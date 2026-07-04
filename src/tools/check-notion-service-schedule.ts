@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createQueryServiceScheduleHandler } from "../functions/query-service-schedule.js";
+import { readTimeZone } from "../time-zone.js";
 import type { BotProfileConfig, FunctionHandlerContext, NotionConfig } from "../types.js";
 
 const requiredEnvNames = [
@@ -46,10 +47,12 @@ const config: NotionConfig = {
 
 const query = cli.query || "本週服事";
 const notion = createNotionDatabaseClient(config);
+const timeZone = readTimeZone(env.TIME_ZONE);
 const handler = createQueryServiceScheduleHandler({
   notion,
   databaseId: config.databaseId,
-  properties: config.properties
+  properties: config.properties,
+  timeZone
 });
 
 try {
@@ -60,6 +63,7 @@ try {
   console.log("Notion API: ok");
   console.log(`Database id: ${mask(config.databaseId)}`);
   console.log(`Rows sampled: ${pages.length}`);
+  console.log(`Time zone: ${timeZone}`);
   console.log("Property mapping:");
   for (const status of propertyStatus) {
     console.log(`- ${status.name}: ${status.property} (${status.present ? "present" : "missing"})`);

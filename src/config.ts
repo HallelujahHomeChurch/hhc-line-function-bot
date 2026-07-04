@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 
 import { z } from "zod";
 
+import { readTimeZone } from "./time-zone.js";
 import { FUNCTION_NAMES } from "./types.js";
 import type { AppConfig, FunctionName } from "./types.js";
 
@@ -29,6 +30,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     serviceName: env.SERVICE_NAME || "hhc-line-function-bot",
     host: env.HOST || "0.0.0.0",
     port: readInt(env.PORT, 3000),
+    timeZone: readTimeZone(env.TIME_ZONE),
     healthPath: env.HEALTH_PATH || "/healthz",
     maxBodyBytes: readInt(env.MAX_BODY_BYTES, 262_144),
     profiles: profiles.map((profile) => ({

@@ -82,6 +82,10 @@ Primary routing uses Ollama. Keyword fallback is intentionally narrow:
 
 Keyword fallback does not treat `詩歌` or `流行歌` alone as PPT requests. PPT fuzzy matching happens inside `find_ppt_slides`; for example, `奇易恩點` can match `奇異恩典.pptx`.
 
+## Time Zone
+
+Set `TIME_ZONE` for all calendar date range decisions, including `今天`, `明天`, `後天`, and upcoming service schedule queries. The default is `Asia/Taipei`.
+
 ## State
 
 Multi-result PPT search stores a short-lived in-memory session and replies with LINE postback Quick Replies. The first version is single-instance friendly. If the Container App scales beyond one replica or restarts, pending selections can expire; use Redis or another shared store before enabling multiple replicas.

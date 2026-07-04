@@ -14,6 +14,7 @@ function testConfig(): AppConfig {
     serviceName: "hhc-line-function-bot",
     host: "127.0.0.1",
     port: 3000,
+    timeZone: "Asia/Taipei",
     healthPath: "/healthz",
     maxBodyBytes: 32_768,
     profiles: [
@@ -263,6 +264,7 @@ describe("LINE entrance", () => {
     expect(res.json()).toMatchObject({
       ok: true,
       service: "hhc-line-function-bot",
+      timeZone: "Asia/Taipei",
       profiles: [
         { name: "main", enabledFunctions: ["find_ppt_slides", "query_service_schedule"] },
         { name: "slides", enabledFunctions: ["find_ppt_slides"] }

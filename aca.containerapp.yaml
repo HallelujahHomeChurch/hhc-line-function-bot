@@ -27,6 +27,8 @@ properties:
             value: hhc-line-function-bot
           - name: PORT
             value: "3000"
+          - name: TIME_ZONE
+            value: Asia/Taipei
           - name: BOT_PROFILES_JSON
             secretRef: bot-profiles-json
           - name: OLLAMA_BASE_URL

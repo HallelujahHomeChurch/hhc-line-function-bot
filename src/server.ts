@@ -45,6 +45,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   app.get(config.healthPath, async () => ({
     ok: true,
     service: config.serviceName,
+    timeZone: config.timeZone,
     profiles: config.profiles.map((profile) => ({
       name: profile.name,
       webhookPath: profile.webhookPath,

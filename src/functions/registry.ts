@@ -54,7 +54,8 @@ export function createFunctionRegistries(
     functions.query_service_schedule = createQueryServiceScheduleHandler({
       notion,
       databaseId: config.notion.databaseId,
-      properties: config.notion.properties
+      properties: config.notion.properties,
+      timeZone: config.timeZone
     });
   }
 

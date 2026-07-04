@@ -390,6 +390,60 @@ describe("query_service_schedule", () => {
     );
   });
 
+  it("uses the configured time zone when deriving tomorrow ranges", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-utc-tomorrow",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-05" } },
+            Meeting: { type: "select", select: { name: "UTC meeting" } },
+            Role: { type: "title", title: [{ plain_text: "Role" }] },
+            Person: { type: "people", people: [{ name: "Ray" }] }
+          }
+        },
+        {
+          id: "page-taipei-tomorrow",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-06" } },
+            Meeting: { type: "select", select: { name: "Taipei meeting" } },
+            Role: { type: "title", title: [{ plain_text: "Role" }] },
+            Person: { type: "people", people: [{ name: "Ann" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-04T23:30:00.000Z"),
+      timeZone: "UTC"
+    });
+
+    const result = await handler({ query: "明天聚會服事人員" }, handlerContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("2026-07-05");
+    expect(result.replyText).not.toContain("2026-07-06");
+    expect(notion.queryDatabase).toHaveBeenCalledWith(
+      "notion-db",
+      expect.objectContaining({
+        filter: expect.objectContaining({
+          and: expect.arrayContaining([
+            expect.objectContaining({ date: { on_or_after: "2026-07-05" } }),
+            expect.objectContaining({ date: { before: "2026-07-06" } })
+          ])
+        })
+      })
+    );
+  });
+
   it("returns a clear empty result with suggestions when Notion has no matching rows", async () => {
     const notion: NotionDatabaseClient = {
       queryDatabase: vi.fn().mockResolvedValue([])

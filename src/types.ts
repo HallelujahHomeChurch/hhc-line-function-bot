@@ -55,6 +55,7 @@ export interface AppConfig {
   serviceName: string;
   host: string;
   port: number;
+  timeZone: string;
   healthPath: string;
   maxBodyBytes: number;
   profiles: BotProfileConfig[];

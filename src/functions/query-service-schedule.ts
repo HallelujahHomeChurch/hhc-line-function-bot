@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { readTimeZone } from "../time-zone.js";
 import type { FunctionHandler, JsonRecord, NotionDatabaseClient } from "../types.js";
 
 const argsSchema = z.object({
@@ -19,6 +20,7 @@ export interface QueryServiceScheduleOptions {
     person: string;
   };
   now?: () => Date;
+  timeZone?: string;
 }
 
 interface ServiceRow {
@@ -42,10 +44,11 @@ export function createQueryServiceScheduleHandler(
   options: QueryServiceScheduleOptions
 ): FunctionHandler {
   const now = options.now ?? (() => new Date());
+  const timeZone = readTimeZone(options.timeZone, "timeZone");
 
   return async (rawArgs) => {
     const args = argsSchema.parse(rawArgs);
-    const derivedFilters = deriveFilters(args, now());
+    const derivedFilters = deriveFilters(args, now(), timeZone);
     const pages = await options.notion.queryDatabase(
       options.databaseId,
       buildNotionQuery(derivedFilters, options.properties.date)
@@ -114,7 +117,11 @@ function buildNotionQuery(filters: DerivedFilters, dateProperty: string): JsonRe
   };
 }
 
-function deriveFilters(args: z.infer<typeof argsSchema>, now: Date): DerivedFilters {
+function deriveFilters(
+  args: z.infer<typeof argsSchema>,
+  now: Date,
+  timeZone: string
+): DerivedFilters {
   const query = args.query.trim();
   const filters: DerivedFilters = {
     date: args.date,
@@ -123,15 +130,15 @@ function deriveFilters(args: z.infer<typeof argsSchema>, now: Date): DerivedFilt
   };
 
   if (query.includes("今天")) {
-    filters.range = dayRange(now, 0);
+    filters.range = dayRange(now, 0, timeZone);
   } else if (query.includes("明天")) {
-    filters.range = dayRange(now, 1);
+    filters.range = dayRange(now, 1, timeZone);
   } else if (query.includes("後天") || query.includes("后天")) {
-    filters.range = dayRange(now, 2);
+    filters.range = dayRange(now, 2, timeZone);
   }
 
   if (/(本週|本周|這週|这周)/.test(query)) {
-    filters.range = upcomingRange(now);
+    filters.range = upcomingRange(now, timeZone);
   }
 
   if (!filters.meeting && query.includes("主日")) {
@@ -143,25 +150,29 @@ function deriveFilters(args: z.infer<typeof argsSchema>, now: Date): DerivedFilt
   }
 
   if (!filters.range && !filters.date && /服事/.test(query)) {
-    filters.range = upcomingRange(now);
+    filters.range = upcomingRange(now, timeZone);
   }
 
   return filters;
 }
 
-function upcomingRange(now: Date): NonNullable<DerivedFilters["range"]> {
+function upcomingRange(now: Date, timeZone: string): NonNullable<DerivedFilters["range"]> {
+  const start = toDateKey(now, timeZone);
   return {
-    start: toDateKey(now),
-    endExclusive: toDateKey(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000))
+    start,
+    endExclusive: addDaysToDateKey(start, 7)
   };
 }
 
-function dayRange(now: Date, offsetDays: number): NonNullable<DerivedFilters["range"]> {
-  const start = new Date(now.getTime() + offsetDays * 24 * 60 * 60 * 1000);
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+function dayRange(
+  now: Date,
+  offsetDays: number,
+  timeZone: string
+): NonNullable<DerivedFilters["range"]> {
+  const start = addDaysToDateKey(toDateKey(now, timeZone), offsetDays);
   return {
-    start: toDateKey(start),
-    endExclusive: toDateKey(end)
+    start,
+    endExclusive: addDaysToDateKey(start, 1)
   };
 }
 
@@ -203,9 +214,9 @@ function extractDateKey(value: string): string {
   return value.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
 }
 
-function toDateKey(date: Date): string {
+function toDateKey(date: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat("en", {
-    timeZone: "Asia/Taipei",
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
@@ -218,6 +229,11 @@ function toDateKey(date: Date): string {
       return acc;
     }, {});
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addDaysToDateKey(dateKey: string, days: number): string {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
 }
 
 function formatRow(row: ServiceRow): string {
