@@ -255,6 +255,55 @@ describe("LINE entrance", () => {
     expect(replyText).toHaveBeenCalledWith("reply-token", "已選擇第 1 個投影片", undefined);
   });
 
+  it("allows numeric PPT selections in groups without requiring the wake word", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const handleSelect = vi.fn().mockResolvedValue({
+      ok: true,
+      replyText:
+        "已找到詩歌投影片：\n奇異恩典.pptx\n下載連結（1 天內有效）：\nhttps://download.invalid/1"
+    });
+    const postbackHandlers: PostbackHandlerRegistry = {
+      select_ppt: handleSelect
+    };
+    const app = createApp(testConfig(), {
+      router: { route },
+      postbackHandlers,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "1" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(handleSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "select_ppt",
+        params: expect.objectContaining({ index: "0" })
+      }),
+      expect.objectContaining({
+        profile: expect.objectContaining({ name: "main" }),
+        event: expect.objectContaining({ replyToken: "reply-token" })
+      })
+    );
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "已找到詩歌投影片：\n奇異恩典.pptx\n下載連結（1 天內有效）：\nhttps://download.invalid/1",
+      undefined
+    );
+  });
+
   it("reports profiles, enabled functions, and LLM status from healthz", async () => {
     const app = createApp(testConfig(), { router: { route: vi.fn() } });
 

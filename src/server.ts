@@ -138,16 +138,35 @@ async function handleWebhook(
       continue;
     }
 
+    if (!event.replyToken) {
+      continue;
+    }
+
+    const numericPptSelectionIndex = numericPptSelectionToIndex(profile, event.message.text);
+    if (numericPptSelectionIndex !== undefined && postbackHandlers.select_ppt) {
+      const result = await postbackHandlers.select_ppt(
+        {
+          action: "select_ppt",
+          params: {
+            index: String(numericPptSelectionIndex)
+          }
+        },
+        { profile, event }
+      );
+      await line.replyText(
+        event.replyToken,
+        result.replyText,
+        result.quickReplies ? { quickReplies: result.quickReplies } : undefined
+      );
+      continue;
+    }
+
     const route = await router.route({
       profileName: profile.name,
       text: event.message.text,
       enabledFunctions: profile.enabledFunctions,
       source: event.source
     });
-
-    if (!event.replyToken) {
-      continue;
-    }
 
     if (route.type === "deny") {
       const quickReplies = buildFunctionQuickReplies(profile);
@@ -248,6 +267,9 @@ function allowEvent(profile: BotProfileConfig, event: LineEvent): AllowResult {
       if (!profile.groupRequireWakeWord || matchesWakeRule(profile, event.message)) {
         return { allowed: true, reason: "group_wake_matched" };
       }
+      if (numericPptSelectionToIndex(profile, event.message?.text) !== undefined) {
+        return { allowed: true, reason: "group_numeric_ppt_selection" };
+      }
       return { allowed: false, reason: "wake_word_missing" };
 
     case "user":
@@ -279,6 +301,24 @@ function messageTypeAllowed(profile: BotProfileConfig, event: LineEvent): boolea
     return false;
   }
   return profile.allowedMessageTypes.map((type) => type.toLowerCase()).includes(messageType);
+}
+
+function numericPptSelectionToIndex(
+  profile: BotProfileConfig,
+  text: string | undefined
+): number | undefined {
+  if (!profile.enabledFunctions.includes("find_ppt_slides")) {
+    return undefined;
+  }
+  const match = (text ?? "").match(/^\s*(\d{1,2})\s*$/);
+  if (!match) {
+    return undefined;
+  }
+  const selection = Number(match[1]);
+  if (!Number.isInteger(selection) || selection < 1) {
+    return undefined;
+  }
+  return selection - 1;
 }
 
 function matchesWakeRule(profile: BotProfileConfig, message?: LineMessage): boolean {

@@ -1,0 +1,95 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  azureSubscription: "alive-azure-rm"
+  nodeVersion: "22.x"
+  pnpmVersion: "11.7.0"
+  acrName: "alive"
+  acrLoginServer: "alive.azurecr.io"
+  imageRepository: "alive/hhc-line-function-bot"
+  dockerfilePath: "$(Build.SourcesDirectory)/Dockerfile"
+  imageTag: "$(Build.SourceBranchName)-$(Build.BuildId)"
+
+stages:
+  - stage: Validate
+    displayName: Validate app
+    jobs:
+      - job: validate
+        displayName: pnpm checks and Docker build
+        steps:
+          - task: NodeTool@0
+            displayName: Use Node.js $(nodeVersion)
+            inputs:
+              versionSpec: "$(nodeVersion)"
+
+          - script: |
+              set -euo pipefail
+              corepack enable
+              corepack prepare pnpm@$(pnpmVersion) --activate
+              pnpm --version
+            displayName: Enable pnpm
+
+          - script: pnpm install --frozen-lockfile
+            displayName: Install dependencies
+
+          - script: pnpm format:check
+            displayName: Check formatting
+
+          - script: pnpm typecheck
+            displayName: Typecheck
+
+          - script: pnpm lint
+            displayName: Lint
+
+          - script: pnpm test
+            displayName: Test
+
+          - script: pnpm build
+            displayName: Build app
+
+          - script: |
+              set -euo pipefail
+              docker build \
+                --file "$(dockerfilePath)" \
+                --tag "$(acrLoginServer)/$(imageRepository):ci-$(Build.BuildId)" \
+                "$(Build.SourcesDirectory)"
+            displayName: Build Docker image
+
+  - stage: BuildAndPush
+    displayName: Build and push image to ACR
+    dependsOn: Validate
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: build_push
+        displayName: az acr build
+        steps:
+          - task: AzureCLI@2
+            displayName: Build and push image to ACR
+            inputs:
+              azureSubscription: "$(azureSubscription)"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                az acr build \
+                  --registry "$(acrName)" \
+                  --image "$(imageRepository):$(imageTag)" \
+                  --image "$(imageRepository):latest" \
+                  --file "$(dockerfilePath)" \
+                  "$(Build.SourcesDirectory)"
+
+          - script: |
+              echo "Pushed $(acrLoginServer)/$(imageRepository):$(imageTag)"
+              echo "Pushed $(acrLoginServer)/$(imageRepository):latest"
+            displayName: Show pushed image refs

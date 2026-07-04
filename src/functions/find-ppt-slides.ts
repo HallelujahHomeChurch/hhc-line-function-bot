@@ -77,7 +77,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
     const candidates = rankPptCandidates(allItems, rawQuery, extensions);
 
     if (candidates.length === 0) {
-      return { ok: true, replyText: "查不到符合的投影片。" };
+      return { ok: true, replyText: "找不到符合的詩歌投影片，請再提供更完整歌名。" };
     }
 
     if (candidates.length === 1) {
@@ -99,7 +99,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
     return {
       ok: true,
       replyText: [
-        `找到 ${candidates.length} 個可能的投影片，請選擇：`,
+        "找到多個相近的詩歌投影片，請回覆編號：",
         ...candidates.map(({ item }, index) => `${index + 1}. ${item.name}`)
       ].join("\n"),
       quickReplies: candidates.map((_candidate, index) =>
@@ -127,14 +127,19 @@ export function createFindPptSlidesPostbackHandler(
 
     if (
       request.action !== POSTBACK_ACTION ||
-      !requestId ||
       !Number.isInteger(selectedIndex) ||
       selectedIndex < 0
     ) {
       return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
     }
 
-    const session = options.sessionStore.get(requestId);
+    const session = requestId
+      ? options.sessionStore.get(requestId)
+      : options.sessionStore.findPptSelection({
+          profileName: context.profile.name,
+          source: context.event.source,
+          requesterUserId: context.event.source.userId
+        });
     if (
       !session ||
       session.type !== "ppt_selection" ||
@@ -150,7 +155,7 @@ export function createFindPptSlidesPostbackHandler(
       return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
     }
 
-    options.sessionStore.delete(requestId);
+    options.sessionStore.delete(session.id);
     return createSharingLinkReply(options.graph, session.driveId, item, now());
   };
 }
@@ -166,7 +171,7 @@ async function createSharingLinkReply(
 
   return {
     ok: true,
-    replyText: [`找到投影片：${item.name}`, link, `過期時間：${expiresAt}`].join("\n")
+    replyText: ["已找到詩歌投影片：", item.name, "下載連結（1 天內有效）：", link].join("\n")
   };
 }
 

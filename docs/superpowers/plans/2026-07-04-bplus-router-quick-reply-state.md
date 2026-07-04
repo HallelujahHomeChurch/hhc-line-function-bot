@@ -6,7 +6,7 @@
 
 **Architecture:** Keep Ollama as the only LLM provider. Route technical Ollama failures to a deterministic keyword fallback; handle multi-result user choices through short-lived server-side sessions keyed by postback `requestId`. Function handlers own domain search quality, so `find_ppt_slides` handles fuzzy matching and selection, while `query_service_schedule` handles date/field parsing.
 
-**Tech Stack:** TypeScript, Fastify, LINE Messaging API SDK, Microsoft Graph SDK, Notion SDK, Vitest, pnpm, GHCR.
+**Tech Stack:** TypeScript, Fastify, LINE Messaging API SDK, Microsoft Graph SDK, Notion SDK, Vitest, pnpm, Azure DevOps, ACR.
 
 ---
 
@@ -103,7 +103,7 @@
 - Modify: `pnpm-lock.yaml`
 
 - [ ] Remove Azure OpenAI env vars, README references, ACA secrets, and `openai` dependency.
-- [ ] Document GHCR image, keyword fallback, quick reply/postback state, and in-memory TTL limitations.
+- [ ] Document ACR image, keyword fallback, quick reply/postback state, and in-memory TTL limitations.
 - [ ] Run `pnpm install`.
 - [ ] Run `pnpm format:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm build`.
 - [ ] Commit and push the feature branch.

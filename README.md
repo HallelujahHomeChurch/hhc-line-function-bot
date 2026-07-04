@@ -11,6 +11,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Conservative keyword fallback when Ollama times out, is unreachable, or returns invalid JSON.
 - LINE Quick Reply suggestions for supported functions.
 - Postback-based selection state for multi-result flows, currently used by PPT search.
+- Hermes-compatible numeric PPT selection replies, so users can tap a Quick Reply or reply with `1`, `2`, `3`.
 - Function handlers:
   - `find_ppt_slides`: searches a configured Microsoft Graph drive folder, fuzzy-matches PPT/PDF names, and returns 24 hour sharing links.
   - `query_service_schedule`: queries Notion with env-configured property mapping.
@@ -88,7 +89,9 @@ Set `TIME_ZONE` for all calendar date range decisions, including `今天`, `明�
 
 ## State
 
-Multi-result PPT search stores a short-lived in-memory session and replies with LINE postback Quick Replies. The first version is single-instance friendly. If the Container App scales beyond one replica or restarts, pending selections can expire; use Redis or another shared store before enabling multiple replicas.
+Multi-result PPT search stores a short-lived in-memory session and replies with LINE postback Quick Replies. Users can also reply with a plain number such as `1` to select from the latest active PPT candidate list for the same profile, LINE source, and requester.
+
+The first version is single-instance friendly. If the Container App scales beyond one replica or restarts, pending selections can expire; use Redis or another shared store before enabling multiple replicas.
 
 ## Notion Service Schedule
 
@@ -111,25 +114,18 @@ Do not commit real `.env` files. In Azure Container Apps, store runtime values i
 - `NOTION_TOKEN`
 - `GRAPH_CLIENT_SECRET`
 
-## GitHub Actions
+## Azure DevOps Pipeline
 
-`ci.yml` runs install, typecheck, lint, tests, app build, Docker image build, and publishes the image to GHCR on pushes to `main`.
+`azure-pipelines.yml` runs install, format check, typecheck, lint, tests, app build, and Docker image build for PRs and pushes to `main`.
 
-`deploy-aca.yml` uses GitHub OIDC with Azure. Configure these GitHub variables:
-
-- `AZURE_SUBSCRIPTION_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_CLIENT_ID`
-- `AZURE_RESOURCE_GROUP`
-- `CONTAINER_APP_NAME`
-
-The deploy workflow updates the Azure Container App to use a GHCR image:
+On successful `main` builds, the pipeline uses Azure Resource Manager service connection `alive-azure-rm` and `az acr build` to publish images to ACR:
 
 ```text
-ghcr.io/hallelujahhomechurch/hhc-line-function-bot:<tag>
+alive.azurecr.io/alive/hhc-line-function-bot:<branch>-<buildId>
+alive.azurecr.io/alive/hhc-line-function-bot:latest
 ```
 
-The GHCR package is intended to be public so Azure Container Apps can pull it without registry credentials. Runtime secrets are expected to be preconfigured on the Container App.
+Azure Container Apps should pull from the ACR image. Runtime secrets are expected to be preconfigured on the Container App.
 
 ## Verification
 

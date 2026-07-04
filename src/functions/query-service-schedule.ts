@@ -87,7 +87,7 @@ export function createQueryServiceScheduleHandler(
 
     return {
       ok: true,
-      replyText: filtered.map(formatRow).join("\n")
+      replyText: formatServiceScheduleReply(filtered, args.query)
     };
   };
 }
@@ -236,12 +236,89 @@ function addDaysToDateKey(dateKey: string, days: number): string {
   return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
 }
 
-function formatRow(row: ServiceRow): string {
-  const heading = `${row.date || "未填日期"} ${row.meeting || "未填聚會"}`;
-  if (!row.role) {
-    return `${heading}\n${row.person || "未填人員"}`;
+function formatServiceScheduleReply(rows: ServiceRow[], query: string): string {
+  const title = scheduleTitle(query);
+  const firstDateKey = extractDateKey(rows[0]?.date ?? "");
+  const dateLine = firstDateKey ? formatMonthDay(firstDateKey) : rows[0]?.date || "未填日期";
+  const lines = [title, dateLine, ""];
+
+  const groups = groupRows(rows);
+  groups.forEach((group, index) => {
+    if (index > 0) {
+      lines.push("");
+    }
+    lines.push(`【${group.meeting || formatMonthDay(group.dateKey) || "未填聚會"}】`);
+    lines.push("服事同工：");
+    for (const row of group.rows) {
+      lines.push(...formatRosterLines(row));
+    }
+  });
+
+  return lines.join("\n");
+}
+
+function scheduleTitle(query: string): string {
+  if (query.includes("明天")) {
+    return "明天聚會服事表";
   }
-  return `${heading} - ${row.role}：${row.person || "未填人員"}`;
+  if (query.includes("今天")) {
+    return "今天聚會服事表";
+  }
+  if (query.includes("後天") || query.includes("后天")) {
+    return "後天聚會服事表";
+  }
+  return "聚會服事表";
+}
+
+interface ServiceGroup {
+  dateKey: string;
+  meeting: string;
+  rows: ServiceRow[];
+}
+
+function groupRows(rows: ServiceRow[]): ServiceGroup[] {
+  const groups = new Map<string, ServiceGroup>();
+  for (const row of rows) {
+    const dateKey = extractDateKey(row.date);
+    const meeting = row.meeting || "";
+    const key = `${dateKey}\u0000${meeting}`;
+    const group = groups.get(key) ?? { dateKey, meeting, rows: [] };
+    group.rows.push(row);
+    groups.set(key, group);
+  }
+  return Array.from(groups.values());
+}
+
+function formatMonthDay(dateKey: string): string {
+  const match = dateKey.match(/^\d{4}-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return "";
+  }
+  return `${Number(match[1])}月${Number(match[2])}日`;
+}
+
+function formatRosterLines(row: ServiceRow): string[] {
+  const role = row.role.trim();
+  if (role) {
+    return [`- ${role}：${row.person || "未填人員"}`];
+  }
+
+  const rosterLines = row.person
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (rosterLines.length === 0) {
+    return ["- 服事：未填人員"];
+  }
+
+  return rosterLines.map((line) => {
+    const match = line.match(/^(.+?)\s*[:：]\s*(.+)$/);
+    if (!match) {
+      return `- 服事：${line}`;
+    }
+    return `- ${match[1].trim()}：${match[2].trim()}`;
+  });
 }
 
 function propertyToText(property: unknown): string {

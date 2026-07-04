@@ -21,7 +21,7 @@ properties:
   template:
     containers:
       - name: hhc-line-function-bot
-        image: ghcr.io/hallelujahhomechurch/hhc-line-function-bot:latest
+        image: alive.azurecr.io/alive/hhc-line-function-bot:latest
         env:
           - name: SERVICE_NAME
             value: hhc-line-function-bot

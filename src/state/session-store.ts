@@ -13,10 +13,17 @@ export interface PptSelectionSession {
 
 export type ConversationSession = PptSelectionSession;
 
+export interface PptSelectionLookup {
+  profileName: string;
+  source: LineSource;
+  requesterUserId?: string;
+}
+
 export interface SessionStore {
   get(id: string): ConversationSession | undefined;
   set(session: ConversationSession): void;
   delete(id: string): void;
+  findPptSelection(lookup: PptSelectionLookup): PptSelectionSession | undefined;
 }
 
 export interface InMemorySessionStoreOptions {
@@ -36,11 +43,34 @@ export class InMemorySessionStore implements SessionStore {
 
   get(id: string): ConversationSession | undefined {
     const session = this.sessions.get(id);
+    return this.liveSession(session);
+  }
+
+  findPptSelection(lookup: PptSelectionLookup): PptSelectionSession | undefined {
+    const liveSessions = Array.from(this.sessions.values())
+      .map((session) => this.liveSession(session))
+      .filter((session): session is PptSelectionSession => Boolean(session))
+      .filter((session) => session.type === "ppt_selection")
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter(
+        (session) =>
+          !session.requesterUserId ||
+          !lookup.requesterUserId ||
+          session.requesterUserId === lookup.requesterUserId
+      );
+
+    return liveSessions.sort(
+      (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+    )[0];
+  }
+
+  private liveSession(session: ConversationSession | undefined): ConversationSession | undefined {
     if (!session) {
       return undefined;
     }
     if (new Date(session.expiresAt).getTime() <= this.now().getTime()) {
-      this.sessions.delete(id);
+      this.sessions.delete(session.id);
       return undefined;
     }
     return session;
@@ -55,5 +85,21 @@ export class InMemorySessionStore implements SessionStore {
 
   delete(id: string): void {
     this.sessions.delete(id);
+  }
+}
+
+function sourceMatches(expected: LineSource, actual: LineSource): boolean {
+  if (expected.type !== actual.type) {
+    return false;
+  }
+  switch (expected.type) {
+    case "group":
+      return expected.groupId === actual.groupId;
+    case "room":
+      return expected.roomId === actual.roomId;
+    case "user":
+      return expected.userId === actual.userId;
+    default:
+      return false;
   }
 }

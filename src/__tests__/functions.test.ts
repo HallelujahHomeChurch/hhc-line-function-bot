@@ -67,8 +67,14 @@ describe("find_ppt_slides", () => {
     const result = await handler({ query: "奇易恩點" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("奇異恩典.pptx");
-    expect(result.replyText).toContain("https://download.invalid/amazing-grace");
+    expect(result.replyText).toBe(
+      [
+        "已找到詩歌投影片：",
+        "奇異恩典.pptx",
+        "下載連結（1 天內有效）：",
+        "https://download.invalid/amazing-grace"
+      ].join("\n")
+    );
     expect(graph.createSharingLink).toHaveBeenCalledWith(
       "drive-id",
       "1",
@@ -101,7 +107,14 @@ describe("find_ppt_slides", () => {
     const result = await handler({ query: "奇異恩典" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("找到 3 個可能的投影片");
+    expect(result.replyText).toBe(
+      [
+        "找到多個相近的詩歌投影片，請回覆編號：",
+        "1. 奇異恩典.pptx",
+        "2. 奇異恩典_青年.pptx",
+        "3. Amazing Grace.pptx"
+      ].join("\n")
+    );
     expect(result.quickReplies).toEqual([
       {
         label: "1",
@@ -193,6 +206,59 @@ describe("find_ppt_slides", () => {
       "2026-07-05T10:00:00.000Z"
     );
   });
+
+  it("creates a sharing link when the user replies with a numeric PPT selection", async () => {
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/numeric")
+    };
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
+    sessionStore.set({
+      id: "req-1",
+      type: "ppt_selection",
+      profileName: "main",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "Cgroup" },
+      driveId: "drive-id",
+      items: [
+        { id: "1", name: "奇異恩典.pptx" },
+        { id: "2", name: "奇異恩典_青年.pptx" }
+      ],
+      expiresAt: new Date("2026-07-04T10:10:00.000Z").toISOString()
+    });
+    const handlePostback = createFindPptSlidesPostbackHandler({
+      graph,
+      sessionStore,
+      now: () => now
+    });
+    const context: PostbackContext = {
+      profile: profile(),
+      event: {
+        type: "message",
+        replyToken: "reply-token",
+        source: { type: "group", groupId: "Cgroup", userId: "U1" },
+        message: { type: "text", text: "2" }
+      }
+    };
+
+    const result = await handlePostback({ action: "select_ppt", params: { index: "1" } }, context);
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toBe(
+      [
+        "已找到詩歌投影片：",
+        "奇異恩典_青年.pptx",
+        "下載連結（1 天內有效）：",
+        "https://download.invalid/numeric"
+      ].join("\n")
+    );
+    expect(graph.createSharingLink).toHaveBeenCalledWith(
+      "drive-id",
+      "2",
+      "2026-07-05T10:00:00.000Z"
+    );
+  });
 });
 
 describe("query_service_schedule", () => {
@@ -224,10 +290,9 @@ describe("query_service_schedule", () => {
     const result = await handler({ query: "主日司會" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("2026-07-05");
+    expect(result.replyText).toContain("7月5日");
     expect(result.replyText).toContain("主日聚會");
-    expect(result.replyText).toContain("司會");
-    expect(result.replyText).toContain("Ray");
+    expect(result.replyText).toContain("- 司會：Ray");
   });
 
   it("filters this-week service schedule requests", async () => {
@@ -268,8 +333,8 @@ describe("query_service_schedule", () => {
     const result = await handler({ query: "本週服事" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("2026-07-05");
-    expect(result.replyText).not.toContain("2026-07-12");
+    expect(result.replyText).toContain("7月5日");
+    expect(result.replyText).not.toContain("7月12日");
   });
 
   it("defaults generic service schedule requests to upcoming rows", async () => {
@@ -310,9 +375,9 @@ describe("query_service_schedule", () => {
     const result = await handler({ query: "主日服事" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("2026-07-05");
+    expect(result.replyText).toContain("7月5日");
     expect(result.replyText).toContain("Ray");
-    expect(result.replyText).not.toContain("2026-01-04");
+    expect(result.replyText).not.toContain("1月4日");
     expect(notion.queryDatabase).toHaveBeenCalledWith(
       "notion-db",
       expect.objectContaining({
@@ -373,8 +438,9 @@ describe("query_service_schedule", () => {
     const result = await handler({ query: "明天聚會服事人員" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("2026-07-05");
-    expect(result.replyText).toContain("Ray");
+    expect(result.replyText).toBe(
+      ["明天聚會服事表", "7月5日", "", "【主日聚會】", "服事同工：", "- 導播：Ray"].join("\n")
+    );
     expect(result.replyText).not.toContain("2026-07-04");
     expect(result.replyText).not.toContain("2026-07-07");
     expect(notion.queryDatabase).toHaveBeenCalledWith(
@@ -387,6 +453,57 @@ describe("query_service_schedule", () => {
           ])
         })
       })
+    );
+  });
+
+  it("formats multiline service roster text into LINE bullet rows", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-tomorrow",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-05" } },
+            Meeting: { type: "select", select: { name: "7月5日 主日" } },
+            Role: { type: "title", title: [] },
+            Person: {
+              type: "rich_text",
+              rich_text: [
+                {
+                  plain_text: "導播: 知樂\n前攝影: 昱圻\n後攝影: 家怡\n投影電腦: 育圻"
+                }
+              ]
+            }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-04T12:00:00.000Z")
+    });
+
+    const result = await handler({ query: "明天聚會服事人員" }, handlerContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toBe(
+      [
+        "明天聚會服事表",
+        "7月5日",
+        "",
+        "【7月5日 主日】",
+        "服事同工：",
+        "- 導播：知樂",
+        "- 前攝影：昱圻",
+        "- 後攝影：家怡",
+        "- 投影電腦：育圻"
+      ].join("\n")
     );
   });
 
@@ -429,8 +546,8 @@ describe("query_service_schedule", () => {
     const result = await handler({ query: "明天聚會服事人員" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("2026-07-05");
-    expect(result.replyText).not.toContain("2026-07-06");
+    expect(result.replyText).toContain("7月5日");
+    expect(result.replyText).not.toContain("7月6日");
     expect(notion.queryDatabase).toHaveBeenCalledWith(
       "notion-db",
       expect.objectContaining({
