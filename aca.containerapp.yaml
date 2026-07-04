@@ -1,0 +1,88 @@
+name: hhc-line-function-bot
+type: Microsoft.App/containerApps
+location: PLACEHOLDER_AZURE_REGION
+properties:
+  managedEnvironmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
+  configuration:
+    activeRevisionsMode: Single
+    ingress:
+      external: true
+      targetPort: 3000
+      transport: auto
+    secrets:
+      - name: bot-profiles-json
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+      - name: ollama-base-url
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+      - name: azure-openai-api-key
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+      - name: graph-client-secret
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+      - name: notion-token
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+  template:
+    containers:
+      - name: hhc-line-function-bot
+        image: PLACEHOLDER_ACR_LOGIN_SERVER/hhc-line-function-bot:latest
+        env:
+          - name: SERVICE_NAME
+            value: hhc-line-function-bot
+          - name: PORT
+            value: "3000"
+          - name: BOT_PROFILES_JSON
+            secretRef: bot-profiles-json
+          - name: OLLAMA_BASE_URL
+            secretRef: ollama-base-url
+          - name: OLLAMA_MODEL
+            value: qwen3:4b-instruct
+          - name: OLLAMA_KEEP_ALIVE
+            value: "-1"
+          - name: AZURE_OPENAI_FALLBACK_ENABLED
+            value: "true"
+          - name: AZURE_OPENAI_ENDPOINT
+            value: PLACEHOLDER_AZURE_OPENAI_ENDPOINT
+          - name: AZURE_OPENAI_API_KEY
+            secretRef: azure-openai-api-key
+          - name: AZURE_OPENAI_DEPLOYMENT
+            value: PLACEHOLDER_AZURE_OPENAI_DEPLOYMENT
+          - name: GRAPH_TENANT_ID
+            value: PLACEHOLDER_GRAPH_TENANT_ID
+          - name: GRAPH_CLIENT_ID
+            value: PLACEHOLDER_GRAPH_CLIENT_ID
+          - name: GRAPH_CLIENT_SECRET
+            secretRef: graph-client-secret
+          - name: GRAPH_DRIVE_ID
+            value: PLACEHOLDER_GRAPH_DRIVE_ID
+          - name: GRAPH_PPT_FOLDER_ITEM_ID
+            value: PLACEHOLDER_GRAPH_PPT_FOLDER_ITEM_ID
+          - name: GRAPH_LINK_SCOPE
+            value: anonymous
+          - name: GRAPH_LINK_TYPE
+            value: view
+          - name: PPT_ALLOWED_EXTENSIONS
+            value: ppt,pptx,pdf
+          - name: NOTION_TOKEN
+            secretRef: notion-token
+          - name: NOTION_SERVICE_DATABASE_ID
+            value: PLACEHOLDER_NOTION_DATABASE_ID
+          - name: NOTION_DATE_PROPERTY
+            value: Date
+          - name: NOTION_MEETING_PROPERTY
+            value: Meeting
+          - name: NOTION_ROLE_PROPERTY
+            value: Role
+          - name: NOTION_PERSON_PROPERTY
+            value: Person
+        probes:
+          - type: Liveness
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          - type: Readiness
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
