@@ -6,6 +6,7 @@ import type {
   AppConfig,
   FunctionRouterPort,
   LineReplyClient,
+  TextMessageHandlerRegistry,
   PostbackHandlerRegistry
 } from "../types.js";
 
@@ -255,20 +256,24 @@ describe("LINE entrance", () => {
     expect(replyText).toHaveBeenCalledWith("reply-token", "已選擇第 1 個投影片", undefined);
   });
 
-  it("allows numeric PPT selections in groups without requiring the wake word", async () => {
+  it("handles numeric PPT selections in groups without routing them", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
-    const handleSelect = vi.fn().mockResolvedValue({
+    const matchesNumericSelection = vi.fn().mockReturnValue(true);
+    const handleNumericSelection = vi.fn().mockResolvedValue({
       ok: true,
       replyText:
         "已找到詩歌投影片：\n奇異恩典.pptx\n下載連結（1 天內有效）：\nhttps://download.invalid/1"
     });
-    const postbackHandlers: PostbackHandlerRegistry = {
-      select_ppt: handleSelect
+    const textMessageHandlers: TextMessageHandlerRegistry = {
+      ppt_numeric_selection: {
+        matches: matchesNumericSelection,
+        handle: handleNumericSelection
+      }
     };
     const app = createApp(testConfig(), {
       router: { route },
-      postbackHandlers,
+      textMessageHandlers,
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -287,10 +292,18 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(handleSelect).toHaveBeenCalledWith(
+    expect(matchesNumericSelection).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "select_ppt",
-        params: expect.objectContaining({ index: "0" })
+        text: "1"
+      }),
+      expect.objectContaining({
+        profile: expect.objectContaining({ name: "main" }),
+        event: expect.objectContaining({ replyToken: "reply-token" })
+      })
+    );
+    expect(handleNumericSelection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "1"
       }),
       expect.objectContaining({
         profile: expect.objectContaining({ name: "main" }),
@@ -302,6 +315,42 @@ describe("LINE entrance", () => {
       "已找到詩歌投影片：\n奇異恩典.pptx\n下載連結（1 天內有效）：\nhttps://download.invalid/1",
       undefined
     );
+  });
+
+  it("ignores numeric group messages without an active text-message handler result", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const matchesNumericSelection = vi.fn().mockReturnValue(true);
+    const handleNumericSelection = vi.fn().mockResolvedValue(undefined);
+    const textMessageHandlers: TextMessageHandlerRegistry = {
+      ppt_numeric_selection: {
+        matches: matchesNumericSelection,
+        handle: handleNumericSelection
+      }
+    };
+    const app = createApp(testConfig(), {
+      router: { route },
+      textMessageHandlers,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "1" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(handleNumericSelection).toHaveBeenCalledOnce();
+    expect(replyText).not.toHaveBeenCalled();
   });
 
   it("reports profiles, enabled functions, and LLM status from healthz", async () => {

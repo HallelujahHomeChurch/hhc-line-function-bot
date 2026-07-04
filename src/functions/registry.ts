@@ -6,11 +6,13 @@ import type {
   FunctionRegistry,
   GraphDriveClient,
   NotionDatabaseClient,
-  PostbackHandlerRegistry
+  PostbackHandlerRegistry,
+  TextMessageHandlerRegistry
 } from "../types.js";
 import {
   createFindPptSlidesHandler,
-  createFindPptSlidesPostbackHandler
+  createFindPptSlidesPostbackHandler,
+  createFindPptSlidesTextMessageHandler
 } from "./find-ppt-slides.js";
 import { createQueryServiceScheduleHandler } from "./query-service-schedule.js";
 
@@ -23,6 +25,7 @@ export interface RegistryClients {
 export interface FunctionRegistries {
   functions: FunctionRegistry;
   postbacks: PostbackHandlerRegistry;
+  textMessages: TextMessageHandlerRegistry;
 }
 
 export function createFunctionRegistries(
@@ -31,6 +34,7 @@ export function createFunctionRegistries(
 ): FunctionRegistries {
   const functions: FunctionRegistry = {};
   const postbacks: PostbackHandlerRegistry = {};
+  const textMessages: TextMessageHandlerRegistry = {};
 
   if (config.graph) {
     const graph = clients.graph ?? createGraphDriveClient(config.graph);
@@ -47,6 +51,10 @@ export function createFunctionRegistries(
       graph,
       sessionStore
     });
+    textMessages.ppt_numeric_selection = createFindPptSlidesTextMessageHandler({
+      graph,
+      sessionStore
+    });
   }
 
   if (config.notion) {
@@ -59,7 +67,7 @@ export function createFunctionRegistries(
     });
   }
 
-  return { functions, postbacks };
+  return { functions, postbacks, textMessages };
 }
 
 export function createFunctionRegistry(

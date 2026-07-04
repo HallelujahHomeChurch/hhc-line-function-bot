@@ -197,6 +197,25 @@ export type PostbackHandler = (
 
 export type PostbackHandlerRegistry = Record<string, PostbackHandler>;
 
+export interface TextMessageRequest {
+  text: string;
+}
+
+export interface TextMessageContext {
+  profile: BotProfileConfig;
+  event: LineEvent;
+}
+
+export interface TextMessageHandler {
+  matches(request: TextMessageRequest, context: TextMessageContext): boolean;
+  handle(
+    request: TextMessageRequest,
+    context: TextMessageContext
+  ): Promise<FunctionExecutionResult | undefined>;
+}
+
+export type TextMessageHandlerRegistry = Record<string, TextMessageHandler>;
+
 export interface DriveItem {
   id: string;
   name: string;

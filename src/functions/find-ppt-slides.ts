@@ -8,7 +8,9 @@ import type {
   FunctionHandler,
   FunctionHandlerContext,
   GraphDriveClient,
-  PostbackHandler
+  PostbackHandler,
+  TextMessageHandler,
+  TextMessageContext
 } from "../types.js";
 
 const argsSchema = z.object({
@@ -20,6 +22,7 @@ const POSTBACK_ACTION = "select_ppt";
 const MAX_CANDIDATES = 5;
 const SELECTION_TTL_MS = 10 * 60 * 1000;
 const MIN_FUZZY_SCORE = 0.45;
+const INVALID_SELECTION_MESSAGE = "請只回覆清單中的數字，例如：1。不要加上其他字。";
 
 const similarChineseCharacters: Record<string, string> = {
   易: "異",
@@ -45,6 +48,8 @@ export interface FindPptSlidesPostbackOptions {
   sessionStore: SessionStore;
   now?: () => Date;
 }
+
+export type FindPptSlidesTextMessageOptions = FindPptSlidesPostbackOptions;
 
 interface ScoredItem {
   item: DriveItem;
@@ -122,7 +127,6 @@ export function createFindPptSlidesPostbackHandler(
   const now = options.now ?? (() => new Date());
 
   return async (request, context) => {
-    const requestId = request.params.requestId;
     const selectedIndex = Number(request.params.index);
 
     if (
@@ -133,31 +137,99 @@ export function createFindPptSlidesPostbackHandler(
       return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
     }
 
-    const session = requestId
-      ? options.sessionStore.get(requestId)
-      : options.sessionStore.findPptSelection({
-          profileName: context.profile.name,
-          source: context.event.source,
-          requesterUserId: context.event.source.userId
-        });
-    if (
-      !session ||
-      session.type !== "ppt_selection" ||
-      session.profileName !== context.profile.name ||
-      !sourceMatches(session.source, context.event.source) ||
-      (session.requesterUserId && session.requesterUserId !== context.event.source.userId)
-    ) {
-      return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
-    }
-
-    const item = session.items[selectedIndex];
-    if (!item) {
-      return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
-    }
-
-    options.sessionStore.delete(session.id);
-    return createSharingLinkReply(options.graph, session.driveId, item, now());
+    return selectPptCandidate({
+      graph: options.graph,
+      sessionStore: options.sessionStore,
+      session: options.sessionStore.get(request.params.requestId),
+      selectedIndex,
+      context,
+      now: now()
+    });
   };
+}
+
+export function createFindPptSlidesTextMessageHandler(
+  options: FindPptSlidesTextMessageOptions
+): TextMessageHandler {
+  const now = options.now ?? (() => new Date());
+
+  return {
+    matches: (request, context) =>
+      context.profile.enabledFunctions.includes("find_ppt_slides") &&
+      numericSelectionToIndex(request.text) !== undefined &&
+      Boolean(findPptSelection(options.sessionStore, context)),
+
+    handle: async (request, context) => {
+      const selectedIndex = numericSelectionToIndex(request.text);
+      if (selectedIndex === undefined) {
+        return undefined;
+      }
+      const session = findPptSelection(options.sessionStore, context);
+      if (!session) {
+        return undefined;
+      }
+      return selectPptCandidate({
+        graph: options.graph,
+        sessionStore: options.sessionStore,
+        session,
+        selectedIndex,
+        context,
+        now: now(),
+        invalidSelectionMessage: INVALID_SELECTION_MESSAGE
+      });
+    }
+  };
+}
+
+function findPptSelection(sessionStore: SessionStore, context: TextMessageContext) {
+  return sessionStore.findPptSelection({
+    profileName: context.profile.name,
+    source: context.event.source,
+    requesterUserId: context.event.source.userId
+  });
+}
+
+function numericSelectionToIndex(text: string): number | undefined {
+  const match = text.match(/^\s*(\d{1,2})\s*$/);
+  if (!match) {
+    return undefined;
+  }
+  const selection = Number(match[1]);
+  if (!Number.isInteger(selection) || selection < 1) {
+    return undefined;
+  }
+  return selection - 1;
+}
+
+async function selectPptCandidate(options: {
+  graph: GraphDriveClient;
+  sessionStore: SessionStore;
+  session: ReturnType<SessionStore["get"]>;
+  selectedIndex: number;
+  context: FunctionHandlerContext;
+  now: Date;
+  invalidSelectionMessage?: string;
+}) {
+  const { graph, sessionStore, session, selectedIndex, context, now, invalidSelectionMessage } =
+    options;
+
+  if (
+    !session ||
+    session.type !== "ppt_selection" ||
+    session.profileName !== context.profile.name ||
+    !sourceMatches(session.source, context.event.source) ||
+    (session.requesterUserId && session.requesterUserId !== context.event.source.userId)
+  ) {
+    return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
+  }
+
+  const item = session.items[selectedIndex];
+  if (!item) {
+    return { ok: true, replyText: invalidSelectionMessage ?? "這個選擇已失效，請重新查詢。" };
+  }
+
+  sessionStore.delete(session.id);
+  return createSharingLinkReply(graph, session.driveId, item, now);
 }
 
 async function createSharingLinkReply(

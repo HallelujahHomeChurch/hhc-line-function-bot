@@ -89,7 +89,7 @@ Set `TIME_ZONE` for all calendar date range decisions, including `今天`, `明�
 
 ## State
 
-Multi-result PPT search stores a short-lived in-memory session and replies with LINE postback Quick Replies. Users can also reply with a plain number such as `1` to select from the latest active PPT candidate list for the same profile, LINE source, and requester.
+Multi-result PPT search stores a short-lived in-memory session and replies with LINE postback Quick Replies. Users can also reply with a plain number such as `1` to select from the latest active PPT candidate list for the same profile, LINE source, and requester. Numeric replies without an active PPT selection session are ignored instead of being routed or answered.
 
 The first version is single-instance friendly. If the Container App scales beyond one replica or restarts, pending selections can expire; use Redis or another shared store before enabling multiple replicas.
 

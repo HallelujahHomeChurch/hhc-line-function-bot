@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createFindPptSlidesHandler,
-  createFindPptSlidesPostbackHandler
+  createFindPptSlidesPostbackHandler,
+  createFindPptSlidesTextMessageHandler
 } from "../functions/find-ppt-slides.js";
 import { createQueryServiceScheduleHandler } from "../functions/query-service-schedule.js";
 import { InMemorySessionStore } from "../state/session-store.js";
@@ -227,7 +228,7 @@ describe("find_ppt_slides", () => {
       ],
       expiresAt: new Date("2026-07-04T10:10:00.000Z").toISOString()
     });
-    const handlePostback = createFindPptSlidesPostbackHandler({
+    const handleTextMessage = createFindPptSlidesTextMessageHandler({
       graph,
       sessionStore,
       now: () => now
@@ -242,10 +243,11 @@ describe("find_ppt_slides", () => {
       }
     };
 
-    const result = await handlePostback({ action: "select_ppt", params: { index: "1" } }, context);
+    expect(handleTextMessage.matches({ text: "2" }, context)).toBe(true);
+    const result = await handleTextMessage.handle({ text: "2" }, context);
 
-    expect(result.ok).toBe(true);
-    expect(result.replyText).toBe(
+    expect(result).toMatchObject({ ok: true });
+    expect(result?.replyText).toBe(
       [
         "已找到詩歌投影片：",
         "奇異恩典_青年.pptx",
@@ -258,6 +260,25 @@ describe("find_ppt_slides", () => {
       "2",
       "2026-07-05T10:00:00.000Z"
     );
+  });
+
+  it("does not handle numeric text when there is no active PPT selection", async () => {
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      createSharingLink: vi.fn()
+    };
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const handleTextMessage = createFindPptSlidesTextMessageHandler({
+      graph,
+      sessionStore: new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 }),
+      now: () => now
+    });
+
+    expect(handleTextMessage.matches({ text: "1" }, handlerContext())).toBe(false);
+    const result = await handleTextMessage.handle({ text: "1" }, handlerContext());
+
+    expect(result).toBeUndefined();
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
   });
 });
 

@@ -22,7 +22,8 @@ const registries = createFunctionRegistries(config);
 const app = createApp(config, {
   router,
   functionRegistry: registries.functions,
-  postbackHandlers: registries.postbacks
+  postbackHandlers: registries.postbacks,
+  textMessageHandlers: registries.textMessages
 });
 
 await app.listen({ host: config.host, port: config.port });
