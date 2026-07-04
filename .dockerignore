@@ -1,7 +1,11 @@
-node_modules
-dist
-coverage
-.git
+node_modules/
+node_modules/**
+dist/
+dist/**
+coverage/
+coverage/**
+.git/
+.git/**
 .env
 .env.*
 !.env.example

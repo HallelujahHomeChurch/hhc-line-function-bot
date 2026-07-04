@@ -13,7 +13,7 @@ pool:
 
 variables:
   azureSubscription: "alive-azure-rm"
-  nodeVersion: "22.x"
+  nodeVersion: "24.x"
   pnpmVersion: "11.7.0"
   acrName: "alive"
   acrLoginServer: "alive.azurecr.io"
@@ -26,7 +26,7 @@ stages:
     displayName: Validate app
     jobs:
       - job: validate
-        displayName: pnpm checks and Docker build
+        displayName: pnpm checks
         steps:
           - task: NodeTool@0
             displayName: Use Node.js $(nodeVersion)
@@ -57,14 +57,6 @@ stages:
 
           - script: pnpm build
             displayName: Build app
-
-          - script: |
-              set -euo pipefail
-              docker build \
-                --file "$(dockerfilePath)" \
-                --tag "$(acrLoginServer)/$(imageRepository):ci-$(Build.BuildId)" \
-                "$(Build.SourcesDirectory)"
-            displayName: Build Docker image
 
   - stage: BuildAndPush
     displayName: Build and push image to ACR
