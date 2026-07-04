@@ -54,3 +54,13 @@ jobs:
         run: |
           docker push $GHCR_IMAGE:${{ github.sha }}
           docker push $GHCR_IMAGE:latest
+      - name: Make GHCR package public
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /orgs/HallelujahHomeChurch/packages/container/hhc-line-function-bot/visibility \
+            -f visibility=public
