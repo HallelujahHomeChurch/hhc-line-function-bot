@@ -122,6 +122,14 @@ function deriveFilters(args: z.infer<typeof argsSchema>, now: Date): DerivedFilt
     role: args.role
   };
 
+  if (query.includes("今天")) {
+    filters.range = dayRange(now, 0);
+  } else if (query.includes("明天")) {
+    filters.range = dayRange(now, 1);
+  } else if (query.includes("後天") || query.includes("后天")) {
+    filters.range = dayRange(now, 2);
+  }
+
   if (/(本週|本周|這週|这周)/.test(query)) {
     filters.range = upcomingRange(now);
   }
@@ -145,6 +153,15 @@ function upcomingRange(now: Date): NonNullable<DerivedFilters["range"]> {
   return {
     start: toDateKey(now),
     endExclusive: toDateKey(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000))
+  };
+}
+
+function dayRange(now: Date, offsetDays: number): NonNullable<DerivedFilters["range"]> {
+  const start = new Date(now.getTime() + offsetDays * 24 * 60 * 60 * 1000);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return {
+    start: toDateKey(start),
+    endExclusive: toDateKey(end)
   };
 }
 
@@ -187,7 +204,20 @@ function extractDateKey(value: string): string {
 }
 
 function toDateKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  })
+    .formatToParts(date)
+    .reduce<Record<string, string>>((acc, part) => {
+      if (part.type !== "literal") {
+        acc[part.type] = part.value;
+      }
+      return acc;
+    }, {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function formatRow(row: ServiceRow): string {

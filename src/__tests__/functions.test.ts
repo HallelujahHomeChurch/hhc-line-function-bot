@@ -326,6 +326,70 @@ describe("query_service_schedule", () => {
     );
   });
 
+  it("filters tomorrow service schedule requests to the next calendar day", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-today",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-04" } },
+            Meeting: { type: "select", select: { name: "國度禱告會" } },
+            Role: { type: "title", title: [{ plain_text: "音控" }] },
+            Person: { type: "people", people: [{ name: "Today" }] }
+          }
+        },
+        {
+          id: "page-tomorrow",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-05" } },
+            Meeting: { type: "select", select: { name: "主日聚會" } },
+            Role: { type: "title", title: [{ plain_text: "導播" }] },
+            Person: { type: "people", people: [{ name: "Ray" }] }
+          }
+        },
+        {
+          id: "page-next-week",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-07" } },
+            Meeting: { type: "select", select: { name: "晨更" } },
+            Role: { type: "title", title: [{ plain_text: "投影" }] },
+            Person: { type: "people", people: [{ name: "Later" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-04T12:00:00.000Z")
+    });
+
+    const result = await handler({ query: "明天聚會服事人員" }, handlerContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("2026-07-05");
+    expect(result.replyText).toContain("Ray");
+    expect(result.replyText).not.toContain("2026-07-04");
+    expect(result.replyText).not.toContain("2026-07-07");
+    expect(notion.queryDatabase).toHaveBeenCalledWith(
+      "notion-db",
+      expect.objectContaining({
+        filter: expect.objectContaining({
+          and: expect.arrayContaining([
+            expect.objectContaining({ date: { on_or_after: "2026-07-05" } }),
+            expect.objectContaining({ date: { before: "2026-07-06" } })
+          ])
+        })
+      })
+    );
+  });
+
   it("returns a clear empty result with suggestions when Notion has no matching rows", async () => {
     const notion: NotionDatabaseClient = {
       queryDatabase: vi.fn().mockResolvedValue([])
