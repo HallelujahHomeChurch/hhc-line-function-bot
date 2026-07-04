@@ -23,7 +23,7 @@ properties:
   template:
     containers:
       - name: hhc-line-function-bot
-        image: PLACEHOLDER_ACR_LOGIN_SERVER/hhc-line-function-bot:latest
+        image: ghcr.io/hallelujahhomechurch/hhc-line-function-bot:latest
         env:
           - name: SERVICE_NAME
             value: hhc-line-function-bot

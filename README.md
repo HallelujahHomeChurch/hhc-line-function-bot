@@ -84,7 +84,7 @@ Do not commit real `.env` files. In Azure Container Apps, store runtime values i
 
 ## GitHub Actions
 
-`ci.yml` runs install, typecheck, lint, tests, app build, and Docker image build.
+`ci.yml` runs install, typecheck, lint, tests, app build, Docker image build, and publishes the image to GHCR on pushes to `main`.
 
 `deploy-aca.yml` uses GitHub OIDC with Azure. Configure these GitHub variables:
 
@@ -92,10 +92,15 @@ Do not commit real `.env` files. In Azure Container Apps, store runtime values i
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
 - `AZURE_RESOURCE_GROUP`
-- `ACR_NAME`
 - `CONTAINER_APP_NAME`
 
-The workflow pushes an image to ACR and updates the Azure Container App image. Runtime secrets are expected to be preconfigured on the Container App.
+The deploy workflow updates the Azure Container App to use a GHCR image:
+
+```text
+ghcr.io/hallelujahhomechurch/hhc-line-function-bot:<tag>
+```
+
+The GHCR package is intended to be public so Azure Container Apps can pull it without registry credentials. Runtime secrets are expected to be preconfigured on the Container App.
 
 ## Verification
 

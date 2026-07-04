@@ -2,10 +2,18 @@ name: Deploy Azure Container App
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "GHCR image tag to deploy. Defaults to the selected commit SHA."
+        required: false
+        type: string
 
 permissions:
   contents: read
   id-token: write
+
+env:
+  GHCR_IMAGE: ghcr.io/hallelujahhomechurch/hhc-line-function-bot
 
 jobs:
   deploy:
@@ -18,15 +26,15 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Build and push image
+      - name: Resolve image
         shell: bash
         run: |
           set -euo pipefail
-          LOGIN_SERVER="${{ vars.ACR_NAME }}.azurecr.io"
-          IMAGE="$LOGIN_SERVER/hhc-line-function-bot:${{ github.sha }}"
-          az acr login --name "${{ vars.ACR_NAME }}"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
+          TAG="${{ inputs.image_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.sha }}"
+          fi
+          IMAGE="$GHCR_IMAGE:$TAG"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
       - name: Update Container App
         shell: bash

@@ -15,6 +15,8 @@ RUN pnpm build
 
 FROM base AS runtime
 ENV NODE_ENV=production
+LABEL org.opencontainers.image.source="https://github.com/HallelujahHomeChurch/hhc-line-function-bot"
+LABEL org.opencontainers.image.description="LINE function bot with local-first LLM routing"
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 COPY --from=build /app/dist ./dist
