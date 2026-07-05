@@ -1,4 +1,4 @@
-import type { DriveItem, LineSource } from "../types.js";
+import type { DriveItem, FunctionName, JsonRecord, LineSource } from "../types.js";
 
 export interface PptSelectionSession {
   id: string;
@@ -22,7 +22,18 @@ export interface SelectionSession {
   expiresAt: string;
 }
 
-export type ConversationSession = PptSelectionSession | SelectionSession;
+export interface PendingFunctionSession {
+  id: string;
+  type: "pending_function";
+  action: FunctionName;
+  profileName: string;
+  requesterUserId?: string;
+  source: LineSource;
+  arguments: JsonRecord;
+  expiresAt: string;
+}
+
+export type ConversationSession = PptSelectionSession | SelectionSession | PendingFunctionSession;
 
 export interface PptSelectionLookup {
   profileName: string;
@@ -34,12 +45,17 @@ export interface SelectionLookup extends PptSelectionLookup {
   action: string;
 }
 
+export interface PendingFunctionLookup extends PptSelectionLookup {
+  action?: FunctionName;
+}
+
 export interface SessionStore {
   get(id: string): ConversationSession | undefined;
   set(session: ConversationSession): void;
   delete(id: string): void;
   findPptSelection(lookup: PptSelectionLookup): PptSelectionSession | undefined;
   findSelection(lookup: SelectionLookup): SelectionSession | undefined;
+  findPendingFunction(lookup: PendingFunctionLookup): PendingFunctionSession | undefined;
 }
 
 export interface InMemorySessionStoreOptions {
@@ -87,6 +103,26 @@ export class InMemorySessionStore implements SessionStore {
       .filter((session): session is SelectionSession => Boolean(session))
       .filter((session) => session.type === "selection")
       .filter((session) => session.action === lookup.action)
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter(
+        (session) =>
+          !session.requesterUserId ||
+          !lookup.requesterUserId ||
+          session.requesterUserId === lookup.requesterUserId
+      );
+
+    return liveSessions.sort(
+      (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+    )[0];
+  }
+
+  findPendingFunction(lookup: PendingFunctionLookup): PendingFunctionSession | undefined {
+    const liveSessions = Array.from(this.sessions.values())
+      .map((session) => this.liveSession(session))
+      .filter((session): session is PendingFunctionSession => Boolean(session))
+      .filter((session) => session.type === "pending_function")
+      .filter((session) => !lookup.action || session.action === lookup.action)
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
       .filter(

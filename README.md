@@ -12,6 +12,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - LINE Quick Reply suggestions for supported functions.
 - Postback-based selection state for multi-result flows, currently used by PPT and sheet music search.
 - Hermes-compatible numeric selection replies, so users can tap a Quick Reply or reply with `1`, `2`, `3`.
+- Clarification state for missing search terms, so users can ask `查投影片` or `查流行歌譜` and answer the follow-up with just the title.
 - Direct-chat admin commands for configured admin LINE user ids.
 - Function handlers:
   - `find_ppt_slides`: searches a configured Microsoft Graph drive folder, fuzzy-matches PPT/PDF names, and returns 24 hour sharing links.
@@ -97,6 +98,8 @@ Set `TIME_ZONE` for all calendar date range decisions, including `今天`, `明�
 ## State
 
 Multi-result PPT and sheet music searches store short-lived in-memory sessions and reply with LINE postback Quick Replies. Users can also reply with a plain number such as `1` to select from the latest active candidate list for the same profile, LINE source, and requester. Numeric replies without an active selection session are ignored instead of being routed or answered.
+
+If a PPT or sheet music request is missing the title keyword, the bot stores a short-lived pending function session and asks for the missing title. The user's next plain-text reply from the same LINE source and requester fills the missing `query` argument and runs the original function.
 
 The first version is single-instance friendly. If the Container App scales beyond one replica or restarts, pending selections can expire; use Redis or another shared store before enabling multiple replicas.
 

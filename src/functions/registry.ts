@@ -22,6 +22,7 @@ import {
   createFindPopSheetMusicTextMessageHandler,
   SHEET_MUSIC_INDEX_CACHE_PREFIX
 } from "./find-pop-sheet-music.js";
+import { createPendingFunctionTextMessageHandler } from "./pending-function.js";
 import { createQueryServiceScheduleHandler } from "./query-service-schedule.js";
 
 export interface RegistryClients {
@@ -46,10 +47,12 @@ export function createFunctionRegistries(
   const postbacks: PostbackHandlerRegistry = {};
   const textMessages: TextMessageHandlerRegistry = {};
   const adminHandlers: AdminHandlerRegistry = {};
+  let sharedSessionStore: SessionStore | undefined;
 
   if (config.graph) {
     const graph = clients.graph ?? createGraphDriveClient(config.graph);
     const sessionStore = clients.sessionStore ?? new InMemorySessionStore();
+    sharedSessionStore = sessionStore;
     const cache = clients.cache ?? new MemoryCacheStore();
     functions.find_ppt_slides = createFindPptSlidesHandler({
       graph,
@@ -101,6 +104,13 @@ export function createFunctionRegistries(
       databaseId: config.notion.databaseId,
       properties: config.notion.properties,
       timeZone: config.timeZone
+    });
+  }
+
+  if (sharedSessionStore) {
+    textMessages.pending_function_answer = createPendingFunctionTextMessageHandler({
+      sessionStore: sharedSessionStore,
+      functions
     });
   }
 

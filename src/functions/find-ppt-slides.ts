@@ -4,6 +4,7 @@ import {
   findPptSlidesArgumentsSchema,
   type FindPptSlidesArguments
 } from "../function-arguments.js";
+import { storePendingFunctionQuery } from "./pending-function.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
 import { InMemorySessionStore, type SessionStore } from "../state/session-store.js";
 import type {
@@ -68,9 +69,17 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
     const rawQuery = args.query.trim();
 
     if (!rawQuery) {
+      storePendingFunctionQuery({
+        sessionStore,
+        requestId: requestIdFactory(),
+        action: "find_ppt_slides",
+        arguments: args,
+        context,
+        now: now()
+      });
       return {
         ok: true,
-        replyText: "請輸入投影片關鍵字，例如：小哈 查投影片 奇異恩典。"
+        replyText: "要查哪一份投影片？請直接回覆名稱。"
       };
     }
 

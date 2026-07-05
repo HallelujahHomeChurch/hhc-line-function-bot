@@ -7,6 +7,7 @@ import {
 } from "../function-arguments.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
 import { InMemorySessionStore, type SessionStore } from "../state/session-store.js";
+import { storePendingFunctionQuery } from "./pending-function.js";
 import type {
   DriveItem,
   FunctionHandler,
@@ -65,9 +66,17 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     const rawQuery = args.query.trim();
 
     if (!rawQuery) {
+      storePendingFunctionQuery({
+        sessionStore,
+        requestId: requestIdFactory(),
+        action: "find_pop_sheet_music",
+        arguments: args,
+        context,
+        now: now()
+      });
       return {
         ok: true,
-        replyText: "請輸入流行歌曲樂譜關鍵字，例如：小哈 查流行歌譜 Yesterday。"
+        replyText: "要查哪一首流行歌譜？請直接回覆歌名或歌手。"
       };
     }
 
