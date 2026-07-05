@@ -192,7 +192,7 @@ describe("LINE entrance", () => {
     expect(route.mock.calls[0]?.[0].source).toEqual({ type: "user", userId: "Uallowed" });
   });
 
-  it("handles admin status in direct chat without calling the router", async () => {
+  it("handles slash admin status in direct chat without calling the router", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(testConfig(), {
@@ -203,7 +203,7 @@ describe("LINE entrance", () => {
       type: "message",
       replyToken: "reply-token",
       source: { type: "user", userId: "Uadmin" },
-      message: { type: "text", text: "小哈 admin status" }
+      message: { type: "text", text: "/status" }
     });
 
     const res = await app.inject({
@@ -222,7 +222,7 @@ describe("LINE entrance", () => {
     );
   });
 
-  it("denies admin commands from groups when direct-only admin is enabled", async () => {
+  it("denies slash admin commands from groups when direct-only admin is enabled", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(testConfig(), {
@@ -233,7 +233,7 @@ describe("LINE entrance", () => {
       type: "message",
       replyToken: "reply-token",
       source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
-      message: { type: "text", text: "小哈 admin status" }
+      message: { type: "text", text: "/status" }
     });
 
     const res = await app.inject({
@@ -248,7 +248,7 @@ describe("LINE entrance", () => {
     expect(replyText).toHaveBeenCalledWith("reply-token", "你沒有權限使用 admin 指令。", undefined);
   });
 
-  it("dispatches direct admin maintenance commands to configured handlers", async () => {
+  it("dispatches direct slash admin maintenance commands to configured handlers", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const refreshSheetMusicCache = vi.fn().mockResolvedValue({
@@ -266,7 +266,7 @@ describe("LINE entrance", () => {
       type: "message",
       replyToken: "reply-token",
       source: { type: "user", userId: "Uadmin" },
-      message: { type: "text", text: "小哈 admin refresh-sheet-music-cache" }
+      message: { type: "text", text: "/refresh-sheet-music-cache" }
     });
 
     const res = await app.inject({
@@ -282,6 +282,32 @@ describe("LINE entrance", () => {
       expect.objectContaining({ profile: expect.objectContaining({ name: "main" }) })
     );
     expect(replyText).toHaveBeenCalledWith("reply-token", "已重新整理流行歌譜 cache。", undefined);
+  });
+
+  it("denies slash admin commands from non-admin direct users without routing", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(testConfig(), {
+      router: { route },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Ustranger" },
+      message: { type: "text", text: "/status" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledWith("reply-token", "你沒有權限使用 admin 指令。", undefined);
   });
 
   it("blocks non-text messages until the profile explicitly allows them", async () => {

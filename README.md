@@ -103,8 +103,14 @@ The first version is single-instance friendly. If the Container App scales beyon
 Sheet music search uses a short-lived in-memory file index cache. Admins can clear it from a direct LINE chat:
 
 ```text
-小哈 admin refresh-sheet-music-cache
+/refresh-sheet-music-cache
 ```
+
+Admin commands use slash syntax and are gated by each profile's `adminUserIds`.
+Available commands:
+
+- `/status`
+- `/refresh-sheet-music-cache`
 
 ## OneDrive And Graph
 

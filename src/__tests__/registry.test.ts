@@ -80,7 +80,7 @@ describe("function registry", () => {
       event: {
         type: "message",
         source: { type: "user", userId: "Uadmin" },
-        message: { type: "text", text: "小哈 admin refresh-sheet-music-cache" }
+        message: { type: "text", text: "/refresh-sheet-music-cache" }
       },
       command: "refresh-sheet-music-cache",
       args: []

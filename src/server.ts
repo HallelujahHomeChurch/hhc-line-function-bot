@@ -35,6 +35,11 @@ interface AllowResult {
   reason: string;
 }
 
+interface ParsedAdminCommand {
+  command: string;
+  args: string[];
+}
+
 export function createApp(config: AppConfig, deps: AppDependencies): FastifyInstance {
   const app = fastify({
     logger: false,
@@ -285,6 +290,9 @@ function allowEvent(
       if (!messageTypeAllowed(profile, event)) {
         return { allowed: false, reason: "message_type_not_allowed" };
       }
+      if (isAdminCommand(event.message?.text)) {
+        return { allowed: true, reason: "group_admin_command_allowed" };
+      }
       if (!profile.groupRequireWakeWord || matchesWakeRule(profile, event.message)) {
         return { allowed: true, reason: "group_wake_matched" };
       }
@@ -297,8 +305,8 @@ function allowEvent(
       if (!profile.allowDirectUser) {
         return { allowed: false, reason: "direct_user_blocked" };
       }
-      if (isAdminCommand(event.message?.text) && isAdminUser(profile, event.source.userId)) {
-        return { allowed: true, reason: "direct_admin_allowed" };
+      if (isAdminCommand(event.message?.text)) {
+        return { allowed: true, reason: "direct_admin_command_allowed" };
       }
       if (!isAllowedId(profile.allowedUserIds, event.source.userId)) {
         return { allowed: false, reason: "user_not_allowed" };
@@ -320,7 +328,7 @@ function allowEvent(
 }
 
 function isAdminCommand(text: string | undefined): boolean {
-  return Boolean(text?.trim().match(/^(?:小哈[，,\s]*)?admin\b/i));
+  return Boolean(parseAdminCommand(text));
 }
 
 function handleAdminCommand(
@@ -333,8 +341,12 @@ function handleAdminCommand(
     return { ok: true, replyText: messages.adminUnauthorized };
   }
 
-  const normalized = text.trim().replace(/^小哈[，,\s]*/i, "");
-  if (/^admin\s+status\b/i.test(normalized)) {
+  const parsed = parseAdminCommand(text);
+  if (!parsed) {
+    return { ok: true, replyText: "目前不支援這個 admin 指令。" };
+  }
+
+  if (parsed.command === "status") {
     return {
       ok: true,
       replyText: [
@@ -346,15 +358,24 @@ function handleAdminCommand(
     };
   }
 
-  const match = normalized.match(/^admin\s+([a-z0-9-]+)(?:\s+(.*))?$/i);
-  const command = match?.[1] ?? "";
-  const handler = adminHandlers[command];
+  const handler = adminHandlers[parsed.command];
   if (handler) {
-    const args = (match?.[2] ?? "").split(/\s+/).filter(Boolean);
-    return handler({ profile, event, command, args });
+    return handler({ profile, event, command: parsed.command, args: parsed.args });
   }
 
   return { ok: true, replyText: "目前不支援這個 admin 指令。" };
+}
+
+function parseAdminCommand(text: string | undefined): ParsedAdminCommand | undefined {
+  const normalized = text?.trim().replace(/^小哈[，,\s]*/i, "") ?? "";
+  const match = normalized.match(/^\/([a-z0-9][a-z0-9-]*)(?:\s+(.*))?$/i);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    command: match[1].toLowerCase(),
+    args: (match[2] ?? "").split(/\s+/).filter(Boolean)
+  };
 }
 
 function adminAllowed(profile: BotProfileConfig, event: LineEvent): boolean {
