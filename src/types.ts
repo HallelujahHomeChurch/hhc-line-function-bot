@@ -1,4 +1,8 @@
-export const FUNCTION_NAMES = ["find_ppt_slides", "query_service_schedule"] as const;
+export const FUNCTION_NAMES = [
+  "find_ppt_slides",
+  "query_service_schedule",
+  "find_pop_sheet_music"
+] as const;
 
 export type FunctionName = (typeof FUNCTION_NAMES)[number];
 
@@ -18,6 +22,8 @@ export interface BotProfileConfig {
   wakeKeywords: string[];
   acceptMention: boolean;
   enabledFunctions: FunctionName[];
+  adminUserIds?: string[];
+  adminDirectOnly?: boolean;
 }
 
 export interface LlmConfig {
@@ -34,6 +40,10 @@ export interface GraphConfig {
   clientSecret: string;
   driveId: string;
   pptFolderItemId: string;
+  sheetMusicFolderItemId?: string;
+  sheetMusicFolderPath: string;
+  sheetMusicAllowedExtensions: string[];
+  sheetMusicRecursive: boolean;
   allowedExtensions: string[];
   defaultIncludePdf: boolean;
   linkType: "view" | "edit" | "embed";
@@ -216,14 +226,40 @@ export interface TextMessageHandler {
 
 export type TextMessageHandlerRegistry = Record<string, TextMessageHandler>;
 
+export interface AdminCommandContext {
+  profile: BotProfileConfig;
+  event: LineEvent;
+  command: string;
+  args: string[];
+}
+
+export type AdminHandler = (
+  context: AdminCommandContext
+) => Promise<FunctionExecutionResult> | FunctionExecutionResult;
+
+export type AdminHandlerRegistry = Record<string, AdminHandler>;
+
 export interface DriveItem {
   id: string;
+  driveId?: string;
   name: string;
   webUrl?: string;
+  path?: string;
+  isFolder?: boolean;
+  remoteItem?: {
+    id?: string;
+    name?: string;
+    parentReference?: {
+      driveId?: string;
+      path?: string;
+    };
+  };
 }
 
 export interface GraphDriveClient {
   listFolderChildren(driveId: string, folderItemId: string): Promise<DriveItem[]>;
+  listFolderFilesRecursive?(driveId: string, folderItemId: string): Promise<DriveItem[]>;
+  getItemByPath?(driveId: string, path: string): Promise<DriveItem | undefined>;
   createSharingLink(driveId: string, itemId: string, expirationDateTime: string): Promise<string>;
 }
 

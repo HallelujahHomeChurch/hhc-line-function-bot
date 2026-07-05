@@ -32,7 +32,9 @@ function testConfig(): AppConfig {
         groupRequireWakeWord: true,
         wakeKeywords: ["小哈"],
         acceptMention: true,
-        enabledFunctions: ["find_ppt_slides", "query_service_schedule"]
+        enabledFunctions: ["find_ppt_slides", "query_service_schedule"],
+        adminUserIds: ["Uadmin"],
+        adminDirectOnly: true
       },
       {
         name: "slides",
@@ -47,7 +49,9 @@ function testConfig(): AppConfig {
         groupRequireWakeWord: true,
         wakeKeywords: ["小哈"],
         acceptMention: true,
-        enabledFunctions: ["find_ppt_slides"]
+        enabledFunctions: ["find_ppt_slides"],
+        adminUserIds: [],
+        adminDirectOnly: true
       }
     ],
     llm: {
@@ -186,6 +190,98 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(route).toHaveBeenCalledOnce();
     expect(route.mock.calls[0]?.[0].source).toEqual({ type: "user", userId: "Uallowed" });
+  });
+
+  it("handles admin status in direct chat without calling the router", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(testConfig(), {
+      router: { route },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uadmin" },
+      message: { type: "text", text: "小哈 admin status" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText.mock.calls[0]?.[1]).toContain("Admin status");
+    expect(replyText.mock.calls[0]?.[1]).toContain("profile: main");
+    expect(replyText.mock.calls[0]?.[1]).toContain(
+      "functions: find_ppt_slides, query_service_schedule"
+    );
+  });
+
+  it("denies admin commands from groups when direct-only admin is enabled", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(testConfig(), {
+      router: { route },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+      message: { type: "text", text: "小哈 admin status" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledWith("reply-token", "你沒有權限使用 admin 指令。", undefined);
+  });
+
+  it("dispatches direct admin maintenance commands to configured handlers", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const refreshSheetMusicCache = vi.fn().mockResolvedValue({
+      ok: true,
+      replyText: "已重新整理流行歌譜 cache。"
+    });
+    const app = createApp(testConfig(), {
+      router: { route },
+      adminHandlers: {
+        "refresh-sheet-music-cache": refreshSheetMusicCache
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uadmin" },
+      message: { type: "text", text: "小哈 admin refresh-sheet-music-cache" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(refreshSheetMusicCache).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: expect.objectContaining({ name: "main" }) })
+    );
+    expect(replyText).toHaveBeenCalledWith("reply-token", "已重新整理流行歌譜 cache。", undefined);
   });
 
   it("blocks non-text messages until the profile explicitly allows them", async () => {

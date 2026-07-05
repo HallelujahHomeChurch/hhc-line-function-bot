@@ -7,7 +7,9 @@ import { verifyLineSignature } from "./line-signature.js";
 import { messages } from "./messages.js";
 import type {
   AppConfig,
+  AdminHandlerRegistry,
   BotProfileConfig,
+  FunctionExecutionResult,
   FunctionRegistry,
   FunctionRouterPort,
   LineEvent,
@@ -24,6 +26,7 @@ export interface AppDependencies {
   functionRegistry?: FunctionRegistry;
   postbackHandlers?: PostbackHandlerRegistry;
   textMessageHandlers?: TextMessageHandlerRegistry;
+  adminHandlers?: AdminHandlerRegistry;
   createLineReplyClient?: (profile: BotProfileConfig) => LineReplyClient;
 }
 
@@ -70,6 +73,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         functionRegistry,
         deps.postbackHandlers ?? {},
         deps.textMessageHandlers ?? {},
+        deps.adminHandlers ?? {},
         createReplyClient
       );
     });
@@ -86,6 +90,7 @@ async function handleWebhook(
   functionRegistry: FunctionRegistry,
   postbackHandlers: PostbackHandlerRegistry,
   textMessageHandlers: TextMessageHandlerRegistry,
+  adminHandlers: AdminHandlerRegistry,
   createReplyClient: (profile: BotProfileConfig) => LineReplyClient
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
@@ -143,6 +148,17 @@ async function handleWebhook(
     }
 
     if (!event.replyToken) {
+      continue;
+    }
+
+    if (isAdminCommand(event.message.text)) {
+      const adminResult = await handleAdminCommand(
+        event.message.text,
+        profile,
+        event,
+        adminHandlers
+      );
+      await line.replyText(event.replyToken, adminResult.replyText, undefined);
       continue;
     }
 
@@ -281,6 +297,9 @@ function allowEvent(
       if (!profile.allowDirectUser) {
         return { allowed: false, reason: "direct_user_blocked" };
       }
+      if (isAdminCommand(event.message?.text) && isAdminUser(profile, event.source.userId)) {
+        return { allowed: true, reason: "direct_admin_allowed" };
+      }
       if (!isAllowedId(profile.allowedUserIds, event.source.userId)) {
         return { allowed: false, reason: "user_not_allowed" };
       }
@@ -298,6 +317,61 @@ function allowEvent(
     default:
       return { allowed: false, reason: "source_type_not_supported" };
   }
+}
+
+function isAdminCommand(text: string | undefined): boolean {
+  return Boolean(text?.trim().match(/^(?:小哈[，,\s]*)?admin\b/i));
+}
+
+function handleAdminCommand(
+  text: string,
+  profile: BotProfileConfig,
+  event: LineEvent,
+  adminHandlers: AdminHandlerRegistry
+): Promise<FunctionExecutionResult> | FunctionExecutionResult {
+  if (!adminAllowed(profile, event)) {
+    return { ok: true, replyText: messages.adminUnauthorized };
+  }
+
+  const normalized = text.trim().replace(/^小哈[，,\s]*/i, "");
+  if (/^admin\s+status\b/i.test(normalized)) {
+    return {
+      ok: true,
+      replyText: [
+        "Admin status",
+        `profile: ${profile.name}`,
+        `functions: ${profile.enabledFunctions.join(", ") || "(none)"}`,
+        `source: ${event.source.type}`
+      ].join("\n")
+    };
+  }
+
+  const match = normalized.match(/^admin\s+([a-z0-9-]+)(?:\s+(.*))?$/i);
+  const command = match?.[1] ?? "";
+  const handler = adminHandlers[command];
+  if (handler) {
+    const args = (match?.[2] ?? "").split(/\s+/).filter(Boolean);
+    return handler({ profile, event, command, args });
+  }
+
+  return { ok: true, replyText: "目前不支援這個 admin 指令。" };
+}
+
+function adminAllowed(profile: BotProfileConfig, event: LineEvent): boolean {
+  if (!isAdminUser(profile, event.source.userId)) {
+    return false;
+  }
+  if (profile.adminDirectOnly !== false && event.source.type !== "user") {
+    return false;
+  }
+  return true;
+}
+
+function isAdminUser(profile: BotProfileConfig, userId: string | undefined): boolean {
+  if (!userId) {
+    return false;
+  }
+  return (profile.adminUserIds ?? []).includes(userId);
 }
 
 function messageTypeAllowed(profile: BotProfileConfig, event: LineEvent): boolean {

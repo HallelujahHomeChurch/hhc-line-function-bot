@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { parseFunctionArguments } from "./function-arguments.js";
+import { getFunctionDefinitions } from "./functions/definitions.js";
 import { FUNCTION_NAMES, isFunctionName } from "./types.js";
 import type {
   ChatProvider,
@@ -130,7 +131,9 @@ function parseJsonObject(content: string): unknown {
 }
 
 function buildRouterPrompt(enabledFunctions: FunctionName[]): string {
-  const available = enabledFunctions.map((name) => functionDescriptions[name]).join("\n");
+  const available = getFunctionDefinitions(enabledFunctions)
+    .map((definition) => definition.description)
+    .join("\n");
   return [
     "You are a strict JSON function router for a LINE bot.",
     "Return exactly one JSON object and no markdown.",
@@ -140,13 +143,6 @@ function buildRouterPrompt(enabledFunctions: FunctionName[]): string {
     available || "(none)"
   ].join("\n");
 }
-
-const functionDescriptions: Record<FunctionName, string> = {
-  find_ppt_slides:
-    '- find_ppt_slides: find church PowerPoint/PDF slide files by title or keyword. Arguments: {"query":"extracted filename/title keyword", "originalQuery":"full user request optional", "fileType":"ppt|pdf|any optional", "includePdf": boolean optional, "matchMode":"fuzzy|exact optional"}. Use fuzzy for typo-tolerant song/title lookup.',
-  query_service_schedule:
-    '- query_service_schedule: query church meeting service schedule or serving assignments. Arguments: {"query":"original user request text", "dateIntent":"today|tomorrow|day_after_tomorrow|this_week|next_meeting|specific_date|upcoming optional", "specificDate":"YYYY-MM-DD required for specific_date", "meeting":"text optional", "role":"text optional", "limit": number optional}. For requests like 下一場/最近一場, use dateIntent next_meeting.'
-};
 
 export function coerceFunctionArguments(args: unknown): JsonRecord {
   if (args && typeof args === "object" && !Array.isArray(args)) {

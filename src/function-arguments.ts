@@ -52,17 +52,28 @@ export const queryServiceScheduleArgumentsSchema = z
     }
   });
 
+export const findPopSheetMusicArgumentsSchema = z
+  .object({
+    query: z.string().optional().default(""),
+    artist: z.string().optional(),
+    fileType: z.enum(["pdf", "image", "any"]).optional(),
+    matchMode: z.enum(["fuzzy", "exact"]).optional()
+  })
+  .strip();
+
 export type FindPptSlidesArguments = z.infer<typeof findPptSlidesArgumentsSchema>;
 export type QueryServiceScheduleArguments = z.infer<typeof queryServiceScheduleArgumentsSchema>;
+export type FindPopSheetMusicArguments = z.infer<typeof findPopSheetMusicArgumentsSchema>;
 
 export function parseFunctionArguments(
   action: FunctionName,
   rawArguments: unknown
 ): JsonRecord | undefined {
-  const schema =
-    action === "find_ppt_slides"
-      ? findPptSlidesArgumentsSchema
-      : queryServiceScheduleArgumentsSchema;
+  const schema = {
+    find_ppt_slides: findPptSlidesArgumentsSchema,
+    query_service_schedule: queryServiceScheduleArgumentsSchema,
+    find_pop_sheet_music: findPopSheetMusicArgumentsSchema
+  }[action];
   const parsed = schema.safeParse(rawArguments ?? {});
   return parsed.success ? (parsed.data as JsonRecord) : undefined;
 }

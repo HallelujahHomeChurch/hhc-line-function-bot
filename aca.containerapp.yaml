@@ -49,12 +49,20 @@ properties:
             value: PLACEHOLDER_GRAPH_DRIVE_ID
           - name: GRAPH_PPT_FOLDER_ITEM_ID
             value: PLACEHOLDER_GRAPH_PPT_FOLDER_ITEM_ID
+          - name: GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID
+            value: PLACEHOLDER_GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID
+          - name: GRAPH_SHEET_MUSIC_FOLDER_PATH
+            value: 文件/流行歌譜 (捷徑)
           - name: GRAPH_LINK_SCOPE
             value: anonymous
           - name: GRAPH_LINK_TYPE
             value: view
           - name: PPT_ALLOWED_EXTENSIONS
             value: ppt,pptx,pdf
+          - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
+            value: pdf,jpg,jpeg
+          - name: SHEET_MUSIC_DEFAULT_RECURSIVE
+            value: "true"
           - name: NOTION_TOKEN
             secretRef: notion-token
           - name: NOTION_SERVICE_DATABASE_ID

@@ -19,7 +19,9 @@ const profileSchema = z.object({
   groupRequireWakeWord: z.boolean().default(true),
   wakeKeywords: z.array(z.string()).default([]),
   acceptMention: z.boolean().default(true),
-  enabledFunctions: z.array(z.enum(FUNCTION_NAMES)).default([])
+  enabledFunctions: z.array(z.enum(FUNCTION_NAMES)).default([]),
+  adminUserIds: z.array(z.string()).default([]),
+  adminDirectOnly: z.boolean().default(true)
 });
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
@@ -56,6 +58,12 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
             clientSecret: env.GRAPH_CLIENT_SECRET,
             driveId: env.GRAPH_DRIVE_ID,
             pptFolderItemId: env.GRAPH_PPT_FOLDER_ITEM_ID,
+            sheetMusicFolderItemId: env.GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID || undefined,
+            sheetMusicFolderPath: env.GRAPH_SHEET_MUSIC_FOLDER_PATH || "文件/流行歌譜 (捷徑)",
+            sheetMusicAllowedExtensions: readList(
+              env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg"
+            ).map((ext) => (ext.startsWith(".") ? ext : `.${ext}`)),
+            sheetMusicRecursive: readBool(env.SHEET_MUSIC_DEFAULT_RECURSIVE, true),
             allowedExtensions: readList(env.PPT_ALLOWED_EXTENSIONS || "ppt,pptx,pdf").map((ext) =>
               ext.startsWith(".") ? ext : `.${ext}`
             ),

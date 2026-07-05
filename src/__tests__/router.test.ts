@@ -152,6 +152,82 @@ describe("function router", () => {
     });
   });
 
+  it("routes structured pop sheet music metadata from Qwen", async () => {
+    const qwen = provider(
+      JSON.stringify({
+        action: "find_pop_sheet_music",
+        confidence: 0.89,
+        arguments: {
+          query: "A TIME FOR US",
+          artist: "Andy Williams",
+          fileType: "pdf",
+          matchMode: "fuzzy",
+          ignored: "drop me"
+        }
+      })
+    );
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈 查流行歌譜 A TIME FOR US Andy Williams",
+      enabledFunctions: ["find_pop_sheet_music"],
+      source: { type: "group", groupId: "C1", userId: "U1" }
+    });
+
+    expect(result).toEqual({
+      type: "execute",
+      action: "find_pop_sheet_music",
+      provider: "ollama",
+      confidence: 0.89,
+      arguments: {
+        query: "A TIME FOR US",
+        artist: "Andy Williams",
+        fileType: "pdf",
+        matchMode: "fuzzy"
+      }
+    });
+  });
+
+  it("keyword-routes pop sheet music without stealing PPT requests", async () => {
+    const qwen = provider("not-json");
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const sheetResult = await router.route({
+      profileName: "main",
+      text: "小哈 查流行歌譜 Yesterday",
+      enabledFunctions: ["find_pop_sheet_music", "find_ppt_slides"],
+      source: { type: "group", groupId: "C1", userId: "U1" }
+    });
+    const pptResult = await router.route({
+      profileName: "main",
+      text: "小哈 查投影片 奇異恩典",
+      enabledFunctions: ["find_pop_sheet_music", "find_ppt_slides"],
+      source: { type: "group", groupId: "C1", userId: "U1" }
+    });
+
+    expect(sheetResult).toMatchObject({
+      type: "execute",
+      action: "find_pop_sheet_music",
+      provider: "keyword",
+      arguments: { query: "Yesterday", fileType: "pdf", matchMode: "fuzzy" }
+    });
+    expect(pptResult).toMatchObject({
+      type: "execute",
+      action: "find_ppt_slides",
+      provider: "keyword",
+      arguments: { query: "奇異恩典" }
+    });
+  });
+
   it("denies invalid Qwen arguments without falling back to keywords", async () => {
     const qwen = provider(
       JSON.stringify({

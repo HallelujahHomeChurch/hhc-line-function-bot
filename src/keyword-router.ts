@@ -1,45 +1,31 @@
-import type { FunctionName, JsonRecord, RouteInput, RouteResult } from "./types.js";
+import { FUNCTION_DEFINITIONS, type FunctionDefinition } from "./functions/definitions.js";
+import type { JsonRecord, RouteInput, RouteResult } from "./types.js";
 
-interface KeywordRule {
-  action: FunctionName;
-  keywords: string[];
-  stripWords: string[];
-}
+type KeywordRule = FunctionDefinition & {
+  keywordFallback: NonNullable<FunctionDefinition["keywordFallback"]>;
+};
 
 export interface KeywordFallbackRouter {
   route(input: RouteInput): RouteResult;
 }
 
-const commonStripWords = ["小哈", "請", "幫我", "幫忙", "查詢", "查", "找", "搜尋"];
-
-const rules: KeywordRule[] = [
-  {
-    action: "find_ppt_slides",
-    keywords: ["投影片", "ppt", "powerpoint", "slides"],
-    stripWords: [...commonStripWords, "投影片", "ppt", "powerpoint", "slides"]
-  },
-  {
-    action: "query_service_schedule",
-    keywords: ["服事表", "服事"],
-    stripWords: [...commonStripWords]
-  }
-];
+const rules: KeywordRule[] = FUNCTION_DEFINITIONS.filter((definition): definition is KeywordRule =>
+  Boolean(definition.keywordFallback)
+);
 
 export function createKeywordFallbackRouter(): KeywordFallbackRouter {
   return {
     route(input: RouteInput): RouteResult {
       const text = input.text.trim();
       const matches = rules.filter((rule) =>
-        rule.keywords.some((keyword) => includesKeyword(text, keyword))
+        rule.keywordFallback.keywords.some((keyword) => includesKeyword(text, keyword))
       );
 
       if (matches.length === 0) {
         return { type: "deny", reason: "keyword_no_match", provider: "keyword" };
       }
 
-      const enabledMatches = matches.filter((match) =>
-        input.enabledFunctions.includes(match.action)
-      );
+      const enabledMatches = matches.filter((match) => input.enabledFunctions.includes(match.name));
       if (enabledMatches.length === 0) {
         return { type: "deny", reason: "function_disabled", provider: "keyword" };
       }
@@ -51,7 +37,7 @@ export function createKeywordFallbackRouter(): KeywordFallbackRouter {
       const match = enabledMatches[0];
       return {
         type: "execute",
-        action: match.action,
+        action: match.name,
         arguments: extractArguments(match, text),
         provider: "keyword"
       };
@@ -64,13 +50,19 @@ function includesKeyword(text: string, keyword: string): boolean {
 }
 
 function extractArguments(rule: KeywordRule, text: string): JsonRecord {
-  const query = cleanupQuery(text, rule.stripWords);
-  const argumentsRecord: JsonRecord = { query: query || text.trim() };
-  if (rule.action === "find_ppt_slides") {
-    argumentsRecord.matchMode = "fuzzy";
+  const query = cleanupQuery(text, rule.keywordFallback.stripWords);
+  const argumentsRecord: JsonRecord = {
+    ...(rule.keywordFallback.defaultArguments ?? {}),
+    query: query || text.trim()
+  };
+  if (rule.name === "find_ppt_slides") {
     if (includesKeyword(text, "pdf")) {
       argumentsRecord.fileType = "pdf";
     }
+  }
+  if (rule.name === "find_pop_sheet_music") {
+    argumentsRecord.fileType =
+      includesKeyword(text, "jpg") || includesKeyword(text, "圖片") ? "image" : "pdf";
   }
   return argumentsRecord;
 }
