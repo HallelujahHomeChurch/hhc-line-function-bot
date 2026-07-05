@@ -34,6 +34,7 @@ interface DerivedFilters {
   date?: string;
   meeting?: string;
   role?: string;
+  nextMeetingOnly?: boolean;
   range?: {
     start: string;
     endExclusive: string;
@@ -61,12 +62,15 @@ export function createQueryServiceScheduleHandler(
       person: propertyToText(page.properties[options.properties.person])
     }));
 
-    const filtered = rows
+    const filteredRows = rows
       .filter((row) => matchesOptional(row.date, derivedFilters.date))
       .filter((row) => matchesOptional(row.meeting, derivedFilters.meeting))
       .filter((row) => matchesOptional(row.role, derivedFilters.role))
       .filter((row) => matchesDateRange(row.date, derivedFilters.range))
       .slice(0, 10);
+    const filtered = derivedFilters.nextMeetingOnly
+      ? limitToFirstGroup(filteredRows)
+      : filteredRows;
 
     if (filtered.length === 0) {
       return {
@@ -141,6 +145,11 @@ function deriveFilters(
     filters.range = upcomingRange(now, timeZone);
   }
 
+  if (/(下一場|下場|最近一場|下一次|下次)/.test(query)) {
+    filters.nextMeetingOnly = true;
+    filters.range ??= upcomingRange(now, timeZone);
+  }
+
   if (!filters.meeting && query.includes("主日")) {
     filters.meeting = "主日";
   }
@@ -154,6 +163,11 @@ function deriveFilters(
   }
 
   return filters;
+}
+
+function limitToFirstGroup(rows: ServiceRow[]): ServiceRow[] {
+  const [first] = groupRows(rows);
+  return first?.rows ?? [];
 }
 
 function upcomingRange(now: Date, timeZone: string): NonNullable<DerivedFilters["range"]> {
@@ -258,6 +272,9 @@ function formatServiceScheduleReply(rows: ServiceRow[], query: string): string {
 }
 
 function scheduleTitle(query: string): string {
+  if (/(下一場|下場|最近一場|下一次|下次)/.test(query)) {
+    return "下一場聚會服事表";
+  }
   if (query.includes("明天")) {
     return "明天聚會服事表";
   }

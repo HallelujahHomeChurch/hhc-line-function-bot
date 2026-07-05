@@ -412,6 +412,62 @@ describe("query_service_schedule", () => {
     );
   });
 
+  it("limits next meeting service schedule requests to the first upcoming meeting", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-next-1",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-05" } },
+            Meeting: { type: "select", select: { name: "7月5日 主日" } },
+            Role: { type: "title", title: [] },
+            Person: {
+              type: "rich_text",
+              rich_text: [{ plain_text: "導播: 知樂\n投影電腦: 育圻" }]
+            }
+          }
+        },
+        {
+          id: "page-next-2",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-07" } },
+            Meeting: { type: "select", select: { name: "7月7日(二) 晨更" } },
+            Role: { type: "title", title: [{ plain_text: "音控" }] },
+            Person: { type: "people", people: [{ name: "資恆" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-05T13:00:00.000Z")
+    });
+
+    const result = await handler({ query: "下一場聚會服事表" }, handlerContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toBe(
+      [
+        "下一場聚會服事表",
+        "7月5日",
+        "",
+        "【7月5日 主日】",
+        "服事同工：",
+        "- 導播：知樂",
+        "- 投影電腦：育圻"
+      ].join("\n")
+    );
+    expect(result.replyText).not.toContain("7月7日");
+    expect(result.replyText).not.toContain("資恆");
+  });
+
   it("filters tomorrow service schedule requests to the next calendar day", async () => {
     const notion: NotionDatabaseClient = {
       queryDatabase: vi.fn().mockResolvedValue([
