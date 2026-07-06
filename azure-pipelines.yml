@@ -131,7 +131,7 @@ stages:
                   app_state="$(az containerapp show \
                     --resource-group "$(resourceGroup)" \
                     --name "$(containerAppName)" \
-                    --query "[properties.latestRevisionName, properties.latestReadyRevisionName, properties.runningStatus, properties.template.containers[0].image]" \
+                    --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,image:properties.template.containers[0].image}" \
                     --output tsv)"
 
                   read -r latest_revision latest_ready_revision running_status deployed_image <<< "${app_state}"
