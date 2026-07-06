@@ -111,6 +111,8 @@ Users and groups register with the same command:
 
 In a direct chat this creates a pending user request. In a group this creates a pending group request. If `<name>` is omitted, the bot tries to fill it from the LINE user profile or group summary. If an admin sends `/register <name>` from inside a group, the current group is opened immediately without a pending review.
 
+If a managed group has not been opened yet, the bot stays quiet for normal group chatter. When someone addresses the bot with a wake word or mention, it replies with a short registration prompt instead of silently ignoring the request.
+
 When any profile enables registration, configure:
 
 ```text

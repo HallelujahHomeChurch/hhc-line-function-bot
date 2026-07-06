@@ -378,7 +378,7 @@ async function handleWebhook(
     }
 
     if (await shouldPromptManagedRegistration(profile, event, accessStore)) {
-      await line.replyText(event.replyToken, registrationPrompt(profile), undefined);
+      await line.replyText(event.replyToken, registrationPrompt(profile, event), undefined);
       continue;
     }
 
@@ -672,6 +672,26 @@ function parseWebhookPayload(body: Buffer): LineWebhookPayload | null {
   }
 }
 
+async function shouldAllowGroupRegistrationPrompt(
+  profile: BotProfileConfig,
+  event: LineEvent,
+  textMessageHandlers: TextMessageHandlerRegistry
+): Promise<boolean> {
+  if (!profile.registration?.enabled) {
+    return false;
+  }
+  if (event.type?.trim().toLowerCase() !== "message") {
+    return false;
+  }
+  if (!messageTypeAllowed(profile, event)) {
+    return false;
+  }
+  if (!profile.groupRequireWakeWord || matchesWakeRule(profile, event.message)) {
+    return true;
+  }
+  return Boolean(await matchingTextMessageHandler(event, profile, textMessageHandlers));
+}
+
 async function allowEvent(
   profile: BotProfileConfig,
   event: LineEvent,
@@ -699,6 +719,9 @@ async function allowEvent(
       if (!(await isGroupAllowed(profile, event.source.groupId, accessStore))) {
         if (command) {
           return { allowed: true, reason: "group_admin_command_allowed" };
+        }
+        if (await shouldAllowGroupRegistrationPrompt(profile, event, textMessageHandlers)) {
+          return { allowed: true, reason: "group_registration_prompt_allowed" };
         }
         return { allowed: false, reason: "group_not_allowed" };
       }
@@ -1071,8 +1094,14 @@ function formatRegistrationResult(requestId: string, created: boolean): Function
   };
 }
 
-function registrationPrompt(profile: BotProfileConfig): string {
+function registrationPrompt(profile: BotProfileConfig, event: LineEvent): string {
   if (profile.registration?.enabled) {
+    if (event.source.type === "group") {
+      return [
+        "這個群組還沒有開通小哈，請先找管理員協助註冊。",
+        "管理員可以在這個群組輸入 /register <群組名稱> 直接開通；若有邀請碼，也可以輸入 /register <邀請碼> <群組名稱> 送出申請。"
+      ].join("\n");
+    }
     return "你尚未開通小哈。請先用 /register <邀請碼> <你的名字> 送出申請。";
   }
   return "你尚未開通小哈，請聯絡管理同工協助。";
@@ -1083,10 +1112,20 @@ async function shouldPromptManagedRegistration(
   event: LineEvent,
   accessStore: AccessStore
 ): Promise<boolean> {
-  return (
+  if (
     event.source.type === "user" &&
     directAccessPolicy(profile) === "managed" &&
     !(await isDirectUserAllowed(profile, event.source.userId, accessStore))
+  ) {
+    return true;
+  }
+
+  return (
+    event.source.type === "group" &&
+    groupAccessPolicy(profile) === "managed" &&
+    Boolean(profile.registration?.enabled) &&
+    event.type?.trim().toLowerCase() === "message" &&
+    !(await isGroupAllowed(profile, event.source.groupId, accessStore))
   );
 }
 

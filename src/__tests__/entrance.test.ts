@@ -1074,6 +1074,62 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("/register");
   });
 
+  it("prompts unregistered groups to ask an admin to register when the bot is addressed", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(accessConfig(), {
+      router: { route },
+      accessStore: new InMemoryAccessStore(),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cnew", userId: "Unew" },
+      message: { type: "text", text: "小哈 查服事表" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/helper/webhook",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText.mock.calls[0]?.[1]).toContain("管理員");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/register");
+  });
+
+  it("keeps quiet in unregistered groups when the bot is not addressed", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(accessConfig(), {
+      router: { route },
+      accessStore: new InMemoryAccessStore(),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cnew", userId: "Unew" },
+      message: { type: "text", text: "查服事表" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/helper/webhook",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, ignored: true, reason: "group_not_allowed" });
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText).not.toHaveBeenCalled();
+  });
+
   it("creates a pending registration request through an invite code", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
