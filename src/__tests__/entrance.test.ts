@@ -328,6 +328,41 @@ describe("LINE entrance", () => {
     );
   });
 
+  it("lists built-in and registered slash admin commands through help-admin", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(testConfig(), {
+      router: { route },
+      adminHandlers: {
+        "refresh-sheet-music-cache": vi.fn()
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uadmin" },
+      message: { type: "text", text: "/help-admin" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText.mock.calls[0]?.[1]).toContain("Admin commands");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/status");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/profile");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/route-test <text>");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/last-errors");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/last-routes");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/refresh-sheet-music-cache");
+  });
+
   it("introduces available functions when a group user only calls the bot name", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);

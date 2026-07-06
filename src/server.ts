@@ -63,6 +63,20 @@ interface ParsedAdminCommand {
   args: string[];
 }
 
+interface AdminCommandHelpEntry {
+  usage: string;
+  description: string;
+}
+
+const builtInAdminCommands: AdminCommandHelpEntry[] = [
+  { usage: "/help-admin", description: "列出可用 admin 指令" },
+  { usage: "/status", description: "查看目前 profile 狀態" },
+  { usage: "/profile", description: "查看目前 LINE 來源與 profile 設定摘要" },
+  { usage: "/route-test <text>", description: "測試一段文字會 route 到哪個 function" },
+  { usage: "/last-errors", description: "查看最近錯誤" },
+  { usage: "/last-routes", description: "查看最近 route/function 結果" }
+];
+
 export function createApp(config: AppConfig, deps: AppDependencies): FastifyInstance {
   const app = fastify({
     logger: false,
@@ -595,6 +609,13 @@ function handleAdminCommand(
     };
   }
 
+  if (["help-admin", "admin-help", "commands"].includes(parsed.command)) {
+    return {
+      ok: true,
+      replyText: formatAdminCommandHelp(adminHandlers)
+    };
+  }
+
   if (parsed.command === "route-test") {
     return handleRouteTestCommand(parsed.args, profile, event, router);
   }
@@ -619,6 +640,23 @@ function handleAdminCommand(
   }
 
   return { ok: true, replyText: "目前不支援這個 admin 指令。" };
+}
+
+function formatAdminCommandHelp(adminHandlers: AdminHandlerRegistry): string {
+  const registeredCommands = Object.keys(adminHandlers)
+    .map((command) => `/${command}`)
+    .filter((usage) => !builtInAdminCommands.some((entry) => entry.usage === usage))
+    .sort();
+
+  return [
+    "Admin commands",
+    "",
+    "Built-in",
+    ...builtInAdminCommands.map((entry) => `${entry.usage} - ${entry.description}`),
+    ...(registeredCommands.length
+      ? ["", "Registered", ...registeredCommands.map((usage) => `${usage} - registered handler`)]
+      : [])
+  ].join("\n");
 }
 
 async function handleRouteTestCommand(

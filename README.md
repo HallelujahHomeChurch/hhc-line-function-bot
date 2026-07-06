@@ -118,6 +118,7 @@ Sheet music search uses a short-lived in-memory file index cache. Admins can cle
 Admin commands use slash syntax and are gated by each profile's `adminUserIds`.
 Available commands:
 
+- `/help-admin`
 - `/status`
 - `/functions`
 - `/profile`
@@ -130,7 +131,7 @@ Available commands:
 - `/clear-sessions`
 - `/refresh-sheet-music-cache`
 
-`/route-test <text>` reports the selected provider, action, arguments, and any fallback reason. `/last-routes` reports recent sanitized route/function outcomes, including whether a query was present, without echoing the raw query. `/llm-status` probes Ollama from inside the running app process with `/api/tags` and a minimal `/api/chat` call, without echoing the full base URL.
+`/help-admin` lists built-in admin commands and registered function-module admin handlers. `/admin-help` and `/commands` are aliases. `/route-test <text>` reports the selected provider, action, arguments, and any fallback reason. `/last-routes` reports recent sanitized route/function outcomes, including whether a query was present, without echoing the raw query. `/llm-status` probes Ollama from inside the running app process with `/api/tags` and a minimal `/api/chat` call, without echoing the full base URL.
 
 ## OneDrive And Graph
 
