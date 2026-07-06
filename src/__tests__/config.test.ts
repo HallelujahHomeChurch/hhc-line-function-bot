@@ -84,6 +84,12 @@ describe("config", () => {
     expect(config.llm.ollamaKeepAlive).toBe(-1);
   });
 
+  it("omits Ollama keep_alive when it is not explicitly configured", () => {
+    const config = loadConfigFromEnv(baseEnv());
+
+    expect(config.llm.ollamaKeepAlive).toBeUndefined();
+  });
+
   it("loads Redis, rate limit, and last error settings", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),

@@ -15,27 +15,30 @@ export function createOllamaProvider(options: OllamaProviderOptions): ChatProvid
     async completeJson(request: ChatProviderRequest): Promise<string> {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+      const body: Record<string, unknown> = {
+        model: options.model,
+        stream: false,
+        think: false,
+        options: {
+          temperature: 0,
+          num_predict: 256
+        },
+        messages: [
+          { role: "system", content: request.prompt },
+          { role: "user", content: request.text }
+        ],
+        format: "json"
+      };
+      if (options.keepAlive !== undefined) {
+        body.keep_alive = options.keepAlive;
+      }
 
       try {
         const res = await fetch(`${baseUrl}/api/chat`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify({
-            model: options.model,
-            stream: false,
-            think: false,
-            keep_alive: options.keepAlive ?? -1,
-            options: {
-              temperature: 0,
-              num_predict: 256
-            },
-            messages: [
-              { role: "system", content: request.prompt },
-              { role: "user", content: request.text }
-            ],
-            format: "json"
-          })
+          body: JSON.stringify(body)
         });
 
         if (!res.ok) {

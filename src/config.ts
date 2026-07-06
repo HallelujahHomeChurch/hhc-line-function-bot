@@ -177,10 +177,10 @@ function readBool(value: string | undefined, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
-function readOllamaKeepAlive(value: string | undefined): string | number {
+function readOllamaKeepAlive(value: string | undefined): string | number | undefined {
   const normalized = value?.trim();
   if (!normalized) {
-    return -1;
+    return undefined;
   }
   if (/^-?\d+$/.test(normalized)) {
     return Number.parseInt(normalized, 10);

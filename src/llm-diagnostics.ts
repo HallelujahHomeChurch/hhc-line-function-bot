@@ -86,6 +86,24 @@ async function probeChat(
   config: LlmConfig
 ): Promise<ProbeResult> {
   const startedAt = Date.now();
+  const body: Record<string, unknown> = {
+    model: config.ollamaModel,
+    stream: false,
+    think: false,
+    options: {
+      temperature: 0,
+      num_predict: 32
+    },
+    messages: [
+      { role: "system", content: "Return exactly one JSON object and no markdown." },
+      { role: "user", content: 'Return {"action":"deny","reason":"diagnostic"}.' }
+    ],
+    format: "json"
+  };
+  if (config.ollamaKeepAlive !== undefined) {
+    body.keep_alive = config.ollamaKeepAlive;
+  }
+
   try {
     const response = await fetchWithTimeout(
       fetchImpl,
@@ -93,21 +111,7 @@ async function probeChat(
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: config.ollamaModel,
-          stream: false,
-          think: false,
-          keep_alive: config.ollamaKeepAlive ?? -1,
-          options: {
-            temperature: 0,
-            num_predict: 32
-          },
-          messages: [
-            { role: "system", content: "Return exactly one JSON object and no markdown." },
-            { role: "user", content: 'Return {"action":"deny","reason":"diagnostic"}.' }
-          ],
-          format: "json"
-        })
+        body: JSON.stringify(body)
       },
       config.timeoutMs
     );

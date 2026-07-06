@@ -35,8 +35,6 @@ properties:
             secretRef: ollama-base-url
           - name: OLLAMA_MODEL
             value: qwen3:4b-instruct
-          - name: OLLAMA_KEEP_ALIVE
-            value: "-1"
           - name: KEYWORD_FALLBACK_ENABLED
             value: "true"
           - name: GRAPH_TENANT_ID

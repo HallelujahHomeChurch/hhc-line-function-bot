@@ -13,6 +13,15 @@ function llmConfig(): LlmConfig {
   };
 }
 
+function llmConfigWithoutKeepAlive(): LlmConfig {
+  return {
+    ollamaBaseUrl: "http://172.16.65.5:11434",
+    ollamaModel: "qwen3:4b-instruct",
+    timeoutMs: 8000,
+    keywordFallbackEnabled: true
+  };
+}
+
 describe("LLM diagnostics admin handler", () => {
   it("checks Ollama tags and chat without exposing the full base URL", async () => {
     const fetchImpl = vi
@@ -65,6 +74,48 @@ describe("LLM diagnostics admin handler", () => {
     expect(result.replyText).toContain("modelPresent: true");
     expect(result.replyText).toContain("chat: ok");
     expect(result.replyText).not.toContain("172.16.65.5");
+  });
+
+  it("omits keep_alive from the diagnostic chat probe when it is not configured", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ models: [{ name: "qwen3:4b-instruct" }] }), {
+          status: 200
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: { content: '{"action":"deny"}' } }), {
+          status: 200
+        })
+      );
+    const handler = createLlmStatusAdminHandler(llmConfigWithoutKeepAlive(), { fetchImpl });
+
+    await handler({
+      profile: {
+        name: "helper",
+        webhookPath: "/line/helper/webhook",
+        channelSecret: "secret",
+        channelAccessToken: "token",
+        allowedGroupIds: [],
+        allowedUserIds: ["Uadmin"],
+        allowDirectUser: true,
+        allowRooms: false,
+        allowedMessageTypes: ["text"],
+        groupRequireWakeWord: true,
+        wakeKeywords: ["小哈"],
+        acceptMention: true,
+        enabledFunctions: ["query_service_schedule"],
+        adminUserIds: ["Uadmin"],
+        adminDirectOnly: true
+      },
+      event: { type: "message", source: { type: "user", userId: "Uadmin" } },
+      command: "llm-status",
+      args: []
+    });
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
+    expect(body.keep_alive).toBeUndefined();
   });
 
   it("reports an unreachable Ollama endpoint as a diagnostic result", async () => {
