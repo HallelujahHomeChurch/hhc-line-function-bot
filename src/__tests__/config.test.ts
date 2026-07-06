@@ -75,6 +75,15 @@ describe("config", () => {
     });
   });
 
+  it("coerces numeric Ollama keep_alive values from environment strings", () => {
+    const config = loadConfigFromEnv({
+      ...baseEnv(),
+      OLLAMA_KEEP_ALIVE: "-1"
+    });
+
+    expect(config.llm.ollamaKeepAlive).toBe(-1);
+  });
+
   it("loads Redis, rate limit, and last error settings", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),

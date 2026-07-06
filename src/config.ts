@@ -48,7 +48,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     llm: {
       ollamaBaseUrl: env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
       ollamaModel: env.OLLAMA_MODEL || "qwen3:4b-instruct",
-      ollamaKeepAlive: env.OLLAMA_KEEP_ALIVE || -1,
+      ollamaKeepAlive: readOllamaKeepAlive(env.OLLAMA_KEEP_ALIVE),
       timeoutMs: readInt(env.OLLAMA_TIMEOUT_MS, 8000),
       keywordFallbackEnabled: readBool(env.KEYWORD_FALLBACK_ENABLED, true)
     },
@@ -175,6 +175,17 @@ function readBool(value: string | undefined, fallback: boolean): boolean {
     return fallback;
   }
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function readOllamaKeepAlive(value: string | undefined): string | number {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return -1;
+  }
+  if (/^-?\d+$/.test(normalized)) {
+    return Number.parseInt(normalized, 10);
+  }
+  return normalized;
 }
 
 function readList(value: string): string[] {
