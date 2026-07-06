@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 import { parseFunctionArguments } from "./function-arguments.js";
+import { normalizeFunctionArguments } from "./functions/argument-normalization.js";
 import { getFunctionDefinitions } from "./functions/definitions.js";
-import { extractPptSlideQuery } from "./ppt-query.js";
 import { FUNCTION_NAMES, isFunctionName } from "./types.js";
 import type {
   ChatProvider,
@@ -141,12 +141,14 @@ function parseProviderDecision(
   if (!parsedArguments) {
     return { type: "deny", reason: "invalid_arguments", provider };
   }
-  const argumentsWithFallbacks = applyArgumentFallbacks(action, parsedArguments, input);
+  const normalizedArguments = normalizeFunctionArguments(action, parsedArguments, {
+    text: input.text
+  });
 
   return {
     type: "execute",
     action,
-    arguments: argumentsWithFallbacks,
+    arguments: normalizedArguments,
     confidence: parsed.data.confidence,
     provider
   };
@@ -188,66 +190,6 @@ export function coerceFunctionArguments(args: unknown): JsonRecord {
     return args as JsonRecord;
   }
   return {};
-}
-
-function applyArgumentFallbacks(
-  action: FunctionName,
-  args: JsonRecord,
-  input: RouteInput
-): JsonRecord {
-  if (action === "find_ppt_slides") {
-    const query = typeof args.query === "string" ? args.query.trim() : "";
-    const normalizedQuery = query ? extractPptSlideQuery(query) : extractPptSlideQuery(input.text);
-
-    if (normalizedQuery && normalizedQuery !== query) {
-      return {
-        ...args,
-        query: normalizedQuery,
-        originalQuery: typeof args.originalQuery === "string" ? args.originalQuery : input.text
-      };
-    }
-
-    if (query && !normalizedQuery) {
-      return {
-        ...args,
-        query: "",
-        originalQuery: typeof args.originalQuery === "string" ? args.originalQuery : input.text
-      };
-    }
-
-    if (query) {
-      return args;
-    }
-
-    if (!normalizedQuery) {
-      return args;
-    }
-
-    return {
-      ...args,
-      query: normalizedQuery,
-      originalQuery: typeof args.originalQuery === "string" ? args.originalQuery : input.text
-    };
-  }
-
-  if (action !== "query_service_schedule") {
-    return args;
-  }
-
-  const query = typeof args.query === "string" ? args.query.trim() : "";
-  const hasStructuredMetadata = [
-    args.date,
-    args.dateIntent,
-    args.specificDate,
-    args.meeting,
-    args.role
-  ].some((value) => typeof value === "string" && value.trim());
-
-  if (query || hasStructuredMetadata) {
-    return args;
-  }
-
-  return { ...args, query: input.text };
 }
 
 export { FUNCTION_NAMES };

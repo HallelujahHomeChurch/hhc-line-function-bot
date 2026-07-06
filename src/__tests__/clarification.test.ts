@@ -289,6 +289,71 @@ describe("clarification flow", () => {
     expect(replyText.mock.calls[1]?.[1]).toContain("https://download.invalid/yesterday");
   });
 
+  it("extracts a sheet music title from a wrapped pending follow-up reply", async () => {
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      listFolderFilesRecursive: vi.fn().mockResolvedValue([
+        {
+          id: "sheet-1",
+          driveId: "drive-id",
+          name: "YESTERDAY-The Beatles-001.pdf"
+        }
+      ]),
+      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/yesterday")
+    };
+    const config = testConfig();
+    const registries = createFunctionRegistries(config, {
+      graph,
+      sessionStore: new InMemorySessionStore()
+    });
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "find_pop_sheet_music",
+      arguments: { query: "" },
+      provider: "ollama"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(config, {
+      router: { route },
+      functionRegistry: registries.functions,
+      postbackHandlers: registries.postbacks,
+      textMessageHandlers: registries.textMessages,
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    const firstBody = lineBody({
+      type: "message",
+      replyToken: "reply-token-1",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "小哈 查流行歌曲樂譜" }
+    });
+    const firstResponse = await app.inject({
+      method: "POST",
+      url: "/line/helper/webhook",
+      headers: signedHeaders(firstBody),
+      payload: firstBody
+    });
+
+    const secondBody = lineBody({
+      type: "message",
+      replyToken: "reply-token-2",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "小哈，幫我找 Yesterday 的流行歌曲樂譜" }
+    });
+    const secondResponse = await app.inject({
+      method: "POST",
+      url: "/line/helper/webhook",
+      headers: signedHeaders(secondBody),
+      payload: secondBody
+    });
+
+    expect(firstResponse.statusCode).toBe(200);
+    expect(secondResponse.statusCode).toBe(200);
+    expect(route).toHaveBeenCalledOnce();
+    expect(replyText.mock.calls[1]?.[1]).toContain("YESTERDAY-The Beatles-001.pdf");
+    expect(replyText.mock.calls[1]?.[1]).toContain("https://download.invalid/yesterday");
+  });
+
   it("asks for a generic service schedule range and uses the next group reply", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),

@@ -289,6 +289,87 @@ describe("function router", () => {
     });
   });
 
+  it("extracts a sheet music title from the user text when Qwen omits the query", async () => {
+    const qwen = provider(
+      JSON.stringify({
+        action: "find_pop_sheet_music",
+        confidence: 0.82,
+        arguments: { query: "", matchMode: "fuzzy" }
+      })
+    );
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈，幫我找 Yesterday 的流行歌曲樂譜",
+      enabledFunctions: ["find_pop_sheet_music"],
+      source: { type: "user", userId: "U1" }
+    });
+
+    expect(result).toMatchObject({
+      type: "execute",
+      action: "find_pop_sheet_music",
+      provider: "ollama",
+      arguments: { query: "Yesterday", matchMode: "fuzzy" }
+    });
+  });
+
+  it("cleans a wrapped sheet music title when Qwen returns the full request as query", async () => {
+    const qwen = provider(
+      JSON.stringify({
+        action: "find_pop_sheet_music",
+        confidence: 0.84,
+        arguments: { query: "小哈 幫我找 A TIME FOR US 的樂譜", fileType: "pdf" }
+      })
+    );
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈 幫我找 A TIME FOR US 的樂譜",
+      enabledFunctions: ["find_pop_sheet_music"],
+      source: { type: "user", userId: "U1" }
+    });
+
+    expect(result).toMatchObject({
+      type: "execute",
+      action: "find_pop_sheet_music",
+      provider: "ollama",
+      arguments: { query: "A TIME FOR US", fileType: "pdf" }
+    });
+  });
+
+  it("keeps generic sheet music keyword fallback queries empty so the function can clarify", async () => {
+    const qwen = provider("not-json");
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈 查流行歌曲樂譜",
+      enabledFunctions: ["find_pop_sheet_music"],
+      source: { type: "user", userId: "U1" }
+    });
+
+    expect(result).toMatchObject({
+      type: "execute",
+      action: "find_pop_sheet_music",
+      provider: "keyword",
+      arguments: { query: "" }
+    });
+  });
+
   it("keyword-routes pop sheet music without stealing PPT requests", async () => {
     const qwen = provider("not-json");
     const router = createFunctionRouter({

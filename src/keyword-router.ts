@@ -1,4 +1,5 @@
 import { FUNCTION_DEFINITIONS, type FunctionDefinition } from "./functions/definitions.js";
+import { normalizeFunctionArguments } from "./functions/argument-normalization.js";
 import { extractPptSlideQuery } from "./ppt-query.js";
 import type { JsonRecord, RouteInput, RouteResult } from "./types.js";
 
@@ -55,7 +56,9 @@ function extractArguments(rule: KeywordRule, text: string): JsonRecord {
     rule.name === "find_ppt_slides"
       ? extractPptSlideQuery(text)
       : cleanupQuery(text, rule.keywordFallback.stripWords);
-  const query = cleanedQuery || (rule.name === "find_ppt_slides" ? "" : text.trim());
+  const query =
+    cleanedQuery ||
+    (rule.name === "find_ppt_slides" || rule.name === "find_pop_sheet_music" ? "" : text.trim());
   const argumentsRecord: JsonRecord = {
     ...(rule.keywordFallback.defaultArguments ?? {}),
     query
@@ -69,7 +72,7 @@ function extractArguments(rule: KeywordRule, text: string): JsonRecord {
     argumentsRecord.fileType =
       includesKeyword(text, "jpg") || includesKeyword(text, "圖片") ? "image" : "pdf";
   }
-  return argumentsRecord;
+  return normalizeFunctionArguments(rule.name, argumentsRecord, { text });
 }
 
 function cleanupQuery(text: string, stripWords: string[]): string {

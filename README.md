@@ -124,12 +124,13 @@ Available commands:
 - `/route-test <text>`
 - `/llm-status`
 - `/last-errors`
+- `/last-routes`
 - `/sessions`
 - `/cache`
 - `/clear-sessions`
 - `/refresh-sheet-music-cache`
 
-`/route-test <text>` reports the selected provider, action, arguments, and any fallback reason. `/llm-status` probes Ollama from inside the running app process with `/api/tags` and a minimal `/api/chat` call, without echoing the full base URL.
+`/route-test <text>` reports the selected provider, action, arguments, and any fallback reason. `/last-routes` reports recent sanitized route/function outcomes, including whether a query was present, without echoing the raw query. `/llm-status` probes Ollama from inside the running app process with `/api/tags` and a minimal `/api/chat` call, without echoing the full base URL.
 
 ## OneDrive And Graph
 
@@ -167,7 +168,7 @@ Do not commit real `.env` files. In Azure Container Apps, store runtime values i
 
 ## Governance
 
-The app assigns a request id to each handled LINE event and includes it in route observer logs and recent error records. Basic per-source rate limiting is enabled by default:
+The app assigns a request id to each handled LINE event and includes it in route observer logs, recent route diagnostics, and recent error records. Basic per-source rate limiting is enabled by default:
 
 - `RATE_LIMIT_ENABLED=true`
 - `RATE_LIMIT_WINDOW_MS=60000`

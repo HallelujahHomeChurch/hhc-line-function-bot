@@ -616,6 +616,65 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[1]?.[1]).toContain("graph unavailable");
   });
 
+  it("records route outcomes without raw query text and exposes them to slash admin last-routes", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "find_ppt_slides",
+      arguments: { query: "Amazing Grace", fileType: "ppt" },
+      provider: "ollama"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(testConfig(), {
+      router: { route },
+      functionRegistry: {
+        find_ppt_slides: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "done"
+        })
+      },
+      requestIdFactory: vi
+        .fn()
+        .mockReturnValueOnce("req-route-1")
+        .mockReturnValueOnce("req-route-2"),
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    const userBody = lineBody({
+      type: "message",
+      replyToken: "reply-token-1",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查 Amazing Grace 投影片" }
+    });
+    await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(userBody, "main-secret"),
+      payload: userBody
+    });
+
+    const adminBody = lineBody({
+      type: "message",
+      replyToken: "reply-token-2",
+      source: { type: "user", userId: "Uadmin" },
+      message: { type: "text", text: "/last-routes" }
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(adminBody, "main-secret"),
+      payload: adminBody
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText.mock.calls[1]?.[1]).toContain("Last routes");
+    expect(replyText.mock.calls[1]?.[1]).toContain("req-route-1");
+    expect(replyText.mock.calls[1]?.[1]).toContain("find_ppt_slides");
+    expect(replyText.mock.calls[1]?.[1]).toContain("provider=ollama");
+    expect(replyText.mock.calls[1]?.[1]).toContain("query=present");
+    expect(replyText.mock.calls[1]?.[1]).toContain("ok=true");
+    expect(replyText.mock.calls[1]?.[1]).not.toContain("Amazing Grace");
+  });
+
   it("rate limits repeated events for the same profile and source before routing", async () => {
     const config = testConfig();
     config.rateLimit = { enabled: true, windowMs: 60_000, maxRequests: 1 };

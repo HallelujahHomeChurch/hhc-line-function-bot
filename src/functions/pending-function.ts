@@ -1,5 +1,4 @@
 import { messages } from "../messages.js";
-import { extractPptSlideQuery } from "../ppt-query.js";
 import type { SessionStore } from "../state/session-store.js";
 import type {
   FunctionHandlerContext,
@@ -9,6 +8,7 @@ import type {
   TextMessageContext,
   TextMessageHandler
 } from "../types.js";
+import { normalizeFunctionArguments } from "./argument-normalization.js";
 
 const PENDING_FUNCTION_TTL_MS = 10 * 60 * 1000;
 
@@ -67,27 +67,18 @@ export function createPendingFunctionTextMessageHandler(
       }
 
       const answer = request.text.trim();
-      const query = normalizePendingFunctionAnswer(pending.action, answer);
-      return handler(
+      const normalizedArguments = normalizeFunctionArguments(
+        pending.action,
         {
           ...pending.arguments,
-          query,
+          query: answer,
           originalQuery: answer
         },
-        { profile: context.profile, event: context.event }
+        { text: answer }
       );
+      return handler(normalizedArguments, { profile: context.profile, event: context.event });
     }
   };
-}
-
-function normalizePendingFunctionAnswer(action: FunctionName, answer: string): string {
-  if (action === "find_ppt_slides") {
-    return extractPptSlideQuery(answer);
-  }
-  if (action === "query_service_schedule" && answer === "主日") {
-    return "主日服事";
-  }
-  return answer;
 }
 
 function findPendingFunction(sessionStore: SessionStore, context: TextMessageContext) {

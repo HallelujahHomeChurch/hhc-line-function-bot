@@ -13,6 +13,12 @@ import {
   InMemoryLastErrorStore,
   type LastErrorStore
 } from "./observability/last-error-store.js";
+import {
+  formatLastRoutes,
+  InMemoryLastRouteStore,
+  type LastRouteRecord,
+  type LastRouteStore
+} from "./observability/last-route-store.js";
 import { InMemoryRateLimiter, type RateLimiter } from "./rate-limit.js";
 import type {
   AppConfig,
@@ -25,6 +31,7 @@ import type {
   LineMessage,
   LineReplyClient,
   LineWebhookPayload,
+  JsonRecord,
   PostbackHandlerRegistry,
   PostbackRequest,
   RouteObserver,
@@ -42,6 +49,7 @@ export interface AppDependencies {
   routeObserver?: RouteObserver;
   requestIdFactory?: () => string;
   lastErrorStore?: LastErrorStore;
+  lastRouteStore?: LastRouteStore;
   rateLimiter?: RateLimiter;
 }
 
@@ -65,6 +73,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   const requestIdFactory = deps.requestIdFactory ?? randomUUID;
   const lastErrorStore =
     deps.lastErrorStore ?? new InMemoryLastErrorStore(config.lastErrors?.maxEntries ?? 20);
+  const lastRouteStore =
+    deps.lastRouteStore ?? new InMemoryLastRouteStore(config.lastErrors?.maxEntries ?? 20);
   const rateLimiter =
     deps.rateLimiter ??
     new InMemoryRateLimiter(
@@ -106,6 +116,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.routeObserver,
         requestIdFactory,
         lastErrorStore,
+        lastRouteStore,
         rateLimiter
       );
     });
@@ -127,6 +138,7 @@ async function handleWebhook(
   routeObserver: RouteObserver | undefined,
   requestIdFactory: () => string,
   lastErrorStore: LastErrorStore,
+  lastRouteStore: LastRouteStore,
   rateLimiter: RateLimiter
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
@@ -224,6 +236,7 @@ async function handleWebhook(
           adminHandlers,
           router,
           lastErrorStore,
+          lastRouteStore,
           requestId
         );
       } catch (error) {
@@ -329,6 +342,21 @@ async function handleWebhook(
       fallbackReason: route.fallbackReason,
       durationMs: elapsedMs(routeStartedAt)
     });
+    await lastRouteStore.record({
+      requestId,
+      occurredAt: new Date().toISOString(),
+      profileName: profile.name,
+      sourceType: event.source.type,
+      phase: "route",
+      provider: route.provider,
+      outcome: route.type,
+      action: route.type === "execute" ? route.action : undefined,
+      reason: route.type === "deny" ? route.reason : undefined,
+      fallbackProvider: route.fallbackProvider,
+      fallbackReason: route.fallbackReason,
+      ...(route.type === "execute" ? summarizeRouteArguments(route.arguments) : {}),
+      durationMs: elapsedMs(routeStartedAt)
+    });
 
     if (route.type === "deny") {
       const quickReplies = buildFunctionQuickReplies(profile);
@@ -358,6 +386,16 @@ async function handleWebhook(
         ok: result.ok,
         durationMs: elapsedMs(functionStartedAt)
       });
+      await lastRouteStore.record({
+        requestId,
+        occurredAt: new Date().toISOString(),
+        profileName: profile.name,
+        sourceType: event.source.type,
+        phase: "function",
+        action: route.action,
+        ok: result.ok,
+        durationMs: elapsedMs(functionStartedAt)
+      });
       await line.replyText(
         event.replyToken,
         result.replyText,
@@ -379,6 +417,17 @@ async function handleWebhook(
         profileName: profile.name,
         sourceType: event.source.type,
         requestId,
+        action: route.action,
+        ok: false,
+        errorName: error instanceof Error ? error.name : typeof error,
+        durationMs: elapsedMs(functionStartedAt)
+      });
+      await lastRouteStore.record({
+        requestId,
+        occurredAt: new Date().toISOString(),
+        profileName: profile.name,
+        sourceType: event.source.type,
+        phase: "function",
         action: route.action,
         ok: false,
         errorName: error instanceof Error ? error.name : typeof error,
@@ -509,6 +558,7 @@ function handleAdminCommand(
   adminHandlers: AdminHandlerRegistry,
   router: FunctionRouterPort,
   lastErrorStore: LastErrorStore,
+  lastRouteStore: LastRouteStore,
   requestId: string
 ): Promise<FunctionExecutionResult> | FunctionExecutionResult {
   if (!adminAllowed(profile, event)) {
@@ -553,6 +603,13 @@ function handleAdminCommand(
     return lastErrorStore.list().then((errors) => ({
       ok: true,
       replyText: formatLastErrors(errors)
+    }));
+  }
+
+  if (parsed.command === "last-routes") {
+    return lastRouteStore.list().then((routes) => ({
+      ok: true,
+      replyText: formatLastRoutes(routes)
     }));
   }
 
@@ -619,6 +676,15 @@ function formatFallbackDiagnostics(route: {
     `fallbackProvider: ${route.fallbackProvider ?? "(unknown)"}`,
     `fallbackReason: ${route.fallbackReason ?? "(unknown)"}`
   ];
+}
+
+function summarizeRouteArguments(args: JsonRecord): Pick<LastRouteRecord, "query" | "fileType"> {
+  const queryValue = args.query;
+  const fileTypeValue = args.fileType;
+  return {
+    query: typeof queryValue === "string" ? (queryValue.trim() ? "present" : "empty") : "missing",
+    fileType: typeof fileTypeValue === "string" ? fileTypeValue : undefined
+  };
 }
 
 function parseAdminCommand(text: string | undefined): ParsedAdminCommand | undefined {

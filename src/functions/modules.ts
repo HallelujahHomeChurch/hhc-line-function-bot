@@ -66,6 +66,11 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         text: "小哈 查投影片 主日報告 pdf",
         action: "find_ppt_slides",
         arguments: { query: "主日報告", fileType: "pdf", matchMode: "fuzzy" }
+      },
+      {
+        text: "小哈 查投影片",
+        action: "find_ppt_slides",
+        arguments: { query: "", matchMode: "fuzzy" }
       }
     ],
     register: ({ config, clients }) => {
@@ -115,6 +120,11 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         text: "小哈 查服事表",
         action: "query_service_schedule",
         arguments: { query: "服事表" }
+      },
+      {
+        text: "小哈 明天聚會服事人員",
+        action: "query_service_schedule",
+        arguments: { query: "明天聚會服事人員" }
       }
     ],
     register: ({ config, clients }) => {
@@ -149,6 +159,16 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         text: "小哈 查歌譜 Yesterday jpg",
         action: "find_pop_sheet_music",
         arguments: { query: "Yesterday", fileType: "image", matchMode: "fuzzy" }
+      },
+      {
+        text: "小哈，幫我找 Yesterday 的流行歌曲樂譜",
+        action: "find_pop_sheet_music",
+        arguments: { query: "Yesterday", fileType: "pdf", matchMode: "fuzzy" }
+      },
+      {
+        text: "小哈 查流行歌曲樂譜",
+        action: "find_pop_sheet_music",
+        arguments: { query: "", fileType: "pdf", matchMode: "fuzzy" }
       }
     ],
     register: ({ config, clients }) => {
