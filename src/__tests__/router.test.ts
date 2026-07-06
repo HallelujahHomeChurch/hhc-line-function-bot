@@ -216,6 +216,38 @@ describe("function router", () => {
     });
   });
 
+  it("keeps generic PPT queries empty when Qwen returns only request words", async () => {
+    const qwen = provider(
+      JSON.stringify({
+        action: "find_ppt_slides",
+        confidence: 0.79,
+        arguments: { query: "小哈 查投影片" }
+      })
+    );
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈 查投影片",
+      enabledFunctions: ["find_ppt_slides"],
+      source: { type: "user", userId: "U1" }
+    });
+
+    expect(result).toMatchObject({
+      type: "execute",
+      action: "find_ppt_slides",
+      provider: "ollama",
+      arguments: {
+        query: "",
+        originalQuery: "小哈 查投影片"
+      }
+    });
+  });
+
   it("routes structured pop sheet music metadata from Qwen", async () => {
     const qwen = provider(
       JSON.stringify({

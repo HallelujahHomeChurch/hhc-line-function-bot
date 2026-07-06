@@ -207,6 +207,14 @@ function applyArgumentFallbacks(
       };
     }
 
+    if (query && !normalizedQuery) {
+      return {
+        ...args,
+        query: "",
+        originalQuery: typeof args.originalQuery === "string" ? args.originalQuery : input.text
+      };
+    }
+
     if (query) {
       return args;
     }
