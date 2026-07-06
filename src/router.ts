@@ -42,6 +42,7 @@ class FunctionRouter implements FunctionRouterPort {
 
   async route(input: RouteInput): Promise<RouteResult> {
     const prompt = buildRouterPrompt(input.enabledFunctions);
+    let fallbackReason: string | undefined;
 
     try {
       return parseProviderDecision(
@@ -50,16 +51,29 @@ class FunctionRouter implements FunctionRouterPort {
         input
       );
     } catch (error) {
+      fallbackReason = providerErrorReason(error);
       if (!this.shouldFallback(error)) {
-        return { type: "deny", reason: "router_failed", provider: "router" };
+        return {
+          type: "deny",
+          reason: "router_failed",
+          provider: "router",
+          fallbackProvider: "ollama",
+          fallbackReason
+        };
       }
     }
 
     if (!this.options.keywordFallback || !this.options.keywordFallbackEnabled) {
-      return { type: "deny", reason: "keyword_fallback_not_configured", provider: "router" };
+      return {
+        type: "deny",
+        reason: "keyword_fallback_not_configured",
+        provider: "router",
+        fallbackProvider: "ollama",
+        fallbackReason
+      };
     }
 
-    return this.options.keywordFallback.route(input);
+    return withFallbackDiagnostics(this.options.keywordFallback.route(input), fallbackReason);
   }
 
   private shouldFallback(error: unknown): boolean {
@@ -68,6 +82,30 @@ class FunctionRouter implements FunctionRouterPort {
     }
     return error instanceof ProviderResponseError;
   }
+}
+
+function withFallbackDiagnostics(
+  result: RouteResult,
+  fallbackReason: string | undefined
+): RouteResult {
+  if (!fallbackReason) {
+    return result;
+  }
+  return {
+    ...result,
+    fallbackProvider: "ollama",
+    fallbackReason
+  };
+}
+
+function providerErrorReason(error: unknown): string {
+  if (error instanceof ProviderResponseError) {
+    return error.message || "provider_response_error";
+  }
+  if (error instanceof Error) {
+    return error.name || "error";
+  }
+  return typeof error;
 }
 
 function parseProviderDecision(

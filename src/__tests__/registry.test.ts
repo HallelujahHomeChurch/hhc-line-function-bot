@@ -92,12 +92,24 @@ describe("function registry", () => {
     expect(await cache.get("other-cache-key")).toBe("kept");
   });
 
-  it("registers debug admin handlers for functions, sessions, and cache", async () => {
+  it("registers debug admin handlers for functions, sessions, cache, and LLM status", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
       listFolderFilesRecursive: vi.fn(),
       createSharingLink: vi.fn()
     };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ models: [{ name: "qwen3:4b-instruct" }] }), {
+          status: 200
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: { content: '{"action":"deny"}' } }), {
+          status: 200
+        })
+      );
     const cache = new MemoryCacheStore();
     const sessionStore = new InMemorySessionStore();
     await cache.set("sheet-music-index:drive-id:sheet-folder", [{ id: "1", name: "A.pdf" }], 1000);
@@ -112,7 +124,12 @@ describe("function registry", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     });
 
-    const registries = createFunctionRegistries(config(), { graph, cache, sessionStore });
+    const registries = createFunctionRegistries(config(), {
+      graph,
+      cache,
+      sessionStore,
+      fetchImpl
+    });
     const adminContext = {
       profile: profile(),
       event: {
@@ -130,6 +147,10 @@ describe("function registry", () => {
       command: "sessions"
     });
     const cacheResult = await registries.adminHandlers.cache({ ...adminContext, command: "cache" });
+    const llmStatusResult = await registries.adminHandlers["llm-status"]({
+      ...adminContext,
+      command: "llm-status"
+    });
     const clearResult = await registries.adminHandlers["clear-sessions"]({
       ...adminContext,
       command: "clear-sessions"
@@ -145,6 +166,9 @@ describe("function registry", () => {
     expect(sessionsResult.replyText).toContain("total: 1");
     expect(sessionsResult.replyText).toContain("- pending_function: 1");
     expect(cacheResult.replyText).toBe("Cache\nentries: 1");
+    expect(llmStatusResult.replyText).toContain("LLM status");
+    expect(llmStatusResult.replyText).toContain("tags: ok");
+    expect(llmStatusResult.replyText).toContain("chat: ok");
     expect(clearResult.replyText).toBe("已清除 session（1 筆）。");
     expect(sessionsAfterClear.replyText).toContain("total: 0");
   });

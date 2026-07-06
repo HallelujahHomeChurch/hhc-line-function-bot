@@ -325,6 +325,8 @@ async function handleWebhook(
       action: route.type === "execute" ? route.action : undefined,
       reason: route.type === "deny" ? route.reason : undefined,
       confidence: route.type === "execute" ? route.confidence : undefined,
+      fallbackProvider: route.fallbackProvider,
+      fallbackReason: route.fallbackReason,
       durationMs: elapsedMs(routeStartedAt)
     });
 
@@ -587,7 +589,8 @@ async function handleRouteTestCommand(
         "Route test",
         "type: deny",
         `provider: ${route.provider}`,
-        `reason: ${route.reason}`
+        `reason: ${route.reason}`,
+        ...formatFallbackDiagnostics(route)
       ].join("\n")
     };
   }
@@ -599,9 +602,23 @@ async function handleRouteTestCommand(
       "type: execute",
       `provider: ${route.provider}`,
       `action: ${route.action}`,
-      `arguments: ${JSON.stringify(route.arguments)}`
+      `arguments: ${JSON.stringify(route.arguments)}`,
+      ...formatFallbackDiagnostics(route)
     ].join("\n")
   };
+}
+
+function formatFallbackDiagnostics(route: {
+  fallbackProvider?: string;
+  fallbackReason?: string;
+}): string[] {
+  if (!route.fallbackProvider && !route.fallbackReason) {
+    return [];
+  }
+  return [
+    `fallbackProvider: ${route.fallbackProvider ?? "(unknown)"}`,
+    `fallbackReason: ${route.fallbackReason ?? "(unknown)"}`
+  ];
 }
 
 function parseAdminCommand(text: string | undefined): ParsedAdminCommand | undefined {

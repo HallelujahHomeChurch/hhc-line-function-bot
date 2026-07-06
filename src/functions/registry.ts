@@ -1,6 +1,7 @@
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { MemoryCacheStore, type CacheStore } from "../cache/cache-store.js";
+import { createLlmStatusAdminHandler } from "../llm-diagnostics.js";
 import { InMemorySessionStore, type SessionStore } from "../state/session-store.js";
 import type {
   AppConfig,
@@ -21,6 +22,7 @@ export interface RegistryClients {
   cache?: CacheStore;
   now?: () => Date;
   requestIdFactory?: () => string;
+  fetchImpl?: typeof fetch;
 }
 
 export interface FunctionRegistries {
@@ -109,6 +111,10 @@ export function createFunctionRegistries(
       replyText: ["Cache", `entries: ${stats.totalEntries}`].join("\n")
     };
   };
+
+  adminHandlers["llm-status"] = createLlmStatusAdminHandler(config.llm, {
+    fetchImpl: clients.fetchImpl
+  });
 
   return { functions, postbacks, textMessages, adminHandlers };
 }

@@ -144,11 +144,15 @@ export type RouteResult =
       arguments: JsonRecord;
       confidence?: number;
       provider: "ollama" | "keyword";
+      fallbackProvider?: "ollama";
+      fallbackReason?: string;
     }
   | {
       type: "deny";
       reason: string;
       provider: "ollama" | "keyword" | "router";
+      fallbackProvider?: "ollama";
+      fallbackReason?: string;
     };
 
 export interface FunctionRouterPort {
@@ -173,6 +177,8 @@ export interface RouteObserverEvent {
   action?: FunctionName | string;
   reason?: string;
   confidence?: number;
+  fallbackProvider?: "ollama";
+  fallbackReason?: string;
   handler?: string;
   command?: string;
   authorized?: boolean;

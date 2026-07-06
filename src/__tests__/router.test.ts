@@ -345,6 +345,8 @@ describe("function router", () => {
       type: "execute",
       action: "query_service_schedule",
       provider: "keyword",
+      fallbackProvider: "ollama",
+      fallbackReason: "timeout",
       arguments: { query: "服事表" }
     });
   });

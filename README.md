@@ -122,11 +122,14 @@ Available commands:
 - `/functions`
 - `/profile`
 - `/route-test <text>`
+- `/llm-status`
 - `/last-errors`
 - `/sessions`
 - `/cache`
 - `/clear-sessions`
 - `/refresh-sheet-music-cache`
+
+`/route-test <text>` reports the selected provider, action, arguments, and any fallback reason. `/llm-status` probes Ollama from inside the running app process with `/api/tags` and a minimal `/api/chat` call, without echoing the full base URL.
 
 ## OneDrive And Graph
 

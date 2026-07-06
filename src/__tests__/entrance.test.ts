@@ -199,6 +199,54 @@ describe("LINE entrance", () => {
     expect(serializedEvents).not.toContain("小哈 查投影片 奇異恩典");
   });
 
+  it("emits fallback diagnostics when keyword routing is used after Ollama fails", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "query_service_schedule",
+      arguments: { query: "服事表" },
+      provider: "keyword",
+      fallbackProvider: "ollama",
+      fallbackReason: "ollama_unreachable"
+    });
+    const queryServiceSchedule = vi.fn().mockResolvedValue({
+      ok: true,
+      replyText: "請問要查哪一場？"
+    });
+    const routeObserver = vi.fn().mockResolvedValue(undefined);
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(testConfig(), {
+      router: { route },
+      functionRegistry: { query_service_schedule: queryServiceSchedule },
+      routeObserver,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "小哈 查服事表" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(routeObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "route",
+        provider: "keyword",
+        outcome: "execute",
+        action: "query_service_schedule",
+        fallbackProvider: "ollama",
+        fallbackReason: "ollama_unreachable"
+      })
+    );
+  });
+
   it("ignores a group message without wake word before calling the router", async () => {
     const router: FunctionRouterPort = { route: vi.fn() };
     const app = createApp(testConfig(), { router });
