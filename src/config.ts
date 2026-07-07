@@ -24,10 +24,9 @@ const profileSchema = z.object({
   groupAccessPolicy: z.enum(["managed", "blocked"]).optional(),
   registration: z
     .object({
-      enabled: z.boolean().default(false),
-      inviteCodeRequired: z.boolean().default(true)
+      enabled: z.boolean().default(false)
     })
-    .default({ enabled: false, inviteCodeRequired: true })
+    .default({ enabled: false })
 });
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
@@ -119,7 +118,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
         }
       : undefined,
     access: {
-      inviteCodeSecret: env.ACCESS_INVITE_CODE_SECRET?.trim() || undefined
+      registrationInviteCodeTtlMinutes: readInt(env.REGISTRATION_INVITE_CODE_TTL_MINUTES, 60)
     },
     rateLimit: {
       enabled: readBool(env.RATE_LIMIT_ENABLED, true),
@@ -169,6 +168,18 @@ function assertNoLegacyProfileFields(parsedProfiles: unknown): void {
     ) {
       throw new Error("allowedGroupIds is no longer supported; use access DB");
     }
+    if (
+      profile &&
+      typeof profile === "object" &&
+      "registration" in profile &&
+      profile.registration &&
+      typeof profile.registration === "object" &&
+      Object.prototype.hasOwnProperty.call(profile.registration, "inviteCodeRequired")
+    ) {
+      throw new Error(
+        "registration.inviteCodeRequired is no longer supported; use /registry invite codes"
+      );
+    }
   }
 }
 
@@ -180,13 +191,8 @@ function validateAccessConfig(profiles: ParsedProfile[], env: NodeJS.ProcessEnv)
   if (!env.DATABASE_URL?.trim()) {
     throw new Error("DATABASE_URL is required when profile registration is enabled");
   }
-  if (
-    registrationProfiles.some((profile) => profile.registration.inviteCodeRequired) &&
-    !env.ACCESS_INVITE_CODE_SECRET?.trim()
-  ) {
-    throw new Error(
-      "ACCESS_INVITE_CODE_SECRET is required when invite-code registration is enabled"
-    );
+  if (!env.REDIS_URL?.trim()) {
+    throw new Error("REDIS_URL is required when profile registration is enabled");
   }
 }
 

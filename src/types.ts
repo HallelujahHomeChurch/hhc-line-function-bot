@@ -18,7 +18,6 @@ export type GroupAccessPolicy = "managed" | "blocked";
 
 export interface RegistrationConfig {
   enabled: boolean;
-  inviteCodeRequired: boolean;
 }
 
 export interface BotProfileConfig {
@@ -104,7 +103,7 @@ export interface DatabaseConfig {
 }
 
 export interface AccessConfig {
-  inviteCodeSecret?: string;
+  registrationInviteCodeTtlMinutes: number;
 }
 
 export interface RateLimitConfig {

@@ -1,5 +1,6 @@
 import { createOllamaProvider } from "./clients/ollama.js";
 import { createAccessStore } from "./access/create-access-store.js";
+import { RedisRegistrationInviteCodeStore } from "./access/registration-invite-code-store.js";
 import { createCacheStore } from "./cache/create-cache-store.js";
 import { loadConfigFromEnv } from "./config.js";
 import { createPostgresRuntime } from "./db/postgres.js";
@@ -29,6 +30,9 @@ const router = createFunctionRouter({
 const redis = await createRedisRuntime(config.redis);
 const postgres = await createPostgresRuntime(config.database);
 const accessStore = await createAccessStore({ db: postgres?.pool });
+const registrationInviteCodeStore = redis
+  ? new RedisRegistrationInviteCodeStore({ client: redis.client, keyPrefix: redis.keyPrefix })
+  : undefined;
 const sessionStore = createSessionStore({ redis });
 const cache = createCacheStore({ redis });
 const lastErrorStore = createLastErrorStore({
@@ -49,6 +53,7 @@ const app = createApp(config, {
   lastErrorStore,
   rateLimiter,
   accessStore,
+  registrationInviteCodeStore,
   routeObserver: createConsoleRouteObserver()
 });
 

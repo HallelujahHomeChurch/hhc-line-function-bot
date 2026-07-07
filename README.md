@@ -6,7 +6,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 
 - Fastify webhook server with LINE signature validation.
 - Multiple bot profiles in one service, each on its own webhook path.
-- Per-profile allowlists, wake words, message type filtering, and function toggles.
+- Per-profile access policy, wake words, message type filtering, and function toggles.
 - Function router that uses Ollama `qwen3:4b-instruct` first.
 - Conservative keyword fallback when Ollama times out, is unreachable, or returns invalid JSON.
 - LINE Quick Reply suggestions for supported functions.
@@ -14,8 +14,9 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Hermes-compatible numeric selection replies, so users can tap a Quick Reply or reply with `1`, `2`, `3`.
 - Clarification state for missing slots, so users can ask `查投影片`, `查流行歌譜`, or generic `查服事表` and answer the follow-up with just the missing value.
 - Intro/help replies for `小哈`, `小哈可以幹嘛`, `help`, and related prompts, scoped to each profile's enabled functions.
-- Optional Redis backend for sessions, cache, recent errors, and rate limiting.
+- Optional Redis backend for sessions, cache, recent errors, rate limiting, and one-time registration invite codes.
 - Per-profile access policy with PostgreSQL-backed user/group/admin registration.
+- Public `/help`, `/registry <code>`, and `/whoami` commands.
 - Direct-chat admin commands for a single bootstrap `adminUserId` plus DB-managed admins.
 - Function handlers:
   - `find_ppt_slides`: searches a configured Microsoft Graph drive folder, fuzzy-matches PPT/PDF names, and returns 24 hour sharing links.
@@ -79,8 +80,7 @@ Example shape:
     "directAccessPolicy": "managed",
     "groupAccessPolicy": "managed",
     "registration": {
-      "enabled": true,
-      "inviteCodeRequired": true
+      "enabled": true
     }
   }
 ]
@@ -106,10 +106,10 @@ Registration is profile-scoped. The current intended split is:
 Users and groups register with the same command:
 
 ```text
-/register <inviteCode> <name>
+/registry <code>
 ```
 
-In a direct chat this creates a pending user request. In a group this creates a pending group request. If `<name>` is omitted, the bot tries to fill it from the LINE user profile or group summary. If an admin sends `/register <name>` from inside a group, the current group is opened immediately without a pending review.
+Admins create one-time invite codes with `/invite-code-create`. The reply includes a standalone `/registry <code>` line that can be copied to a user or group. When the code is used within its TTL, the direct user or current group is opened immediately. Display names are resolved through the LINE SDK; users should not type names into the registration command.
 
 If a managed group has not been opened yet, the bot stays quiet for normal group chatter. When someone addresses the bot with a wake word or mention, it replies with a short registration prompt instead of silently ignoring the request.
 
@@ -118,10 +118,19 @@ When any profile enables registration, configure:
 ```text
 DATABASE_URL=...
 DATABASE_SSL=true
-ACCESS_INVITE_CODE_SECRET=...
+REDIS_URL=...
+REGISTRATION_INVITE_CODE_TTL_MINUTES=60
 ```
 
-PostgreSQL tables are created on startup if they do not exist.
+PostgreSQL stores active user/group/admin principals and audit events. Redis stores short-lived one-time registration codes.
+If upgrading from the old pending-request registration flow, review `docs/sql/drop-legacy-access-registration.sql` before manually dropping legacy tables.
+
+Function toggles are profile-scoped:
+
+- `enabledFunctions` means profile-global functions for that bot profile only.
+- Direct users can use profile-global functions only.
+- Groups can use profile-global functions plus DB-managed grants for the same `profileName/groupId`.
+- Group grants are additive. To make a function group-only, remove it from `enabledFunctions` and grant it to selected groups.
 
 ## Routing
 
@@ -157,19 +166,21 @@ Sheet music search uses a short-lived in-memory file index cache. Admins can cle
 /refresh-sheet-music-cache
 ```
 
-Admin commands use slash syntax and are gated by each profile's bootstrap `adminUserId` or DB-managed admin principals. `/help-admin` lists common commands by group, and `/help-admin all` includes advanced and diagnostic commands.
+Admin commands use slash syntax and are gated by each profile's bootstrap `adminUserId` or DB-managed admin principals. `/help` lists public commands and enabled functions. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
 
 Common commands:
 
 ```text
-/access-requests [user|group]
-/access-approve <requestId>
-/access-deny <requestId>
+/help
+/registry <code>
+/whoami
 /access-list [user|group|admin]
 /user-remove <userId>
 /group-remove [groupId]
+/function-grant <functionName> [groupId]
+/function-revoke <functionName> [groupId]
+/function-scopes [groupId]
 /audit-list [limit]
-/whoami
 ```
 
 Advanced commands:
@@ -177,9 +188,7 @@ Advanced commands:
 ```text
 /user-add <userId> [name]
 /group-add <groupId> [name]
-/invite-code-create <code> [maxUses] [expiresDays]
-/invite-code-list
-/invite-code-disable <id>
+/invite-code-create
 /admin-add <userId>
 /admin-remove <userId>
 /status
@@ -224,8 +233,7 @@ Do not commit real `.env` files. In Azure Container Apps, store runtime values i
 - `NOTION_TOKEN`
 - `GRAPH_CLIENT_SECRET`
 - `DATABASE_URL`
-- `ACCESS_INVITE_CODE_SECRET`
-- `REDIS_URL` when using multi-replica or restart-tolerant state
+- `REDIS_URL`
 
 ## Governance
 

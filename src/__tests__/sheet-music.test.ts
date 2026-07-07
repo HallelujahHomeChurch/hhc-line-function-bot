@@ -284,6 +284,38 @@ describe("find_pop_sheet_music", () => {
     );
   });
 
+  it("does not honor sheet music postback selections when the function is not enabled", async () => {
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      listFolderFilesRecursive: vi.fn(),
+      createSharingLink: vi.fn()
+    };
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
+    const handlePostback = createFindPopSheetMusicPostbackHandler({
+      graph,
+      sessionStore,
+      now: () => now
+    });
+    const disabledProfile: BotProfileConfig = { ...profile(), enabledFunctions: [] };
+
+    const result = await handlePostback(
+      { action: "select_sheet_music", params: { requestId: "sheet-req-1", index: "0" } },
+      {
+        profile: disabledProfile,
+        event: {
+          type: "postback",
+          replyToken: "reply-token",
+          source: { type: "group", groupId: "Cgroup", userId: "U1" },
+          postback: { data: "action=select_sheet_music&requestId=sheet-req-1&index=0" }
+        }
+      }
+    );
+
+    expect(result.replyText).toBe("這個功能目前沒有開放。");
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
+  });
+
   it("handles numeric sheet music selections through the generic text flow", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),

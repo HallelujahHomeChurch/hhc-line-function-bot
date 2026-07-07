@@ -57,7 +57,7 @@ When adding or changing a function:
 - `src/function-arguments.ts`: argument extraction and slot handling.
 - `src/functions/*`: function definitions, modules, and implementations.
 - `src/clients/*`: external service clients for LINE, Ollama, Graph, and Notion.
-- `src/access/*`: access principals, invite codes, access requests, audit events, and stores.
+- `src/access/*`: access principals, Redis-backed registration invite codes, audit events, and stores.
 - `src/state/*`: short-lived user sessions and selection state.
 - `src/cache/*`: shared cache abstractions, including Redis-backed cache.
 - `src/observability/*`: recent errors and route diagnostics used by admin commands.
@@ -65,23 +65,36 @@ When adding or changing a function:
 
 ## Access And Admin Model
 
-- Ordinary users should use natural language or `/register`.
+- Ordinary users should use natural language, `/registry <code>`, `/help`, or `/whoami`.
 - Slash admin commands are gated by `adminUserId` or DB-managed admin principals.
 - `adminDirectOnly` means admin commands should only run from direct chat except explicitly group-scoped commands.
-- Group registration rule:
-  - A normal group user sends `/register <inviteCode> <name>` and creates a pending group request.
-  - An admin inside a group sends `/register <name>` and opens that group immediately.
-- Use `/help-admin` for common grouped admin commands and `/help-admin all` for advanced diagnostics.
-- Prefer consistent names such as `/user-remove`, `/group-remove`, `/access-requests`, and `/access-list`.
-- Do not bring back old `allow-*`, `/remove-group`, or `/register-this-group` commands unless the user explicitly reverses this decision.
+- Registration is invite-code based:
+  - Admins create one-time codes with `/invite-code-create`.
+  - The reply must include a standalone `/registry <code>` line for copy/paste.
+  - A direct user or group sends `/registry <code>` and is opened immediately.
+  - Display names come from the LINE SDK, not typed command arguments.
+  - Do not reintroduce pending approval commands or admin group self-registration.
+- Use `/help` for public command/function help.
+- Use `/help admin` for common grouped admin commands and `/help admin all` for advanced diagnostics.
+- Prefer consistent names such as `/user-remove`, `/group-remove`, `/access-list`, and `/invite-code-create`.
+- Do not bring back old `allow-*`, `/remove-group`, `/help-admin`, `/admin-help`, `/commands`, `/register`, `/access-requests`, `/access-approve`, `/access-deny`, `/invite-code-list`, `/invite-code-disable`, or `/register-this-group` commands unless the user explicitly reverses this decision.
+
+## Function Scoping
+
+- `profile.enabledFunctions` means profile-global functions for that profile only, not service-global functions.
+- Direct users only receive profile-global functions.
+- Groups receive profile-global functions plus DB-managed `profileName/groupId/functionName` grants.
+- Group grants are additive. To make a function group-only, remove it from `enabledFunctions` and grant it to selected groups with `/function-grant`.
+- Use `/function-grant <functionName> [groupId]`, `/function-revoke <functionName> [groupId]`, and `/function-scopes [groupId]` for group function scope management.
+- In a group, admins can omit `groupId` for those function-scope commands. In direct chat, admins must provide `groupId`.
 
 ## State And Persistence
 
 - In-memory stores are acceptable for single-replica local/dev behavior.
-- `REDIS_URL` moves sessions, cache, recent errors, and rate-limit state to Redis.
-- PostgreSQL backs managed access control when registration is enabled.
+- `REDIS_URL` moves sessions, cache, recent errors, rate-limit state, and registration invite codes to Redis.
+- PostgreSQL backs managed access principals and audit events when registration is enabled.
 - The app creates access tables on startup if PostgreSQL is configured.
-- Do not assume multi-replica safety without Redis for sessions/cache.
+- Do not assume multi-replica safety without Redis for sessions/cache/invite codes.
 
 ## Workflow
 

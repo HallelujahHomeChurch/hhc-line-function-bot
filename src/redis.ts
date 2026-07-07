@@ -1,13 +1,18 @@
 import { createClient } from "redis";
 
 import type { RedisConfig } from "./types.js";
+import type { RedisRegistrationInviteCodeClient } from "./access/registration-invite-code-store.js";
 import type { RedisCacheClient } from "./cache/redis-cache-store.js";
 import type { RedisLastErrorClient } from "./observability/create-last-error-store.js";
 import type { RedisRateLimitClient } from "./rate-limit.js";
 import type { RedisSessionClient } from "./state/redis-session-store.js";
 
 export interface RedisRuntime {
-  client: RedisCacheClient & RedisSessionClient & RedisLastErrorClient & RedisRateLimitClient;
+  client: RedisCacheClient &
+    RedisSessionClient &
+    RedisLastErrorClient &
+    RedisRateLimitClient &
+    RedisRegistrationInviteCodeClient;
   keyPrefix: string;
 }
 

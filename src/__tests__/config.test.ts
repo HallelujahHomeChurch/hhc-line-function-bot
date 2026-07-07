@@ -153,28 +153,28 @@ describe("config", () => {
           directAccessPolicy: "managed",
           groupAccessPolicy: "managed",
           registration: {
-            enabled: true,
-            inviteCodeRequired: true
+            enabled: true
           }
         }
       ]),
       DATABASE_URL: "postgres://localhost/test",
-      ACCESS_INVITE_CODE_SECRET: "secret"
+      REDIS_URL: "redis://localhost:6379",
+      REGISTRATION_INVITE_CODE_TTL_MINUTES: "30"
     });
 
     expect(config.profiles[0]).toMatchObject({
       directAccessPolicy: "managed",
       groupAccessPolicy: "managed",
       registration: {
-        enabled: true,
-        inviteCodeRequired: true
+        enabled: true
       }
     });
     expect(config.database).toMatchObject({
       url: "postgres://localhost/test",
       ssl: false
     });
-    expect(config.access).toMatchObject({ inviteCodeSecret: "secret" });
+    expect(config.redis).toMatchObject({ url: "redis://localhost:6379" });
+    expect(config.access).toMatchObject({ registrationInviteCodeTtlMinutes: 30 });
   });
 
   it("rejects registration without PostgreSQL", () => {
@@ -186,14 +186,31 @@ describe("config", () => {
             webhookPath: "/line/helper/webhook",
             channelSecret: "secret",
             channelAccessToken: "token",
-            registration: { enabled: true, inviteCodeRequired: false }
+            registration: { enabled: true }
           }
         ])
       })
     ).toThrow("DATABASE_URL is required when profile registration is enabled");
   });
 
-  it("rejects invite-code registration without a secret", () => {
+  it("rejects registration without Redis", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        BOT_PROFILES_JSON: JSON.stringify([
+          {
+            name: "helper",
+            webhookPath: "/line/helper/webhook",
+            channelSecret: "secret",
+            channelAccessToken: "token",
+            registration: { enabled: true }
+          }
+        ]),
+        DATABASE_URL: "postgres://localhost/test"
+      })
+    ).toThrow("REDIS_URL is required when profile registration is enabled");
+  });
+
+  it("rejects legacy inviteCodeRequired profile settings", () => {
     expect(() =>
       loadConfigFromEnv({
         BOT_PROFILES_JSON: JSON.stringify([
@@ -205,9 +222,10 @@ describe("config", () => {
             registration: { enabled: true, inviteCodeRequired: true }
           }
         ]),
-        DATABASE_URL: "postgres://localhost/test"
+        DATABASE_URL: "postgres://localhost/test",
+        REDIS_URL: "redis://localhost:6379"
       })
-    ).toThrow("ACCESS_INVITE_CODE_SECRET is required");
+    ).toThrow("registration.inviteCodeRequired is no longer supported");
   });
 
   it("coerces numeric Ollama keep_alive values from environment strings", () => {

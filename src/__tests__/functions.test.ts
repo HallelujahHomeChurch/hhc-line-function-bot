@@ -313,6 +313,40 @@ describe("find_ppt_slides", () => {
     );
   });
 
+  it("does not honor PPT postback selections when the function is not enabled", async () => {
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      createSharingLink: vi.fn()
+    };
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
+    const handlePostback = createFindPptSlidesPostbackHandler({
+      graph,
+      sessionStore,
+      now: () => now
+    });
+    const disabledProfile: BotProfileConfig = {
+      ...profile(),
+      enabledFunctions: ["query_service_schedule"]
+    };
+
+    const result = await handlePostback(
+      { action: "select_ppt", params: { requestId: "req-1", index: "0" } },
+      {
+        profile: disabledProfile,
+        event: {
+          type: "postback",
+          replyToken: "reply-token",
+          source: { type: "group", groupId: "Cgroup", userId: "U1" },
+          postback: { data: "action=select_ppt&requestId=req-1&index=0" }
+        }
+      }
+    );
+
+    expect(result.replyText).toBe("這個功能目前沒有開放。");
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
+  });
+
   it("creates a sharing link when the user replies with a numeric PPT selection", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),

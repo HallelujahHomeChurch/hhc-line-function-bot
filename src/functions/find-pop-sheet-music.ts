@@ -162,6 +162,10 @@ export function createFindPopSheetMusicPostbackHandler(
   const now = options.now ?? (() => new Date());
 
   return async (request, context) => {
+    if (!context.profile.enabledFunctions.includes("find_pop_sheet_music")) {
+      return { ok: true, replyText: "這個功能目前沒有開放。" };
+    }
+
     const selectedIndex = Number(request.params.index);
 
     if (
