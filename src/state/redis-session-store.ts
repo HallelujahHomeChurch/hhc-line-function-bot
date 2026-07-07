@@ -10,6 +10,7 @@ import type {
   SessionStoreSummary
 } from "./session-store.js";
 import type { LineSource } from "../types.js";
+import { requesterMatchesForSource } from "./session-safety.js";
 
 export interface RedisSessionClient {
   get(key: string): Promise<string | null>;
@@ -54,7 +55,9 @@ export class RedisSessionStore implements SessionStore {
       .filter((session): session is PptSelectionSession => session.type === "ppt_selection")
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) => requesterMatches(session.requesterUserId, lookup.requesterUserId));
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
 
     return latestSession(liveSessions);
   }
@@ -65,7 +68,9 @@ export class RedisSessionStore implements SessionStore {
       .filter((session) => session.action === lookup.action)
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) => requesterMatches(session.requesterUserId, lookup.requesterUserId));
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
 
     return latestSession(liveSessions);
   }
@@ -78,7 +83,9 @@ export class RedisSessionStore implements SessionStore {
       .filter((session) => !lookup.action || session.action === lookup.action)
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) => requesterMatches(session.requesterUserId, lookup.requesterUserId));
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
 
     return latestSession(liveSessions);
   }
@@ -136,10 +143,6 @@ function latestSession<T extends ConversationSession>(sessions: T[]): T | undefi
   return sessions.sort(
     (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
   )[0];
-}
-
-function requesterMatches(expected: string | undefined, actual: string | undefined): boolean {
-  return !expected || !actual || expected === actual;
 }
 
 function sourceMatches(expected: LineSource, actual: LineSource): boolean {

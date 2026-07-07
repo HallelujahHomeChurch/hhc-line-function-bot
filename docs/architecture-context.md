@@ -138,6 +138,13 @@ multiple replicas or restarts matter.
 - `src/observability/*`: recent routes and recent errors.
 - `src/access/*`: Postgres access principals, audit, and invite-code stores.
 
+Group and room task sessions are requester-scoped. A pending clarification or
+multi-result selection in a shared conversation must only match when LINE sends
+the same `source.userId`; if the requester user id is missing, do not create or
+match that session. The bot may softly prefix task-state replies with the
+requester's LINE display name, but final function results should stay focused on
+the requested data.
+
 In-flight locks currently protect long-running function requests by
 `profileName + sourceKey + action + queryHash`. With Redis configured, this is
 cross-instance using Redis `NX` and `PX`. Without Redis, it is process-local.
@@ -168,6 +175,9 @@ Use this map for common issues:
   `src/functions/definitions.ts`, router eval cases.
 - Missing query or wrong slot: `src/function-arguments.ts`,
   `src/functions/argument-normalization.ts`, clarification tests.
+- Group clarification or selection goes to the wrong person:
+  `src/state/session-safety.ts`, `src/requester-personalization.ts`, and
+  requester-scoped session tests.
 - Duplicate long task replies: `src/in-flight/*` and in-flight block in
   `src/server.ts`.
 - Admin command denied: `adminUserId`, DB admin principals, `adminDirectOnly`,

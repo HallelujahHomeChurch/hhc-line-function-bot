@@ -1,4 +1,5 @@
 import type { DriveItem, FunctionName, JsonRecord, LineSource } from "../types.js";
+import { requesterMatchesForSource } from "./session-safety.js";
 
 export interface PptSelectionSession {
   id: string;
@@ -93,11 +94,8 @@ export class InMemorySessionStore implements SessionStore {
       .filter((session) => session.type === "ppt_selection")
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter(
-        (session) =>
-          !session.requesterUserId ||
-          !lookup.requesterUserId ||
-          session.requesterUserId === lookup.requesterUserId
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
       );
 
     return liveSessions.sort(
@@ -113,11 +111,8 @@ export class InMemorySessionStore implements SessionStore {
       .filter((session) => session.action === lookup.action)
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter(
-        (session) =>
-          !session.requesterUserId ||
-          !lookup.requesterUserId ||
-          session.requesterUserId === lookup.requesterUserId
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
       );
 
     return liveSessions.sort(
@@ -135,11 +130,8 @@ export class InMemorySessionStore implements SessionStore {
       .filter((session) => !lookup.action || session.action === lookup.action)
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter(
-        (session) =>
-          !session.requesterUserId ||
-          !lookup.requesterUserId ||
-          session.requesterUserId === lookup.requesterUserId
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
       );
 
     return liveSessions.sort(

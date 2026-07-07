@@ -351,6 +351,7 @@ export interface FunctionHandlerContext {
   profile: BotProfileConfig;
   event: LineEvent;
   requestId?: string;
+  requesterDisplayName?: string;
 }
 
 export type FunctionHandler = (
@@ -389,6 +390,7 @@ export interface PostbackContext {
   profile: BotProfileConfig;
   event: LineEvent;
   requestId?: string;
+  requesterDisplayName?: string;
 }
 
 export type PostbackHandler = (
@@ -406,6 +408,7 @@ export interface TextMessageContext {
   profile: BotProfileConfig;
   event: LineEvent;
   requestId?: string;
+  requesterDisplayName?: string;
 }
 
 export interface TextMessageHandler {

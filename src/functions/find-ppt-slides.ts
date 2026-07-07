@@ -6,6 +6,8 @@ import {
 } from "../function-arguments.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
+import { withRequesterDisplayName } from "../requester-personalization.js";
+import { canCreateRequesterScopedSession } from "../state/session-safety.js";
 import {
   InMemorySessionStore,
   type ConversationSession,
@@ -83,7 +85,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       });
       return {
         ok: true,
-        replyText: "要查哪一份投影片？請直接回覆名稱。"
+        replyText: withRequesterDisplayName(context, "要查哪一份投影片？請直接回覆名稱。")
       };
     }
 
@@ -116,6 +118,13 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       return createSharingLinkReply(options.graph, options.driveId, candidates[0].item, now());
     }
 
+    if (!canCreateRequesterScopedSession(context.event.source)) {
+      return {
+        ok: true,
+        replyText: "找到多個相近的詩歌投影片，請提供更完整歌名。"
+      };
+    }
+
     const requestId = requestIdFactory();
     await sessionStore.set({
       id: requestId,
@@ -131,7 +140,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
     return {
       ok: true,
       replyText: [
-        "找到多個相近的詩歌投影片，請回覆編號：",
+        withRequesterDisplayName(context, "找到多個相近的詩歌投影片，請回覆編號："),
         ...candidates.map(({ item }, index) => `${index + 1}. ${item.name}`)
       ].join("\n"),
       quickReplies: candidates.map((_candidate, index) =>

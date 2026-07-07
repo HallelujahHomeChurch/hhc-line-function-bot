@@ -126,6 +126,8 @@ When adding or changing an admin action:
 - PostgreSQL backs managed access principals and audit events when registration is enabled.
 - The app creates access tables on startup if PostgreSQL is configured.
 - Do not assume multi-replica safety without Redis for sessions/cache/invite codes.
+- Group and room clarification/selection sessions are requester-scoped. They require the same `source.userId` to continue, and should not be created or matched when LINE does not provide a requester user id.
+- Soft display-name personalization is for task-state replies such as "what title?" or "please choose"; avoid adding names to final data-heavy function results unless the user asks.
 
 ## Workflow
 

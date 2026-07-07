@@ -168,6 +168,68 @@ describe("store factories", () => {
     await expect(store.tryStart(key, 60_000)).resolves.toBe("started");
   });
 
+  it("does not match in-memory group sessions when the requester user id is missing", async () => {
+    const store = new InMemorySessionStore({
+      now: () => new Date("2026-07-04T10:00:00.000Z")
+    });
+    await store.set({
+      id: "pending-1",
+      type: "pending_function",
+      action: "find_ppt_slides",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1" },
+      arguments: { query: "" },
+      expiresAt: "2026-07-04T10:10:00.000Z"
+    });
+
+    await expect(
+      store.findPendingFunction({
+        profileName: "helper",
+        source: { type: "group", groupId: "C1" }
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.findPendingFunction({
+        profileName: "helper",
+        source: { type: "group", groupId: "C1", userId: "U1" },
+        requesterUserId: "U1"
+      })
+    ).resolves.toMatchObject({ id: "pending-1" });
+  });
+
+  it("does not match Redis group sessions when the requester user id is missing", async () => {
+    const store = new RedisSessionStore({
+      client: new FakeRedisClient(),
+      keyPrefix: "test",
+      now: () => new Date("2026-07-04T10:00:00.000Z")
+    });
+    await store.set({
+      id: "pending-1",
+      type: "pending_function",
+      action: "find_ppt_slides",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1" },
+      arguments: { query: "" },
+      expiresAt: "2026-07-04T10:10:00.000Z"
+    });
+
+    await expect(
+      store.findPendingFunction({
+        profileName: "helper",
+        source: { type: "group", groupId: "C1" }
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.findPendingFunction({
+        profileName: "helper",
+        source: { type: "group", groupId: "C1", userId: "U1" },
+        requesterUserId: "U1"
+      })
+    ).resolves.toMatchObject({ id: "pending-1" });
+  });
+
   it("stores cache values and deletes by prefix through Redis", async () => {
     const client = new FakeRedisClient();
     const cache = new RedisCacheStore({ client, keyPrefix: "test" });

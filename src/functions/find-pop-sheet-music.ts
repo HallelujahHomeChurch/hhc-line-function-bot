@@ -6,6 +6,8 @@ import {
   type FindPopSheetMusicArguments
 } from "../function-arguments.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
+import { withRequesterDisplayName } from "../requester-personalization.js";
+import { canCreateRequesterScopedSession } from "../state/session-safety.js";
 import {
   InMemorySessionStore,
   type ConversationSession,
@@ -80,7 +82,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       });
       return {
         ok: true,
-        replyText: "要查哪一首流行歌譜？請直接回覆歌名或歌手。"
+        replyText: withRequesterDisplayName(context, "要查哪一首流行歌譜？請直接回覆歌名或歌手。")
       };
     }
 
@@ -120,6 +122,13 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       return createSharingLinkReply(options.graph, candidates[0].item, now());
     }
 
+    if (!canCreateRequesterScopedSession(context.event.source)) {
+      return {
+        ok: true,
+        replyText: "找到多個相近的樂譜，請提供更完整歌名或歌手。"
+      };
+    }
+
     const requestId = requestIdFactory();
     await sessionStore.set({
       id: requestId,
@@ -139,7 +148,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     return {
       ok: true,
       replyText: [
-        "找到多個相近的樂譜，請選擇：",
+        withRequesterDisplayName(context, "找到多個相近的樂譜，請選擇："),
         ...candidates.map(({ item }, index) => `${index + 1}. ${item.name}`)
       ].join("\n"),
       quickReplies: candidates.map((_candidate, index) =>

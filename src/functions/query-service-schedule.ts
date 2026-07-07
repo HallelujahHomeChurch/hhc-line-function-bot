@@ -6,6 +6,7 @@ import {
 } from "../function-arguments.js";
 import { readTimeZone } from "../time-zone.js";
 import type { FunctionHandler, JsonRecord, NotionDatabaseClient } from "../types.js";
+import { withRequesterDisplayName } from "../requester-personalization.js";
 import type { SessionStore } from "../state/session-store.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
 
@@ -65,7 +66,10 @@ export function createQueryServiceScheduleHandler(
 
       return {
         ok: true,
-        replyText: "要查哪個服事表範圍？請選擇或直接回覆：下一場、本週、明天、主日。",
+        replyText: withRequesterDisplayName(
+          context,
+          "要查哪個服事表範圍？請選擇或直接回覆：下一場、本週、明天、主日。"
+        ),
         quickReplies: [
           {
             label: "下一場",

@@ -42,7 +42,34 @@ function handlerContext(): FunctionHandlerContext {
   };
 }
 
+function personalizedHandlerContext(): FunctionHandlerContext {
+  return {
+    ...handlerContext(),
+    requesterDisplayName: "Ray"
+  };
+}
+
 describe("find_pop_sheet_music", () => {
+  it("softly personalizes missing sheet music title clarification", async () => {
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const handler = createFindPopSheetMusicHandler({
+      graph: {
+        listFolderChildren: vi.fn(),
+        listFolderFilesRecursive: vi.fn(),
+        createSharingLink: vi.fn()
+      },
+      driveId: "drive-id",
+      folderItemId: "sheet-folder-id",
+      allowedExtensions: [".pdf"],
+      cache: new MemoryCacheStore({ now: () => now }),
+      now: () => now
+    });
+
+    const result = await handler({ query: "" }, personalizedHandlerContext());
+
+    expect(result.replyText).toBe("Ray，要查哪一首流行歌譜？請直接回覆歌名或歌手。");
+  });
+
   it("finds one PDF recursively and creates a 24 hour link", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),

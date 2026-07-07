@@ -33,6 +33,10 @@ import { buildFunctionQuickReplies } from "./line-reply.js";
 import { verifyLineSignature } from "./line-signature.js";
 import { messages } from "./messages.js";
 import { sanitizeActionTelemetryEvent } from "./observability/action-telemetry.js";
+import {
+  resolveRequesterDisplayName,
+  withRequesterDisplayName
+} from "./requester-personalization.js";
 import { createControlledSmallTalkReply, smallTalkCategoryFromArguments } from "./small-talk.js";
 import {
   formatLastErrors,
@@ -326,6 +330,7 @@ async function handleWebhook(
   for (const event of allowedEvents) {
     const requestId = requestIdFactory();
     const effectiveProfile = await resolveEffectiveProfile(profile, event, accessStore);
+    const requesterDisplayName = await resolveRequesterDisplayName(lineIdentity, event);
 
     if (event.type === "postback") {
       if (!event.replyToken) {
@@ -336,7 +341,8 @@ async function handleWebhook(
         event,
         effectiveProfile,
         postbackHandlers,
-        requestId
+        requestId,
+        requesterDisplayName
       );
       await emitRouteEvent(routeObserver, {
         kind: "postback",
@@ -505,13 +511,14 @@ async function handleWebhook(
     const textMessageHandler = await matchingTextMessageHandler(
       event,
       effectiveProfile,
-      textMessageHandlers
+      textMessageHandlers,
+      requesterDisplayName
     );
     if (textMessageHandler) {
       const handlerStartedAt = Date.now();
       const result = await textMessageHandler.handler.handle(
         { text: event.message.text },
-        { profile: effectiveProfile, event, requestId }
+        { profile: effectiveProfile, event, requestId, requesterDisplayName }
       );
       await emitRouteEvent(routeObserver, {
         kind: "text_handler",
@@ -675,7 +682,11 @@ async function handleWebhook(
           dedup: "busy",
           queryHash: inFlight.queryHash
         });
-        await line.replyText(event.replyToken, "我還在找這個，等我一下就好。", undefined);
+        await line.replyText(
+          event.replyToken,
+          withRequesterDisplayName({ requesterDisplayName }, "我還在找這個，等我一下就好。"),
+          undefined
+        );
         continue;
       }
     }
@@ -685,7 +696,8 @@ async function handleWebhook(
       const result = await handler(route.arguments, {
         profile: effectiveProfile,
         event,
-        requestId
+        requestId,
+        requesterDisplayName
       });
       await emitRouteEvent(routeObserver, {
         kind: "function_result",
@@ -793,7 +805,8 @@ async function handlePostbackEvent(
   event: LineEvent,
   profile: BotProfileConfig,
   postbackHandlers: PostbackHandlerRegistry,
-  requestId: string
+  requestId: string,
+  requesterDisplayName?: string
 ) {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
@@ -803,7 +816,7 @@ async function handlePostbackEvent(
   if (!handler) {
     return { ok: true, replyText: messages.postbackUnsupported };
   }
-  return handler(request, { profile, event, requestId });
+  return handler(request, { profile, event, requestId, requesterDisplayName });
 }
 
 function parsePostbackData(data: string): PostbackRequest | null {
@@ -2054,14 +2067,15 @@ function messageTypeAllowed(profile: BotProfileConfig, event: LineEvent): boolea
 async function matchingTextMessageHandler(
   event: LineEvent,
   profile: BotProfileConfig,
-  textMessageHandlers: TextMessageHandlerRegistry
+  textMessageHandlers: TextMessageHandlerRegistry,
+  requesterDisplayName?: string
 ) {
   const text = event.message?.text;
   if (event.type !== "message" || event.message?.type !== "text" || !text) {
     return undefined;
   }
   for (const [name, handler] of Object.entries(textMessageHandlers)) {
-    if (await handler.matches({ text }, { profile, event })) {
+    if (await handler.matches({ text }, { profile, event, requesterDisplayName })) {
       return { name, handler };
     }
   }

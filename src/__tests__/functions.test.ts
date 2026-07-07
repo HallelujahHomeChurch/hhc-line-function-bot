@@ -43,7 +43,93 @@ function handlerContext(): FunctionHandlerContext {
   };
 }
 
+function personalizedHandlerContext(): FunctionHandlerContext {
+  return {
+    ...handlerContext(),
+    requesterDisplayName: "Ray"
+  };
+}
+
 describe("find_ppt_slides", () => {
+  it("softly personalizes missing PPT title clarification", async () => {
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const handler = createFindPptSlidesHandler({
+      graph: { listFolderChildren: vi.fn(), createSharingLink: vi.fn() },
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".ppt", ".pptx"],
+      defaultIncludePdf: false,
+      sessionStore: new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 }),
+      now: () => now
+    });
+
+    const result = await handler({ query: "" }, personalizedHandlerContext());
+
+    expect(result.replyText).toBe("Ray，要查哪一份投影片？請直接回覆名稱。");
+  });
+
+  it("does not create a pending PPT clarification session without a group requester user id", async () => {
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
+    const handler = createFindPptSlidesHandler({
+      graph: { listFolderChildren: vi.fn(), createSharingLink: vi.fn() },
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".ppt", ".pptx"],
+      defaultIncludePdf: false,
+      sessionStore,
+      now: () => now,
+      requestIdFactory: () => "pending-1"
+    });
+    const context: FunctionHandlerContext = {
+      ...handlerContext(),
+      event: {
+        ...handlerContext().event,
+        source: { type: "group", groupId: "Cgroup" }
+      }
+    };
+
+    const result = await handler({ query: "" }, context);
+
+    expect(result.replyText).toBe("要查哪一份投影片？請直接回覆名稱。");
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
+  it("does not create a PPT selection session without a group requester user id", async () => {
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn().mockResolvedValue([
+        { id: "ppt-1", name: "奇異恩典.pptx" },
+        { id: "ppt-2", name: "奇異恩典新版.pptx" }
+      ]),
+      createSharingLink: vi.fn()
+    };
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
+    const handler = createFindPptSlidesHandler({
+      graph,
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".ppt", ".pptx"],
+      defaultIncludePdf: false,
+      sessionStore,
+      now: () => now,
+      requestIdFactory: () => "selection-1"
+    });
+    const context: FunctionHandlerContext = {
+      ...handlerContext(),
+      event: {
+        ...handlerContext().event,
+        source: { type: "group", groupId: "Cgroup" }
+      }
+    };
+
+    const result = await handler({ query: "奇異恩典" }, context);
+
+    expect(result.replyText).toBe("找到多個相近的詩歌投影片，請提供更完整歌名。");
+    expect(result.quickReplies).toBeUndefined();
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
   it("fuzzy matches Chinese typo queries before creating a 24 hour link", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn().mockResolvedValue([
@@ -422,6 +508,28 @@ describe("find_ppt_slides", () => {
 });
 
 describe("query_service_schedule", () => {
+  it("softly personalizes generic service schedule clarification", async () => {
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const handler = createQueryServiceScheduleHandler({
+      notion: { queryDatabase: vi.fn() },
+      databaseId: "database-id",
+      properties: {
+        date: "date",
+        meeting: "meeting",
+        role: "role",
+        person: "person"
+      },
+      sessionStore: new InMemorySessionStore({ now: () => now }),
+      now: () => now
+    });
+
+    const result = await handler({ query: "服事表" }, personalizedHandlerContext());
+
+    expect(result.replyText).toContain(
+      "Ray，要查哪個服事表範圍？請選擇或直接回覆：下一場、本週、明天、主日。"
+    );
+  });
+
   it("maps Notion properties from env-style configuration", async () => {
     const notion: NotionDatabaseClient = {
       queryDatabase: vi.fn().mockResolvedValue([

@@ -1,4 +1,5 @@
 import { messages } from "../messages.js";
+import { canCreateRequesterScopedSession } from "../state/session-safety.js";
 import type { SessionStore } from "../state/session-store.js";
 import type {
   FunctionHandlerContext,
@@ -29,6 +30,10 @@ export interface PendingFunctionTextMessageOptions {
 export async function storePendingFunctionQuery(
   options: StorePendingFunctionOptions
 ): Promise<void> {
+  if (!canCreateRequesterScopedSession(options.context.event.source)) {
+    return;
+  }
+
   await options.sessionStore.set({
     id: options.requestId,
     type: "pending_function",
@@ -76,7 +81,12 @@ export function createPendingFunctionTextMessageHandler(
         },
         { text: answer }
       );
-      return handler(normalizedArguments, { profile: context.profile, event: context.event });
+      return handler(normalizedArguments, {
+        profile: context.profile,
+        event: context.event,
+        requestId: context.requestId,
+        requesterDisplayName: context.requesterDisplayName
+      });
     }
   };
 }

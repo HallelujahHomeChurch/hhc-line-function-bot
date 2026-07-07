@@ -2,12 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
+import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
+import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
 import { signLineBody } from "../line-signature.js";
 import { createApp } from "../server.js";
+import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   AppConfig,
   FunctionExecutionResult,
   FunctionRouterPort,
+  GraphDriveClient,
   LineIdentityClient,
   LineReplyClient,
   TextMessageHandlerRegistry,
@@ -318,11 +322,18 @@ describe("LINE entrance", () => {
       return Promise.resolve({ ok: true, replyText: "second result" });
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const identity: LineIdentityClient = {
+      getUserDisplayName: vi
+        .fn()
+        .mockImplementation(async (userId: string) => (userId === "U1" ? "Ray" : undefined)),
+      getGroupDisplayName: vi.fn()
+    };
     const routeObserver = vi.fn().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
       router: { route },
       functionRegistry: { find_ppt_slides: findPptSlides },
       routeObserver,
+      createLineIdentityClient: () => identity,
       createLineReplyClient: () => ({ replyText })
     });
     const firstBody = lineBody({
@@ -356,7 +367,11 @@ describe("LINE entrance", () => {
 
     expect(secondResponse.statusCode).toBe(200);
     expect(findPptSlides).toHaveBeenCalledTimes(1);
-    expect(replyText).toHaveBeenCalledWith("reply-2", "我還在找這個，等我一下就好。", undefined);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-2",
+      "Ray，我還在找這個，等我一下就好。",
+      undefined
+    );
     expect(routeObserver).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "function_result",
@@ -366,6 +381,134 @@ describe("LINE entrance", () => {
         queryHash: expect.any(String)
       })
     );
+  });
+
+  it("softly personalizes group clarification replies with the requester display name", async () => {
+    const sessionStore = new InMemorySessionStore();
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "find_ppt_slides",
+      arguments: { query: "" },
+      provider: "ollama"
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      createSharingLink: vi.fn()
+    };
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const identity: LineIdentityClient = {
+      getUserDisplayName: vi.fn().mockResolvedValue("Ray"),
+      getGroupDisplayName: vi.fn()
+    };
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      functionRegistry: {
+        find_ppt_slides: createFindPptSlidesHandler({
+          graph,
+          driveId: "drive-id",
+          folderItemId: "folder-id",
+          allowedExtensions: [".pptx"],
+          defaultIncludePdf: false,
+          sessionStore,
+          requestIdFactory: () => "pending-1"
+        })
+      },
+      createLineIdentityClient: () => identity,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查投影片" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "Ray，要查哪一份投影片？請直接回覆名稱。",
+      undefined
+    );
+    await expect(sessionStore.get("pending-1")).resolves.toMatchObject({
+      requesterUserId: "U1"
+    });
+  });
+
+  it("does not let another group member answer someone else's pending clarification", async () => {
+    const sessionStore = new InMemorySessionStore();
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "find_ppt_slides",
+      arguments: { query: "" },
+      provider: "ollama"
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn().mockResolvedValue([{ id: "1", name: "奇異恩典.pptx" }]),
+      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/1")
+    };
+    const handler = createFindPptSlidesHandler({
+      graph,
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pptx"],
+      defaultIncludePdf: false,
+      sessionStore,
+      requestIdFactory: () => "pending-1"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      functionRegistry: { find_ppt_slides: handler },
+      textMessageHandlers: {
+        pending_function_answer: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { find_ppt_slides: handler }
+        })
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    const firstBody = lineBody({
+      type: "message",
+      replyToken: "reply-1",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查投影片" }
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(firstBody, "main-secret"),
+      payload: firstBody
+    });
+
+    const secondBody = lineBody({
+      type: "message",
+      replyToken: "reply-2",
+      source: { type: "group", groupId: "Cmain", userId: "U2" },
+      message: { type: "text", text: "奇異恩典" }
+    });
+    const secondResponse = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(secondBody, "main-secret"),
+      payload: secondBody
+    });
+
+    expect(secondResponse.statusCode).toBe(200);
+    expect(secondResponse.json()).toMatchObject({
+      ok: true,
+      ignored: true,
+      reason: "wake_word_missing"
+    });
+    expect(graph.listFolderChildren).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledTimes(1);
   });
 
   it("emits fallback diagnostics when keyword routing is used after Ollama fails", async () => {
