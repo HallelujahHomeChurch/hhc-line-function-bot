@@ -13,12 +13,13 @@
 Read these first when starting work:
 
 1. `README.md` for product behavior, configuration, commands, and deployment context.
-2. `src/server.ts` for LINE entrance behavior, admin commands, access checks, and postback routing.
-3. `src/router.ts`, `src/keyword-router.ts`, and `src/function-arguments.ts` for LLM/keyword routing and argument handling.
-4. `src/functions/definitions.ts`, `src/functions/registry.ts`, and `src/functions/modules.ts` for function registration.
-5. `src/access/*` for managed user/group/admin registration and PostgreSQL/in-memory stores.
-6. `src/state/*`, `src/cache/*`, and `src/redis.ts` for session/cache persistence.
-7. `src/__tests__/*` before changing behavior; tests are the best executable map of expected bot behavior.
+2. `docs/architecture-context.md` for the request flow, subsystem map, and debug entry points.
+3. `src/server.ts` for LINE entrance behavior, admin commands, access checks, and postback routing.
+4. `src/router.ts`, `src/keyword-router.ts`, and `src/function-arguments.ts` for LLM/keyword routing and argument handling.
+5. `src/functions/definitions.ts`, `src/functions/registry.ts`, and `src/functions/modules.ts` for function registration.
+6. `src/access/*` for managed user/group/admin registration and PostgreSQL/in-memory stores.
+7. `src/state/*`, `src/cache/*`, and `src/redis.ts` for session/cache persistence.
+8. `src/__tests__/*` before changing behavior; tests are the best executable map of expected bot behavior.
 
 ## Current Product Shape
 
