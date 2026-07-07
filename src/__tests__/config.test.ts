@@ -286,6 +286,37 @@ describe("config", () => {
     expect(config.llm.ollamaKeepAlive).toBeUndefined();
   });
 
+  it("defaults profile small talk to template mode with an 80 character limit", () => {
+    const config = loadConfigFromEnv(baseEnv());
+
+    expect(config.profiles[0].smallTalk).toEqual({
+      mode: "template",
+      maxChars: 80
+    });
+  });
+
+  it("loads profile LLM small talk settings", () => {
+    const config = loadConfigFromEnv({
+      BOT_PROFILES_JSON: JSON.stringify([
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          smallTalk: {
+            mode: "llm",
+            maxChars: 80
+          }
+        }
+      ])
+    });
+
+    expect(config.profiles[0].smallTalk).toEqual({
+      mode: "llm",
+      maxChars: 80
+    });
+  });
+
   it("loads Redis, rate limit, and last error settings", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),

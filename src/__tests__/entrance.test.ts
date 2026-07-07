@@ -11,7 +11,8 @@ import type {
   LineIdentityClient,
   LineReplyClient,
   TextMessageHandlerRegistry,
-  PostbackHandlerRegistry
+  PostbackHandlerRegistry,
+  TextGenerationProvider
 } from "../types.js";
 
 function testConfig(): AppConfig {
@@ -507,6 +508,53 @@ describe("LINE entrance", () => {
         engagement: "small_talk",
         smallTalkCategory: "reassurance"
       })
+    );
+  });
+
+  it("uses controlled LLM small talk for addressed group chat when enabled by profile", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      smallTalk: { mode: "llm", maxChars: 80 }
+    };
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const completeText = vi
+      .fn<TextGenerationProvider["completeText"]>()
+      .mockResolvedValue("我在，謝謝你關心，需要查資料再叫我就好。");
+    const app = createTestApp(config, {
+      router: { route },
+      textGenerator: { completeText },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈你好嗎" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(completeText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "main",
+        text: "小哈你好嗎",
+        category: "wellbeing",
+        maxChars: 80
+      })
+    );
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "我在，謝謝你關心，需要查資料再叫我就好。",
+      undefined
     );
   });
 

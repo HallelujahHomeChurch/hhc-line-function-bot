@@ -11,6 +11,7 @@ export const SYSTEM_ACTION_NAMES = ["introduce_bot", "small_talk"] as const;
 export type SystemActionName = (typeof SYSTEM_ACTION_NAMES)[number];
 
 export const SMALL_TALK_CATEGORIES = [
+  "wellbeing",
   "thanks",
   "encouragement",
   "reassurance",
@@ -36,6 +37,11 @@ export interface RegistrationConfig {
   enabled: boolean;
 }
 
+export interface SmallTalkConfig {
+  mode: "template" | "llm";
+  maxChars: number;
+}
+
 export interface BotProfileConfig {
   name: string;
   webhookPath: string;
@@ -53,6 +59,7 @@ export interface BotProfileConfig {
   directAccessPolicy?: DirectAccessPolicy;
   groupAccessPolicy?: GroupAccessPolicy;
   registration?: RegistrationConfig;
+  smallTalk?: SmallTalkConfig;
 }
 
 export interface LlmConfig {
@@ -310,6 +317,18 @@ export interface ChatProviderRequest {
 
 export interface ChatProvider {
   completeJson(request: ChatProviderRequest): Promise<string>;
+}
+
+export interface TextGenerationRequest {
+  prompt: string;
+  profileName: string;
+  text: string;
+  category: SmallTalkCategory;
+  maxChars: number;
+}
+
+export interface TextGenerationProvider {
+  completeText(request: TextGenerationRequest): Promise<string>;
 }
 
 export interface LineReplyClient {

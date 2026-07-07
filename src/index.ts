@@ -66,6 +66,7 @@ const app = createApp(config, {
   registrationInviteCodeStore,
   confirmationStore,
   inFlightStore,
+  textGenerator: primary,
   diagnostics: createDependencyDiagnostics({
     config,
     postgres: postgres?.pool,

@@ -33,7 +33,7 @@ import { buildFunctionQuickReplies } from "./line-reply.js";
 import { verifyLineSignature } from "./line-signature.js";
 import { messages } from "./messages.js";
 import { sanitizeActionTelemetryEvent } from "./observability/action-telemetry.js";
-import { createSmallTalkReply, smallTalkCategoryFromArguments } from "./small-talk.js";
+import { createControlledSmallTalkReply, smallTalkCategoryFromArguments } from "./small-talk.js";
 import {
   formatLastErrors,
   InMemoryLastErrorStore,
@@ -66,6 +66,7 @@ import type {
   PostbackRequest,
   RouteObserver,
   RouteObserverEvent,
+  TextGenerationProvider,
   TextMessageHandlerRegistry
 } from "./types.js";
 import { FUNCTION_NAMES, isFunctionName } from "./types.js";
@@ -90,6 +91,7 @@ export interface AppDependencies {
   diagnostics?: AppDiagnostics;
   confirmationStore?: ConfirmationStore;
   inFlightStore?: InFlightStore;
+  textGenerator?: TextGenerationProvider;
 }
 
 interface AllowResult {
@@ -211,6 +213,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     );
   const diagnostics = deps.diagnostics ?? createStaticAppDiagnostics(config);
   const inFlightStore = deps.inFlightStore ?? new MemoryInFlightStore();
+  const textGenerator = deps.textGenerator;
 
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
@@ -250,7 +253,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         accessStore,
         registrationInviteCodeStore,
         diagnostics,
-        inFlightStore
+        inFlightStore,
+        textGenerator
       );
     });
   }
@@ -279,7 +283,8 @@ async function handleWebhook(
   accessStore: AccessStore,
   registrationInviteCodeStore: RegistrationInviteCodeStore,
   diagnostics: AppDiagnostics,
-  inFlightStore: InFlightStore
+  inFlightStore: InFlightStore,
+  textGenerator: TextGenerationProvider | undefined
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -467,7 +472,12 @@ async function handleWebhook(
       continue;
     }
     if (groupEngagement?.kind === "small_talk" && groupEngagement.smallTalkCategory) {
-      const result = createSmallTalkReply(groupEngagement.smallTalkCategory);
+      const result = await createControlledSmallTalkReply({
+        profile: effectiveProfile,
+        text: event.message.text,
+        category: groupEngagement.smallTalkCategory,
+        generator: textGenerator
+      });
       await emitRouteEvent(routeObserver, {
         kind: "route",
         profileName: profile.name,
@@ -617,7 +627,12 @@ async function handleWebhook(
       }
       if (route.action === "small_talk") {
         const category = smallTalkCategoryFromArguments(route.arguments);
-        const result = createSmallTalkReply(category);
+        const result = await createControlledSmallTalkReply({
+          profile: effectiveProfile,
+          text: event.message.text,
+          category,
+          generator: textGenerator
+        });
         await line.replyText(event.replyToken, result.replyText, undefined);
         continue;
       }

@@ -139,6 +139,9 @@ function isIntroText(text: string): boolean {
 
 function classifySmallTalkCategory(text: string): SmallTalkCategory | undefined {
   const lower = text.toLowerCase();
+  if (/你好嗎|還在嗎|在嗎|最近好嗎|好嗎|安好/u.test(lower)) {
+    return "wellbeing";
+  }
   if (/謝謝|謝啦|感謝|thanks|thank you/u.test(lower)) {
     return "thanks";
   }

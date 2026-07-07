@@ -623,6 +623,31 @@ describe("function router", () => {
     });
   });
 
+  it("falls back to wellbeing small talk when Qwen fails on a check-in", async () => {
+    const qwen = provider("not-json");
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈你好嗎",
+      enabledFunctions: ["find_ppt_slides", "query_service_schedule"],
+      source: { type: "group", groupId: "C1", userId: "U1" }
+    });
+
+    expect(result).toEqual({
+      type: "respond",
+      action: "small_talk",
+      provider: "keyword",
+      fallbackProvider: "ollama",
+      fallbackReason: "invalid_json",
+      arguments: { category: "wellbeing" }
+    });
+  });
+
   it("keeps generic PPT keyword fallback queries empty so the function can clarify", async () => {
     const qwen = provider("not-json");
     const router = createFunctionRouter({

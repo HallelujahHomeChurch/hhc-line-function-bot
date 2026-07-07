@@ -32,7 +32,13 @@ const profileSchema = z.object({
     .object({
       enabled: z.boolean().default(false)
     })
-    .default({ enabled: false })
+    .default({ enabled: false }),
+  smallTalk: z
+    .object({
+      mode: z.enum(["template", "llm"]).default("template"),
+      maxChars: z.number().int().min(20).max(120).default(80)
+    })
+    .default({ mode: "template", maxChars: 80 })
 });
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {

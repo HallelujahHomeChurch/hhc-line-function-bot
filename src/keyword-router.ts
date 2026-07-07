@@ -160,6 +160,9 @@ function extractSmallTalkFallback(text: string): SmallTalkCategory | undefined {
   const withoutWake = normalized.replace(/^小哈[，,\s]*/i, "");
   const value = withoutWake || normalized;
   const lower = value.toLowerCase();
+  if (/你好嗎|還在嗎|在嗎|最近好嗎|好嗎|安好/u.test(lower)) {
+    return "wellbeing";
+  }
   if (/謝謝|謝啦|感謝|thanks|thank you/u.test(lower)) {
     return "thanks";
   }
