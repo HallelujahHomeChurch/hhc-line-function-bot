@@ -1636,6 +1636,88 @@ describe("LINE entrance", () => {
     );
   });
 
+  it("records admin natural-language routes and action results without raw text or invite codes", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const adminRoute = vi.fn().mockResolvedValue({
+      type: "execute",
+      action: "invite_code_create",
+      arguments: {},
+      confidence: 0.93,
+      provider: "ollama"
+    });
+    const routeObserver = vi.fn().mockResolvedValue(undefined);
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const registrationInviteCodeStore = new InMemoryRegistrationInviteCodeStore({
+      codeFactory: () => "ADMINOBS"
+    });
+    const app = createApp(accessConfig(), {
+      router: { route },
+      adminActionRouter: { route: adminRoute },
+      accessStore: new InMemoryAccessStore(),
+      registrationInviteCodeStore,
+      routeObserver,
+      requestIdFactory: vi
+        .fn()
+        .mockReturnValueOnce("req-admin-action-1")
+        .mockReturnValueOnce("req-admin-action-2"),
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    const createBody = lineBody({
+      type: "message",
+      replyToken: "reply-token-1",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "please create an invite code for Ray" }
+    });
+    await app.inject({
+      method: "POST",
+      url: "/line/helper/webhook",
+      headers: signedHeaders(createBody, "helper-secret"),
+      payload: createBody
+    });
+
+    const adminBody = lineBody({
+      type: "message",
+      replyToken: "reply-token-2",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "/last-routes" }
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/helper/webhook",
+      headers: signedHeaders(adminBody, "helper-secret"),
+      payload: adminBody
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(routeObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "admin_action_route",
+        provider: "ollama",
+        outcome: "execute",
+        action: "invite_code_create",
+        confidence: 0.93
+      })
+    );
+    expect(routeObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "admin_action_result",
+        action: "invite_code_create",
+        ok: true
+      })
+    );
+    const lastRoutes = String(replyText.mock.calls[1]?.[1]);
+    expect(lastRoutes).toContain("Last routes");
+    expect(lastRoutes).toContain("phase=admin_route");
+    expect(lastRoutes).toContain("phase=admin_action");
+    expect(lastRoutes).toContain("invite_code_create");
+    expect(lastRoutes).toContain("provider=ollama");
+    expect(lastRoutes).toContain("ok=true");
+    expect(lastRoutes).not.toContain("please create an invite code for Ray");
+    expect(lastRoutes).not.toContain("ADMINOBS");
+  });
+
   it("keeps admin natural-language actions direct-only even when sent by an admin in a group", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",

@@ -9,6 +9,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Per-profile access policy, wake words, message type filtering, and function toggles.
 - Function router that uses Ollama `qwen3:4b-instruct` first.
 - Action catalog that separates user functions, admin actions, and system actions.
+- Policy gate and admin action registry for natural-language admin operations.
 - Conservative keyword fallback when Ollama times out, is unreachable, or returns invalid JSON.
 - LINE Quick Reply suggestions for supported functions.
 - Postback-based selection state for multi-result flows, currently used by PPT and sheet music search.
@@ -173,6 +174,8 @@ Admin commands use slash syntax and are gated by each profile's bootstrap `admin
 
 Admins can also use direct-chat natural language for selected admin actions. For example, an admin can ask the bot to create an invite code, and the bot will return a copyable `/registry <code>` line. Admin natural language is direct-chat only; group messages do not execute admin actions. `/registry <code>` remains a deterministic slash command and is not routed through the LLM.
 
+Admin natural-language requests pass through a conservative local hint check, the admin action router, the policy gate, and the admin action registry. `/last-routes` records sanitized admin route/action outcomes without raw message text or invite codes. Use `pnpm eval:admin` when changing admin intent hints or adding admin actions.
+
 Common commands:
 
 ```text
@@ -267,9 +270,11 @@ Azure Container Apps should pull from the ACR image. Runtime secrets are expecte
 ## Verification
 
 ```powershell
-pnpm test
-pnpm eval:router
+pnpm format:check
 pnpm typecheck
 pnpm lint
+pnpm test
+pnpm eval:router
+pnpm eval:admin
 pnpm build
 ```

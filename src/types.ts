@@ -230,6 +230,8 @@ export interface RouteObserverEvent {
     | "route"
     | "function_result"
     | "function_error"
+    | "admin_action_route"
+    | "admin_action_result"
     | "text_handler"
     | "postback"
     | "admin_command"

@@ -4,6 +4,7 @@ import fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { InMemoryAccessStore } from "./access/memory-access-store.js";
+import { createAdminActionRegistry, type AdminActionRegistry } from "./actions/admin-registry.js";
 import {
   InMemoryRegistrationInviteCodeStore,
   type RegistrationInviteCodeStore
@@ -13,7 +14,6 @@ import { createLineSdkIdentityClient, createLineSdkReplyClient } from "./clients
 import { getFunctionDefinitions } from "./functions/definitions.js";
 import {
   enabledNaturalLanguageAdminActionNames,
-  getActionDefinition,
   matchesNaturalLanguageAdminActionHint
 } from "./actions/catalog.js";
 import { createIntroReply } from "./intro.js";
@@ -39,7 +39,6 @@ import type {
   FunctionExecutionResult,
   FunctionRegistry,
   FunctionRouterPort,
-  AdminActionName,
   AdminActionRouterPort,
   LineIdentityClient,
   LineEvent,
@@ -59,6 +58,7 @@ import { FUNCTION_NAMES, isFunctionName } from "./types.js";
 export interface AppDependencies {
   router: FunctionRouterPort;
   adminActionRouter?: AdminActionRouterPort;
+  adminActionRegistry?: AdminActionRegistry;
   functionRegistry?: FunctionRegistry;
   postbackHandlers?: PostbackHandlerRegistry;
   textMessageHandlers?: TextMessageHandlerRegistry;
@@ -171,6 +171,13 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   const registrationInviteCodeStore =
     deps.registrationInviteCodeStore ?? new InMemoryRegistrationInviteCodeStore();
   const registrationInviteCodeTtlMinutes = config.access?.registrationInviteCodeTtlMinutes ?? 60;
+  const adminActionRegistry =
+    deps.adminActionRegistry ??
+    createAdminActionRegistry({
+      accessStore,
+      registrationInviteCodeStore,
+      registrationInviteCodeTtlMinutes
+    });
   const lastErrorStore =
     deps.lastErrorStore ?? new InMemoryLastErrorStore(config.lastErrors?.maxEntries ?? 20);
   const lastRouteStore =
@@ -209,6 +216,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         profile,
         deps.router,
         adminActionRouter,
+        adminActionRegistry,
         functionRegistry,
         deps.postbackHandlers ?? {},
         deps.textMessageHandlers ?? {},
@@ -221,8 +229,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         lastRouteStore,
         rateLimiter,
         accessStore,
-        registrationInviteCodeStore,
-        registrationInviteCodeTtlMinutes
+        registrationInviteCodeStore
       );
     });
   }
@@ -236,6 +243,7 @@ async function handleWebhook(
   profile: BotProfileConfig,
   router: FunctionRouterPort,
   adminActionRouter: AdminActionRouterPort | undefined,
+  adminActionRegistry: AdminActionRegistry,
   functionRegistry: FunctionRegistry,
   postbackHandlers: PostbackHandlerRegistry,
   textMessageHandlers: TextMessageHandlerRegistry,
@@ -248,8 +256,7 @@ async function handleWebhook(
   lastRouteStore: LastRouteStore,
   rateLimiter: RateLimiter,
   accessStore: AccessStore,
-  registrationInviteCodeStore: RegistrationInviteCodeStore,
-  registrationInviteCodeTtlMinutes: number
+  registrationInviteCodeStore: RegistrationInviteCodeStore
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -374,8 +381,7 @@ async function handleWebhook(
           lastErrorStore,
           lastRouteStore,
           accessStore,
-          registrationInviteCodeStore,
-          registrationInviteCodeTtlMinutes,
+          adminActionRegistry,
           requestId
         );
       } catch (error) {
@@ -459,9 +465,11 @@ async function handleWebhook(
       effectiveProfile,
       event,
       adminActionRouter,
+      adminActionRegistry,
       accessStore,
-      registrationInviteCodeStore,
-      registrationInviteCodeTtlMinutes
+      routeObserver,
+      lastRouteStore,
+      requestId
     );
     if (adminActionResult) {
       await line.replyText(
@@ -1065,9 +1073,11 @@ async function handleNaturalLanguageAdminAction(
   profile: BotProfileConfig,
   event: LineEvent,
   adminActionRouter: AdminActionRouterPort | undefined,
+  adminActionRegistry: AdminActionRegistry,
   accessStore: AccessStore,
-  registrationInviteCodeStore: RegistrationInviteCodeStore,
-  registrationInviteCodeTtlMinutes: number
+  routeObserver: RouteObserver | undefined,
+  lastRouteStore: LastRouteStore,
+  requestId: string
 ): Promise<FunctionExecutionResult | undefined> {
   if (!matchesNaturalLanguageAdminActionHint(text)) {
     return undefined;
@@ -1085,119 +1095,127 @@ async function handleNaturalLanguageAdminAction(
     return { ok: true, replyText: adminNaturalLanguageUnsupportedReply() };
   }
 
+  const routeStartedAt = Date.now();
   const route = await adminActionRouter.route({
     profileName: profile.name,
     text,
     enabledActions: enabledNaturalLanguageAdminActionNames(),
     source: event.source
   });
+  const routeDurationMs = elapsedMs(routeStartedAt);
+  await recordAdminActionRoute({
+    routeObserver,
+    lastRouteStore,
+    requestId,
+    profile,
+    event,
+    provider: route.provider,
+    outcome: route.type,
+    action: route.type === "execute" ? route.action : undefined,
+    reason: route.type === "deny" ? route.reason : undefined,
+    confidence: route.type === "execute" ? route.confidence : undefined,
+    fallbackProvider: route.type === "deny" ? route.fallbackProvider : undefined,
+    fallbackReason: route.type === "deny" ? route.fallbackReason : undefined,
+    durationMs: routeDurationMs
+  });
 
   if (route.type === "deny") {
     return { ok: true, replyText: adminNaturalLanguageUnsupportedReply() };
   }
 
-  return executeAdminAction(
-    route.action,
+  const actionStartedAt = Date.now();
+  const result = await adminActionRegistry.execute({
+    action: route.action,
+    profile,
+    event
+  });
+  await recordAdminActionResult({
+    routeObserver,
+    lastRouteStore,
+    requestId,
     profile,
     event,
-    accessStore,
-    registrationInviteCodeStore,
-    registrationInviteCodeTtlMinutes
-  );
-}
-
-async function executeAdminAction(
-  action: AdminActionName,
-  profile: BotProfileConfig,
-  event: LineEvent,
-  accessStore: AccessStore,
-  registrationInviteCodeStore: RegistrationInviteCodeStore,
-  registrationInviteCodeTtlMinutes: number
-): Promise<FunctionExecutionResult> {
-  const policy = await evaluateAdminActionPolicy(action, profile, event, accessStore);
-  if (!policy.allowed) {
-    return {
-      ok: true,
-      replyText:
-        policy.reason === "source_direct_required"
-          ? "管理操作請到個人對話使用。"
-          : messages.adminUnauthorized
-    };
-  }
-
-  if (action === "invite_code_create") {
-    return createInviteCodeResult(
-      profile,
-      event.source.userId,
-      accessStore,
-      registrationInviteCodeStore,
-      registrationInviteCodeTtlMinutes
-    );
-  }
-
-  return { ok: true, replyText: adminNaturalLanguageUnsupportedReply() };
-}
-
-async function evaluateAdminActionPolicy(
-  action: AdminActionName,
-  profile: BotProfileConfig,
-  event: LineEvent,
-  accessStore: AccessStore
-): Promise<AllowResult> {
-  const definition = getActionDefinition(action);
-  if (!definition || definition.kind !== "admin_action") {
-    return { allowed: false, reason: "unknown_admin_action" };
-  }
-  if (
-    definition.auth === "admin" &&
-    !(await isAdminUser(profile, event.source.userId, accessStore))
-  ) {
-    return { allowed: false, reason: "admin_required" };
-  }
-  if (definition.sourcePolicy === "direct" && event.source.type !== "user") {
-    return { allowed: false, reason: "source_direct_required" };
-  }
-  if (profile.adminDirectOnly !== false && event.source.type !== "user") {
-    return { allowed: false, reason: "source_direct_required" };
-  }
-  return { allowed: true, reason: "allowed" };
-}
-
-async function createInviteCodeResult(
-  profile: BotProfileConfig,
-  actorUserId: string | undefined,
-  accessStore: AccessStore,
-  registrationInviteCodeStore: RegistrationInviteCodeStore,
-  registrationInviteCodeTtlMinutes: number
-): Promise<FunctionExecutionResult> {
-  if (!actorUserId) {
-    return { ok: true, replyText: messages.adminUnauthorized };
-  }
-  if (!profile.registration?.enabled) {
-    return { ok: true, replyText: "這個 profile 沒有啟用註冊邀請碼。" };
-  }
-  const invite = await registrationInviteCodeStore.create({
-    profileName: profile.name,
-    createdBy: actorUserId,
-    ttlMinutes: registrationInviteCodeTtlMinutes
+    action: route.action,
+    ok: result.ok,
+    durationMs: elapsedMs(actionStartedAt)
   });
-  await accessStore.recordAudit({
-    profileName: profile.name,
-    actorUserId,
-    action: "invite_code.create",
-    metadata: { ttlMinutes: registrationInviteCodeTtlMinutes }
+  return result;
+}
+
+async function recordAdminActionRoute(input: {
+  routeObserver: RouteObserver | undefined;
+  lastRouteStore: LastRouteStore;
+  requestId: string;
+  profile: BotProfileConfig;
+  event: LineEvent;
+  provider: "ollama" | "router";
+  outcome: "execute" | "deny";
+  action?: string;
+  reason?: string;
+  confidence?: number;
+  fallbackProvider?: "ollama";
+  fallbackReason?: string;
+  durationMs: number;
+}): Promise<void> {
+  await emitRouteEvent(input.routeObserver, {
+    kind: "admin_action_route",
+    profileName: input.profile.name,
+    sourceType: input.event.source.type,
+    requestId: input.requestId,
+    provider: input.provider,
+    outcome: input.outcome,
+    action: input.action,
+    reason: input.reason,
+    confidence: input.confidence,
+    fallbackProvider: input.fallbackProvider,
+    fallbackReason: input.fallbackReason,
+    durationMs: input.durationMs
   });
-  return {
-    ok: true,
-    replyText: [
-      "註冊邀請碼已建立",
-      `有效期限：${registrationInviteCodeTtlMinutes} 分鐘`,
-      `到期時間：${invite.expiresAt}`,
-      "",
-      "請把下面這行傳給要註冊的使用者或群組：",
-      `/registry ${invite.code}`
-    ].join("\n")
-  };
+  await input.lastRouteStore.record({
+    requestId: input.requestId,
+    occurredAt: new Date().toISOString(),
+    profileName: input.profile.name,
+    sourceType: input.event.source.type,
+    phase: "admin_route",
+    provider: input.provider,
+    outcome: input.outcome,
+    action: input.action,
+    reason: input.reason,
+    fallbackProvider: input.fallbackProvider,
+    fallbackReason: input.fallbackReason,
+    durationMs: input.durationMs
+  });
+}
+
+async function recordAdminActionResult(input: {
+  routeObserver: RouteObserver | undefined;
+  lastRouteStore: LastRouteStore;
+  requestId: string;
+  profile: BotProfileConfig;
+  event: LineEvent;
+  action: string;
+  ok: boolean;
+  durationMs: number;
+}): Promise<void> {
+  await emitRouteEvent(input.routeObserver, {
+    kind: "admin_action_result",
+    profileName: input.profile.name,
+    sourceType: input.event.source.type,
+    requestId: input.requestId,
+    action: input.action,
+    ok: input.ok,
+    durationMs: input.durationMs
+  });
+  await input.lastRouteStore.record({
+    requestId: input.requestId,
+    occurredAt: new Date().toISOString(),
+    profileName: input.profile.name,
+    sourceType: input.event.source.type,
+    phase: "admin_action",
+    action: input.action,
+    ok: input.ok,
+    durationMs: input.durationMs
+  });
 }
 
 function adminNaturalLanguageUnsupportedReply(): string {
@@ -1213,8 +1231,7 @@ async function handleAdminCommand(
   lastErrorStore: LastErrorStore,
   lastRouteStore: LastRouteStore,
   accessStore: AccessStore,
-  registrationInviteCodeStore: RegistrationInviteCodeStore,
-  registrationInviteCodeTtlMinutes: number,
+  adminActionRegistry: AdminActionRegistry,
   requestId: string
 ): Promise<FunctionExecutionResult> {
   const parsed = parseAdminCommand(text);
@@ -1279,8 +1296,7 @@ async function handleAdminCommand(
     profile,
     event,
     accessStore,
-    registrationInviteCodeStore,
-    registrationInviteCodeTtlMinutes
+    adminActionRegistry
   );
   if (accessResult) {
     return accessResult;
@@ -1300,8 +1316,7 @@ async function handleAdminAccessCommand(
   profile: BotProfileConfig,
   event: LineEvent,
   accessStore: AccessStore,
-  registrationInviteCodeStore: RegistrationInviteCodeStore,
-  registrationInviteCodeTtlMinutes: number
+  adminActionRegistry: AdminActionRegistry
 ): Promise<FunctionExecutionResult | undefined> {
   const actorUserId = event.source.userId;
   if (!actorUserId) {
@@ -1518,14 +1533,11 @@ async function handleAdminAccessCommand(
   }
 
   if (command === "invite-code-create") {
-    return executeAdminAction(
-      "invite_code_create",
+    return adminActionRegistry.execute({
+      action: "invite_code_create",
       profile,
-      event,
-      accessStore,
-      registrationInviteCodeStore,
-      registrationInviteCodeTtlMinutes
-    );
+      event
+    });
   }
   if (command === "admin-add" || command === "admin-remove") {
     if (!isBootstrapSuperAdmin(profile, actorUserId)) {

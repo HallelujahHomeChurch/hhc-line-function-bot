@@ -3,7 +3,7 @@ export interface LastRouteRecord {
   occurredAt: string;
   profileName: string;
   sourceType: string;
-  phase: "route" | "function";
+  phase: "route" | "function" | "admin_route" | "admin_action";
   provider?: string;
   outcome?: "execute" | "respond" | "deny";
   action?: string;

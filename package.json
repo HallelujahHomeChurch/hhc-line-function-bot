@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "eval:router": "tsx src/tools/eval-router.ts",
+    "eval:admin": "tsx src/tools/eval-admin-actions.ts",
     "check:notion": "tsx src/tools/check-notion-service-schedule.ts",
     "format:check": "prettier --check ."
   },

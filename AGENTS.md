@@ -38,6 +38,7 @@ The first-class functions are:
 - Intro/help behavior is not a normal function execution path; keep it friendly and do not expose implementation details such as OneDrive or Notion to ordinary users.
 - User functions, admin actions, and system actions are separate action kinds. Do not add management behavior to `enabledFunctions`.
 - Admin natural language is direct-chat only. It may route to selected admin actions, currently invite-code creation, after admin identity and source policy checks.
+- Admin actions must go through the action catalog, policy gate, admin action registry, audit, and sanitized route observability.
 
 When adding or changing a function:
 
@@ -48,6 +49,14 @@ When adding or changing a function:
 - Add postback/numeric selection behavior if multiple results are possible.
 - Add tests for enabled, disabled, unclear, deny, missing-slot, and multi-result cases.
 - Update README and this file if the behavior changes how agents should work.
+
+When adding or changing an admin action:
+
+- Add the action name and metadata to the action catalog.
+- Add or update policy tests for auth, source policy, side effect, and confirmation behavior.
+- Register the handler in the admin action registry instead of adding execution logic to `server.ts`.
+- Add admin router/eval cases and run `pnpm eval:admin`.
+- Add observability tests that verify `/last-routes` does not expose raw messages or secrets.
 
 ## Architecture Map
 
@@ -111,6 +120,7 @@ When adding or changing a function:
   - `pnpm test`
   - `pnpm build`
 - For router behavior changes, also run `pnpm eval:router` when relevant.
+- For admin natural-language routing changes, also run `pnpm eval:admin`.
 - Update tests when changing routing, LINE webhook entrance behavior, access control, admin commands, or function execution behavior.
 - Keep `README.md` aligned when changing user-facing or admin-facing commands.
 
