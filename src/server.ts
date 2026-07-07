@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { InMemoryAccessStore } from "./access/memory-access-store.js";
 import { createAdminActionRegistry, type AdminActionRegistry } from "./actions/admin-registry.js";
+import type { ConfirmationStore } from "./actions/confirmation-store.js";
 import {
   InMemoryRegistrationInviteCodeStore,
   type RegistrationInviteCodeStore
@@ -76,6 +77,7 @@ export interface AppDependencies {
   accessStore?: AccessStore;
   registrationInviteCodeStore?: RegistrationInviteCodeStore;
   diagnostics?: AppDiagnostics;
+  confirmationStore?: ConfirmationStore;
 }
 
 interface AllowResult {
@@ -148,6 +150,7 @@ const builtInAdminCommandGroups: AdminCommandHelpGroup[] = [
       { usage: "/status", description: "查看目前 profile 狀態" },
       { usage: "/profile", description: "查看目前 LINE 來源與 profile 設定摘要" },
       { usage: "/diag", description: "查看服務診斷摘要" },
+      { usage: "/confirm <code>", description: "確認需要二次確認的操作" },
       { usage: "/route-test <text>", description: "測試一段文字會 route 到哪個 function" },
       { usage: "/last-errors", description: "查看最近錯誤" },
       { usage: "/last-routes", description: "查看最近 route/function 結果" }
@@ -181,7 +184,9 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     createAdminActionRegistry({
       accessStore,
       registrationInviteCodeStore,
-      registrationInviteCodeTtlMinutes
+      registrationInviteCodeTtlMinutes,
+      confirmationStore: deps.confirmationStore,
+      confirmationTtlMinutes: config.access?.confirmationTtlMinutes
     });
   const lastErrorStore =
     deps.lastErrorStore ?? new InMemoryLastErrorStore(config.lastErrors?.maxEntries ?? 20);
@@ -1282,6 +1287,18 @@ async function handleAdminCommand(
       ok: true,
       replyText: await diagnostics.formatAdminDiagnostics()
     };
+  }
+
+  if (parsed.command === "confirm") {
+    const code = parsed.args[0];
+    if (!code) {
+      return { ok: true, replyText: "Usage: /confirm <code>" };
+    }
+    return adminActionRegistry.confirm({
+      code,
+      profile,
+      event
+    });
   }
 
   if (parsed.command === "route-test") {

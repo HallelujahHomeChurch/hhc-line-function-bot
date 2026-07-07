@@ -1,5 +1,9 @@
 import type { AccessStore } from "../access/types.js";
 import type { RegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
+import {
+  InMemoryConfirmationStore,
+  type ConfirmationStore
+} from "./confirmation-store.js";
 import type {
   AdminActionName,
   BotProfileConfig,
@@ -12,6 +16,8 @@ export interface AdminActionRegistryOptions {
   accessStore: AccessStore;
   registrationInviteCodeStore: RegistrationInviteCodeStore;
   registrationInviteCodeTtlMinutes: number;
+  confirmationStore?: ConfirmationStore;
+  confirmationTtlMinutes?: number;
 }
 
 export interface AdminActionExecutionInput {
@@ -23,6 +29,11 @@ export interface AdminActionExecutionInput {
 
 export interface AdminActionRegistry {
   execute(input: AdminActionExecutionInput): Promise<FunctionExecutionResult>;
+  confirm(input: {
+    code: string;
+    profile: BotProfileConfig;
+    event: LineEvent;
+  }): Promise<FunctionExecutionResult>;
 }
 
 export function createAdminActionRegistry(
@@ -32,7 +43,13 @@ export function createAdminActionRegistry(
 }
 
 class DefaultAdminActionRegistry implements AdminActionRegistry {
-  constructor(private readonly options: AdminActionRegistryOptions) {}
+  private readonly confirmationStore: ConfirmationStore;
+  private readonly confirmationTtlMinutes: number;
+
+  constructor(private readonly options: AdminActionRegistryOptions) {
+    this.confirmationStore = options.confirmationStore ?? new InMemoryConfirmationStore();
+    this.confirmationTtlMinutes = options.confirmationTtlMinutes ?? 5;
+  }
 
   async execute(input: AdminActionExecutionInput): Promise<FunctionExecutionResult> {
     const policy = await evaluateActionPolicy({
@@ -43,6 +60,9 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
       confirmed: input.confirmed
     });
     if (!policy.allowed) {
+      if (policy.requiresConfirmation) {
+        return this.createConfirmation(input);
+      }
       return {
         ok: true,
         replyText:
@@ -59,6 +79,54 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
     return {
       ok: true,
       replyText: "我目前只能協助產生註冊邀請碼，請改用 /invite-code-create 或 /help admin。"
+    };
+  }
+
+  async confirm(input: {
+    code: string;
+    profile: BotProfileConfig;
+    event: LineEvent;
+  }): Promise<FunctionExecutionResult> {
+    const actorUserId = input.event.source.userId;
+    if (!actorUserId) {
+      return { ok: true, replyText: "你沒有權限使用 admin 指令。" };
+    }
+    const request = await this.confirmationStore.consume(
+      input.code,
+      actorUserId,
+      input.profile.name
+    );
+    if (!request) {
+      return { ok: true, replyText: "確認碼無效或已過期。" };
+    }
+    return this.execute({
+      action: request.action,
+      profile: input.profile,
+      event: input.event,
+      confirmed: true
+    });
+  }
+
+  private async createConfirmation(
+    input: AdminActionExecutionInput
+  ): Promise<FunctionExecutionResult> {
+    const actorUserId = input.event.source.userId;
+    if (!actorUserId) {
+      return { ok: true, replyText: "你沒有權限使用 admin 指令。" };
+    }
+    const request = await this.confirmationStore.create({
+      profileName: input.profile.name,
+      actorUserId,
+      action: input.action,
+      ttlMinutes: this.confirmationTtlMinutes
+    });
+    return {
+      ok: true,
+      replyText: [
+        "這個操作需要再次確認。",
+        `請在 ${this.confirmationTtlMinutes} 分鐘內回覆：`,
+        `/confirm ${request.id}`
+      ].join("\n")
     };
   }
 

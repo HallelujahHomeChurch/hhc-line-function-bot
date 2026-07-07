@@ -111,6 +111,7 @@ export interface DatabaseConfig {
 
 export interface AccessConfig {
   registrationInviteCodeTtlMinutes: number;
+  confirmationTtlMinutes: number;
 }
 
 export interface RateLimitConfig {

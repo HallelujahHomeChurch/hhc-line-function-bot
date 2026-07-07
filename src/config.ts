@@ -119,7 +119,8 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
         }
       : undefined,
     access: {
-      registrationInviteCodeTtlMinutes: readInt(env.REGISTRATION_INVITE_CODE_TTL_MINUTES, 60)
+      registrationInviteCodeTtlMinutes: readInt(env.REGISTRATION_INVITE_CODE_TTL_MINUTES, 60),
+      confirmationTtlMinutes: readInt(env.CONFIRMATION_TTL_MINUTES, 5)
     },
     rateLimit: {
       enabled: readBool(env.RATE_LIMIT_ENABLED, true),

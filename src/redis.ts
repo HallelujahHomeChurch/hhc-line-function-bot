@@ -2,6 +2,7 @@ import { createClient } from "redis";
 
 import type { RedisConfig } from "./types.js";
 import type { RedisRegistrationInviteCodeClient } from "./access/registration-invite-code-store.js";
+import type { RedisConfirmationClient } from "./actions/confirmation-store.js";
 import type { RedisCacheClient } from "./cache/redis-cache-store.js";
 import type { DiagnosticRedisClient } from "./diagnostics/dependencies.js";
 import type { RedisLastErrorClient } from "./observability/create-last-error-store.js";
@@ -14,6 +15,7 @@ export interface RedisRuntime {
     RedisLastErrorClient &
     RedisRateLimitClient &
     RedisRegistrationInviteCodeClient &
+    RedisConfirmationClient &
     DiagnosticRedisClient;
   keyPrefix: string;
 }

@@ -538,6 +538,7 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(replyText.mock.calls[0]?.[1]).toContain("/invite-code-create");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/confirm <code>");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/invite-code-list");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/invite-code-disable");
     expect(replyText.mock.calls[0]?.[1]).toContain("Superadmin");
@@ -548,6 +549,45 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("/refresh-sheet-music-cache");
     expect(replyText.mock.calls[0]?.[1]).toContain("/group-add <groupId> [name]");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/allow-group-add");
+  });
+
+  it("confirms admin actions through slash command", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const adminActionRegistry = {
+      execute: vi.fn(),
+      confirm: vi.fn().mockResolvedValue({
+        ok: true,
+        replyText: "confirmed"
+      })
+    };
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      adminActionRegistry,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uadmin" },
+      message: { type: "text", text: "/confirm CONFIRM1" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(adminActionRegistry.confirm).toHaveBeenCalledWith({
+      code: "CONFIRM1",
+      profile: expect.objectContaining({ name: "main" }),
+      event: expect.objectContaining({ replyToken: "reply-token" })
+    });
+    expect(replyText).toHaveBeenCalledWith("reply-token", "confirmed", undefined);
   });
 
   it("blocks help admin from non-admin users", async () => {

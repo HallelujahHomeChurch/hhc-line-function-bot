@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
+import { InMemoryConfirmationStore } from "../actions/confirmation-store.js";
 import { createAdminActionRegistry } from "../actions/admin-registry.js";
 import type { BotProfileConfig } from "../types.js";
 
@@ -86,5 +87,77 @@ describe("admin action registry", () => {
     expect(result.replyText).toContain("沒有啟用註冊邀請碼");
     await expect(registrationInviteCodeStore.consume("helper", "DISABLED")).resolves.toBe(false);
     expect(accessStore.audit).toEqual([]);
+  });
+
+  it("does not require confirmation for invite code creation", async () => {
+    const accessStore = new InMemoryAccessStore();
+    const registrationInviteCodeStore = new InMemoryRegistrationInviteCodeStore({
+      codeFactory: () => "ADMINCODE"
+    });
+    const confirmationStore = new InMemoryConfirmationStore({
+      idFactory: () => {
+        throw new Error("confirmation should not be created");
+      }
+    });
+    const registry = createAdminActionRegistry({
+      accessStore,
+      registrationInviteCodeStore,
+      registrationInviteCodeTtlMinutes: 60,
+      confirmationStore
+    });
+
+    const result = await registry.execute({
+      action: "invite_code_create",
+      profile: profile(),
+      event: {
+        type: "message",
+        source: { type: "user", userId: "Uroot" }
+      }
+    });
+
+    expect(result.replyText).toContain("/registry ADMINCODE");
+  });
+
+  it("confirms a stored admin action only once", async () => {
+    const accessStore = new InMemoryAccessStore();
+    const registrationInviteCodeStore = new InMemoryRegistrationInviteCodeStore({
+      codeFactory: () => "ADMINCODE"
+    });
+    const confirmationStore = new InMemoryConfirmationStore({
+      idFactory: () => "CONFIRM1",
+      now: () => new Date("2026-07-07T00:00:00.000Z")
+    });
+    await confirmationStore.create({
+      profileName: "helper",
+      actorUserId: "Uroot",
+      action: "invite_code_create",
+      ttlMinutes: 5
+    });
+    const registry = createAdminActionRegistry({
+      accessStore,
+      registrationInviteCodeStore,
+      registrationInviteCodeTtlMinutes: 60,
+      confirmationStore
+    });
+
+    const first = await registry.confirm({
+      code: "CONFIRM1",
+      profile: profile(),
+      event: {
+        type: "message",
+        source: { type: "user", userId: "Uroot" }
+      }
+    });
+    const second = await registry.confirm({
+      code: "CONFIRM1",
+      profile: profile(),
+      event: {
+        type: "message",
+        source: { type: "user", userId: "Uroot" }
+      }
+    });
+
+    expect(first.replyText).toContain("/registry ADMINCODE");
+    expect(second.replyText).toContain("確認碼無效或已過期");
   });
 });
