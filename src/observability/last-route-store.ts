@@ -1,3 +1,5 @@
+import { sanitizeLastRouteRecord } from "./action-telemetry.js";
+
 export interface LastRouteRecord {
   requestId: string;
   occurredAt: string;
@@ -29,7 +31,7 @@ export class InMemoryLastRouteStore implements LastRouteStore {
   constructor(private readonly maxEntries: number) {}
 
   async record(route: LastRouteRecord): Promise<void> {
-    this.routes.unshift(route);
+    this.routes.unshift(sanitizeLastRouteRecord(route));
     this.routes.splice(this.maxEntries);
   }
 

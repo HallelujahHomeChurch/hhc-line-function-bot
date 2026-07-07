@@ -1,4 +1,5 @@
 import type { RouteObserver } from "../types.js";
+import { sanitizeActionTelemetryEvent } from "./action-telemetry.js";
 
 export function createConsoleRouteObserver(): RouteObserver {
   return (event) => {
@@ -6,7 +7,7 @@ export function createConsoleRouteObserver(): RouteObserver {
       JSON.stringify({
         event: "line_function_route",
         timestamp: new Date().toISOString(),
-        ...event
+        ...sanitizeActionTelemetryEvent(event)
       })
     );
   };

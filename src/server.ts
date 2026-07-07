@@ -21,6 +21,7 @@ import { createIntroReply } from "./intro.js";
 import { buildFunctionQuickReplies } from "./line-reply.js";
 import { verifyLineSignature } from "./line-signature.js";
 import { messages } from "./messages.js";
+import { sanitizeActionTelemetryEvent } from "./observability/action-telemetry.js";
 import {
   formatLastErrors,
   InMemoryLastErrorStore,
@@ -1878,7 +1879,7 @@ async function emitRouteEvent(
     return;
   }
   try {
-    await observer(event);
+    await observer(sanitizeActionTelemetryEvent(event) as RouteObserverEvent);
   } catch {
     // Observability must not change LINE webhook behavior.
   }

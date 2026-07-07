@@ -1,3 +1,5 @@
+import { sanitizeLastErrorRecord } from "./action-telemetry.js";
+
 export interface LastErrorRecord {
   requestId: string;
   occurredAt: string;
@@ -22,7 +24,7 @@ export class InMemoryLastErrorStore implements LastErrorStore {
   constructor(private readonly maxEntries: number) {}
 
   async record(error: LastErrorRecord): Promise<void> {
-    this.errors.unshift(error);
+    this.errors.unshift(sanitizeLastErrorRecord(error));
     this.errors.splice(this.maxEntries);
   }
 

@@ -3,6 +3,7 @@ import {
   type LastErrorRecord,
   type LastErrorStore
 } from "./last-error-store.js";
+import { sanitizeLastErrorRecord } from "./action-telemetry.js";
 
 export interface RedisLastErrorClient {
   lPush(key: string, value: string): Promise<number>;
@@ -23,7 +24,7 @@ export class RedisLastErrorStore implements LastErrorStore {
   constructor(private readonly options: Required<LastErrorStoreFactoryOptions>) {}
 
   async record(error: LastErrorRecord): Promise<void> {
-    await this.options.redis.client.lPush(this.key(), JSON.stringify(error));
+    await this.options.redis.client.lPush(this.key(), JSON.stringify(sanitizeLastErrorRecord(error)));
     await this.options.redis.client.lTrim(this.key(), 0, this.options.maxEntries - 1);
   }
 
