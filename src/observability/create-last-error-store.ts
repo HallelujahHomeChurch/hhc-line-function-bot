@@ -24,7 +24,10 @@ export class RedisLastErrorStore implements LastErrorStore {
   constructor(private readonly options: Required<LastErrorStoreFactoryOptions>) {}
 
   async record(error: LastErrorRecord): Promise<void> {
-    await this.options.redis.client.lPush(this.key(), JSON.stringify(sanitizeLastErrorRecord(error)));
+    await this.options.redis.client.lPush(
+      this.key(),
+      JSON.stringify(sanitizeLastErrorRecord(error))
+    );
     await this.options.redis.client.lTrim(this.key(), 0, this.options.maxEntries - 1);
   }
 

@@ -2,15 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { FUNCTION_DEFINITIONS } from "../functions/definitions.js";
 
-const internalTerms = [
-  "OneDrive",
-  "Notion",
-  "Graph",
-  "Redis",
-  "Ollama",
-  "database",
-  "Postgres"
-];
+const internalTerms = ["OneDrive", "Notion", "Graph", "Redis", "Ollama", "database", "Postgres"];
 
 describe("function capability contracts", () => {
   it("defines user-facing metadata for every function", () => {

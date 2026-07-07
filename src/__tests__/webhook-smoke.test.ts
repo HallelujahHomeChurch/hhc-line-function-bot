@@ -27,7 +27,11 @@ describe("webhook smoke tool", () => {
     });
 
     expect(
-      verifyLineSignature(Buffer.from(request.body), request.headers["x-line-signature"], "channel-secret")
+      verifyLineSignature(
+        Buffer.from(request.body),
+        request.headers["x-line-signature"],
+        "channel-secret"
+      )
     ).toBe(true);
   });
 

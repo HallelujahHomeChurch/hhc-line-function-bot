@@ -1,9 +1,6 @@
 import type { AccessStore } from "../access/types.js";
 import type { RegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
-import {
-  InMemoryConfirmationStore,
-  type ConfirmationStore
-} from "./confirmation-store.js";
+import { InMemoryConfirmationStore, type ConfirmationStore } from "./confirmation-store.js";
 import type {
   AdminActionName,
   BotProfileConfig,

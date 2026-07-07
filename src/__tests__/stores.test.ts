@@ -28,6 +28,18 @@ class FakeRedisClient {
     this.values.set(key, value);
   }
 
+  async incr(key: string): Promise<number> {
+    const next = Number.parseInt(this.values.get(key) ?? "0", 10) + 1;
+    this.values.set(key, String(next));
+    return next;
+  }
+
+  async expire(_key: string, _seconds: number): Promise<number> {
+    void _key;
+    void _seconds;
+    return 1;
+  }
+
   async lPush(key: string, value: string): Promise<number> {
     const list = this.lists.get(key) ?? [];
     list.unshift(value);

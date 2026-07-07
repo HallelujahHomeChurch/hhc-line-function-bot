@@ -23,9 +23,7 @@ export interface DependencyDiagnosticsOptions {
   timeoutMs?: number;
 }
 
-export function createDependencyDiagnostics(
-  options: DependencyDiagnosticsOptions
-): AppDiagnostics {
+export function createDependencyDiagnostics(options: DependencyDiagnosticsOptions): AppDiagnostics {
   const timeoutMs = options.timeoutMs ?? 1500;
   const now = options.now ?? (() => new Date());
 
@@ -116,9 +114,7 @@ async function checkRedis(
   return checkTimed("redis", () => client.ping(), timeoutMs);
 }
 
-async function checkOllama(
-  options: DependencyDiagnosticsOptions
-): Promise<NamedDependencyStatus> {
+async function checkOllama(options: DependencyDiagnosticsOptions): Promise<NamedDependencyStatus> {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (!fetchImpl) {
     return { name: "ollama", configured: true, status: "degraded", message: "fetch_unavailable" };
