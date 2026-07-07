@@ -190,10 +190,13 @@ function buildRouterPrompt(enabledFunctions: FunctionName[]): string {
     "Return exactly one JSON object and no markdown.",
     'If the user request does not clearly match an enabled function, return {"action":"deny","reason":"not_matched"}.',
     'If the user greets the bot, only calls the bot, asks what the bot can do, or asks for help/usage, return {"action":"introduce_bot","arguments":{"greeting":"<short greeting if present>"}}.',
+    'If the user directly asks the bot light chat, encouragement, persona, thanks, or reassurance, return {"action":"small_talk","arguments":{"category":"thanks|encouragement|reassurance|persona|light_joke"}}.',
+    'If the message only mentions the bot in third person, return {"action":"deny","reason":"not_addressed_to_bot"}.',
     "If the user both greets and requests an enabled function, choose the function instead of introduce_bot.",
     "Never invent a function name.",
     "System actions:",
     "- introduce_bot: controlled introduction/help response. Do not write the final reply text.",
+    "- small_talk: controlled short chat response. Do not write the final reply text.",
     "Available functions:",
     available || "(none)"
   ].join("\n");

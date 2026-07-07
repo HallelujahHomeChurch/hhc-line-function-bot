@@ -30,20 +30,17 @@ export function createIntroReply(
   }
 
   const definitions = getFunctionDefinitions(profile.enabledFunctions);
-  const greetingLine = formatGreetingLine(options.greeting);
+  void options.greeting;
   if (definitions.length === 0) {
     return {
       ok: true,
-      replyText: [greetingLine, "我是小哈，教會同工小幫手。目前還沒有開放可查詢的項目。"]
-        .filter(Boolean)
-        .join("\n")
+      replyText: "我是小哈，教會同工小幫手。目前還沒有開放可查詢的項目。"
     };
   }
 
   return {
     ok: true,
     replyText: [
-      greetingLine,
       "我是小哈，教會同工小幫手。",
       "需要資料時可以叫我一聲，我可以幫忙：",
       "",
@@ -69,18 +66,4 @@ function normalizeIntroText(value: string): string {
     .trim()
     .replace(/[!！。.\s]+$/g, "")
     .toLowerCase();
-}
-
-function formatGreetingLine(value: string | undefined): string | undefined {
-  const greeting = value
-    ?.normalize("NFKC")
-    .trim()
-    .replace(/[!！。.\s]+$/g, "");
-  if (!greeting) {
-    return undefined;
-  }
-  if (greeting.length > 12) {
-    return undefined;
-  }
-  return `${greeting}。`;
 }

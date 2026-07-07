@@ -8,6 +8,7 @@ import { loadConfigFromEnv } from "./config.js";
 import { createDependencyDiagnostics } from "./diagnostics/dependencies.js";
 import { createPostgresRuntime } from "./db/postgres.js";
 import { createFunctionRegistries } from "./functions/registry.js";
+import { createInFlightStore } from "./in-flight/create-in-flight-store.js";
 import { createKeywordFallbackRouter } from "./keyword-router.js";
 import { createLastErrorStore } from "./observability/create-last-error-store.js";
 import { createConsoleRouteObserver } from "./observability/route-observer.js";
@@ -42,6 +43,7 @@ const confirmationStore = redis
   : undefined;
 const sessionStore = createSessionStore({ redis });
 const cache = createCacheStore({ redis });
+const inFlightStore = createInFlightStore({ redis });
 const lastErrorStore = createLastErrorStore({
   redis,
   maxEntries: config.lastErrors?.maxEntries ?? 20
@@ -63,6 +65,7 @@ const app = createApp(config, {
   accessStore,
   registrationInviteCodeStore,
   confirmationStore,
+  inFlightStore,
   diagnostics: createDependencyDiagnostics({
     config,
     postgres: postgres?.pool,

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { MemoryCacheStore } from "../cache/cache-store.js";
 import { createCacheStore } from "../cache/create-cache-store.js";
 import { RedisCacheStore } from "../cache/redis-cache-store.js";
+import { createInFlightStore } from "../in-flight/create-in-flight-store.js";
+import { MemoryInFlightStore, RedisInFlightStore } from "../in-flight/in-flight-store.js";
 import {
   createLastErrorStore,
   RedisLastErrorStore
@@ -20,8 +22,17 @@ class FakeRedisClient {
     return this.values.get(key) ?? null;
   }
 
-  async set(key: string, value: string): Promise<void> {
+  async set(
+    key: string,
+    value: string,
+    options?: { NX?: boolean; PX?: number }
+  ): Promise<"OK" | null> {
+    if (options?.NX && this.values.has(key)) {
+      return null;
+    }
     this.values.set(key, value);
+    void options?.PX;
+    return "OK";
   }
 
   async setEx(key: string, _seconds: number, value: string): Promise<void> {
@@ -93,6 +104,68 @@ describe("store factories", () => {
 
     expect(createSessionStore({ redis })).toBeInstanceOf(RedisSessionStore);
     expect(createCacheStore({ redis })).toBeInstanceOf(RedisCacheStore);
+    expect(createInFlightStore({ redis })).toBeInstanceOf(RedisInFlightStore);
+  });
+
+  it("uses memory in-flight store when Redis is not configured", async () => {
+    const store = createInFlightStore({ redis: undefined });
+
+    expect(store).toBeInstanceOf(MemoryInFlightStore);
+    await expect(
+      store.tryStart(
+        {
+          profileName: "helper",
+          sourceKey: "group:C1",
+          action: "find_ppt_slides",
+          queryHash: "abc"
+        },
+        60_000
+      )
+    ).resolves.toBe("started");
+    await expect(
+      store.tryStart(
+        {
+          profileName: "helper",
+          sourceKey: "group:C1",
+          action: "find_ppt_slides",
+          queryHash: "abc"
+        },
+        60_000
+      )
+    ).resolves.toBe("busy");
+    await store.release({
+      profileName: "helper",
+      sourceKey: "group:C1",
+      action: "find_ppt_slides",
+      queryHash: "abc"
+    });
+    await expect(
+      store.tryStart(
+        {
+          profileName: "helper",
+          sourceKey: "group:C1",
+          action: "find_ppt_slides",
+          queryHash: "abc"
+        },
+        60_000
+      )
+    ).resolves.toBe("started");
+  });
+
+  it("uses Redis NX semantics for in-flight locks", async () => {
+    const client = new FakeRedisClient();
+    const store = new RedisInFlightStore({ client, keyPrefix: "test" });
+    const key = {
+      profileName: "helper",
+      sourceKey: "group:C1",
+      action: "find_ppt_slides",
+      queryHash: "abc"
+    };
+
+    await expect(store.tryStart(key, 60_000)).resolves.toBe("started");
+    await expect(store.tryStart(key, 60_000)).resolves.toBe("busy");
+    await store.release(key);
+    await expect(store.tryStart(key, 60_000)).resolves.toBe("started");
   });
 
   it("stores cache values and deletes by prefix through Redis", async () => {

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -12,8 +12,18 @@ import {
 } from "./access/registration-invite-code-store.js";
 import type { AccessPrincipalType, AccessStore } from "./access/types.js";
 import { createStaticAppDiagnostics } from "./diagnostics/dependencies.js";
+import {
+  classifyGroupEngagement,
+  groupEngagementAllowsReply,
+  groupEngagementIgnoredReason
+} from "./engagement.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "./clients/line.js";
 import { getFunctionDefinitions } from "./functions/definitions.js";
+import {
+  MemoryInFlightStore,
+  type InFlightKey,
+  type InFlightStore
+} from "./in-flight/in-flight-store.js";
 import {
   enabledNaturalLanguageAdminActionNames,
   matchesNaturalLanguageAdminActionHint
@@ -23,6 +33,7 @@ import { buildFunctionQuickReplies } from "./line-reply.js";
 import { verifyLineSignature } from "./line-signature.js";
 import { messages } from "./messages.js";
 import { sanitizeActionTelemetryEvent } from "./observability/action-telemetry.js";
+import { createSmallTalkReply, smallTalkCategoryFromArguments } from "./small-talk.js";
 import {
   formatLastErrors,
   InMemoryLastErrorStore,
@@ -46,8 +57,8 @@ import type {
   AdminActionRouterPort,
   LineIdentityClient,
   LineEvent,
-  LineMessage,
   LineReplyClient,
+  LineSource,
   LineWebhookPayload,
   JsonRecord,
   FunctionName,
@@ -78,6 +89,7 @@ export interface AppDependencies {
   registrationInviteCodeStore?: RegistrationInviteCodeStore;
   diagnostics?: AppDiagnostics;
   confirmationStore?: ConfirmationStore;
+  inFlightStore?: InFlightStore;
 }
 
 interface AllowResult {
@@ -198,6 +210,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
       config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
     );
   const diagnostics = deps.diagnostics ?? createStaticAppDiagnostics(config);
+  const inFlightStore = deps.inFlightStore ?? new MemoryInFlightStore();
 
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
@@ -236,7 +249,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         rateLimiter,
         accessStore,
         registrationInviteCodeStore,
-        diagnostics
+        diagnostics,
+        inFlightStore
       );
     });
   }
@@ -264,7 +278,8 @@ async function handleWebhook(
   rateLimiter: RateLimiter,
   accessStore: AccessStore,
   registrationInviteCodeStore: RegistrationInviteCodeStore,
-  diagnostics: AppDiagnostics
+  diagnostics: AppDiagnostics,
+  inFlightStore: InFlightStore
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -429,6 +444,44 @@ async function handleWebhook(
       continue;
     }
 
+    const groupEngagement =
+      event.source.type === "group"
+        ? classifyGroupEngagement(effectiveProfile, event.message)
+        : undefined;
+    if (groupEngagement?.kind === "intro") {
+      const intro = createIntroReply(effectiveProfile, event.message.text, { force: true });
+      await emitRouteEvent(routeObserver, {
+        kind: "route",
+        profileName: profile.name,
+        sourceType: event.source.type,
+        requestId,
+        outcome: "respond",
+        action: "introduce_bot",
+        engagement: "intro"
+      });
+      await line.replyText(
+        event.replyToken,
+        intro?.replyText ?? messages.requestFailed,
+        intro?.quickReplies ? { quickReplies: intro.quickReplies } : undefined
+      );
+      continue;
+    }
+    if (groupEngagement?.kind === "small_talk" && groupEngagement.smallTalkCategory) {
+      const result = createSmallTalkReply(groupEngagement.smallTalkCategory);
+      await emitRouteEvent(routeObserver, {
+        kind: "route",
+        profileName: profile.name,
+        sourceType: event.source.type,
+        requestId,
+        outcome: "respond",
+        action: "small_talk",
+        engagement: groupEngagement.kind,
+        smallTalkCategory: groupEngagement.smallTalkCategory
+      });
+      await line.replyText(event.replyToken, result.replyText, undefined);
+      continue;
+    }
+
     const intro = createIntroReply(effectiveProfile, event.message.text);
     if (intro) {
       await line.replyText(
@@ -466,6 +519,10 @@ async function handleWebhook(
           result.quickReplies ? { quickReplies: result.quickReplies } : undefined
         );
       }
+      continue;
+    }
+
+    if (groupEngagement && !groupEngagementAllowsReply(groupEngagement)) {
       continue;
     }
 
@@ -526,6 +583,7 @@ async function handleWebhook(
         route.type === "execute" || route.type === "respond" ? route.confidence : undefined,
       fallbackProvider: route.fallbackProvider,
       fallbackReason: route.fallbackReason,
+      engagement: groupEngagement?.kind,
       durationMs: elapsedMs(routeStartedAt)
     });
     await lastRouteStore.record({
@@ -557,6 +615,12 @@ async function handleWebhook(
         );
         continue;
       }
+      if (route.action === "small_talk") {
+        const category = smallTalkCategoryFromArguments(route.arguments);
+        const result = createSmallTalkReply(category);
+        await line.replyText(event.replyToken, result.replyText, undefined);
+        continue;
+      }
       await line.replyText(event.replyToken, messages.unsupported);
       continue;
     }
@@ -577,6 +641,30 @@ async function handleWebhook(
       continue;
     }
 
+    const inFlight = buildInFlightKey(
+      effectiveProfile.name,
+      event.source,
+      route.action,
+      route.arguments
+    );
+    if (inFlight) {
+      const startResult = await inFlightStore.tryStart(inFlight.key, IN_FLIGHT_TTL_MS);
+      if (startResult === "busy") {
+        await emitRouteEvent(routeObserver, {
+          kind: "function_result",
+          profileName: profile.name,
+          sourceType: event.source.type,
+          requestId,
+          action: route.action,
+          ok: false,
+          dedup: "busy",
+          queryHash: inFlight.queryHash
+        });
+        await line.replyText(event.replyToken, "我還在找這個，等我一下就好。", undefined);
+        continue;
+      }
+    }
+
     const functionStartedAt = Date.now();
     try {
       const result = await handler(route.arguments, {
@@ -591,6 +679,8 @@ async function handleWebhook(
         requestId,
         action: route.action,
         ok: result.ok,
+        dedup: inFlight ? "started" : undefined,
+        queryHash: inFlight?.queryHash,
         durationMs: elapsedMs(functionStartedAt)
       });
       await lastRouteStore.record({
@@ -641,6 +731,10 @@ async function handleWebhook(
         durationMs: elapsedMs(functionStartedAt)
       });
       await line.replyText(event.replyToken, messages.requestFailed);
+    } finally {
+      if (inFlight) {
+        await releaseInFlight(inFlightStore, inFlight.key);
+      }
     }
   }
 
@@ -732,7 +826,8 @@ async function shouldAllowGroupRegistrationPrompt(
   if (!messageTypeAllowed(profile, event)) {
     return false;
   }
-  if (!profile.groupRequireWakeWord || matchesWakeRule(profile, event.message)) {
+  const engagement = classifyGroupEngagement(profile, event.message);
+  if (!profile.groupRequireWakeWord || groupEngagementAllowsReply(engagement)) {
     return true;
   }
   return Boolean(await matchingTextMessageHandler(event, profile, textMessageHandlers));
@@ -755,7 +850,7 @@ async function allowEvent(
       }
       return { allowed: false, reason: "room_not_implemented" };
 
-    case "group":
+    case "group": {
       if (groupAccessPolicy(profile) === "blocked") {
         return { allowed: false, reason: "group_blocked" };
       }
@@ -783,8 +878,9 @@ async function allowEvent(
       if (command) {
         return { allowed: true, reason: "group_admin_command_allowed" };
       }
-      if (!profile.groupRequireWakeWord || matchesWakeRule(profile, event.message)) {
-        return { allowed: true, reason: "group_wake_matched" };
+      const engagement = classifyGroupEngagement(profile, event.message);
+      if (!profile.groupRequireWakeWord || groupEngagementAllowsReply(engagement)) {
+        return { allowed: true, reason: `group_${engagement.kind}_matched` };
       }
       if (
         await matchingTextMessageHandler(
@@ -795,7 +891,8 @@ async function allowEvent(
       ) {
         return { allowed: true, reason: "group_text_message_handler_matched" };
       }
-      return { allowed: false, reason: "wake_word_missing" };
+      return { allowed: false, reason: groupEngagementIgnoredReason(engagement) };
+    }
 
     case "user":
       if (command === "whoami" || command === "registry") {
@@ -1765,6 +1862,68 @@ function summarizeRouteArguments(args: JsonRecord): Pick<LastRouteRecord, "query
   };
 }
 
+const IN_FLIGHT_TTL_MS = 120_000;
+const IN_FLIGHT_FUNCTIONS = new Set<FunctionName>([
+  "find_ppt_slides",
+  "find_pop_sheet_music",
+  "query_service_schedule"
+]);
+
+function buildInFlightKey(
+  profileName: string,
+  source: LineSource,
+  action: FunctionName,
+  args: JsonRecord
+): { key: InFlightKey; queryHash: string } | undefined {
+  if (!IN_FLIGHT_FUNCTIONS.has(action)) {
+    return undefined;
+  }
+  const queryHash = hashDedupPayload(normalizeDedupPayload(args));
+  return {
+    queryHash,
+    key: {
+      profileName,
+      sourceKey: sourceKey(source),
+      action,
+      queryHash
+    }
+  };
+}
+
+function normalizeDedupPayload(args: JsonRecord): string {
+  const query = typeof args.query === "string" ? args.query.normalize("NFKC").trim() : "";
+  const fileType = typeof args.fileType === "string" ? args.fileType.trim().toLowerCase() : "";
+  const dateIntent = typeof args.dateIntent === "string" ? args.dateIntent.trim() : "";
+  const meeting = typeof args.meeting === "string" ? args.meeting.trim() : "";
+  const role = typeof args.role === "string" ? args.role.trim() : "";
+  return JSON.stringify({ query, fileType, dateIntent, meeting, role });
+}
+
+function hashDedupPayload(payload: string): string {
+  return createHash("sha256").update(payload).digest("hex").slice(0, 16);
+}
+
+function sourceKey(source: LineSource): string {
+  switch (source.type) {
+    case "group":
+      return `group:${source.groupId ?? ""}`;
+    case "room":
+      return `room:${source.roomId ?? ""}`;
+    case "user":
+      return `user:${source.userId ?? ""}`;
+    default:
+      return `${source.type}:unknown`;
+  }
+}
+
+async function releaseInFlight(store: InFlightStore, key: InFlightKey): Promise<void> {
+  try {
+    await store.release(key);
+  } catch {
+    // A failed cleanup should not turn a successful LINE reply into an error.
+  }
+}
+
 function stringRouteArgument(args: JsonRecord, key: string): string | undefined {
   const value = args[key];
   return typeof value === "string" ? value : undefined;
@@ -1905,16 +2064,6 @@ async function emitRouteEvent(
 
 function elapsedMs(startedAt: number): number {
   return Math.max(0, Date.now() - startedAt);
-}
-
-function matchesWakeRule(profile: BotProfileConfig, message?: LineMessage): boolean {
-  const text = typeof message?.text === "string" ? message.text : "";
-  if (profile.wakeKeywords.some((keyword) => keyword && text.includes(keyword))) {
-    return true;
-  }
-  return Boolean(
-    profile.acceptMention && message?.mention?.mentionees?.some((mentionee) => mentionee.isSelf)
-  );
 }
 
 function formatIgnoredSummary(counts: Map<string, number>): string {

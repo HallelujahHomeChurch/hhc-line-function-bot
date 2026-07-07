@@ -6,9 +6,19 @@ export const FUNCTION_NAMES = [
 
 export type FunctionName = (typeof FUNCTION_NAMES)[number];
 
-export const SYSTEM_ACTION_NAMES = ["introduce_bot"] as const;
+export const SYSTEM_ACTION_NAMES = ["introduce_bot", "small_talk"] as const;
 
 export type SystemActionName = (typeof SYSTEM_ACTION_NAMES)[number];
+
+export const SMALL_TALK_CATEGORIES = [
+  "thanks",
+  "encouragement",
+  "reassurance",
+  "persona",
+  "light_joke"
+] as const;
+
+export type SmallTalkCategory = (typeof SMALL_TALK_CATEGORIES)[number];
 
 export const ADMIN_ACTION_NAMES = ["invite_code_create"] as const;
 
@@ -283,6 +293,10 @@ export interface RouteObserverEvent {
   authorized?: boolean;
   ok?: boolean;
   errorName?: string;
+  engagement?: string;
+  smallTalkCategory?: string;
+  dedup?: string;
+  queryHash?: string;
 }
 
 export type RouteObserver = (event: RouteObserverEvent) => void | Promise<void>;

@@ -6,6 +6,7 @@ import { signLineBody } from "../line-signature.js";
 import { createApp } from "../server.js";
 import type {
   AppConfig,
+  FunctionExecutionResult,
   FunctionRouterPort,
   LineIdentityClient,
   LineReplyClient,
@@ -298,6 +299,74 @@ describe("LINE entrance", () => {
     expect(serializedEvents).not.toContain("小哈 查投影片 奇異恩典");
   });
 
+  it("does not execute a duplicate function request while the same query is in flight", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "find_ppt_slides",
+      arguments: { query: "奇異恩典" },
+      provider: "ollama"
+    });
+    let resolveFirst: (result: FunctionExecutionResult) => void = () => undefined;
+    const firstResult = new Promise<FunctionExecutionResult>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const findPptSlides = vi.fn().mockImplementation(() => {
+      if (findPptSlides.mock.calls.length === 1) {
+        return firstResult;
+      }
+      return Promise.resolve({ ok: true, replyText: "second result" });
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const routeObserver = vi.fn().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      functionRegistry: { find_ppt_slides: findPptSlides },
+      routeObserver,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const firstBody = lineBody({
+      type: "message",
+      replyToken: "reply-1",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查投影片 奇異恩典" }
+    });
+    const secondBody = lineBody({
+      type: "message",
+      replyToken: "reply-2",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查投影片 奇異恩典" }
+    });
+
+    const firstRequest = app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(firstBody, "main-secret"),
+      payload: firstBody
+    });
+    await vi.waitFor(() => expect(findPptSlides).toHaveBeenCalledTimes(1));
+    const secondResponse = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(secondBody, "main-secret"),
+      payload: secondBody
+    });
+    resolveFirst({ ok: true, replyText: "first result" });
+    await firstRequest;
+
+    expect(secondResponse.statusCode).toBe(200);
+    expect(findPptSlides).toHaveBeenCalledTimes(1);
+    expect(replyText).toHaveBeenCalledWith("reply-2", "我還在找這個，等我一下就好。", undefined);
+    expect(routeObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "function_result",
+        action: "find_ppt_slides",
+        ok: false,
+        dedup: "busy",
+        queryHash: expect.any(String)
+      })
+    );
+  });
+
   it("emits fallback diagnostics when keyword routing is used after Ollama fails", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "execute",
@@ -366,6 +435,79 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, ignored: true, reason: "wake_word_missing" });
     expect(router.route).not.toHaveBeenCalled();
+  });
+
+  it("ignores third-person group mentions of the bot before calling the router", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "ollama"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "因為以前高雄淑芬姐待的教會叫小哈。" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, ignored: true, reason: "group_not_addressed" });
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText).not.toHaveBeenCalled();
+  });
+
+  it("answers addressed group small talk with a controlled reply before routing", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "ollama"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const routeObserver = vi.fn().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      routeObserver,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈，你會覺得我們這樣很難為你嗎" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText.mock.calls[0]?.[1]).toContain("不會啦");
+    expect(replyText.mock.calls[0]?.[1]).toContain("安靜");
+    expect(routeObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "route",
+        outcome: "respond",
+        action: "small_talk",
+        engagement: "small_talk",
+        smallTalkCategory: "reassurance"
+      })
+    );
   });
 
   it("allows a direct user without a wake word when the user is allowlisted", async () => {
@@ -994,7 +1136,8 @@ describe("LINE entrance", () => {
         enabledFunctions: ["find_ppt_slides", "query_service_schedule"]
       })
     );
-    expect(replyText.mock.calls[0]?.[1]).toMatch(/^你好。\n我是小哈/);
+    expect(replyText.mock.calls[0]?.[1]).toMatch(/^我是小哈/);
+    expect(replyText.mock.calls[0]?.[1]).not.toMatch(/^你好。\n/);
     expect(replyText.mock.calls[0]?.[1]).toContain("教會同工小幫手");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("目前不支援");
   });

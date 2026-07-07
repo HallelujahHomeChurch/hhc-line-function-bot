@@ -22,7 +22,11 @@ const allowedTelemetryKeys = new Set([
   "authorized",
   "ok",
   "errorName",
-  "durationMs"
+  "durationMs",
+  "engagement",
+  "smallTalkCategory",
+  "dedup",
+  "queryHash"
 ]);
 
 export function sanitizeActionTelemetryEvent(event: TelemetryInput): Partial<RouteObserverEvent> {

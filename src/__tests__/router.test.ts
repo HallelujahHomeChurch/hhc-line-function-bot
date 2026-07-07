@@ -70,6 +70,36 @@ describe("function router", () => {
     });
   });
 
+  it("returns a controlled small-talk response when Qwen classifies addressed chat", async () => {
+    const qwen = provider(
+      JSON.stringify({
+        action: "small_talk",
+        confidence: 0.87,
+        arguments: { category: "reassurance" }
+      })
+    );
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈，你會覺得我們這樣很難為你嗎",
+      enabledFunctions: ["find_ppt_slides", "query_service_schedule"],
+      source: { type: "group", groupId: "C1", userId: "U1" }
+    });
+
+    expect(result).toEqual({
+      type: "respond",
+      action: "small_talk",
+      provider: "ollama",
+      confidence: 0.87,
+      arguments: { category: "reassurance" }
+    });
+  });
+
   it("passes structured service schedule metadata from Qwen", async () => {
     const qwen = provider(
       JSON.stringify({
@@ -565,6 +595,31 @@ describe("function router", () => {
       fallbackProvider: "ollama",
       fallbackReason: "invalid_json",
       arguments: { greeting: "你好" }
+    });
+  });
+
+  it("falls back to a controlled small-talk response when Qwen fails on addressed chat", async () => {
+    const qwen = provider("not-json");
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈辛苦了",
+      enabledFunctions: ["find_ppt_slides", "query_service_schedule"],
+      source: { type: "group", groupId: "C1", userId: "U1" }
+    });
+
+    expect(result).toEqual({
+      type: "respond",
+      action: "small_talk",
+      provider: "keyword",
+      fallbackProvider: "ollama",
+      fallbackReason: "invalid_json",
+      arguments: { category: "encouragement" }
     });
   });
 

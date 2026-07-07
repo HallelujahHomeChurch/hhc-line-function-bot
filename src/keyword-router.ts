@@ -1,7 +1,7 @@
 import { FUNCTION_DEFINITIONS, type FunctionDefinition } from "./functions/definitions.js";
 import { normalizeFunctionArguments } from "./functions/argument-normalization.js";
 import { extractPptSlideQuery } from "./ppt-query.js";
-import type { JsonRecord, RouteInput, RouteResult } from "./types.js";
+import type { JsonRecord, RouteInput, RouteResult, SmallTalkCategory } from "./types.js";
 
 type KeywordRule = FunctionDefinition & {
   keywordFallback: NonNullable<FunctionDefinition["keywordFallback"]>;
@@ -24,6 +24,15 @@ export function createKeywordFallbackRouter(): KeywordFallbackRouter {
       );
 
       if (matches.length === 0) {
+        const smallTalk = extractSmallTalkFallback(text);
+        if (smallTalk) {
+          return {
+            type: "respond",
+            action: "small_talk",
+            arguments: { category: smallTalk },
+            provider: "keyword"
+          };
+        }
         const intro = extractIntroFallback(text);
         if (intro) {
           return {
@@ -144,4 +153,27 @@ function isIntroHelpText(value: string): boolean {
     "你可以做什麼",
     "你會什麼"
   ].includes(normalized);
+}
+
+function extractSmallTalkFallback(text: string): SmallTalkCategory | undefined {
+  const normalized = normalizeIntroFallbackText(text);
+  const withoutWake = normalized.replace(/^小哈[，,\s]*/i, "");
+  const value = withoutWake || normalized;
+  const lower = value.toLowerCase();
+  if (/謝謝|謝啦|感謝|thanks|thank you/u.test(lower)) {
+    return "thanks";
+  }
+  if (/難為|為難|還好嗎|累嗎|累不累|辛苦嗎/u.test(lower)) {
+    return "reassurance";
+  }
+  if (/人設|i人|e人|內向|外向|安靜/u.test(lower)) {
+    return "persona";
+  }
+  if (/辛苦|加油|很棒|厲害|強/u.test(lower)) {
+    return "encouragement";
+  }
+  if (/哈哈|好笑|開玩笑|笑死/u.test(lower)) {
+    return "light_joke";
+  }
+  return undefined;
 }
