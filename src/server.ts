@@ -11,6 +11,11 @@ import {
 import type { AccessPrincipalType, AccessStore } from "./access/types.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "./clients/line.js";
 import { getFunctionDefinitions } from "./functions/definitions.js";
+import {
+  enabledNaturalLanguageAdminActionNames,
+  getActionDefinition,
+  matchesNaturalLanguageAdminActionHint
+} from "./actions/catalog.js";
 import { createIntroReply } from "./intro.js";
 import { buildFunctionQuickReplies } from "./line-reply.js";
 import { verifyLineSignature } from "./line-signature.js";
@@ -34,6 +39,8 @@ import type {
   FunctionExecutionResult,
   FunctionRegistry,
   FunctionRouterPort,
+  AdminActionName,
+  AdminActionRouterPort,
   LineIdentityClient,
   LineEvent,
   LineMessage,
@@ -51,6 +58,7 @@ import { FUNCTION_NAMES, isFunctionName } from "./types.js";
 
 export interface AppDependencies {
   router: FunctionRouterPort;
+  adminActionRouter?: AdminActionRouterPort;
   functionRegistry?: FunctionRegistry;
   postbackHandlers?: PostbackHandlerRegistry;
   textMessageHandlers?: TextMessageHandlerRegistry;
@@ -155,6 +163,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     bodyLimit: config.maxBodyBytes
   });
   const functionRegistry = deps.functionRegistry ?? {};
+  const adminActionRouter = deps.adminActionRouter;
   const createReplyClient = deps.createLineReplyClient ?? createLineSdkReplyClient;
   const createIdentityClient = deps.createLineIdentityClient ?? createLineSdkIdentityClient;
   const requestIdFactory = deps.requestIdFactory ?? randomUUID;
@@ -199,6 +208,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         reply,
         profile,
         deps.router,
+        adminActionRouter,
         functionRegistry,
         deps.postbackHandlers ?? {},
         deps.textMessageHandlers ?? {},
@@ -225,6 +235,7 @@ async function handleWebhook(
   reply: FastifyReply,
   profile: BotProfileConfig,
   router: FunctionRouterPort,
+  adminActionRouter: AdminActionRouterPort | undefined,
   functionRegistry: FunctionRegistry,
   postbackHandlers: PostbackHandlerRegistry,
   textMessageHandlers: TextMessageHandlerRegistry,
@@ -440,6 +451,26 @@ async function handleWebhook(
           result.quickReplies ? { quickReplies: result.quickReplies } : undefined
         );
       }
+      continue;
+    }
+
+    const adminActionResult = await handleNaturalLanguageAdminAction(
+      event.message.text,
+      effectiveProfile,
+      event,
+      adminActionRouter,
+      accessStore,
+      registrationInviteCodeStore,
+      registrationInviteCodeTtlMinutes
+    );
+    if (adminActionResult) {
+      await line.replyText(
+        event.replyToken,
+        adminActionResult.replyText,
+        adminActionResult.quickReplies
+          ? { quickReplies: adminActionResult.quickReplies }
+          : undefined
+      );
       continue;
     }
 
@@ -1029,6 +1060,150 @@ async function shouldPromptManagedRegistration(
   );
 }
 
+async function handleNaturalLanguageAdminAction(
+  text: string,
+  profile: BotProfileConfig,
+  event: LineEvent,
+  adminActionRouter: AdminActionRouterPort | undefined,
+  accessStore: AccessStore,
+  registrationInviteCodeStore: RegistrationInviteCodeStore,
+  registrationInviteCodeTtlMinutes: number
+): Promise<FunctionExecutionResult | undefined> {
+  if (!matchesNaturalLanguageAdminActionHint(text)) {
+    return undefined;
+  }
+
+  if (!(await isAdminUser(profile, event.source.userId, accessStore))) {
+    return undefined;
+  }
+
+  if (event.source.type !== "user") {
+    return { ok: true, replyText: "管理操作請到個人對話使用。" };
+  }
+
+  if (!adminActionRouter) {
+    return { ok: true, replyText: adminNaturalLanguageUnsupportedReply() };
+  }
+
+  const route = await adminActionRouter.route({
+    profileName: profile.name,
+    text,
+    enabledActions: enabledNaturalLanguageAdminActionNames(),
+    source: event.source
+  });
+
+  if (route.type === "deny") {
+    return { ok: true, replyText: adminNaturalLanguageUnsupportedReply() };
+  }
+
+  return executeAdminAction(
+    route.action,
+    profile,
+    event,
+    accessStore,
+    registrationInviteCodeStore,
+    registrationInviteCodeTtlMinutes
+  );
+}
+
+async function executeAdminAction(
+  action: AdminActionName,
+  profile: BotProfileConfig,
+  event: LineEvent,
+  accessStore: AccessStore,
+  registrationInviteCodeStore: RegistrationInviteCodeStore,
+  registrationInviteCodeTtlMinutes: number
+): Promise<FunctionExecutionResult> {
+  const policy = await evaluateAdminActionPolicy(action, profile, event, accessStore);
+  if (!policy.allowed) {
+    return {
+      ok: true,
+      replyText:
+        policy.reason === "source_direct_required"
+          ? "管理操作請到個人對話使用。"
+          : messages.adminUnauthorized
+    };
+  }
+
+  if (action === "invite_code_create") {
+    return createInviteCodeResult(
+      profile,
+      event.source.userId,
+      accessStore,
+      registrationInviteCodeStore,
+      registrationInviteCodeTtlMinutes
+    );
+  }
+
+  return { ok: true, replyText: adminNaturalLanguageUnsupportedReply() };
+}
+
+async function evaluateAdminActionPolicy(
+  action: AdminActionName,
+  profile: BotProfileConfig,
+  event: LineEvent,
+  accessStore: AccessStore
+): Promise<AllowResult> {
+  const definition = getActionDefinition(action);
+  if (!definition || definition.kind !== "admin_action") {
+    return { allowed: false, reason: "unknown_admin_action" };
+  }
+  if (
+    definition.auth === "admin" &&
+    !(await isAdminUser(profile, event.source.userId, accessStore))
+  ) {
+    return { allowed: false, reason: "admin_required" };
+  }
+  if (definition.sourcePolicy === "direct" && event.source.type !== "user") {
+    return { allowed: false, reason: "source_direct_required" };
+  }
+  if (profile.adminDirectOnly !== false && event.source.type !== "user") {
+    return { allowed: false, reason: "source_direct_required" };
+  }
+  return { allowed: true, reason: "allowed" };
+}
+
+async function createInviteCodeResult(
+  profile: BotProfileConfig,
+  actorUserId: string | undefined,
+  accessStore: AccessStore,
+  registrationInviteCodeStore: RegistrationInviteCodeStore,
+  registrationInviteCodeTtlMinutes: number
+): Promise<FunctionExecutionResult> {
+  if (!actorUserId) {
+    return { ok: true, replyText: messages.adminUnauthorized };
+  }
+  if (!profile.registration?.enabled) {
+    return { ok: true, replyText: "這個 profile 沒有啟用註冊邀請碼。" };
+  }
+  const invite = await registrationInviteCodeStore.create({
+    profileName: profile.name,
+    createdBy: actorUserId,
+    ttlMinutes: registrationInviteCodeTtlMinutes
+  });
+  await accessStore.recordAudit({
+    profileName: profile.name,
+    actorUserId,
+    action: "invite_code.create",
+    metadata: { ttlMinutes: registrationInviteCodeTtlMinutes }
+  });
+  return {
+    ok: true,
+    replyText: [
+      "註冊邀請碼已建立",
+      `有效期限：${registrationInviteCodeTtlMinutes} 分鐘`,
+      `到期時間：${invite.expiresAt}`,
+      "",
+      "請把下面這行傳給要註冊的使用者或群組：",
+      `/registry ${invite.code}`
+    ].join("\n")
+  };
+}
+
+function adminNaturalLanguageUnsupportedReply(): string {
+  return "我目前只能協助產生註冊邀請碼，請改用 /invite-code-create 或 /help admin。";
+}
+
 async function handleAdminCommand(
   text: string,
   profile: BotProfileConfig,
@@ -1343,31 +1518,14 @@ async function handleAdminAccessCommand(
   }
 
   if (command === "invite-code-create") {
-    if (!profile.registration?.enabled) {
-      return { ok: true, replyText: "這個 profile 沒有開放邀請碼註冊。" };
-    }
-    const invite = await registrationInviteCodeStore.create({
-      profileName: profile.name,
-      createdBy: actorUserId,
-      ttlMinutes: registrationInviteCodeTtlMinutes
-    });
-    await accessStore.recordAudit({
-      profileName: profile.name,
-      actorUserId,
-      action: "invite_code.create",
-      metadata: { ttlMinutes: registrationInviteCodeTtlMinutes }
-    });
-    return {
-      ok: true,
-      replyText: [
-        "邀請碼已建立",
-        `有效期限：${registrationInviteCodeTtlMinutes} 分鐘`,
-        `過期時間：${invite.expiresAt}`,
-        "",
-        "請複製下面這行給要註冊的人：",
-        `/registry ${invite.code}`
-      ].join("\n")
-    };
+    return executeAdminAction(
+      "invite_code_create",
+      profile,
+      event,
+      accessStore,
+      registrationInviteCodeStore,
+      registrationInviteCodeTtlMinutes
+    );
   }
   if (command === "admin-add" || command === "admin-remove") {
     if (!isBootstrapSuperAdmin(profile, actorUserId)) {

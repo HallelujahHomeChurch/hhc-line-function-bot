@@ -8,6 +8,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Multiple bot profiles in one service, each on its own webhook path.
 - Per-profile access policy, wake words, message type filtering, and function toggles.
 - Function router that uses Ollama `qwen3:4b-instruct` first.
+- Action catalog that separates user functions, admin actions, and system actions.
 - Conservative keyword fallback when Ollama times out, is unreachable, or returns invalid JSON.
 - LINE Quick Reply suggestions for supported functions.
 - Postback-based selection state for multi-result flows, currently used by PPT and sheet music search.
@@ -18,6 +19,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Per-profile access policy with PostgreSQL-backed user/group/admin registration.
 - Public `/help`, `/registry <code>`, and `/whoami` commands.
 - Direct-chat admin commands for a single bootstrap `adminUserId` plus DB-managed admins.
+- Admin direct-chat natural language for selected management actions, currently invite-code creation.
 - Function handlers:
   - `find_ppt_slides`: searches a configured Microsoft Graph drive folder, fuzzy-matches PPT/PDF names, and returns 24 hour sharing links.
   - `query_service_schedule`: queries Notion with env-configured property mapping.
@@ -131,6 +133,7 @@ Function toggles are profile-scoped:
 - Direct users can use profile-global functions only.
 - Groups can use profile-global functions plus DB-managed grants for the same `profileName/groupId`.
 - Group grants are additive. To make a function group-only, remove it from `enabledFunctions` and grant it to selected groups.
+- Admin actions are not `enabledFunctions` and cannot be granted to groups. They are gated separately by admin identity, source policy, and audit rules.
 
 ## Routing
 
@@ -167,6 +170,8 @@ Sheet music search uses a short-lived in-memory file index cache. Admins can cle
 ```
 
 Admin commands use slash syntax and are gated by each profile's bootstrap `adminUserId` or DB-managed admin principals. `/help` lists public commands and enabled functions. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
+
+Admins can also use direct-chat natural language for selected admin actions. For example, an admin can ask the bot to create an invite code, and the bot will return a copyable `/registry <code>` line. Admin natural language is direct-chat only; group messages do not execute admin actions. `/registry <code>` remains a deterministic slash command and is not routed through the LLM.
 
 Common commands:
 

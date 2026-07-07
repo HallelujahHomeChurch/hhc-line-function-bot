@@ -1586,6 +1586,123 @@ describe("LINE entrance", () => {
     );
   });
 
+  it("lets admins create an invite code through direct natural language", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const adminRoute = vi.fn().mockResolvedValue({
+      type: "execute",
+      action: "invite_code_create",
+      arguments: {},
+      provider: "ollama"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const accessStore = new InMemoryAccessStore();
+    const registrationInviteCodeStore = new InMemoryRegistrationInviteCodeStore({
+      codeFactory: () => "ADMINNL"
+    });
+    const app = createApp(accessConfig(), {
+      router: { route },
+      adminActionRouter: { route: adminRoute },
+      accessStore,
+      registrationInviteCodeStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "please create an invite code" }
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/helper/webhook",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(adminRoute).toHaveBeenCalledOnce();
+    expect(route).not.toHaveBeenCalled();
+    const reply = String(replyText.mock.calls[0]?.[1]);
+    expect(reply).toContain("/registry ADMINNL");
+    expect(reply.split("\n")).toContain("/registry ADMINNL");
+    expect(accessStore.audit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "invite_code.create",
+          metadata: { ttlMinutes: 60 }
+        })
+      ])
+    );
+  });
+
+  it("keeps admin natural-language actions direct-only even when sent by an admin in a group", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "ollama"
+    });
+    const adminRoute = vi.fn();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const config = testConfig();
+    config.profiles[0].groupRequireWakeWord = false;
+    const app = createTestApp(config, {
+      router: { route },
+      adminActionRouter: { route: adminRoute },
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+      message: { type: "text", text: "撠? please create an invite code" }
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(adminRoute).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText.mock.calls[0]?.[1]).toContain("個人對話");
+  });
+
+  it("does not route admin natural-language actions for non-admin direct users", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "ollama"
+    });
+    const adminRoute = vi.fn();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      adminActionRouter: { route: adminRoute },
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "please create an invite code" }
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/line/main/webhook",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(adminRoute).not.toHaveBeenCalled();
+    expect(route).toHaveBeenCalledOnce();
+  });
+
   it("rejects legacy registration and approval commands", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);

@@ -1,4 +1,5 @@
 import { createOllamaProvider } from "./clients/ollama.js";
+import { createAdminActionRouter } from "./admin-action-router.js";
 import { createAccessStore } from "./access/create-access-store.js";
 import { RedisRegistrationInviteCodeStore } from "./access/registration-invite-code-store.js";
 import { createCacheStore } from "./cache/create-cache-store.js";
@@ -27,6 +28,7 @@ const router = createFunctionRouter({
   keywordFallback: createKeywordFallbackRouter(),
   keywordFallbackEnabled: config.llm.keywordFallbackEnabled
 });
+const adminActionRouter = createAdminActionRouter({ primary });
 const redis = await createRedisRuntime(config.redis);
 const postgres = await createPostgresRuntime(config.database);
 const accessStore = await createAccessStore({ db: postgres?.pool });
@@ -46,6 +48,7 @@ const rateLimiter = createRateLimiter({
 const registries = createFunctionRegistries(config, { sessionStore, cache });
 const app = createApp(config, {
   router,
+  adminActionRouter,
   functionRegistry: registries.functions,
   postbackHandlers: registries.postbacks,
   textMessageHandlers: registries.textMessages,

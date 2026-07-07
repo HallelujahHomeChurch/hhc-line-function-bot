@@ -36,6 +36,8 @@ The first-class functions are:
 - `query_service_schedule`: query Notion service schedule data and return a focused service list.
 - `find_pop_sheet_music`: search Microsoft Graph/OneDrive sheet music folders, including shortcut folders, and return temporary sharing links.
 - Intro/help behavior is not a normal function execution path; keep it friendly and do not expose implementation details such as OneDrive or Notion to ordinary users.
+- User functions, admin actions, and system actions are separate action kinds. Do not add management behavior to `enabledFunctions`.
+- Admin natural language is direct-chat only. It may route to selected admin actions, currently invite-code creation, after admin identity and source policy checks.
 
 When adding or changing a function:
 
@@ -67,9 +69,11 @@ When adding or changing a function:
 
 - Ordinary users should use natural language, `/registry <code>`, `/help`, or `/whoami`.
 - Slash admin commands are gated by `adminUserId` or DB-managed admin principals.
+- Natural-language admin actions are gated the same way and must not run in groups.
 - `adminDirectOnly` means admin commands should only run from direct chat except explicitly group-scoped commands.
 - Registration is invite-code based:
   - Admins create one-time codes with `/invite-code-create`.
+  - Admins may also create one-time codes through direct-chat natural language.
   - The reply must include a standalone `/registry <code>` line for copy/paste.
   - A direct user or group sends `/registry <code>` and is opened immediately.
   - Display names come from the LINE SDK, not typed command arguments.

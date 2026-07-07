@@ -10,6 +10,12 @@ export const SYSTEM_ACTION_NAMES = ["introduce_bot"] as const;
 
 export type SystemActionName = (typeof SYSTEM_ACTION_NAMES)[number];
 
+export const ADMIN_ACTION_NAMES = ["invite_code_create"] as const;
+
+export type AdminActionName = (typeof ADMIN_ACTION_NAMES)[number];
+
+export type ActionName = FunctionName | SystemActionName | AdminActionName;
+
 export type JsonRecord = Record<string, unknown>;
 
 export type DirectAccessPolicy = "managed" | "public" | "blocked";
@@ -192,6 +198,33 @@ export interface FunctionRouterPort {
   route(input: RouteInput): Promise<RouteResult>;
 }
 
+export interface AdminActionRouteInput {
+  profileName: string;
+  text: string;
+  enabledActions: AdminActionName[];
+  source: LineSource;
+}
+
+export type AdminActionRouteResult =
+  | {
+      type: "execute";
+      action: AdminActionName;
+      arguments: JsonRecord;
+      confidence?: number;
+      provider: "ollama";
+    }
+  | {
+      type: "deny";
+      reason: string;
+      provider: "ollama" | "router";
+      fallbackProvider?: "ollama";
+      fallbackReason?: string;
+    };
+
+export interface AdminActionRouterPort {
+  route(input: AdminActionRouteInput): Promise<AdminActionRouteResult>;
+}
+
 export interface RouteObserverEvent {
   kind:
     | "route"
@@ -371,4 +404,8 @@ export function isFunctionName(value: string): value is FunctionName {
 
 export function isSystemActionName(value: string): value is SystemActionName {
   return (SYSTEM_ACTION_NAMES as readonly string[]).includes(value);
+}
+
+export function isAdminActionName(value: string): value is AdminActionName {
+  return (ADMIN_ACTION_NAMES as readonly string[]).includes(value);
 }
