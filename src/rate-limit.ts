@@ -11,8 +11,8 @@ export interface RateLimiter {
 }
 
 export interface RedisRateLimitClient {
-  get(key: string): Promise<string | null>;
-  setEx(key: string, seconds: number, value: string): Promise<unknown>;
+  incr(key: string): Promise<number>;
+  expire(key: string, seconds: number): Promise<number | boolean>;
 }
 
 export interface RateLimiterFactoryOptions {
@@ -84,22 +84,16 @@ export class RedisRateLimiter implements RateLimiter {
       input.source
     )}`;
     const nowMs = this.now().getTime();
-    const current = await this.options.redis.client.get(key);
-    const bucket: Bucket =
-      current && JSON.parse(current).resetAt > nowMs
-        ? (JSON.parse(current) as Bucket)
-        : { count: 0, resetAt: nowMs + this.options.config.windowMs };
-    bucket.count += 1;
-    await this.options.redis.client.setEx(
-      key,
-      ttlSeconds(bucket.resetAt - nowMs),
-      JSON.stringify(bucket)
-    );
+    const count = await this.options.redis.client.incr(key);
+    if (count === 1) {
+      await this.options.redis.client.expire(key, ttlSeconds(this.options.config.windowMs));
+    }
+    const resetAt = nowMs + this.options.config.windowMs;
 
     return {
-      allowed: bucket.count <= this.options.config.maxRequests,
-      remaining: Math.max(0, this.options.config.maxRequests - bucket.count),
-      resetAt: new Date(bucket.resetAt).toISOString()
+      allowed: count <= this.options.config.maxRequests,
+      remaining: Math.max(0, this.options.config.maxRequests - count),
+      resetAt: new Date(resetAt).toISOString()
     };
   }
 }
