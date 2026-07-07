@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createAgentRuntime } from "../agent/agent-runtime.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
+import { PostgresAgentMemoryStore, type PgQueryable } from "../agent/postgres-memory-store.js";
 import type { BotProfileConfig, FunctionHandlerContext, GraphDriveClient } from "../types.js";
 
 function profile(): BotProfileConfig {
@@ -107,6 +108,44 @@ describe("agent memory", () => {
     ).resolves.toMatchObject({ title: "奇異恩典青年版.pptx" });
   });
 
+  it("stores and searches external link resources in the current scope", async () => {
+    const now = new Date("2026-07-08T00:00:00.000Z");
+    const store = new InMemoryAgentMemoryStore({ now: () => now });
+    await store.recordResource({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      createdBy: "U1",
+      resourceType: "ppt_slide",
+      title: "青年聚會投影片",
+      query: "青年聚會",
+      storage: {
+        provider: "external_link",
+        url: "https://example.com/youth-slides",
+        sourceLabel: "Ray provided",
+        description: "外部補充投影片"
+      },
+      expiresAt: "2026-08-07T00:00:00.000Z"
+    });
+
+    await expect(
+      store.searchResources({
+        profileName: "helper",
+        source: { type: "group", groupId: "C1", userId: "U2" },
+        query: "青年",
+        resourceTypes: ["ppt_slide"],
+        limit: 5
+      })
+    ).resolves.toMatchObject([
+      {
+        title: "青年聚會投影片",
+        storage: {
+          provider: "external_link",
+          url: "https://example.com/youth-slides"
+        }
+      }
+    ]);
+  });
+
   it("recalls the latest resource through the agent runtime without routing again", async () => {
     const now = new Date("2026-07-08T00:00:00.000Z");
     const store = new InMemoryAgentMemoryStore({ now: () => now });
@@ -142,6 +181,40 @@ describe("agent memory", () => {
       "ppt-1",
       "2026-07-09T00:00:00.000Z"
     );
+  });
+
+  it("saves explicit external link resources and recalls them without Graph", async () => {
+    const now = new Date("2026-07-08T00:00:00.000Z");
+    const store = new InMemoryAgentMemoryStore({ now: () => now });
+    const runtime = createAgentRuntime({ memoryStore: store, now: () => now });
+
+    const saved = await runtime.handleTextBeforeRouting({
+      text: "小哈幫我記住這份投影片 https://example.com/youth 名稱是青年聚會投影片",
+      context: context()
+    });
+    const recalled = await runtime.handleTextBeforeRouting({
+      text: "小哈 再給我一次",
+      context: context()
+    });
+
+    expect(saved?.replyText).toContain("已記住");
+    expect(saved?.replyText).toContain("青年聚會投影片");
+    expect(recalled?.replyText).toContain("青年聚會投影片");
+    expect(recalled?.replyText).toContain("https://example.com/youth");
+  });
+
+  it("asks for resource type before saving an external resource when it is unclear", async () => {
+    const now = new Date("2026-07-08T00:00:00.000Z");
+    const store = new InMemoryAgentMemoryStore({ now: () => now });
+    const runtime = createAgentRuntime({ memoryStore: store, now: () => now });
+
+    const result = await runtime.handleTextBeforeRouting({
+      text: "小哈幫我記住 https://example.com/resource 名稱是青年聚會",
+      context: context()
+    });
+
+    expect(result?.replyText).toContain("這是投影片還是歌譜");
+    await expect(store.summary()).resolves.toMatchObject({ resources: 0 });
   });
 
   it("saves explicit text memory and retrieves it by query", async () => {
@@ -187,5 +260,91 @@ describe("agent memory", () => {
     ).resolves.toMatchObject({
       replyText: expect.stringContaining("textMemories: 1")
     });
+  });
+
+  it("lists and forgets external resource memories through memory commands", async () => {
+    const now = new Date("2026-07-08T00:00:00.000Z");
+    const store = new InMemoryAgentMemoryStore({ now: () => now });
+    const runtime = createAgentRuntime({ memoryStore: store, now: () => now });
+    const resource = await store.recordResource({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      createdBy: "U1",
+      resourceType: "ppt_slide",
+      title: "青年聚會投影片",
+      query: "青年聚會",
+      storage: { provider: "external_link", url: "https://example.com/youth" },
+      expiresAt: "2026-08-08T00:00:00.000Z"
+    });
+
+    await expect(
+      runtime.handleCommand({ text: "/memories", context: context(), isAdmin: false })
+    ).resolves.toMatchObject({
+      replyText: expect.stringContaining("青年聚會投影片")
+    });
+    await expect(
+      runtime.handleCommand({ text: "/memory-status", context: context(), isAdmin: true })
+    ).resolves.toMatchObject({
+      replyText: expect.stringContaining("externalResources: 1")
+    });
+    await expect(
+      runtime.handleCommand({
+        text: `/forget-memory ${resource.id}`,
+        context: context(),
+        isAdmin: false
+      })
+    ).resolves.toMatchObject({
+      replyText: "已移除這段記憶。"
+    });
+    await expect(
+      runtime.handleTextBeforeRouting({ text: "小哈 再給我一次", context: context() })
+    ).resolves.toBeUndefined();
+  });
+
+  it("maps external link resources from the Postgres memory store", async () => {
+    const db: PgQueryable = {
+      query: vi.fn().mockResolvedValue({
+        rows: [
+          {
+            id: "00000000-0000-0000-0000-000000000001",
+            profile_name: "helper",
+            scope_type: "group",
+            scope_id: "C1",
+            resource_type: "ppt_slide",
+            title: "青年聚會投影片",
+            query_text: "青年聚會",
+            storage_provider: "external_link",
+            external_url: "https://example.com/youth",
+            source_label: "Ray",
+            description: "外部資源",
+            created_by: "U1",
+            created_at: "2026-07-08T00:00:00.000Z",
+            expires_at: "2026-08-08T00:00:00.000Z",
+            deleted_at: null
+          }
+        ]
+      })
+    };
+    const store = new PostgresAgentMemoryStore(db);
+
+    await expect(
+      store.searchResources({
+        profileName: "helper",
+        source: { type: "group", groupId: "C1", userId: "U1" },
+        query: "青年",
+        resourceTypes: ["ppt_slide"],
+        limit: 5
+      })
+    ).resolves.toMatchObject([
+      {
+        title: "青年聚會投影片",
+        storage: {
+          provider: "external_link",
+          url: "https://example.com/youth",
+          sourceLabel: "Ray",
+          description: "外部資源"
+        }
+      }
+    ]);
   });
 });

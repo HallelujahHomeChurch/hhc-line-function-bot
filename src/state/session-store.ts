@@ -1,5 +1,15 @@
-import type { DriveItem, FunctionName, JsonRecord, LineSource } from "../types.js";
+import type {
+  AgentResourceReference,
+  DriveItem,
+  FunctionName,
+  JsonRecord,
+  LineSource
+} from "../types.js";
 import { requesterMatchesForSource } from "./session-safety.js";
+
+export type SelectionItem = Pick<DriveItem, "id" | "name" | "driveId"> & {
+  memoryResource?: AgentResourceReference;
+};
 
 export interface PptSelectionSession {
   id: string;
@@ -8,7 +18,7 @@ export interface PptSelectionSession {
   requesterUserId?: string;
   source: LineSource;
   driveId: string;
-  items: Array<Pick<DriveItem, "id" | "name">>;
+  items: SelectionItem[];
   expiresAt: string;
 }
 
@@ -19,7 +29,7 @@ export interface SelectionSession {
   profileName: string;
   requesterUserId?: string;
   source: LineSource;
-  items: Array<Pick<DriveItem, "id" | "name" | "driveId">>;
+  items: SelectionItem[];
   expiresAt: string;
 }
 

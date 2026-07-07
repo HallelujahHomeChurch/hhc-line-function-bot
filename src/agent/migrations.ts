@@ -12,14 +12,50 @@ const migrations = [
     resource_type text not null check (resource_type in ('ppt_slide', 'sheet_music')),
     title text not null,
     query_text text,
-    storage_provider text not null check (storage_provider in ('graph')),
-    drive_id text not null,
-    item_id text not null,
+    storage_provider text not null check (storage_provider in ('graph', 'external_link')),
+    drive_id text,
+    item_id text,
+    external_url text,
+    source_label text,
+    description text,
     created_by text,
     created_at timestamptz not null default now(),
     expires_at timestamptz not null,
     deleted_at timestamptz
   )
+  `,
+  `
+  alter table agent_resources
+    alter column drive_id drop not null,
+    alter column item_id drop not null
+  `,
+  `
+  alter table agent_resources
+    add column if not exists external_url text,
+    add column if not exists source_label text,
+    add column if not exists description text
+  `,
+  `
+  alter table agent_resources
+    drop constraint if exists agent_resources_storage_provider_check
+  `,
+  `
+  alter table agent_resources
+    add constraint agent_resources_storage_provider_check
+    check (storage_provider in ('graph', 'external_link'))
+  `,
+  `
+  alter table agent_resources
+    drop constraint if exists agent_resources_storage_shape_check
+  `,
+  `
+  alter table agent_resources
+    add constraint agent_resources_storage_shape_check
+    check (
+      (storage_provider = 'graph' and drive_id is not null and item_id is not null)
+      or
+      (storage_provider = 'external_link' and external_url is not null)
+    )
   `,
   `
   create index if not exists agent_resources_lookup_idx

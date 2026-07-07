@@ -4,6 +4,7 @@ import {
   findPptSlidesArgumentsSchema,
   type FindPptSlidesArguments
 } from "../function-arguments.js";
+import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
 import { withRequesterDisplayName } from "../requester-personalization.js";
@@ -38,12 +39,23 @@ const similarChineseCharacters: Record<string, string> = {
 
 const titleAliases: Array<[string, string]> = [["amazinggrace", "奇異恩典"]];
 
+type PptCandidate =
+  | {
+      kind: "memory";
+      resource: AgentResourceRecord;
+    }
+  | {
+      kind: "graph";
+      item: DriveItem;
+    };
+
 export interface FindPptSlidesOptions {
   graph: GraphDriveClient;
   driveId: string;
   folderItemId: string;
   allowedExtensions: string[];
   defaultIncludePdf: boolean;
+  memoryStore?: AgentMemoryStore;
   sessionStore?: SessionStore;
   now?: () => Date;
   requestIdFactory?: () => string;
@@ -95,8 +107,25 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       args,
       options.defaultIncludePdf
     );
+    const remembered = await findRememberedPptSlides(options.memoryStore, rawQuery, context);
+    const exactRemembered = remembered.find((resource) =>
+      resourceMatchesQueryExactly(resource, rawQuery)
+    );
+    if (exactRemembered) {
+      return createRememberedResourceReply(options.graph, exactRemembered, now());
+    }
+
     const allItems = await options.graph.listFolderChildren(options.driveId, options.folderItemId);
-    const candidates = rankPptCandidates(allItems, rawQuery, extensions, args.matchMode ?? "fuzzy");
+    const graphCandidates = rankPptCandidates(
+      allItems,
+      rawQuery,
+      extensions,
+      args.matchMode ?? "fuzzy"
+    );
+    const candidates: PptCandidate[] = [
+      ...remembered.map((resource) => ({ kind: "memory" as const, resource })),
+      ...graphCandidates.map(({ item }) => ({ kind: "graph" as const, item }))
+    ].slice(0, MAX_CANDIDATES);
 
     if (candidates.length === 0) {
       return {
@@ -116,7 +145,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
     }
 
     if (candidates.length === 1) {
-      return createSharingLinkReply(options.graph, options.driveId, candidates[0].item, now());
+      return createPptCandidateReply(options.graph, options.driveId, candidates[0], now());
     }
 
     if (!canCreateRequesterScopedSession(context.event.source)) {
@@ -134,7 +163,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       requesterUserId: context.event.source.userId,
       source: context.event.source,
       driveId: options.driveId,
-      items: candidates.map(({ item }) => ({ id: item.id, name: item.name })),
+      items: candidates.map(toSelectionItem),
       expiresAt: new Date(now().getTime() + SELECTION_TTL_MS).toISOString()
     });
 
@@ -142,7 +171,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       ok: true,
       replyText: [
         withRequesterDisplayName(context, "找到多個相近的詩歌投影片，請回覆編號："),
-        ...candidates.map(({ item }, index) => `${index + 1}. ${item.name}`)
+        ...candidates.map((candidate, index) => `${index + 1}. ${candidateName(candidate)}`)
       ].join("\n"),
       quickReplies: candidates.map((_candidate, index) =>
         buildPostbackQuickReply(
@@ -270,7 +299,111 @@ async function selectPptCandidate(options: {
   }
 
   await sessionStore.delete(session.id);
+  if (item.memoryResource) {
+    return createRememberedReferenceReply(graph, item.memoryResource, now);
+  }
   return createSharingLinkReply(graph, session.driveId, item, now);
+}
+
+async function findRememberedPptSlides(
+  memoryStore: AgentMemoryStore | undefined,
+  query: string,
+  context: FunctionHandlerContext
+): Promise<AgentResourceRecord[]> {
+  const resources = await memoryStore?.searchResources({
+    profileName: context.profile.name,
+    source: context.event.source,
+    query,
+    resourceTypes: ["ppt_slide"],
+    limit: MAX_CANDIDATES
+  });
+  return resources ?? [];
+}
+
+async function createRememberedResourceReply(
+  graph: GraphDriveClient,
+  resource: AgentResourceRecord,
+  now: Date
+): Promise<FunctionExecutionResult> {
+  return createRememberedReferenceReply(
+    graph,
+    {
+      resourceType: resource.resourceType,
+      title: resource.title,
+      query: resource.query,
+      storage: resource.storage
+    },
+    now
+  );
+}
+
+async function createRememberedReferenceReply(
+  graph: GraphDriveClient,
+  resource: {
+    resourceType: AgentResourceRecord["resourceType"];
+    title: string;
+    query?: string;
+    storage: AgentResourceRecord["storage"];
+  },
+  now: Date
+): Promise<FunctionExecutionResult> {
+  if (resource.storage.provider === "external_link") {
+    return {
+      ok: true,
+      replyText: ["已找到小哈記住的詩歌投影片：", resource.title, resource.storage.url].join("\n"),
+      agentResource: {
+        resourceType: resource.resourceType,
+        title: resource.title,
+        query: resource.query,
+        storage: resource.storage
+      }
+    };
+  }
+  return createSharingLinkReply(
+    graph,
+    resource.storage.driveId,
+    { id: resource.storage.itemId, name: resource.title },
+    now
+  );
+}
+
+function createPptCandidateReply(
+  graph: GraphDriveClient,
+  driveId: string,
+  candidate: PptCandidate,
+  now: Date
+): Promise<FunctionExecutionResult> {
+  if (candidate.kind === "memory") {
+    return createRememberedResourceReply(graph, candidate.resource, now);
+  }
+  return createSharingLinkReply(graph, driveId, candidate.item, now);
+}
+
+function toSelectionItem(candidate: PptCandidate) {
+  if (candidate.kind === "memory") {
+    return {
+      id: candidate.resource.id,
+      name: candidate.resource.title,
+      memoryResource: {
+        resourceType: candidate.resource.resourceType,
+        title: candidate.resource.title,
+        query: candidate.resource.query,
+        storage: candidate.resource.storage
+      }
+    };
+  }
+  return { id: candidate.item.id, name: candidate.item.name };
+}
+
+function candidateName(candidate: PptCandidate): string {
+  return candidate.kind === "memory" ? candidate.resource.title : candidate.item.name;
+}
+
+function resourceMatchesQueryExactly(resource: AgentResourceRecord, rawQuery: string): boolean {
+  const query = normalizeSearchText(rawQuery);
+  return [resource.title, resource.query]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .some((value) => normalizeSearchText(value) === query);
 }
 
 async function createSharingLinkReply(

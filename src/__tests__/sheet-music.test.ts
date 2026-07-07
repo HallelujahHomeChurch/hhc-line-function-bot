@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { MemoryCacheStore } from "../cache/cache-store.js";
 import {
   createFindPopSheetMusicHandler,
@@ -114,6 +115,115 @@ describe("find_pop_sheet_music", () => {
       "pdf-1",
       "2026-07-05T10:00:00.000Z"
     );
+  });
+
+  it("returns an external remembered sheet music link before searching Graph", async () => {
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
+    await memoryStore.recordResource({
+      profileName: "main",
+      source: { type: "group", groupId: "Cgroup", userId: "U1" },
+      createdBy: "U1",
+      resourceType: "sheet_music",
+      title: "A TIME FOR US 手抄譜",
+      query: "A TIME FOR US",
+      storage: { provider: "external_link", url: "https://example.com/a-time-for-us" },
+      expiresAt: "2026-08-04T10:00:00.000Z"
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      listFolderFilesRecursive: vi.fn().mockResolvedValue([]),
+      createSharingLink: vi.fn()
+    };
+    const handler = createFindPopSheetMusicHandler({
+      graph,
+      memoryStore,
+      driveId: "drive-id",
+      folderItemId: "sheet-folder-id",
+      allowedExtensions: [".pdf"],
+      cache: new MemoryCacheStore({ now: () => now }),
+      now: () => now
+    });
+
+    const result = await handler({ query: "A TIME FOR US" }, handlerContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("A TIME FOR US 手抄譜");
+    expect(result.replyText).toContain("https://example.com/a-time-for-us");
+    expect(graph.listFolderFilesRecursive).not.toHaveBeenCalled();
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
+  });
+
+  it("merges remembered and Graph sheet music candidates into one selection flow", async () => {
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
+    const remembered = await memoryStore.recordResource({
+      profileName: "main",
+      source: { type: "group", groupId: "Cgroup", userId: "U1" },
+      createdBy: "U1",
+      resourceType: "sheet_music",
+      title: "A TIME FOR US 手抄譜",
+      query: "A TIME FOR US 手抄譜",
+      storage: { provider: "external_link", url: "https://example.com/a-time-for-us" },
+      expiresAt: "2026-08-04T10:00:00.000Z"
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      listFolderFilesRecursive: vi
+        .fn()
+        .mockResolvedValue([{ id: "pdf-1", driveId: "drive-id", name: "A TIME FOR US.pdf" }]),
+      createSharingLink: vi.fn()
+    };
+    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
+    const handler = createFindPopSheetMusicHandler({
+      graph,
+      memoryStore,
+      driveId: "drive-id",
+      folderItemId: "sheet-folder-id",
+      allowedExtensions: [".pdf"],
+      sessionStore,
+      cache: new MemoryCacheStore({ now: () => now }),
+      now: () => now,
+      requestIdFactory: () => "mixed-sheet"
+    });
+
+    const result = await handler({ query: "A TIME FOR US" }, handlerContext());
+
+    expect(result.replyText).toContain("A TIME FOR US 手抄譜");
+    expect(result.replyText).toContain("A TIME FOR US.pdf");
+    await expect(sessionStore.get("mixed-sheet")).resolves.toMatchObject({
+      type: "selection",
+      action: "select_sheet_music",
+      items: [
+        {
+          id: remembered.id,
+          name: "A TIME FOR US 手抄譜",
+          memoryResource: { storage: { provider: "external_link" } }
+        },
+        { id: "pdf-1", driveId: "drive-id", name: "A TIME FOR US.pdf" }
+      ]
+    });
+
+    const handlePostback = createFindPopSheetMusicPostbackHandler({
+      graph,
+      sessionStore,
+      now: () => now
+    });
+    const selected = await handlePostback(
+      { action: "select_sheet_music", params: { requestId: "mixed-sheet", index: "0" } },
+      {
+        profile: profile(),
+        event: {
+          type: "postback",
+          replyToken: "reply-token",
+          source: { type: "group", groupId: "Cgroup", userId: "U1" },
+          postback: { data: "action=select_sheet_music&requestId=mixed-sheet&index=0" }
+        }
+      }
+    );
+
+    expect(selected.replyText).toContain("https://example.com/a-time-for-us");
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
   });
 
   it("uses the file index cache between searches", async () => {

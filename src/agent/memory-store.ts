@@ -82,6 +82,14 @@ export interface SearchAgentTextMemoriesInput {
   limit?: number;
 }
 
+export interface SearchAgentResourcesInput {
+  profileName: string;
+  source: LineSource;
+  query?: string;
+  resourceTypes?: AgentResourceType[];
+  limit?: number;
+}
+
 export interface ForgetAgentMemoryInput {
   profileName: string;
   source: LineSource;
@@ -91,6 +99,7 @@ export interface ForgetAgentMemoryInput {
 
 export interface AgentMemorySummary {
   resources: number;
+  externalResources: number;
   textMemories: number;
   aliases: number;
 }
@@ -98,6 +107,7 @@ export interface AgentMemorySummary {
 export interface AgentMemoryStore {
   recordResource(input: RecordAgentResourceInput): Promise<AgentResourceRecord>;
   findRecentResource(input: FindRecentAgentResourceInput): Promise<AgentResourceRecord | undefined>;
+  searchResources(input: SearchAgentResourcesInput): Promise<AgentResourceRecord[]>;
   rememberAlias(input: RememberAgentAliasInput): Promise<void>;
   findResourceByAlias(
     input: FindAgentResourceByAliasInput
@@ -106,6 +116,7 @@ export interface AgentMemoryStore {
   searchTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]>;
   listTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]>;
   forgetMemory(input: ForgetAgentMemoryInput): Promise<boolean>;
+  forgetResource(input: ForgetAgentMemoryInput): Promise<boolean>;
   summary(): Promise<AgentMemorySummary>;
 }
 
@@ -167,6 +178,18 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
       )
       .filter((record) => !input.requesterUserId || record.createdBy === input.requesterUserId)
       .sort(descendingCreatedAt)[0];
+  }
+
+  async searchResources(input: SearchAgentResourcesInput): Promise<AgentResourceRecord[]> {
+    const scope = scopeFromSource(input.source);
+    const query = normalizeLookupText(input.query ?? "");
+    return Array.from(this.resources.values())
+      .filter((record) =>
+        this.resourceMatches(record, input.profileName, scope, input.resourceTypes)
+      )
+      .filter((record) => !query || normalizeLookupText(resourceSearchText(record)).includes(query))
+      .sort(descendingCreatedAt)
+      .slice(0, input.limit ?? 5);
   }
 
   async rememberAlias(input: RememberAgentAliasInput): Promise<void> {
@@ -260,9 +283,28 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
     return true;
   }
 
+  async forgetResource(input: ForgetAgentMemoryInput): Promise<boolean> {
+    const scope = scopeFromSource(input.source);
+    const record = this.resources.get(input.id);
+    if (!record || record.profileName !== input.profileName || !sameScope(record.scope, scope)) {
+      return false;
+    }
+    this.resources.set(record.id, {
+      ...record,
+      deletedAt: this.now().toISOString()
+    });
+    return true;
+  }
+
   async summary(): Promise<AgentMemorySummary> {
+    const activeResources = Array.from(this.resources.values()).filter((record) =>
+      this.active(record)
+    );
     return {
-      resources: Array.from(this.resources.values()).filter((record) => this.active(record)).length,
+      resources: activeResources.length,
+      externalResources: activeResources.filter(
+        (record) => record.storage.provider === "external_link"
+      ).length,
       textMemories: Array.from(this.textMemories.values()).filter((record) => this.active(record))
         .length,
       aliases: this.aliases.size
@@ -329,4 +371,16 @@ function descendingCreatedAt<T extends { createdAt: string }>(left: T, right: T)
 
 function memorySearchText(record: AgentTextMemoryRecord): string {
   return [record.title, record.query, record.content].filter(Boolean).join(" ");
+}
+
+function resourceSearchText(record: AgentResourceRecord): string {
+  return [
+    record.title,
+    record.query,
+    record.storage.provider === "external_link" ? record.storage.sourceLabel : undefined,
+    record.storage.provider === "external_link" ? record.storage.description : undefined,
+    record.storage.provider === "external_link" ? record.storage.url : undefined
+  ]
+    .filter(Boolean)
+    .join(" ");
 }

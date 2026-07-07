@@ -345,15 +345,24 @@ export interface LineIdentityClient {
 
 export type AgentResourceType = "ppt_slide" | "sheet_music";
 
+export type AgentResourceStorage =
+  | {
+      provider: "graph";
+      driveId: string;
+      itemId: string;
+    }
+  | {
+      provider: "external_link";
+      url: string;
+      sourceLabel?: string;
+      description?: string;
+    };
+
 export interface AgentResourceReference {
   resourceType: AgentResourceType;
   title: string;
   query?: string;
-  storage: {
-    provider: "graph";
-    driveId: string;
-    itemId: string;
-  };
+  storage: AgentResourceStorage;
 }
 
 export interface FunctionExecutionResult {

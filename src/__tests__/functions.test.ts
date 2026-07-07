@@ -5,6 +5,7 @@ import {
   createFindPptSlidesPostbackHandler,
   createFindPptSlidesTextMessageHandler
 } from "../functions/find-ppt-slides.js";
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { createQueryServiceScheduleHandler } from "../functions/query-service-schedule.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
@@ -170,6 +171,110 @@ describe("find_ppt_slides", () => {
       "1",
       "2026-07-05T10:00:00.000Z"
     );
+  });
+
+  it("returns an external remembered slide before searching Graph", async () => {
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
+    await memoryStore.recordResource({
+      profileName: "main",
+      source: { type: "group", groupId: "Cgroup", userId: "U1" },
+      createdBy: "U1",
+      resourceType: "ppt_slide",
+      title: "青年聚會投影片",
+      query: "青年聚會",
+      storage: { provider: "external_link", url: "https://example.com/youth-slides" },
+      expiresAt: "2026-08-04T10:00:00.000Z"
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn().mockResolvedValue([]),
+      createSharingLink: vi.fn()
+    };
+    const handler = createFindPptSlidesHandler({
+      graph,
+      memoryStore,
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".ppt", ".pptx", ".pdf"],
+      defaultIncludePdf: false,
+      now: () => now
+    });
+
+    const result = await handler({ query: "青年聚會" }, handlerContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("青年聚會投影片");
+    expect(result.replyText).toContain("https://example.com/youth-slides");
+    expect(graph.listFolderChildren).not.toHaveBeenCalled();
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
+  });
+
+  it("merges remembered and Graph slide candidates into one selection flow", async () => {
+    const now = new Date("2026-07-04T10:00:00.000Z");
+    const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
+    const remembered = await memoryStore.recordResource({
+      profileName: "main",
+      source: { type: "group", groupId: "Cgroup", userId: "U1" },
+      createdBy: "U1",
+      resourceType: "ppt_slide",
+      title: "青年聚會投影片",
+      query: "青年聚會",
+      storage: { provider: "external_link", url: "https://example.com/youth-slides" },
+      expiresAt: "2026-08-04T10:00:00.000Z"
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn().mockResolvedValue([{ id: "ppt-1", name: "青年主日.pptx" }]),
+      createSharingLink: vi.fn()
+    };
+    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
+    const handler = createFindPptSlidesHandler({
+      graph,
+      memoryStore,
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".ppt", ".pptx", ".pdf"],
+      defaultIncludePdf: false,
+      sessionStore,
+      now: () => now,
+      requestIdFactory: () => "mixed-ppt"
+    });
+
+    const result = await handler({ query: "青年" }, handlerContext());
+
+    expect(result.replyText).toContain("青年聚會投影片");
+    expect(result.replyText).toContain("青年主日.pptx");
+    await expect(sessionStore.get("mixed-ppt")).resolves.toMatchObject({
+      type: "ppt_selection",
+      items: [
+        {
+          id: remembered.id,
+          name: "青年聚會投影片",
+          memoryResource: { storage: { provider: "external_link" } }
+        },
+        { id: "ppt-1", name: "青年主日.pptx" }
+      ]
+    });
+
+    const handlePostback = createFindPptSlidesPostbackHandler({
+      graph,
+      sessionStore,
+      now: () => now
+    });
+    const selected = await handlePostback(
+      { action: "select_ppt", params: { requestId: "mixed-ppt", index: "0" } },
+      {
+        profile: profile(),
+        event: {
+          type: "postback",
+          replyToken: "reply-token",
+          source: { type: "group", groupId: "Cgroup", userId: "U1" },
+          postback: { data: "action=select_ppt&requestId=mixed-ppt&index=0" }
+        }
+      }
+    );
+
+    expect(selected.replyText).toContain("https://example.com/youth-slides");
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
   });
 
   it("uses file type metadata to search PDF slide exports", async () => {

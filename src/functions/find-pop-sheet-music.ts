@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { CacheStore } from "../cache/cache-store.js";
+import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
 import {
   findPopSheetMusicArgumentsSchema,
   type FindPopSheetMusicArguments
@@ -40,6 +41,7 @@ export interface FindPopSheetMusicOptions {
   folderPath?: string;
   allowedExtensions: string[];
   recursive?: boolean;
+  memoryStore?: AgentMemoryStore;
   cache?: CacheStore;
   sessionStore?: SessionStore;
   now?: () => Date;
@@ -58,6 +60,16 @@ interface ScoredItem {
   item: DriveItem;
   score: number;
 }
+
+type SheetMusicCandidate =
+  | {
+      kind: "memory";
+      resource: AgentResourceRecord;
+    }
+  | {
+      kind: "graph";
+      item: DriveItem;
+    };
 
 type SheetMusicMatchMode = NonNullable<FindPopSheetMusicArguments["matchMode"]>;
 
@@ -87,16 +99,28 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       };
     }
 
+    const remembered = await findRememberedSheetMusic(options.memoryStore, rawQuery, context);
+    const exactRemembered = remembered.find((resource) =>
+      resourceMatchesQueryExactly(resource, rawQuery)
+    );
+    if (exactRemembered) {
+      return createRememberedResourceReply(options.graph, exactRemembered, now());
+    }
+
     const root = await resolveSheetMusicRoot(options);
     const extensions = resolveSearchExtensions(configuredExtensions, args);
     const allItems = await getCachedFileIndex(options, root);
-    const candidates = rankSheetMusicCandidates(
+    const graphCandidates = rankSheetMusicCandidates(
       allItems,
       rawQuery,
       args.artist,
       extensions,
       args.matchMode ?? "fuzzy"
     );
+    const candidates: SheetMusicCandidate[] = [
+      ...remembered.map((resource) => ({ kind: "memory" as const, resource })),
+      ...graphCandidates.map(({ item }) => ({ kind: "graph" as const, item }))
+    ].slice(0, MAX_CANDIDATES);
 
     if (candidates.length === 0) {
       return {
@@ -120,7 +144,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     }
 
     if (candidates.length === 1) {
-      return createSharingLinkReply(options.graph, candidates[0].item, now());
+      return createSheetMusicCandidateReply(options.graph, candidates[0], now());
     }
 
     if (!canCreateRequesterScopedSession(context.event.source)) {
@@ -138,11 +162,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       profileName: context.profile.name,
       requesterUserId: context.event.source.userId,
       source: context.event.source,
-      items: candidates.map(({ item }) => ({
-        id: item.id,
-        driveId: item.driveId,
-        name: item.name
-      })),
+      items: candidates.map(toSelectionItem),
       expiresAt: new Date(now().getTime() + SELECTION_TTL_MS).toISOString()
     });
 
@@ -150,7 +170,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       ok: true,
       replyText: [
         withRequesterDisplayName(context, "找到多個相近的樂譜，請選擇："),
-        ...candidates.map(({ item }, index) => `${index + 1}. ${item.name}`)
+        ...candidates.map((candidate, index) => `${index + 1}. ${candidateName(candidate)}`)
       ].join("\n"),
       quickReplies: candidates.map((_candidate, index) =>
         buildPostbackQuickReply(
@@ -230,6 +250,111 @@ export function createFindPopSheetMusicTextMessageHandler(
   };
 }
 
+async function findRememberedSheetMusic(
+  memoryStore: AgentMemoryStore | undefined,
+  query: string,
+  context: FunctionHandlerContext
+): Promise<AgentResourceRecord[]> {
+  const resources = await memoryStore?.searchResources({
+    profileName: context.profile.name,
+    source: context.event.source,
+    query,
+    resourceTypes: ["sheet_music"],
+    limit: MAX_CANDIDATES
+  });
+  return resources ?? [];
+}
+
+async function createRememberedResourceReply(
+  graph: GraphDriveClient,
+  resource: AgentResourceRecord,
+  now: Date
+): Promise<FunctionExecutionResult> {
+  return createRememberedReferenceReply(
+    graph,
+    {
+      resourceType: resource.resourceType,
+      title: resource.title,
+      query: resource.query,
+      storage: resource.storage
+    },
+    now
+  );
+}
+
+async function createRememberedReferenceReply(
+  graph: GraphDriveClient,
+  resource: {
+    resourceType: AgentResourceRecord["resourceType"];
+    title: string;
+    query?: string;
+    storage: AgentResourceRecord["storage"];
+  },
+  now: Date
+): Promise<FunctionExecutionResult> {
+  if (resource.storage.provider === "external_link") {
+    return {
+      ok: true,
+      replyText: ["已找到小哈記住的流行歌曲樂譜：", resource.title, resource.storage.url].join(
+        "\n"
+      ),
+      agentResource: {
+        resourceType: resource.resourceType,
+        title: resource.title,
+        query: resource.query,
+        storage: resource.storage
+      }
+    };
+  }
+  return createSharingLinkReply(
+    graph,
+    { id: resource.storage.itemId, driveId: resource.storage.driveId, name: resource.title },
+    now
+  );
+}
+
+function createSheetMusicCandidateReply(
+  graph: GraphDriveClient,
+  candidate: SheetMusicCandidate,
+  now: Date
+): Promise<FunctionExecutionResult> {
+  if (candidate.kind === "memory") {
+    return createRememberedResourceReply(graph, candidate.resource, now);
+  }
+  return createSharingLinkReply(graph, candidate.item, now);
+}
+
+function toSelectionItem(candidate: SheetMusicCandidate) {
+  if (candidate.kind === "memory") {
+    return {
+      id: candidate.resource.id,
+      name: candidate.resource.title,
+      memoryResource: {
+        resourceType: candidate.resource.resourceType,
+        title: candidate.resource.title,
+        query: candidate.resource.query,
+        storage: candidate.resource.storage
+      }
+    };
+  }
+  return {
+    id: candidate.item.id,
+    driveId: candidate.item.driveId,
+    name: candidate.item.name
+  };
+}
+
+function candidateName(candidate: SheetMusicCandidate): string {
+  return candidate.kind === "memory" ? candidate.resource.title : candidate.item.name;
+}
+
+function resourceMatchesQueryExactly(resource: AgentResourceRecord, rawQuery: string): boolean {
+  const query = normalizeSearchText(rawQuery);
+  return [resource.title, resource.query]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .some((value) => normalizeSearchText(value) === query);
+}
+
 async function resolveSheetMusicRoot(options: FindPopSheetMusicOptions) {
   if (options.folderItemId) {
     return { driveId: options.driveId, itemId: options.folderItemId };
@@ -295,6 +420,9 @@ async function selectSheetMusicCandidate(options: {
   }
 
   await sessionStore.delete(session.id);
+  if (item.memoryResource) {
+    return createRememberedReferenceReply(graph, item.memoryResource, now);
+  }
   return createSharingLinkReply(graph, item, now);
 }
 

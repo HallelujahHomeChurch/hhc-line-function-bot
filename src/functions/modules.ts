@@ -136,6 +136,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             folderItemId: config.graph.pptFolderItemId,
             allowedExtensions: config.graph.allowedExtensions,
             defaultIncludePdf: config.graph.defaultIncludePdf,
+            memoryStore: clients.memoryStore,
             sessionStore: clients.sessionStore,
             now: clients.now,
             requestIdFactory: clients.requestIdFactory
@@ -321,6 +322,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             folderPath: config.graph.sheetMusicFolderPath,
             allowedExtensions: config.graph.sheetMusicAllowedExtensions,
             recursive: config.graph.sheetMusicRecursive,
+            memoryStore: clients.memoryStore,
             cache: clients.cache,
             sessionStore: clients.sessionStore,
             now: clients.now,

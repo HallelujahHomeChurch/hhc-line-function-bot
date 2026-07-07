@@ -21,6 +21,8 @@ The service is local-first for routing:
   handlers.
 - Agent memory is controlled and explicit: file results store metadata only,
   text memory is saved only when requested, and short-lived links are regenerated.
+- User-provided external links can be saved as scoped resource memories only
+  when the user explicitly asks the bot to remember them.
 
 ## Request Flow
 
@@ -143,6 +145,7 @@ handler:
 - in-flight duplicate protection for long-running lookups
 - recent file recall such as "再給我一次"
 - scope-local aliases such as "以後 X 就用這份"
+- explicit external resource links such as "幫我記住這份投影片 https://..."
 - explicit text memories such as "幫我記住..."
 - memory commands such as `/memories`, `/forget-memory <id>`, and
   `/memory-status`
@@ -150,14 +153,18 @@ handler:
 
 Do not use it for unrestricted chat logging. Normal group chatter must not be
 saved. Temporary Graph sharing links must not be saved; store drive/item ids and
-regenerate links on demand.
+regenerate links on demand. External resource memories store user-provided URLs
+and do not verify continued access. LINE attachment download/storage is out of
+scope unless a future plan explicitly adds it.
 
 When adding resource memory for a function:
 
 1. Return `agentResource` from the successful function result.
 2. Include only stable storage metadata, not generated sharing links.
-3. Add tests that cover direct handler execution and entrance-level recall.
-4. Keep requester-scoped recall for group conversations unless the user
+3. Use `graph` storage for files that can regenerate links, or
+   `external_link` storage for user-provided URLs.
+4. Add tests that cover direct handler execution and entrance-level recall.
+5. Keep requester-scoped recall for group conversations unless the user
    explicitly asks for a shared alias.
 
 ## Admin Cookbook

@@ -58,6 +58,13 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
   async function createResourceReply(
     resource: AgentResourceRecord
   ): Promise<FunctionExecutionResult> {
+    if (resource.storage.provider === "external_link") {
+      return {
+        ok: true,
+        replyText: ["這是我記住的：", resource.title, resource.storage.url].join("\n"),
+        agentResource: toResourceReference(resource)
+      };
+    }
     if (!options.graph) {
       return {
         ok: true,
@@ -113,6 +120,38 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
         return {
           ok: true,
           replyText: `好，以後在這裡提到「${alias}」時，我會先用這份：${recent.title}`
+        };
+      }
+
+      const saveResourceRequest = extractSaveResourceRequest(text);
+      if (saveResourceRequest) {
+        if (!saveResourceRequest.resourceType) {
+          return { ok: true, replyText: "這是投影片還是歌譜？請直接回覆類型後再保存。" };
+        }
+        const requiredFunction = functionNameForResourceType(saveResourceRequest.resourceType);
+        if (!input.context.profile.enabledFunctions.includes(requiredFunction)) {
+          return { ok: true, replyText: "這個功能目前沒有開放。" };
+        }
+        if (!saveResourceRequest.title) {
+          return { ok: true, replyText: "要用什麼名稱保存這個資源？" };
+        }
+        await options.memoryStore.recordResource({
+          profileName: input.context.profile.name,
+          source: input.context.event.source,
+          createdBy: input.context.event.source.userId,
+          resourceType: saveResourceRequest.resourceType,
+          title: saveResourceRequest.title,
+          query: saveResourceRequest.title,
+          storage: {
+            provider: "external_link",
+            url: saveResourceRequest.url,
+            description: saveResourceRequest.description
+          },
+          expiresAt: new Date(now().getTime() + RESOURCE_TTL_MS).toISOString()
+        });
+        return {
+          ok: true,
+          replyText: `已記住：${saveResourceRequest.title}`
         };
       }
 
@@ -194,6 +233,7 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
           replyText: [
             "Memory status",
             `resources: ${summary.resources}`,
+            `externalResources: ${summary.externalResources}`,
             `textMemories: ${summary.textMemories}`,
             `aliases: ${summary.aliases}`
           ].join("\n")
@@ -206,12 +246,15 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
           source: input.context.event.source,
           limit: 10
         });
+        const resources = await options.memoryStore.searchResources({
+          profileName: input.context.profile.name,
+          source: input.context.event.source,
+          limit: 10
+        });
+        const lines = [...resources.map(formatResourceMemory), ...memories.map(formatTextMemory)];
         return {
           ok: true,
-          replyText:
-            memories.length === 0
-              ? "目前沒有記住的資訊。"
-              : ["Memories", ...memories.map(formatTextMemory)].join("\n")
+          replyText: lines.length === 0 ? "目前沒有記住的資訊。" : ["Memories", ...lines].join("\n")
         };
       }
 
@@ -220,13 +263,24 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
         if (!id) {
           return { ok: true, replyText: "Usage: /forget-memory <id>" };
         }
-        const removed = await options.memoryStore.forgetMemory({
+        const removedText = await options.memoryStore.forgetMemory({
           profileName: input.context.profile.name,
           source: input.context.event.source,
           id,
           deletedBy: input.context.event.source.userId
         });
-        return { ok: true, replyText: removed ? "已移除這段記憶。" : "找不到這段記憶。" };
+        const removedResource = removedText
+          ? false
+          : await options.memoryStore.forgetResource({
+              profileName: input.context.profile.name,
+              source: input.context.event.source,
+              id,
+              deletedBy: input.context.event.source.userId
+            });
+        return {
+          ok: true,
+          replyText: removedText || removedResource ? "已移除這段記憶。" : "找不到這段記憶。"
+        };
       }
 
       return undefined;
@@ -239,6 +293,9 @@ async function createGraphLink(
   storage: AgentResourceReference["storage"],
   now: Date
 ): Promise<string> {
+  if (storage.provider !== "graph") {
+    throw new Error("graph_storage_required");
+  }
   const expiresAt = new Date(now.getTime() + LINK_TTL_MS).toISOString();
   return graph.createSharingLink(storage.driveId, storage.itemId, expiresAt);
 }
@@ -287,6 +344,58 @@ function extractSaveMemoryRequest(text: string): { title?: string; content: stri
   return { title, content: rest.length > 0 ? rest.join(":").trim() : content };
 }
 
+function extractSaveResourceRequest(text: string):
+  | {
+      url: string;
+      resourceType?: AgentResourceType;
+      title?: string;
+      description?: string;
+    }
+  | undefined {
+  if (!/(?:記住|保存|儲存)/u.test(text)) {
+    return undefined;
+  }
+  const url = firstUrl(text);
+  if (!url) {
+    return undefined;
+  }
+  return {
+    url,
+    resourceType: inferResourceType(text),
+    title: extractResourceTitle(text, url),
+    description: text.replace(url, "").trim()
+  };
+}
+
+function firstUrl(text: string): string | undefined {
+  const match = text.match(/https?:\/\/[^\s，,。)）]+/u);
+  return match?.[0];
+}
+
+function inferResourceType(text: string): AgentResourceType | undefined {
+  if (/投影片|簡報|ppt|powerpoint|slide/i.test(text)) {
+    return "ppt_slide";
+  }
+  if (/歌譜|樂譜|sheet\s*music/i.test(text)) {
+    return "sheet_music";
+  }
+  return undefined;
+}
+
+function extractResourceTitle(text: string, url: string): string | undefined {
+  const withoutUrl = text.replace(url, " ").trim();
+  const explicit = withoutUrl.match(/(?:名稱|標題|名字)(?:是|叫)?[：:\s]*(.+)$/u)?.[1]?.trim();
+  if (explicit) {
+    return cleanupTitle(explicit);
+  }
+  return undefined;
+}
+
+function cleanupTitle(value: string): string | undefined {
+  const cleaned = value.replace(/[。.!！?？]+$/u, "").trim();
+  return cleaned || undefined;
+}
+
 function extractRetrieveMemoryQuery(text: string): string | undefined {
   const match = text.match(/(?:查|找|看)(?:一下)?(?:我)?(?:記住|保存|儲存)(?:的)?[：:\s]*(.*)$/u);
   if (match) {
@@ -310,6 +419,10 @@ function resourceTypesForAction(action: FunctionName): AgentResourceType[] | und
   }
 }
 
+function functionNameForResourceType(resourceType: AgentResourceType): FunctionName {
+  return resourceType === "ppt_slide" ? "find_ppt_slides" : "find_pop_sheet_music";
+}
+
 function inferTitle(content: string): string {
   return content.replace(/\s+/g, " ").trim().slice(0, 20) || "記憶";
 }
@@ -317,6 +430,11 @@ function inferTitle(content: string): string {
 function formatTextMemory(memory: { id: string; title?: string; content: string }): string {
   const title = memory.title?.trim() || memory.content.slice(0, 16);
   return `- ${title} (${memory.id})\n${memory.content}`;
+}
+
+function formatResourceMemory(memory: AgentResourceRecord): string {
+  const source = memory.storage.provider === "external_link" ? "連結" : "檔案";
+  return `- ${memory.title} (${memory.id})\n${source}: ${memory.resourceType}`;
 }
 
 function parseMemoryCommand(text: string): { command: string; args: string[] } | undefined {
