@@ -86,6 +86,7 @@ export interface AppConfig {
   port: number;
   timeZone: string;
   healthPath: string;
+  readyPath?: string;
   maxBodyBytes: number;
   profiles: BotProfileConfig[];
   llm: LlmConfig;
@@ -120,6 +121,35 @@ export interface RateLimitConfig {
 
 export interface LastErrorsConfig {
   maxEntries: number;
+}
+
+export type DependencyName = "postgres" | "redis" | "ollama" | "graph" | "notion";
+
+export type DependencyStatusValue = "ok" | "degraded" | "missing" | "error";
+
+export interface DependencyStatus {
+  configured: boolean;
+  status: DependencyStatusValue;
+  latencyMs?: number;
+  message?: string;
+}
+
+export interface NamedDependencyStatus extends DependencyStatus {
+  name: DependencyName;
+}
+
+export interface PublicReadinessResult {
+  service: string;
+  status: "ok" | "error";
+  database: {
+    postgres: DependencyStatus;
+    redis: DependencyStatus;
+  };
+}
+
+export interface AppDiagnostics {
+  checkPublicReadiness(): Promise<PublicReadinessResult>;
+  formatAdminDiagnostics(): Promise<string>;
 }
 
 export interface LineWebhookPayload {

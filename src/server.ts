@@ -10,6 +10,7 @@ import {
   type RegistrationInviteCodeStore
 } from "./access/registration-invite-code-store.js";
 import type { AccessPrincipalType, AccessStore } from "./access/types.js";
+import { createStaticAppDiagnostics } from "./diagnostics/dependencies.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "./clients/line.js";
 import { getFunctionDefinitions } from "./functions/definitions.js";
 import {
@@ -34,6 +35,7 @@ import {
 import { InMemoryRateLimiter, type RateLimiter } from "./rate-limit.js";
 import type {
   AppConfig,
+  AppDiagnostics,
   AdminHandlerRegistry,
   BotProfileConfig,
   FunctionExecutionResult,
@@ -72,6 +74,7 @@ export interface AppDependencies {
   rateLimiter?: RateLimiter;
   accessStore?: AccessStore;
   registrationInviteCodeStore?: RegistrationInviteCodeStore;
+  diagnostics?: AppDiagnostics;
 }
 
 interface AllowResult {
@@ -143,6 +146,7 @@ const builtInAdminCommandGroups: AdminCommandHelpGroup[] = [
       { usage: "/help admin all", description: "列出完整 admin 指令" },
       { usage: "/status", description: "查看目前 profile 狀態" },
       { usage: "/profile", description: "查看目前 LINE 來源與 profile 設定摘要" },
+      { usage: "/diag", description: "查看服務診斷摘要" },
       { usage: "/route-test <text>", description: "測試一段文字會 route 到哪個 function" },
       { usage: "/last-errors", description: "查看最近錯誤" },
       { usage: "/last-routes", description: "查看最近 route/function 結果" }
@@ -187,6 +191,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     new InMemoryRateLimiter(
       config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
     );
+  const diagnostics = deps.diagnostics ?? createStaticAppDiagnostics(config);
 
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
@@ -195,18 +200,13 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   app.get(config.healthPath, async () => ({
     ok: true,
     service: config.serviceName,
-    timeZone: config.timeZone,
-    profiles: config.profiles.map((profile) => ({
-      name: profile.name,
-      webhookPath: profile.webhookPath,
-      enabledFunctions: profile.enabledFunctions
-    })),
-    llm: {
-      primary: "ollama",
-      model: config.llm.ollamaModel,
-      fallback: config.llm.keywordFallbackEnabled ? "keyword" : "disabled"
-    }
+    timestamp: new Date().toISOString()
   }));
+
+  app.get(config.readyPath ?? "/readyz", async (_request, reply) => {
+    const readiness = await diagnostics.checkPublicReadiness();
+    return reply.code(readiness.status === "ok" ? 200 : 503).send(readiness);
+  });
 
   for (const profile of config.profiles) {
     app.post(profile.webhookPath, async (request, reply) => {
@@ -229,7 +229,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         lastRouteStore,
         rateLimiter,
         accessStore,
-        registrationInviteCodeStore
+        registrationInviteCodeStore,
+        diagnostics
       );
     });
   }
@@ -256,7 +257,8 @@ async function handleWebhook(
   lastRouteStore: LastRouteStore,
   rateLimiter: RateLimiter,
   accessStore: AccessStore,
-  registrationInviteCodeStore: RegistrationInviteCodeStore
+  registrationInviteCodeStore: RegistrationInviteCodeStore,
+  diagnostics: AppDiagnostics
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -382,6 +384,7 @@ async function handleWebhook(
           lastRouteStore,
           accessStore,
           adminActionRegistry,
+          diagnostics,
           requestId
         );
       } catch (error) {
@@ -1232,6 +1235,7 @@ async function handleAdminCommand(
   lastRouteStore: LastRouteStore,
   accessStore: AccessStore,
   adminActionRegistry: AdminActionRegistry,
+  diagnostics: AppDiagnostics,
   requestId: string
 ): Promise<FunctionExecutionResult> {
   const parsed = parseAdminCommand(text);
@@ -1269,6 +1273,13 @@ async function handleAdminCommand(
         `functions: ${profile.enabledFunctions.join(", ") || "(none)"}`,
         `adminDirectOnly: ${profile.adminDirectOnly !== false}`
       ].join("\n")
+    };
+  }
+
+  if (parsed.command === "diag") {
+    return {
+      ok: true,
+      replyText: await diagnostics.formatAdminDiagnostics()
     };
   }
 

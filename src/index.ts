@@ -4,6 +4,7 @@ import { createAccessStore } from "./access/create-access-store.js";
 import { RedisRegistrationInviteCodeStore } from "./access/registration-invite-code-store.js";
 import { createCacheStore } from "./cache/create-cache-store.js";
 import { loadConfigFromEnv } from "./config.js";
+import { createDependencyDiagnostics } from "./diagnostics/dependencies.js";
 import { createPostgresRuntime } from "./db/postgres.js";
 import { createFunctionRegistries } from "./functions/registry.js";
 import { createKeywordFallbackRouter } from "./keyword-router.js";
@@ -57,6 +58,11 @@ const app = createApp(config, {
   rateLimiter,
   accessStore,
   registrationInviteCodeStore,
+  diagnostics: createDependencyDiagnostics({
+    config,
+    postgres: postgres?.pool,
+    redis: redis?.client
+  }),
   routeObserver: createConsoleRouteObserver()
 });
 

@@ -2185,7 +2185,7 @@ describe("LINE entrance", () => {
     expect(replyText).not.toHaveBeenCalled();
   });
 
-  it("reports profiles, enabled functions, and LLM status from healthz", async () => {
+  it("keeps healthz minimal", async () => {
     const app = createTestApp(testConfig(), { router: { route: vi.fn() } });
 
     const res = await app.inject({ method: "GET", url: "/healthz" });
@@ -2193,17 +2193,11 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       ok: true,
-      service: "hhc-line-function-bot",
-      timeZone: "Asia/Taipei",
-      profiles: [
-        { name: "main", enabledFunctions: ["find_ppt_slides", "query_service_schedule"] },
-        { name: "slides", enabledFunctions: ["find_ppt_slides"] }
-      ],
-      llm: {
-        primary: "ollama",
-        model: "qwen3:4b-instruct",
-        fallback: "keyword"
-      }
+      service: "hhc-line-function-bot"
     });
+    expect(res.json()).toHaveProperty("timestamp");
+    expect(res.json()).not.toHaveProperty("timeZone");
+    expect(res.json()).not.toHaveProperty("profiles");
+    expect(res.json()).not.toHaveProperty("llm");
   });
 });

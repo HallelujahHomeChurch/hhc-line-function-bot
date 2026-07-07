@@ -49,6 +49,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     port: readInt(env.PORT, 3000),
     timeZone: readTimeZone(env.TIME_ZONE),
     healthPath: env.HEALTH_PATH || "/healthz",
+    readyPath: env.READY_PATH || "/readyz",
     maxBodyBytes: readInt(env.MAX_BODY_BYTES, 262_144),
     profiles: normalizedProfiles.map((profile) => ({
       ...profile,
