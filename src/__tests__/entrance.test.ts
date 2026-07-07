@@ -1104,9 +1104,9 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
     expect(replyText.mock.calls[0]?.[1]).toContain("我是小哈");
-    expect(replyText.mock.calls[0]?.[1]).toContain("教會同工小幫手");
-    expect(replyText.mock.calls[0]?.[1]).toContain("聚會或詩歌需要的投影片");
-    expect(replyText.mock.calls[0]?.[1]).toContain("近期聚會的服事安排");
+    expect(replyText.mock.calls[0]?.[1]).toContain("家教會小幫手");
+    expect(replyText.mock.calls[0]?.[1]).toContain("我可以：查投影片、查服事表。");
+    expect(replyText.mock.calls[0]?.[1]).toContain("小哈 查投影片 奇異恩典");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("OneDrive");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("Notion");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("下載連結");
@@ -1147,20 +1147,30 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText.mock.calls[0]?.[1]).toContain("我是小哈");
+    expect(replyText.mock.calls[0]?.[1]).toContain("我能：查投影片、查服事表。");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("我是小哈");
   });
 
-  it("uses the router intro intent for direct greetings without falling through to deny", async () => {
+  it("uses controlled LLM small talk for direct greetings when enabled by profile", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      smallTalk: { mode: "llm", maxChars: 80 }
+    };
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "respond",
-      action: "introduce_bot",
+      action: "small_talk",
       provider: "ollama",
       confidence: 0.92,
-      arguments: { greeting: "你好" }
+      arguments: { category: "greeting" }
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
-    const app = createTestApp(testConfig(), {
+    const completeText = vi
+      .fn<TextGenerationProvider["completeText"]>()
+      .mockResolvedValue("你好，我在。");
+    const app = createTestApp(config, {
       router: { route },
+      textGenerator: { completeText },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -1184,10 +1194,85 @@ describe("LINE entrance", () => {
         enabledFunctions: ["find_ppt_slides", "query_service_schedule"]
       })
     );
-    expect(replyText.mock.calls[0]?.[1]).toMatch(/^我是小哈/);
-    expect(replyText.mock.calls[0]?.[1]).not.toMatch(/^你好。\n/);
-    expect(replyText.mock.calls[0]?.[1]).toContain("教會同工小幫手");
+    expect(completeText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "你好",
+        category: "greeting",
+        maxChars: 80
+      })
+    );
+    expect(replyText.mock.calls[0]?.[1]).toBe("你好，我在。");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("我是小哈");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("目前不支援");
+  });
+
+  it("answers addressed group greetings with small talk before routing", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      smallTalk: { mode: "llm", maxChars: 80 }
+    };
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const completeText = vi
+      .fn<TextGenerationProvider["completeText"]>()
+      .mockResolvedValue("你好，我在。");
+    const app = createTestApp(config, {
+      router: { route },
+      textGenerator: { completeText },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈你好" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(completeText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "小哈你好",
+        category: "greeting"
+      })
+    );
+    expect(replyText).toHaveBeenCalledWith("reply-token", "你好，我在。", undefined);
+  });
+
+  it("answers capabilities questions without repeating the identity sentence", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "小哈你能做什麼" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText.mock.calls[0]?.[1]).toContain("我能：查投影片、查服事表。");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("我是小哈");
+    expect(replyText.mock.calls[0]?.[1]).toContain("你可以試試：");
   });
 
   it("introduces sheet music lookup without exposing storage details", async () => {
@@ -1219,7 +1304,7 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText.mock.calls[0]?.[1]).toContain("流行歌曲樂譜");
+    expect(replyText.mock.calls[0]?.[1]).toContain("查流行歌譜");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("OneDrive");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("下載連結");
   });

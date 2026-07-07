@@ -616,7 +616,7 @@ async function handleWebhook(
       if (route.action === "introduce_bot") {
         const intro = createIntroReply(effectiveProfile, event.message.text, {
           force: true,
-          greeting: stringRouteArgument(route.arguments, "greeting")
+          variant: introVariantRouteArgument(route.arguments)
         });
         await line.replyText(
           event.replyToken,
@@ -1942,6 +1942,11 @@ async function releaseInFlight(store: InFlightStore, key: InFlightKey): Promise<
 function stringRouteArgument(args: JsonRecord, key: string): string | undefined {
   const value = args[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function introVariantRouteArgument(args: JsonRecord): "identity" | "capabilities" | undefined {
+  const value = stringRouteArgument(args, "variant");
+  return value === "identity" || value === "capabilities" ? value : undefined;
 }
 
 function parseAdminCommand(text: string | undefined): ParsedAdminCommand | undefined {

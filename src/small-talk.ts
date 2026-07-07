@@ -8,6 +8,7 @@ import type {
 } from "./types.js";
 
 const replies: Record<SmallTalkCategory, string> = {
+  greeting: "你好，我在。有需要再叫我就好。",
   wellbeing: "我在，謝謝你關心。有需要查資料再叫我就好。",
   thanks: "不客氣，有需要再叫我。",
   encouragement: "不辛苦，我在旁邊幫忙就好。",

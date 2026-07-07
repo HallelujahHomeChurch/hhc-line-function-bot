@@ -40,12 +40,12 @@ describe("function router", () => {
     });
   });
 
-  it("returns a controlled intro response when Qwen classifies a greeting", async () => {
+  it("returns a controlled greeting small-talk response when Qwen classifies a greeting", async () => {
     const qwen = provider(
       JSON.stringify({
-        action: "introduce_bot",
+        action: "small_talk",
         confidence: 0.92,
-        arguments: { greeting: "你好" }
+        arguments: { category: "greeting" }
       })
     );
     const router = createFunctionRouter({
@@ -63,10 +63,10 @@ describe("function router", () => {
 
     expect(result).toEqual({
       type: "respond",
-      action: "introduce_bot",
+      action: "small_talk",
       provider: "ollama",
       confidence: 0.92,
-      arguments: { greeting: "你好" }
+      arguments: { category: "greeting" }
     });
   });
 
@@ -573,7 +573,7 @@ describe("function router", () => {
     });
   });
 
-  it("falls back to a controlled intro response when Qwen fails on a greeting", async () => {
+  it("falls back to greeting small talk when Qwen fails on a greeting", async () => {
     const qwen = provider("not-json");
     const router = createFunctionRouter({
       primary: qwen,
@@ -590,11 +590,61 @@ describe("function router", () => {
 
     expect(result).toEqual({
       type: "respond",
+      action: "small_talk",
+      provider: "keyword",
+      fallbackProvider: "ollama",
+      fallbackReason: "invalid_json",
+      arguments: { category: "greeting" }
+    });
+  });
+
+  it("falls back to a capabilities intro when Qwen fails on a capabilities question", async () => {
+    const qwen = provider("not-json");
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈你能做什麼",
+      enabledFunctions: ["find_ppt_slides", "query_service_schedule"],
+      source: { type: "user", userId: "U1" }
+    });
+
+    expect(result).toEqual({
+      type: "respond",
       action: "introduce_bot",
       provider: "keyword",
       fallbackProvider: "ollama",
       fallbackReason: "invalid_json",
-      arguments: { greeting: "你好" }
+      arguments: { variant: "capabilities" }
+    });
+  });
+
+  it("falls back to a capabilities intro when the addressed question has punctuation", async () => {
+    const qwen = provider("not-json");
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈，你能做什麼？",
+      enabledFunctions: ["find_ppt_slides", "query_service_schedule"],
+      source: { type: "user", userId: "U1" }
+    });
+
+    expect(result).toEqual({
+      type: "respond",
+      action: "introduce_bot",
+      provider: "keyword",
+      fallbackProvider: "ollama",
+      fallbackReason: "invalid_json",
+      arguments: { variant: "capabilities" }
     });
   });
 

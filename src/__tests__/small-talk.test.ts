@@ -29,6 +29,11 @@ function profile(overrides: Partial<BotProfileConfig> = {}): BotProfileConfig {
 }
 
 describe("small talk replies", () => {
+  it("recognizes greeting as a first-class category", () => {
+    expect(smallTalkCategoryFromArguments({ category: "greeting" })).toBe("greeting");
+    expect(createSmallTalkReply("greeting").replyText).toContain("你好");
+  });
+
   it("recognizes wellbeing as a first-class category", () => {
     expect(smallTalkCategoryFromArguments({ category: "wellbeing" })).toBe("wellbeing");
     expect(createSmallTalkReply("wellbeing").replyText).toContain("我在");

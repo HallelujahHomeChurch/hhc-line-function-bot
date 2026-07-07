@@ -11,6 +11,7 @@ export const SYSTEM_ACTION_NAMES = ["introduce_bot", "small_talk"] as const;
 export type SystemActionName = (typeof SYSTEM_ACTION_NAMES)[number];
 
 export const SMALL_TALK_CATEGORIES = [
+  "greeting",
   "wellbeing",
   "thanks",
   "encouragement",

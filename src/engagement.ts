@@ -128,10 +128,12 @@ function isIntroText(text: string): boolean {
     "使用說明",
     "可以幹嘛",
     "可以做什麼",
+    "能做什麼",
     "你會什麼",
     "會什麼",
     "小哈可以幹嘛",
     "小哈可以做什麼",
+    "小哈你能做什麼",
     "小哈你會什麼",
     "小哈會什麼"
   ].includes(value);
@@ -141,6 +143,9 @@ function classifySmallTalkCategory(text: string): SmallTalkCategory | undefined 
   const lower = text.toLowerCase();
   if (/你好嗎|還在嗎|在嗎|最近好嗎|好嗎|安好/u.test(lower)) {
     return "wellbeing";
+  }
+  if (/^(你好|哈囉|嗨|hi|hello|hey|早安|午安|晚安)$/iu.test(lower)) {
+    return "greeting";
   }
   if (/謝謝|謝啦|感謝|thanks|thank you/u.test(lower)) {
     return "thanks";

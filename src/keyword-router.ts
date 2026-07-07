@@ -38,7 +38,7 @@ export function createKeywordFallbackRouter(): KeywordFallbackRouter {
           return {
             type: "respond",
             action: "introduce_bot",
-            arguments: intro.greeting ? { greeting: intro.greeting } : {},
+            arguments: { variant: intro.variant },
             provider: "keyword"
           };
         }
@@ -101,15 +101,14 @@ function cleanupQuery(text: string, stripWords: string[]): string {
   return result.replace(/\s+/g, " ").trim();
 }
 
-function extractIntroFallback(text: string): { greeting?: string } | undefined {
+function extractIntroFallback(text: string): { variant: "identity" | "capabilities" } | undefined {
   const normalized = normalizeIntroFallbackText(text);
-  const withoutWake = normalized.replace(/^小哈[，,\s]*/i, "");
-  const greeting = matchGreeting(withoutWake) ?? matchGreeting(normalized);
-  if (greeting) {
-    return { greeting };
+  const withoutWake = stripWakeAddress(normalized);
+  if (isIdentityIntroText(normalized) || withoutWake === "") {
+    return { variant: "identity" };
   }
-  if (isIntroHelpText(normalized)) {
-    return {};
+  if (isCapabilitiesIntroText(normalized) || isCapabilitiesIntroText(withoutWake)) {
+    return { variant: "capabilities" };
   }
   return undefined;
 }
@@ -118,50 +117,42 @@ function normalizeIntroFallbackText(value: string): string {
   return value
     .normalize("NFKC")
     .trim()
-    .replace(/[!！。.\s]+$/g, "");
+    .replace(/[!！。.?？\s]+$/g, "");
 }
 
-function matchGreeting(value: string): string | undefined {
+function isIdentityIntroText(value: string): boolean {
   const normalized = value.toLowerCase();
-  const greetings: Record<string, string> = {
-    你好: "你好",
-    嗨: "嗨",
-    hi: "Hi",
-    hello: "Hello",
-    hey: "Hey",
-    哈囉: "哈囉",
-    哈啰: "哈囉",
-    平安: "平安",
-    早安: "早安",
-    午安: "午安",
-    晚安: "晚安"
-  };
-  return greetings[normalized];
+  return ["小哈", "小哈是誰", "小哈你是誰"].includes(normalized);
 }
 
-function isIntroHelpText(value: string): boolean {
+function isCapabilitiesIntroText(value: string): boolean {
   const normalized = value.toLowerCase();
   return [
-    "小哈",
     "help",
     "功能",
     "使用說明",
     "小哈可以幹嘛",
     "小哈可以做什麼",
+    "小哈你能做什麼",
     "小哈你會什麼",
     "小哈會什麼",
     "你可以做什麼",
-    "你會什麼"
+    "你能做什麼",
+    "你會什麼",
+    "能做什麼"
   ].includes(normalized);
 }
 
 function extractSmallTalkFallback(text: string): SmallTalkCategory | undefined {
   const normalized = normalizeIntroFallbackText(text);
-  const withoutWake = normalized.replace(/^小哈[，,\s]*/i, "");
+  const withoutWake = stripWakeAddress(normalized);
   const value = withoutWake || normalized;
   const lower = value.toLowerCase();
   if (/你好嗎|還在嗎|在嗎|最近好嗎|好嗎|安好/u.test(lower)) {
     return "wellbeing";
+  }
+  if (/^(你好|哈囉|哈啰|嗨|hi|hello|hey|平安|早安|午安|晚安)$/iu.test(lower)) {
+    return "greeting";
   }
   if (/謝謝|謝啦|感謝|thanks|thank you/u.test(lower)) {
     return "thanks";
@@ -179,4 +170,11 @@ function extractSmallTalkFallback(text: string): SmallTalkCategory | undefined {
     return "light_joke";
   }
   return undefined;
+}
+
+function stripWakeAddress(value: string): string {
+  if (!value.startsWith("小哈")) {
+    return value;
+  }
+  return value.slice("小哈".length).replace(/^[，,、:：?？\s]+/u, "");
 }
