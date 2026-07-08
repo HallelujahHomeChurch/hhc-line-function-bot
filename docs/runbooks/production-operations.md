@@ -26,7 +26,9 @@ Direct-message admin commands:
 
 `/diag` may show dependency status for Ollama, Redis, Postgres, Graph, and Notion, but must not print tenant IDs, database IDs, folder IDs, LINE IDs, tokens, secrets, credential URLs, raw user messages, or invite codes.
 
-`/llm-login` and `/llm-logout` are bootstrap superadmin direct-chat only. `/llm-login` requires Redis, Postgres, and `LLM_AUTH_ENCRYPTION_KEY`; it returns a short-lived browser URL and never sends tokens through LINE. The OAuth callback exchanges the code server-side and stores encrypted tokens in `llm_auth_profiles`.
+`/llm-login`, `/llm-logout`, and `/llm-use` are bootstrap superadmin direct-chat only. `/llm-login codex` returns Codex app-server deployment guidance for the configured `CODEX_HOME`; it does not create a browser URL, OAuth state, or stored token row. Complete Codex login in the deployment environment or mounted account volume before switching `LLM_PROVIDER=codex_app_server`.
+
+If upgrading from the removed direct OAuth provider, review `docs/sql/drop-legacy-llm-auth.sql` before manually dropping the old `llm_auth_profiles` table.
 
 ## Registration And Admin Safety
 
@@ -50,12 +52,7 @@ The tool prints status, request id when present, and response body. It must not 
 
 For an unsigned public gateway check, `POST /api/line/webhook/{profileName}` should reach the app and return a missing-signature style `400`. The Container App itself should keep external ingress disabled; public access should go through the gateway.
 
-If the Codex OAuth provider is enabled, the public gateway must also forward these GET-only paths to the line bot app without rewriting:
-
-```text
-/api/line/llm-auth/openai-codex/start
-/api/line/llm-auth/openai-codex/callback
-```
+The line bot does not expose LLM auth callback routes. Public gateway routing should forward only the canonical webhook path for each profile.
 
 ## Router Evals
 
@@ -67,7 +64,7 @@ If the Codex OAuth provider is enabled, the public gateway must also forward the
 - Redis: verify the ACA secret `REDIS_URL` is set and `/readyz` shows Redis `ok`.
 - Redis also stores requester-scoped conversation windows and long-running job results. If Redis is down, production should fail startup instead of silently losing those results.
 - Postgres: verify `DATABASE_URL` and `DATABASE_SSL` are set and `/readyz` shows Postgres `ok`.
-- Postgres stores access principals, audit events, agent memory, LLM OAuth auth profiles, and controlled web allowlist entries.
+- Postgres stores access principals, audit events, agent memory, and controlled web allowlist entries.
 - Ollama: use `/llm-status` or `/diag`, not `/readyz`.
 - Graph: use function smoke tests through LINE, then `/diag` for configured/not configured state.
 - Notion: use `pnpm check:notion` locally or function smoke tests through LINE, then `/diag` for configured/not configured state.

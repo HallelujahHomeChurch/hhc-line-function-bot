@@ -32,17 +32,11 @@ import {
   groupEngagementIgnoredReason
 } from "./engagement.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "./clients/line.js";
-import {
-  buildOpenAICodexOAuthAuthorizeUrl,
-  exchangeOpenAICodexOAuthCode
-} from "./clients/openai-codex-oauth.js";
 import { getFunctionDefinitions } from "./functions/definitions.js";
 import { MemoryInFlightStore, type InFlightStore } from "./in-flight/in-flight-store.js";
 import { createIntroReply } from "./intro.js";
 import { buildFunctionQuickReplies, buildPostbackQuickReply } from "./line-reply.js";
 import { verifyLineSignature } from "./line-signature.js";
-import { InMemoryLlmAuthStore, type LlmAuthStore } from "./llm/auth.js";
-import { InMemoryLlmOAuthStateStore, type LlmOAuthStateStore } from "./llm/oauth-state-store.js";
 import { messages } from "./messages.js";
 import { sanitizeActionTelemetryEvent } from "./observability/action-telemetry.js";
 import { resolveRequesterDisplayName } from "./requester-personalization.js";
@@ -112,9 +106,6 @@ export interface AppDependencies {
   agentJobStore?: AgentJobStore;
   conversationWindowStore?: ConversationWindowStore;
   webAllowlistStore?: WebAllowlistStore;
-  llmAuthStore?: LlmAuthStore;
-  llmOAuthStateStore?: LlmOAuthStateStore;
-  llmOAuthFetch?: typeof fetch;
 }
 
 interface AllowResult {
@@ -187,8 +178,9 @@ const builtInAdminCommandGroups: AdminCommandHelpGroup[] = [
     entries: [
       { usage: "/admin-add <userId>", description: "superadmin 新增 admin" },
       { usage: "/admin-remove <userId>", description: "superadmin 停用 admin" },
-      { usage: "/llm-login", description: "superadmin direct chat OAuth login" },
-      { usage: "/llm-logout", description: "superadmin direct chat OAuth logout" }
+      { usage: "/llm-login [provider]", description: "superadmin direct chat provider login" },
+      { usage: "/llm-logout [provider]", description: "superadmin direct chat provider logout" },
+      { usage: "/llm-use <provider>", description: "show/change the active provider" }
     ]
   },
   {
@@ -257,9 +249,6 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   const conversationWindowStore =
     deps.conversationWindowStore ?? new InMemoryConversationWindowStore();
   const webAllowlistStore = deps.webAllowlistStore ?? new InMemoryWebAllowlistStore();
-  const llmAuthStore = deps.llmAuthStore ?? new InMemoryLlmAuthStore();
-  const llmOAuthStateStore = deps.llmOAuthStateStore ?? new InMemoryLlmOAuthStateStore();
-  const llmOAuthFetch = deps.llmOAuthFetch ?? fetch;
   const contextManager = createContextManager({
     runtimeContextBudgetTokens: config.llm.runtimeContextBudgetTokens ?? 2000,
     compressionThresholdRatio: config.llm.contextCompressionThresholdRatio ?? 0.75
@@ -300,78 +289,6 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     return reply.code(readiness.status === "ok" ? 200 : 503).send(readiness);
   });
 
-  app.get("/api/line/llm-auth/openai-codex/start", async (request, reply) => {
-    const state = readQueryParam(request.query, "state");
-    if (!state) {
-      return sendLlmAuthHtml(reply, 400, "Login link invalid", "Missing OAuth state.");
-    }
-    const record = await llmOAuthStateStore.peek(state);
-    if (!record) {
-      return sendLlmAuthHtml(
-        reply,
-        400,
-        "Login link expired",
-        "This login link is invalid or expired. Please create a new one from LINE."
-      );
-    }
-    return reply.redirect(
-      buildOpenAICodexOAuthAuthorizeUrl({
-        authorizeUrl: config.llm.openaiCodexOAuthAuthorizeUrl,
-        clientId: config.llm.openaiCodexOAuthClientId,
-        redirectUri: llmOAuthRedirectUri(config),
-        state: record.state
-      })
-    );
-  });
-
-  app.get("/api/line/llm-auth/openai-codex/callback", async (request, reply) => {
-    const state = readQueryParam(request.query, "state");
-    const code = readQueryParam(request.query, "code");
-    if (!state || !code) {
-      return sendLlmAuthHtml(reply, 400, "Login failed", "Missing OAuth callback parameters.");
-    }
-    const record = await llmOAuthStateStore.consume(state);
-    if (!record) {
-      return sendLlmAuthHtml(
-        reply,
-        400,
-        "Login link expired",
-        "This login link is invalid, already used, or expired."
-      );
-    }
-    try {
-      const token = await exchangeOpenAICodexOAuthCode({
-        code,
-        redirectUri: llmOAuthRedirectUri(config),
-        tokenUrl: config.llm.openaiCodexOAuthTokenUrl,
-        clientId: config.llm.openaiCodexOAuthClientId,
-        fetchImpl: llmOAuthFetch
-      });
-      await llmAuthStore.save({
-        provider: "openai_codex_oauth",
-        profileName: record.authProfile,
-        accessToken: token.accessToken,
-        refreshToken: token.refreshToken,
-        expiresAt: token.expiresAt,
-        accountId: token.accountId,
-        status: "active"
-      });
-      return sendLlmAuthHtml(
-        reply,
-        200,
-        "Login complete",
-        "You can close this page and return to LINE."
-      );
-    } catch {
-      return sendLlmAuthHtml(
-        reply,
-        502,
-        "Login failed",
-        "OAuth token exchange failed. Please create a new login link from LINE."
-      );
-    }
-  });
-
   for (const profile of config.profiles) {
     app.post(profile.webhookPath, async (request, reply) => {
       await handleWebhook(
@@ -400,9 +317,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.agentRuntime,
         agentJobStore,
         conversationWindowStore,
-        webAllowlistStore,
-        llmAuthStore,
-        llmOAuthStateStore
+        webAllowlistStore
       );
     });
   }
@@ -436,9 +351,7 @@ async function handleWebhook(
   agentRuntime: AgentRuntime | undefined,
   agentJobStore: AgentJobStore,
   conversationWindowStore: ConversationWindowStore,
-  webAllowlistStore: WebAllowlistStore,
-  llmAuthStore: LlmAuthStore,
-  llmOAuthStateStore: LlmOAuthStateStore
+  webAllowlistStore: WebAllowlistStore
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -606,9 +519,7 @@ async function handleWebhook(
           diagnostics,
           agentTraceStore,
           requestId,
-          webAllowlistStore,
-          llmAuthStore,
-          llmOAuthStateStore
+          webAllowlistStore
         );
       } catch (error) {
         await lastErrorStore.record({
@@ -1388,9 +1299,7 @@ async function handleAdminCommand(
   diagnostics: AppDiagnostics,
   agentTraceStore: AgentTraceStore,
   requestId: string,
-  webAllowlistStore: WebAllowlistStore,
-  llmAuthStore: LlmAuthStore,
-  llmOAuthStateStore: LlmOAuthStateStore
+  webAllowlistStore: WebAllowlistStore
 ): Promise<FunctionExecutionResult> {
   const parsed = parseAdminCommand(text);
   if (!parsed) {
@@ -1401,16 +1310,20 @@ async function handleAdminCommand(
     return { ok: true, replyText: "目前不支援這個 admin 指令。" };
   }
 
-  if (!(await adminAllowed(profile, event, accessStore, parsed.command))) {
-    return { ok: true, replyText: messages.adminUnauthorized };
-  }
-
   if (parsed.command === "llm-login") {
-    return handleLlmLoginCommand(config, profile, event, llmOAuthStateStore);
+    return handleLlmLoginCommand(config, profile, event, parsed.args[0]);
   }
 
   if (parsed.command === "llm-logout") {
-    return handleLlmLogoutCommand(config, profile, event, llmAuthStore);
+    return handleLlmLogoutCommand(config, profile, event, parsed.args[0]);
+  }
+
+  if (parsed.command === "llm-use") {
+    return handleLlmUseCommand(config, profile, event, parsed.args[0]);
+  }
+
+  if (!(await adminAllowed(profile, event, accessStore, parsed.command))) {
+    return { ok: true, replyText: messages.adminUnauthorized };
   }
 
   if (parsed.command === "status") {
@@ -1509,41 +1422,30 @@ async function handleLlmLoginCommand(
   config: AppConfig,
   profile: BotProfileConfig,
   event: LineEvent,
-  stateStore: LlmOAuthStateStore
+  providerArg: string | undefined
 ): Promise<FunctionExecutionResult> {
   const actorUserId = event.source.userId;
-  if (!isBootstrapSuperAdmin(profile, actorUserId) || event.source.type !== "user") {
-    return { ok: true, replyText: "No permission. LLM login is superadmin direct chat only." };
+  if (!isBootstrapSuperAdmin(profile, actorUserId)) {
+    return { ok: true, replyText: "你沒有權限使用 LLM 登入指令。" };
   }
-  if (config.llm.provider !== "openai_codex_oauth") {
-    return { ok: true, replyText: "LLM OAuth is not enabled for this service." };
+  if (event.source.type !== "user") {
+    return { ok: true, replyText: "請在 1 對 1 對話中使用 LLM 登入指令。" };
   }
-  if (!config.redis) {
-    return { ok: true, replyText: "Redis is required before creating an LLM OAuth login link." };
+  const provider = resolveProviderArg(providerArg, profile, config);
+  if (provider === "ollama") {
+    return { ok: true, replyText: "Ollama 不需要登入。" };
   }
-  if (!config.database || !config.llm.authEncryptionKey) {
-    return {
-      ok: true,
-      replyText: "PostgreSQL and LLM_AUTH_ENCRYPTION_KEY are required before LLM OAuth login."
-    };
+  if (provider !== "codex_app_server") {
+    return { ok: true, replyText: `不支援的 LLM provider：${providerArg ?? "(empty)"}` };
   }
-  const record = await stateStore.create({
-    profileName: profile.name,
-    actorUserId: actorUserId as string,
-    authProfile: config.llm.openaiCodexAuthProfile ?? profile.name,
-    ttlMinutes: config.llm.authLoginStateTtlMinutes ?? 10
-  });
-  const loginUrl = `${llmOAuthPublicBaseUrl(config)}/api/line/llm-auth/openai-codex/start?state=${encodeURIComponent(
-    record.state
-  )}`;
   return {
     ok: true,
     replyText: [
-      "LLM login link",
-      loginUrl,
-      "",
-      `Expires at: ${record.expiresAt}`,
-      "Open the link in your browser. Do not share this link."
+      "Codex app-server 登入方式",
+      `provider: ${provider}`,
+      `CODEX_HOME: ${config.llm.codexHome ?? "(container default)"}`,
+      "請先在部署環境用相同 CODEX_HOME 完成 Codex 登入，讓 app-server 可以讀到帳號狀態。",
+      "這個 bot 不再產生 provider OAuth callback 連結。"
     ].join("\n")
   };
 }
@@ -1552,18 +1454,69 @@ async function handleLlmLogoutCommand(
   config: AppConfig,
   profile: BotProfileConfig,
   event: LineEvent,
-  authStore: LlmAuthStore
+  providerArg: string | undefined
 ): Promise<FunctionExecutionResult> {
   const actorUserId = event.source.userId;
-  if (!isBootstrapSuperAdmin(profile, actorUserId) || event.source.type !== "user") {
-    return { ok: true, replyText: "No permission. LLM logout is superadmin direct chat only." };
+  if (!isBootstrapSuperAdmin(profile, actorUserId)) {
+    return { ok: true, replyText: "你沒有權限使用 LLM 登出指令。" };
   }
-  await authStore.markReauthRequired({
-    provider: "openai_codex_oauth",
-    profileName: config.llm.openaiCodexAuthProfile ?? profile.name,
-    lastError: "manual_logout"
-  });
-  return { ok: true, replyText: "Logged out LLM OAuth profile." };
+  if (event.source.type !== "user") {
+    return { ok: true, replyText: "請在 1 對 1 對話中使用 LLM 登出指令。" };
+  }
+  const provider = resolveProviderArg(providerArg, profile, config);
+  return {
+    ok: true,
+    replyText:
+      provider === "codex_app_server"
+        ? `Codex app-server 登出需要清除部署環境的 CODEX_HOME 帳號狀態：${config.llm.codexHome ?? "(container default)"}`
+        : "Ollama 不需要登出。"
+  };
+}
+
+async function handleLlmUseCommand(
+  config: AppConfig,
+  profile: BotProfileConfig,
+  event: LineEvent,
+  providerArg: string | undefined
+): Promise<FunctionExecutionResult> {
+  const actorUserId = event.source.userId;
+  if (!isBootstrapSuperAdmin(profile, actorUserId)) {
+    return { ok: true, replyText: "你沒有權限使用 LLM provider 指令。" };
+  }
+  if (event.source.type !== "user") {
+    return { ok: true, replyText: "請在 1 對 1 對話中使用 LLM provider 指令。" };
+  }
+  if (!providerArg) {
+    return {
+      ok: true,
+      replyText: [
+        "LLM provider",
+        `profile: ${profile.name}`,
+        `active: ${resolveProviderArg(undefined, profile, config)}`,
+        "available: codex_app_server, ollama",
+        "目前 provider 由 profile/env 設定；LINE 指令先提供查詢與驗證，不做持久化切換。"
+      ].join("\n")
+    };
+  }
+  const provider = resolveProviderArg(providerArg, profile, config);
+  return {
+    ok: true,
+    replyText: `Provider ${provider} 可用；請透過 profile/env 設定切換後重新部署。`
+  };
+}
+
+function resolveProviderArg(
+  value: string | undefined,
+  profile: BotProfileConfig,
+  config: AppConfig
+) {
+  if (value === "codex" || value === "codex_app_server") {
+    return "codex_app_server";
+  }
+  if (value === "ollama") {
+    return "ollama";
+  }
+  return profile.llmProvider ?? config.llm.provider ?? "ollama";
 }
 
 async function handleAdminAccessCommand(
@@ -2088,62 +2041,6 @@ function functionNameForAgentResource(resourceType: AgentResourceType | undefine
     default:
       return undefined;
   }
-}
-
-function readQueryParam(query: unknown, key: string): string | undefined {
-  if (!query || typeof query !== "object") {
-    return undefined;
-  }
-  const value = (query as Record<string, unknown>)[key];
-  if (Array.isArray(value)) {
-    return typeof value[0] === "string" ? value[0] : undefined;
-  }
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function llmOAuthRedirectUri(config: AppConfig): string {
-  return `${llmOAuthPublicBaseUrl(config)}/api/line/llm-auth/openai-codex/callback`;
-}
-
-function llmOAuthPublicBaseUrl(config: AppConfig): string {
-  return (config.llm.publicBaseUrl ?? "https://www.alive.org.tw").replace(/\/+$/u, "");
-}
-
-function sendLlmAuthHtml(
-  reply: FastifyReply,
-  statusCode: number,
-  title: string,
-  message: string
-): FastifyReply {
-  return reply
-    .code(statusCode)
-    .header("content-type", "text/html; charset=utf-8")
-    .header("cache-control", "no-store")
-    .send(
-      [
-        "<!doctype html>",
-        '<html lang="zh-Hant">',
-        "<head>",
-        '<meta charset="utf-8" />',
-        '<meta name="viewport" content="width=device-width, initial-scale=1" />',
-        `<title>${escapeHtml(title)}</title>`,
-        "</head>",
-        "<body>",
-        `<h1>${escapeHtml(title)}</h1>`,
-        `<p>${escapeHtml(message)}</p>`,
-        "</body>",
-        "</html>"
-      ].join("")
-    );
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function parseAdminCommand(text: string | undefined): ParsedAdminCommand | undefined {

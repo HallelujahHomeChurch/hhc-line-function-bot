@@ -14,11 +14,11 @@ functions, and admin gates.
 The service is local-first for routing:
 
 - Ollama is the default natural-language router.
-- `openai_codex_oauth` is an optional smarter provider behind encrypted
-  PostgreSQL auth profiles.
-- OpenAI/Codex OAuth browser login uses service-level GET routes under
-  `/api/line/llm-auth/openai-codex/*`; these are not LINE webhook routes and
-  should be forwarded by the gateway without path rewriting.
+- `codex_app_server` is an optional smarter provider that runs the Codex
+  app-server over stdio using account state from `CODEX_HOME`.
+- The line bot does not own browser OAuth callbacks or stored LLM tokens.
+  Provider login must be completed outside the webhook flow in the deployment
+  environment or a mounted account volume.
 - Keyword fallback is conservative and only runs when Ollama is unavailable,
   times out, or returns invalid JSON.
 - Explicit model deny decisions do not fall back.
@@ -63,12 +63,10 @@ For normal LINE webhook messages, read the flow in this order:
 The main entrance behavior lives in `src/server.ts`; tests for it live mostly in
 `src/__tests__/entrance.test.ts`.
 
-For OpenAI/Codex OAuth login, the bootstrap superadmin sends `/llm-login` in
-direct chat. `src/server.ts` creates a one-time Redis state, returns a browser
-URL, redirects the `/start` route to the configured OAuth authorize URL, and
-consumes the state in `/callback` before exchanging the code and saving
-encrypted tokens in PostgreSQL. `/llm-status` reports auth state without
-printing tokens.
+For Codex app-server operations, the bootstrap superadmin sends `/llm-login
+codex`, `/llm-logout codex`, `/llm-use`, or `/llm-status` in direct chat.
+These commands report provider state and deployment guidance only; they never
+return browser OAuth URLs or handle callback codes through LINE.
 
 ## Action Types
 
@@ -116,9 +114,8 @@ Routing is deliberately layered:
 - `src/agent/slot-clarification.ts`: required-slot handling driven by function
   definition metadata.
 - `src/router.ts`: primary JSON router with provider/fallback diagnostics.
-- `src/clients/openai-codex-oauth.ts`: optional Codex OAuth provider client.
-- `src/llm/auth.ts`: encrypted OAuth token profile storage and refresh manager.
-- `src/llm/oauth-state-store.ts`: Redis/in-memory one-time OAuth state store.
+- `src/codex-app-server/client.ts`: JSON-RPC client for Codex app-server stdio.
+- `src/codex-app-server/provider.ts`: Codex app-server chat/text provider.
 - `src/keyword-router.ts`: narrow fallback when Ollama fails.
 - `src/function-arguments.ts` and `src/functions/argument-normalization.ts`:
   slot validation and cleanup.
@@ -249,7 +246,7 @@ Function dependencies are intentionally behind ports/clients:
 
 - LINE: `src/clients/line.ts`
 - Ollama: `src/clients/ollama.ts`
-- OpenAI/Codex OAuth provider: `src/clients/openai-codex-oauth.ts`
+- Codex app-server provider: `src/codex-app-server/*`
 - Microsoft Graph: `src/clients/graph.ts`
 - Notion: `src/clients/notion.ts`
 - Postgres access store: `src/access/postgres-access-store.ts`
@@ -287,9 +284,9 @@ Use this map for common issues:
   `src/agent/*memory-store.ts`, and `src/__tests__/agent-memory.test.ts`.
 - Admin command denied: `adminUserId`, DB admin principals, `adminDirectOnly`,
   admin command parser, action policy tests.
-- `/llm-login` does not work: verify direct chat source, bootstrap
-  `adminUserId`, `LLM_PROVIDER=openai_codex_oauth`, `PUBLIC_BASE_URL`, Redis,
-  Postgres, `LLM_AUTH_ENCRYPTION_KEY`, and the gateway OAuth GET routes.
+- `/llm-login codex` does not work: verify direct chat source, bootstrap
+  `adminUserId`, `LLM_PROVIDER=codex_app_server`, `CODEX_HOME`, the
+  configured app-server command, and the deployed account volume/state.
 - Need to know where a text request stopped: admin direct-chat
   `/last-agent-turns`.
 - Readiness failed: public `/readyz` checks only Postgres and Redis; detailed

@@ -77,7 +77,7 @@ describe("small talk replies", () => {
     expect(result.replyText).toBe(createSmallTalkReply("wellbeing").replyText);
   });
 
-  it("allows longer controlled replies from the Codex OAuth provider", async () => {
+  it("allows longer controlled replies from the Codex app-server provider", async () => {
     const reply = "你好，我在這裡。你可以直接說想查哪一份資料，我會先判斷能不能安全地幫你處理。";
     const completeText = vi.fn<TextGenerationProvider["completeText"]>().mockResolvedValue(reply);
 
@@ -85,7 +85,7 @@ describe("small talk replies", () => {
       profile: profile({ smallTalk: { mode: "llm", maxChars: 10 } }),
       text: "小哈你好嗎",
       category: "wellbeing",
-      generator: { providerName: "openai_codex_oauth", completeText }
+      generator: { providerName: "codex_app_server", completeText }
     });
 
     expect(result.replyText).toBe(reply);

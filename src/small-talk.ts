@@ -42,7 +42,7 @@ export async function createControlledSmallTalkReply(
 
   try {
     const maxChars =
-      input.generator.providerName === "openai_codex_oauth"
+      input.generator.providerName === "codex_app_server"
         ? Math.max(config.maxChars, 320)
         : config.maxChars;
     const reply = sanitizeGeneratedReply(

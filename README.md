@@ -7,7 +7,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Fastify webhook server with LINE signature validation.
 - Multiple bot profiles in one service, each on its own webhook path.
 - Per-profile access policy, wake words, message type filtering, and function toggles.
-- Function router that uses Ollama `qwen3:4b-instruct` by default, with optional Codex OAuth provider support.
+- Function router that uses Ollama `qwen3:4b-instruct` by default, with optional Codex app-server provider support.
 - Action catalog that separates user functions, admin actions, and system actions.
 - Policy gate and admin action registry for natural-language admin operations.
 - Conservative keyword fallback when Ollama times out, is unreachable, or returns invalid JSON.
@@ -50,10 +50,7 @@ Set the LINE webhook URL per bot profile, for example:
 - `/api/line/webhook/helper`
 - `/api/line/webhook/slides`
 
-If the Codex OAuth provider is enabled, expose these GET endpoints through the gateway without rewriting the path:
-
-- `/api/line/llm-auth/openai-codex/start`
-- `/api/line/llm-auth/openai-codex/callback`
+Provider auth callbacks are not exposed by this service. LINE webhook traffic should only use the canonical profile paths above.
 
 Health and readiness:
 
@@ -171,37 +168,36 @@ Function toggles are profile-scoped:
 
 ## Routing
 
-Primary routing uses Ollama unless `LLM_PROVIDER=openai_codex_oauth` is configured. If the Codex OAuth provider is enabled, the app stores encrypted OAuth tokens in PostgreSQL and can fall back to Ollama when the primary provider returns invalid JSON, times out, or is unavailable. Explicit model deny decisions do not fall back.
+Primary routing uses Ollama unless `LLM_PROVIDER=codex_app_server` is configured. The Codex provider starts the Codex app-server over stdio inside the container and uses the account state available in `CODEX_HOME`. The bot no longer owns browser OAuth callbacks, refresh tokens, or token storage.
+
+If the primary provider returns invalid JSON, times out, or is unavailable, routing can fall back to Ollama through `LLM_FALLBACK_PROVIDER=ollama`. Explicit model deny decisions do not fall back.
 
 Relevant env vars:
 
 ```text
 LLM_PROVIDER=ollama
 LLM_FALLBACK_PROVIDER=ollama
-OPENAI_CODEX_BASE_URL=...
-OPENAI_CODEX_MODEL=...
-OPENAI_CODEX_AUTH_PROFILE=helper
-OPENAI_CODEX_OAUTH_AUTHORIZE_URL=https://auth.openai.com/oauth/authorize
-OPENAI_CODEX_OAUTH_TOKEN_URL=https://auth.openai.com/oauth/token
-OPENAI_CODEX_OAUTH_CLIENT_ID=app_EMoamEEZ73f0CkXaXp7hrann
-PUBLIC_BASE_URL=https://www.alive.org.tw
-LLM_AUTH_LOGIN_STATE_TTL_MINUTES=10
-LLM_AUTH_ENCRYPTION_KEY=...
+CODEX_APP_SERVER_COMMAND=codex
+CODEX_APP_SERVER_ARGS=app-server,--listen,stdio://
+CODEX_HOME=/mnt/codex-home
+CODEX_MODEL=gpt-5.1-codex
+CODEX_MODEL_PROVIDER=openai
 LLM_RUNTIME_CONTEXT_BUDGET_TOKENS=2000
 LLM_CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.75
 LLM_GENERAL_MAX_OUTPUT_TOKENS=160
 LLM_ROUTE_MAX_OUTPUT_TOKENS=256
 ```
 
-Bootstrap superadmin direct-chat commands for OAuth:
+Bootstrap superadmin direct-chat commands for LLM provider operations:
 
 ```text
-/llm-login
-/llm-logout
+/llm-login codex
+/llm-logout codex
+/llm-use
 /llm-status
 ```
 
-`/llm-login` creates a short-lived one-time Redis state and returns a browser login link. The callback exchanges the OAuth code server-side and stores encrypted tokens in PostgreSQL. The LINE reply never includes tokens or callback codes.
+`/llm-login codex` does not create a browser link. It returns deployment guidance for the configured `CODEX_HOME`; complete the Codex login in the deployment environment or in a mounted volume before using `codex_app_server` as the primary provider. `/llm-use` reports the active provider and the provider names accepted by the runtime.
 
 Keyword fallback is intentionally narrow:
 

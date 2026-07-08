@@ -1,8 +1,5 @@
 import { createOllamaProvider } from "./clients/ollama.js";
-import {
-  createOpenAICodexOAuthProvider,
-  refreshOpenAICodexOAuthToken
-} from "./clients/openai-codex-oauth.js";
+import { createCodexAppServerProvider } from "./codex-app-server/provider.js";
 import { createAdminActionRouter } from "./admin-action-router.js";
 import { RedisConfirmationStore } from "./actions/confirmation-store.js";
 import { createAccessStore } from "./access/create-access-store.js";
@@ -28,22 +25,12 @@ import { createFunctionRouter } from "./router.js";
 import { createApp } from "./server.js";
 import { createSessionStore } from "./state/create-session-store.js";
 import { PostgresWebAllowlistStore, runWebAllowlistMigrations } from "./web/allowlist.js";
-import {
-  createLlmTokenCipher,
-  InMemoryLlmAuthStore,
-  OpenAICodexAuthManager,
-  PostgresLlmAuthStore,
-  runLlmAuthMigrations
-} from "./llm/auth.js";
-import { RedisLlmOAuthStateStore } from "./llm/oauth-state-store.js";
-import type { LlmAuthStore } from "./llm/auth.js";
 import type { ChatProvider, TextGenerationProvider } from "./types.js";
 
 const config = loadConfigFromEnv(process.env);
 
 const redis = await createRedisRuntime(config.redis);
 const postgres = await createPostgresRuntime(config.database);
-const llmAuthStore = await createSharedLlmAuthStore();
 
 const ollama = createOllamaProvider({
   baseUrl: config.llm.ollamaBaseUrl,
@@ -54,13 +41,13 @@ const ollama = createOllamaProvider({
 const primary = await createPrimaryProvider();
 const router = createFunctionRouter({
   primary,
-  modelFallback: primary.providerName === "openai_codex_oauth" ? ollama : undefined,
+  modelFallback: primary.providerName === "codex_app_server" ? ollama : undefined,
   keywordFallback: createKeywordFallbackRouter(),
   keywordFallbackEnabled: config.llm.keywordFallbackEnabled
 });
 const adminActionRouter = createAdminActionRouter({
   primary,
-  modelFallback: primary.providerName === "openai_codex_oauth" ? ollama : undefined
+  modelFallback: primary.providerName === "codex_app_server" ? ollama : undefined
 });
 const accessStore = await createAccessStore({ db: postgres?.pool });
 const memoryStore = await createAgentMemoryStore({ db: postgres?.pool });
@@ -95,12 +82,8 @@ const registries = createFunctionRegistries(config, {
   notion,
   sessionStore,
   cache,
-  memoryStore,
-  llmAuthStore
+  memoryStore
 });
-const llmOAuthStateStore = redis
-  ? new RedisLlmOAuthStateStore({ client: redis.client, keyPrefix: redis.keyPrefix })
-  : undefined;
 const app = createApp(config, {
   router,
   adminActionRouter,
@@ -118,8 +101,6 @@ const app = createApp(config, {
   agentJobStore,
   conversationWindowStore,
   webAllowlistStore,
-  llmAuthStore,
-  llmOAuthStateStore,
   textGenerator: primary,
   agentRuntime: createAgentRuntime({ memoryStore, graph }),
   diagnostics: createDependencyDiagnostics({
@@ -133,49 +114,10 @@ const app = createApp(config, {
 await app.listen({ host: config.host, port: config.port });
 
 async function createPrimaryProvider(): Promise<ChatProvider & TextGenerationProvider> {
-  if (config.llm.provider !== "openai_codex_oauth") {
-    return ollama;
+  if (config.llm.provider === "codex_app_server") {
+    return createCodexAppServerProvider({ config: config.llm });
   }
-  if (!config.llm.authEncryptionKey) {
-    console.warn("LLM_PROVIDER=openai_codex_oauth requires LLM_AUTH_ENCRYPTION_KEY; using Ollama");
-    return ollama;
-  }
-  const authStore = llmAuthStore ?? new InMemoryLlmAuthStore();
-  const auth = new OpenAICodexAuthManager({
-    store: authStore,
-    refresh: (refreshToken) =>
-      refreshOpenAICodexOAuthToken(refreshToken, {
-        tokenUrl: config.llm.openaiCodexOAuthTokenUrl,
-        clientId: config.llm.openaiCodexOAuthClientId
-      })
-  });
-  return createOpenAICodexOAuthProvider({
-    auth,
-    authProfile: config.llm.openaiCodexAuthProfile ?? "helper",
-    baseUrl: config.llm.openaiCodexBaseUrl ?? "https://chatgpt.com/backend-api/codex",
-    model: config.llm.openaiCodexModel ?? "gpt-5.1-codex",
-    timeoutMs: config.llm.timeoutMs,
-    routeMaxOutputTokens: config.llm.routeMaxOutputTokens,
-    generalMaxOutputTokens: config.llm.generalMaxOutputTokens
-  });
-}
-
-async function createSharedLlmAuthStore(): Promise<LlmAuthStore | undefined> {
-  if (!postgres?.pool || !config.llm.authEncryptionKey) {
-    return undefined;
-  }
-  return createPostgresLlmAuthStore();
-}
-
-async function createPostgresLlmAuthStore(): Promise<PostgresLlmAuthStore> {
-  if (!postgres?.pool || !config.llm.authEncryptionKey) {
-    throw new Error("postgres_and_llm_auth_key_required");
-  }
-  await runLlmAuthMigrations(postgres.pool);
-  return new PostgresLlmAuthStore(
-    postgres.pool,
-    createLlmTokenCipher(config.llm.authEncryptionKey)
-  );
+  return ollama;
 }
 
 async function createPostgresWebAllowlistStore(): Promise<PostgresWebAllowlistStore> {

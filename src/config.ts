@@ -39,7 +39,7 @@ const profileSchema = z.object({
       maxChars: z.number().int().min(20).max(120).default(80)
     })
     .default({ mode: "template", maxChars: 80 }),
-  llmProvider: z.enum(["ollama", "openai_codex_oauth"]).optional(),
+  llmProvider: z.enum(["ollama", "codex_app_server"]).optional(),
   generalAgent: z
     .object({
       enabled: z.boolean().default(false),
@@ -93,17 +93,11 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       ollamaBaseUrl: env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
       ollamaModel: env.OLLAMA_MODEL || "qwen3:4b-instruct",
       ollamaKeepAlive: readOllamaKeepAlive(env.OLLAMA_KEEP_ALIVE),
-      openaiCodexBaseUrl: env.OPENAI_CODEX_BASE_URL || "https://chatgpt.com/backend-api/codex",
-      openaiCodexModel: env.OPENAI_CODEX_MODEL || "gpt-5.1-codex",
-      openaiCodexAuthProfile: env.OPENAI_CODEX_AUTH_PROFILE || "helper",
-      openaiCodexOAuthAuthorizeUrl:
-        env.OPENAI_CODEX_OAUTH_AUTHORIZE_URL || "https://auth.openai.com/oauth/authorize",
-      openaiCodexOAuthTokenUrl:
-        env.OPENAI_CODEX_OAUTH_TOKEN_URL || "https://auth.openai.com/oauth/token",
-      openaiCodexOAuthClientId: env.OPENAI_CODEX_OAUTH_CLIENT_ID || "app_EMoamEEZ73f0CkXaXp7hrann",
-      publicBaseUrl: env.PUBLIC_BASE_URL || undefined,
-      authLoginStateTtlMinutes: readInt(env.LLM_AUTH_LOGIN_STATE_TTL_MINUTES, 10),
-      authEncryptionKey: env.LLM_AUTH_ENCRYPTION_KEY || undefined,
+      codexAppServerCommand: env.CODEX_APP_SERVER_COMMAND || "codex",
+      codexAppServerArgs: readList(env.CODEX_APP_SERVER_ARGS || "app-server,--listen,stdio://"),
+      codexHome: env.CODEX_HOME || undefined,
+      codexModel: env.CODEX_MODEL || "gpt-5.1-codex",
+      codexModelProvider: env.CODEX_MODEL_PROVIDER || "openai",
       contextWindowTokens: readInt(env.LLM_CONTEXT_WINDOW_TOKENS, 128_000),
       runtimeContextBudgetTokens: readInt(env.LLM_RUNTIME_CONTEXT_BUDGET_TOKENS, 24_000),
       contextCompressionThresholdRatio: readFloat(
@@ -325,9 +319,15 @@ function readFloat(value: string | undefined, fallback: number): number {
 
 function readModelProvider(
   value: string | undefined,
-  fallback: "ollama" | "openai_codex_oauth"
-): "ollama" | "openai_codex_oauth" {
-  return value === "openai_codex_oauth" ? "openai_codex_oauth" : fallback;
+  fallback: "ollama" | "codex_app_server"
+): "ollama" | "codex_app_server" {
+  if (value === "openai_codex_oauth") {
+    throw new Error("openai_codex_oauth is no longer supported");
+  }
+  if (value === "codex_app_server") {
+    return "codex_app_server";
+  }
+  return fallback;
 }
 
 function readOllamaKeepAlive(value: string | undefined): string | number | undefined {

@@ -1,9 +1,7 @@
 import type { AdminHandler, FunctionExecutionResult, LlmConfig } from "./types.js";
-import type { LlmAuthStore } from "./llm/auth.js";
 
 export interface LlmStatusAdminHandlerOptions {
   fetchImpl?: typeof fetch;
-  authStore?: LlmAuthStore;
 }
 
 interface ProbeResult {
@@ -22,6 +20,21 @@ export function createLlmStatusAdminHandler(
   const fetchImpl = options.fetchImpl ?? fetch;
 
   return async (): Promise<FunctionExecutionResult> => {
+    if (config.provider === "codex_app_server") {
+      return {
+        ok: true,
+        replyText: [
+          "LLM status",
+          "provider: codex_app_server",
+          `command: ${config.codexAppServerCommand ?? "codex"}`,
+          `args: ${(config.codexAppServerArgs ?? ["app-server", "--listen", "stdio://"]).join(" ")}`,
+          `CODEX_HOME: ${config.codexHome ?? "(container default)"}`,
+          `model: ${config.codexModel ?? "gpt-5.1-codex"}`,
+          `modelProvider: ${config.codexModelProvider ?? "openai"}`,
+          `fallback: ${config.fallbackProvider ?? "ollama"}`
+        ].join("\n")
+      };
+    }
     const baseUrl = normalizeBaseUrl(config.ollamaBaseUrl);
     const endpoint = describeEndpoint(baseUrl);
     const tags = await probeTags(fetchImpl, baseUrl, config);
@@ -29,7 +42,6 @@ export function createLlmStatusAdminHandler(
       tags.status === "ok"
         ? await probeChat(fetchImpl, baseUrl, config)
         : skippedProbe("tags failed");
-    const auth = await describeAuthStatus(config, options.authStore);
 
     return {
       ok: true,
@@ -40,7 +52,6 @@ export function createLlmStatusAdminHandler(
         `host: ${endpoint.hostClass}`,
         `model: ${config.ollamaModel}`,
         `fallback: ${config.keywordFallbackEnabled ? "keyword" : "disabled"}`,
-        ...auth,
         formatTags(tags),
         `modelPresent: ${tags.modelPresent ?? "unknown"}`,
         `modelCount: ${tags.modelCount ?? "unknown"}`,
@@ -177,26 +188,6 @@ function formatProbe(label: string, result: ProbeResult): string {
 
 function skippedProbe(detail: string): ProbeResult {
   return { status: "skipped", detail };
-}
-
-async function describeAuthStatus(config: LlmConfig, authStore: LlmAuthStore | undefined) {
-  if (config.provider !== "openai_codex_oauth") {
-    return ["auth: not_configured"];
-  }
-  const authProfile = config.openaiCodexAuthProfile ?? "helper";
-  if (!authStore) {
-    return [`authProfile: ${authProfile}`, "auth: missing_store"];
-  }
-  const profile = await authStore.get("openai_codex_oauth", authProfile);
-  if (!profile) {
-    return [`authProfile: ${authProfile}`, "auth: missing"];
-  }
-  return [
-    `authProfile: ${authProfile}`,
-    `auth: ${profile.status}`,
-    `authExpiresAt: ${profile.expiresAt}`,
-    profile.lastError ? `authLastError: ${profile.lastError}` : undefined
-  ].filter((line): line is string => Boolean(line));
 }
 
 function describeEndpoint(baseUrl: string): { scheme: string; hostClass: string; port: string } {

@@ -32,7 +32,7 @@ export type ActionName = FunctionName | SystemActionName | AdminActionName;
 
 export type JsonRecord = Record<string, unknown>;
 
-export type ModelProviderName = "ollama" | "openai_codex_oauth";
+export type ModelProviderName = "ollama" | "codex_app_server";
 export type RouteProviderName = ModelProviderName | "keyword" | "router";
 
 export type DirectAccessPolicy = "managed" | "public" | "blocked";
@@ -88,15 +88,11 @@ export interface LlmConfig {
   ollamaBaseUrl: string;
   ollamaModel: string;
   ollamaKeepAlive?: string | number;
-  openaiCodexBaseUrl?: string;
-  openaiCodexModel?: string;
-  openaiCodexAuthProfile?: string;
-  openaiCodexOAuthAuthorizeUrl?: string;
-  openaiCodexOAuthTokenUrl?: string;
-  openaiCodexOAuthClientId?: string;
-  publicBaseUrl?: string;
-  authLoginStateTtlMinutes?: number;
-  authEncryptionKey?: string;
+  codexAppServerCommand?: string;
+  codexAppServerArgs?: string[];
+  codexHome?: string;
+  codexModel?: string;
+  codexModelProvider?: string;
   contextWindowTokens?: number;
   runtimeContextBudgetTokens?: number;
   contextCompressionThresholdRatio?: number;

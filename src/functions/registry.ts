@@ -3,7 +3,6 @@ import { createNotionDatabaseClient } from "../clients/notion.js";
 import { InMemoryAgentMemoryStore, type AgentMemoryStore } from "../agent/memory-store.js";
 import { MemoryCacheStore, type CacheStore } from "../cache/cache-store.js";
 import { createLlmStatusAdminHandler } from "../llm-diagnostics.js";
-import type { LlmAuthStore } from "../llm/auth.js";
 import { InMemorySessionStore, type SessionStore } from "../state/session-store.js";
 import type {
   AppConfig,
@@ -26,7 +25,6 @@ export interface RegistryClients {
   now?: () => Date;
   requestIdFactory?: () => string;
   fetchImpl?: typeof fetch;
-  llmAuthStore?: LlmAuthStore;
 }
 
 export interface FunctionRegistries {
@@ -119,8 +117,7 @@ export function createFunctionRegistries(
   };
 
   adminHandlers["llm-status"] = createLlmStatusAdminHandler(config.llm, {
-    fetchImpl: clients.fetchImpl,
-    authStore: clients.llmAuthStore
+    fetchImpl: clients.fetchImpl
   });
 
   return { functions, postbacks, textMessages, adminHandlers };

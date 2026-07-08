@@ -286,6 +286,34 @@ describe("config", () => {
     expect(config.llm.ollamaKeepAlive).toBeUndefined();
   });
 
+  it("loads Codex app-server as a pluggable LLM provider", () => {
+    const config = loadConfigFromEnv({
+      ...baseEnv(),
+      LLM_PROVIDER: "codex_app_server",
+      LLM_FALLBACK_PROVIDER: "ollama",
+      CODEX_APP_SERVER_COMMAND: "codex",
+      CODEX_APP_SERVER_ARGS: "app-server,--listen,stdio://",
+      CODEX_HOME: "/mnt/codex-home"
+    });
+
+    expect(config.llm).toMatchObject({
+      provider: "codex_app_server",
+      fallbackProvider: "ollama",
+      codexAppServerCommand: "codex",
+      codexAppServerArgs: ["app-server", "--listen", "stdio://"],
+      codexHome: "/mnt/codex-home"
+    });
+  });
+
+  it("rejects the removed direct Codex OAuth provider", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        ...baseEnv(),
+        LLM_PROVIDER: "openai_codex_oauth"
+      })
+    ).toThrow("openai_codex_oauth is no longer supported");
+  });
+
   it("defaults profile small talk to template mode with an 80 character limit", () => {
     const config = loadConfigFromEnv(baseEnv());
 
