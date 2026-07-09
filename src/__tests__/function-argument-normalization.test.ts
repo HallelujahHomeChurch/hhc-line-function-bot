@@ -41,6 +41,45 @@ describe("function argument normalization", () => {
     });
   });
 
+  it("clears hallucinated sheet music titles when the user only asks for sheet music", () => {
+    expect(
+      normalizeFunctionArguments(
+        "find_pop_sheet_music",
+        { query: "Yesterday", matchMode: "fuzzy" },
+        { text: "小哈 查流行歌譜" }
+      )
+    ).toMatchObject({
+      query: "",
+      matchMode: "fuzzy"
+    });
+  });
+
+  it("treats short generic sheet music requests as missing the song title", () => {
+    expect(
+      normalizeFunctionArguments(
+        "find_pop_sheet_music",
+        { query: "小哈幫我查譜", matchMode: "fuzzy" },
+        { text: "小哈幫我查譜" }
+      )
+    ).toMatchObject({
+      query: "",
+      matchMode: "fuzzy"
+    });
+  });
+
+  it("extracts a song title from short sheet music phrasing", () => {
+    expect(
+      normalizeFunctionArguments(
+        "find_pop_sheet_music",
+        { query: "", matchMode: "fuzzy" },
+        { text: "小哈幫我查 Yesterday 的譜" }
+      )
+    ).toMatchObject({
+      query: "Yesterday",
+      matchMode: "fuzzy"
+    });
+  });
+
   it("preserves service schedule structured metadata while filling the query when missing", () => {
     expect(
       normalizeFunctionArguments(
@@ -52,6 +91,34 @@ describe("function argument normalization", () => {
       query: "小哈 下一場主日服事表",
       dateIntent: "next_meeting",
       meeting: "主日"
+    });
+  });
+
+  it("clears model-inferred next meeting metadata for generic service schedule requests", () => {
+    const result = normalizeFunctionArguments(
+      "query_service_schedule",
+      { query: "服事表", dateIntent: "next_meeting", limit: 1 },
+      { text: "小哈查服事表" }
+    );
+
+    expect(result).toMatchObject({
+      query: "小哈查服事表",
+      limit: 1
+    });
+    expect(result).not.toHaveProperty("dateIntent");
+  });
+
+  it("keeps explicit next meeting service schedule intent", () => {
+    expect(
+      normalizeFunctionArguments(
+        "query_service_schedule",
+        { query: "", dateIntent: "next_meeting", limit: 1 },
+        { text: "小哈 下一場聚會服事表" }
+      )
+    ).toMatchObject({
+      query: "小哈 下一場聚會服事表",
+      dateIntent: "next_meeting",
+      limit: 1
     });
   });
 });

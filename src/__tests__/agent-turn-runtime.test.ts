@@ -163,6 +163,68 @@ describe("AgentTurnRuntime", () => {
     });
   });
 
+  it("clarifies a generic sheet music request even when the model supplies a title", async () => {
+    const sessionStore = new InMemorySessionStore({
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "find_pop_sheet_music",
+      arguments: { query: "Yesterday", matchMode: "fuzzy" },
+      provider: "ollama"
+    });
+    const handler = vi.fn<FunctionHandler>();
+    const runtime = createRuntime({
+      router: { route },
+      functionRegistry: { find_pop_sheet_music: handler },
+      sessionStore
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["find_pop_sheet_music"]),
+      event: textEvent("小哈 查流行歌譜"),
+      requestId: "req-sheet-generic"
+    });
+
+    expect(result?.replyText).toContain("歌名");
+    expect(handler).not.toHaveBeenCalled();
+    await expect(sessionStore.summary()).resolves.toMatchObject({
+      total: 1,
+      byType: { pending_function: 1 }
+    });
+  });
+
+  it("clarifies a generic service schedule request even when the model infers next meeting", async () => {
+    const sessionStore = new InMemorySessionStore({
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "query_service_schedule",
+      arguments: { query: "服事表", dateIntent: "next_meeting", limit: 1 },
+      provider: "ollama"
+    });
+    const handler = vi.fn<FunctionHandler>();
+    const runtime = createRuntime({
+      router: { route },
+      functionRegistry: { query_service_schedule: handler },
+      sessionStore
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["query_service_schedule"]),
+      event: textEvent("小哈查服事表"),
+      requestId: "req-service-generic"
+    });
+
+    expect(result?.replyText).toContain("哪一場");
+    expect(handler).not.toHaveBeenCalled();
+    await expect(sessionStore.summary()).resolves.toMatchObject({
+      total: 1,
+      byType: { pending_function: 1 }
+    });
+  });
+
   it("records sanitized trace for routed function execution", async () => {
     const traceStore = new InMemoryAgentTraceStore(10);
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({

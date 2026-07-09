@@ -110,7 +110,7 @@ export function createQueryServiceScheduleHandler(
       .filter((row) => matchesOptional(row.role, derivedFilters.role))
       .filter((row) => matchesDateRange(row.date, derivedFilters.range));
     const filtered = derivedFilters.nextMeetingOnly
-      ? limitToFirstGroup(filteredRows)
+      ? limitToFirstUpcomingGroup(filteredRows, now(), timeZone)
       : filteredRows.slice(0, derivedFilters.limit ?? 10);
 
     if (filtered.length === 0) {
@@ -282,8 +282,8 @@ function applyStructuredDateIntent(
   }
 }
 
-function limitToFirstGroup(rows: ServiceRow[]): ServiceRow[] {
-  const [first] = groupRows(rows);
+function limitToFirstUpcomingGroup(rows: ServiceRow[], now: Date, timeZone: string): ServiceRow[] {
+  const [first] = groupRows(rows).filter((group) => !serviceGroupEnded(group, now, timeZone));
   return first?.rows ?? [];
 }
 
@@ -432,6 +432,22 @@ interface ServiceGroup {
   rows: ServiceRow[];
 }
 
+interface MeetingTimeRule {
+  pattern: RegExp;
+  weekdays?: number[];
+  endHour: number;
+  endMinute: number;
+}
+
+const MEETING_TIME_RULES: MeetingTimeRule[] = [
+  { pattern: /晨更/u, weekdays: [2, 5], endHour: 8, endMinute: 30 },
+  { pattern: /仙履奇緣/u, weekdays: [4], endHour: 9, endMinute: 0 },
+  { pattern: /福音餐會/u, weekdays: [4], endHour: 14, endMinute: 0 },
+  { pattern: /門訓禱告會/u, weekdays: [5], endHour: 21, endMinute: 30 },
+  { pattern: /國度禱告會/u, weekdays: [6], endHour: 11, endMinute: 30 },
+  { pattern: /主日/u, weekdays: [0], endHour: 12, endMinute: 0 }
+];
+
 function groupRows(rows: ServiceRow[]): ServiceGroup[] {
   const groups = new Map<string, ServiceGroup>();
   for (const row of rows) {
@@ -443,6 +459,99 @@ function groupRows(rows: ServiceRow[]): ServiceGroup[] {
     groups.set(key, group);
   }
   return Array.from(groups.values());
+}
+
+function serviceGroupEnded(group: ServiceGroup, now: Date, timeZone: string): boolean {
+  const end = inferServiceGroupEnd(group, timeZone);
+  return end ? end <= now : false;
+}
+
+function inferServiceGroupEnd(group: ServiceGroup, timeZone: string): Date | undefined {
+  const rawDate = group.rows[0]?.date ?? "";
+  const explicitEnd = parseLastDateTime(rawDate);
+  if (explicitEnd) {
+    return explicitEnd;
+  }
+
+  if (!group.dateKey) {
+    return undefined;
+  }
+  const [hour, minute] = inferMeetingEndTime(group.meeting, group.dateKey);
+  return zonedDateTimeToUtc(group.dateKey, hour, minute, timeZone);
+}
+
+function parseLastDateTime(value: string): Date | undefined {
+  const matches = value.match(/\d{4}-\d{2}-\d{2}T[^\s~]+/g);
+  if (!matches || matches.length === 0) {
+    return undefined;
+  }
+  const last = matches && matches.length > 1 ? matches.at(-1) : matches?.[0];
+  if (!last) {
+    return undefined;
+  }
+  const parsed = new Date(last);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+  return matches.length > 1 ? parsed : new Date(parsed.getTime() + 3 * 60 * 60 * 1000);
+}
+
+function inferMeetingEndTime(meeting: string, dateKey: string): [number, number] {
+  const weekday = weekdayFromDateKey(dateKey);
+  const rule = MEETING_TIME_RULES.find(
+    (candidate) =>
+      candidate.pattern.test(meeting) &&
+      (!candidate.weekdays || candidate.weekdays.includes(weekday))
+  );
+  if (rule) {
+    return [rule.endHour, rule.endMinute];
+  }
+  return [23, 59];
+}
+
+function weekdayFromDateKey(dateKey: string): number {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+function zonedDateTimeToUtc(
+  dateKey: string,
+  hour: number,
+  minute: number,
+  timeZone: string
+): Date {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  return new Date(utcGuess.getTime() - timeZoneOffsetMs(utcGuess, timeZone));
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  })
+    .formatToParts(date)
+    .reduce<Record<string, string>>((acc, part) => {
+      if (part.type !== "literal") {
+        acc[part.type] = part.value;
+      }
+      return acc;
+    }, {});
+  const zonedAsUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  return zonedAsUtc - date.getTime();
 }
 
 function formatMonthDay(dateKey: string): string {

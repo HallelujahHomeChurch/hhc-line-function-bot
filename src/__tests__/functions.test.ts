@@ -840,7 +840,7 @@ describe("query_service_schedule", () => {
         role: "Role",
         person: "Person"
       },
-      now: () => new Date("2026-07-05T13:00:00.000Z")
+      now: () => new Date("2026-07-05T02:00:00.000Z")
     });
 
     const result = await handler({ query: "下一場聚會服事表" }, handlerContext());
@@ -859,6 +859,247 @@ describe("query_service_schedule", () => {
     );
     expect(result.replyText).not.toContain("7月7日");
     expect(result.replyText).not.toContain("資恆");
+  });
+
+  it("skips an inferred ended same-day meeting when selecting the next meeting", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-ended-today",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-09" } },
+            Meeting: { type: "select", select: { name: "7月9日(四) 福音餐會" } },
+            Role: { type: "title", title: [{ plain_text: "音控" }] },
+            Person: { type: "people", people: [{ name: "Today" }] }
+          }
+        },
+        {
+          id: "page-next",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-10" } },
+            Meeting: { type: "select", select: { name: "7月10日(五) 門訓禱告會" } },
+            Role: { type: "title", title: [{ plain_text: "導播" }] },
+            Person: { type: "people", people: [{ name: "Tomorrow" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-09T13:05:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await handler(
+      { query: "下一場聚會服事表", dateIntent: "next_meeting" },
+      handlerContext()
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("7月10日(五) 門訓禱告會");
+    expect(result.replyText).toContain("Tomorrow");
+    expect(result.replyText).not.toContain("Today");
+  });
+
+  it("skips the Thursday gospel meal after its Taipei end time", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-ended-gospel-meal",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-09" } },
+            Meeting: { type: "select", select: { name: "7月9日(四) 福音餐會" } },
+            Role: { type: "title", title: [{ plain_text: "音控" }] },
+            Person: { type: "people", people: [{ name: "GospelMeal" }] }
+          }
+        },
+        {
+          id: "page-next-training-prayer",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-10" } },
+            Meeting: { type: "select", select: { name: "7月10日(五) 門訓禱告會" } },
+            Role: { type: "title", title: [{ plain_text: "導播" }] },
+            Person: { type: "people", people: [{ name: "TrainingPrayer" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-09T06:05:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await handler(
+      { query: "下一場聚會服事表", dateIntent: "next_meeting" },
+      handlerContext()
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("7月10日(五) 門訓禱告會");
+    expect(result.replyText).toContain("TrainingPrayer");
+    expect(result.replyText).not.toContain("GospelMeal");
+  });
+
+  it("keeps the Thursday gospel meal as next meeting before its Taipei end time", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-current-gospel-meal",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-09" } },
+            Meeting: { type: "select", select: { name: "7月9日(四) 福音餐會" } },
+            Role: { type: "title", title: [{ plain_text: "音控" }] },
+            Person: { type: "people", people: [{ name: "GospelMeal" }] }
+          }
+        },
+        {
+          id: "page-next-training-prayer",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-10" } },
+            Meeting: { type: "select", select: { name: "7月10日(五) 門訓禱告會" } },
+            Role: { type: "title", title: [{ plain_text: "導播" }] },
+            Person: { type: "people", people: [{ name: "TrainingPrayer" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-09T05:59:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await handler(
+      { query: "下一場聚會服事表", dateIntent: "next_meeting" },
+      handlerContext()
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("7月9日(四) 福音餐會");
+    expect(result.replyText).toContain("GospelMeal");
+    expect(result.replyText).not.toContain("TrainingPrayer");
+  });
+
+  it("skips Sunday after noon when selecting the next meeting", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-ended-sunday",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-05" } },
+            Meeting: { type: "select", select: { name: "7月5日 主日" } },
+            Role: { type: "title", title: [{ plain_text: "導播" }] },
+            Person: { type: "people", people: [{ name: "Sunday" }] }
+          }
+        },
+        {
+          id: "page-next-morning",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-07" } },
+            Meeting: { type: "select", select: { name: "7月7日(二) 晨更" } },
+            Role: { type: "title", title: [{ plain_text: "音控" }] },
+            Person: { type: "people", people: [{ name: "MorningPrayer" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-05T04:01:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await handler(
+      { query: "下一場聚會服事表", dateIntent: "next_meeting" },
+      handlerContext()
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("7月7日(二) 晨更");
+    expect(result.replyText).toContain("MorningPrayer");
+    expect(result.replyText).not.toContain("Sunday");
+  });
+
+  it("uses explicit Notion datetime instead of inferred meeting windows", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-explicit-current",
+          properties: {
+            Date: {
+              type: "date",
+              date: {
+                start: "2026-07-09T18:30:00.000+08:00",
+                end: "2026-07-09T21:00:00.000+08:00"
+              }
+            },
+            Meeting: { type: "select", select: { name: "7月9日(四) 福音餐會" } },
+            Role: { type: "title", title: [{ plain_text: "音控" }] },
+            Person: { type: "people", people: [{ name: "ExplicitEvening" }] }
+          }
+        },
+        {
+          id: "page-next-day",
+          properties: {
+            Date: { type: "date", date: { start: "2026-07-10" } },
+            Meeting: { type: "select", select: { name: "7月10日(五) 門訓禱告會" } },
+            Role: { type: "title", title: [{ plain_text: "導播" }] },
+            Person: { type: "people", people: [{ name: "NextDay" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "Date",
+        meeting: "Meeting",
+        role: "Role",
+        person: "Person"
+      },
+      now: () => new Date("2026-07-09T12:30:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await handler(
+      { query: "下一場聚會服事表", dateIntent: "next_meeting" },
+      handlerContext()
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("7月9日(四) 福音餐會");
+    expect(result.replyText).toContain("ExplicitEvening");
+    expect(result.replyText).not.toContain("NextDay");
   });
 
   it("uses structured next-meeting metadata even when the query text is generic", async () => {
@@ -896,7 +1137,7 @@ describe("query_service_schedule", () => {
         role: "Role",
         person: "Person"
       },
-      now: () => new Date("2026-07-05T13:00:00.000Z")
+      now: () => new Date("2026-07-05T02:00:00.000Z")
     });
 
     const result = await handler(

@@ -495,7 +495,7 @@ describe("clarification flow", () => {
       }
     );
     expect(replyText.mock.calls[1]?.[1]).toContain("下一場聚會服事表");
-    expect(replyText.mock.calls[1]?.[1]).toContain("- 導播：知樂");
-    expect(replyText.mock.calls[1]?.[1]).not.toContain("資恆");
+    expect(replyText.mock.calls[1]?.[1]).toContain("- 音控：資恆");
+    expect(replyText.mock.calls[1]?.[1]).not.toContain("知樂");
   });
 });

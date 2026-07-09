@@ -178,7 +178,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         expected: {
           type: "execute",
           action: "query_service_schedule",
-          arguments: { query: "服事表" }
+          arguments: { query: "小哈 查服事表" }
         }
       },
       {
@@ -469,7 +469,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         expected: {
           type: "execute",
           action: "query_service_schedule",
-          arguments: { query: "服事表" }
+          arguments: { query: "小哈查服事表" }
         }
       }
     ],

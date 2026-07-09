@@ -744,7 +744,7 @@ describe("function router", () => {
       provider: "keyword",
       fallbackProvider: "ollama",
       fallbackReason: "timeout",
-      arguments: { query: "服事表" }
+      arguments: { query: "小哈 查服事表" }
     });
   });
 
