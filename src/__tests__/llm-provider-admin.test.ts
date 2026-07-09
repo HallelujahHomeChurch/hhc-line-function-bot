@@ -198,6 +198,39 @@ describe("LLM provider admin commands", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("An active login is already in progress");
   });
 
+  it("returns a readable Codex login startup error instead of the generic failure", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const loginManager = providerLoginManager({
+      startCodexLogin: vi.fn(async () => {
+        throw new Error("Codex device code request failed: http_403");
+      })
+    });
+    const app = createApp(config(), {
+      router: { route: vi.fn() },
+      accessStore: new InMemoryAccessStore(),
+      providerLoginManager: loginManager,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "/llm-login codex" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText.mock.calls[0]?.[1]).toContain("Codex device login 啟動失敗");
+    expect(replyText.mock.calls[0]?.[1]).toContain("http_403");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("處理請求時發生錯誤");
+  });
+
   it("clears Codex device login state from LINE for the bootstrap superadmin", async () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const loginManager = providerLoginManager({

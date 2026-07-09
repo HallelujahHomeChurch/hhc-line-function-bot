@@ -1453,6 +1453,20 @@ function llmProviderQuickReplies(): QuickReplyItem[] {
   ];
 }
 
+function codexDeviceLoginErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("Codex device code request failed:")) {
+    return message;
+  }
+  if (message === "fetch failed" || message.includes("fetch failed")) {
+    return "fetch_failed";
+  }
+  if (message.includes("missing required fields")) {
+    return "invalid_device_auth_response";
+  }
+  return "unexpected_error";
+}
+
 async function handleLlmLoginCommand(
   config: AppConfig,
   profile: BotProfileConfig,
@@ -1480,12 +1494,34 @@ async function handleLlmLoginCommand(
   if (provider !== "codex_app_server") {
     return { ok: true, replyText: `不支援的 LLM provider：${providerArg ?? "(empty)"}` };
   }
-  const login = await providerLoginManager.startCodexLogin({
-    codexHome: config.llm.codexHome,
-    clientId: config.llm.codexLoginClientId,
-    issuer: config.llm.codexAuthIssuer,
-    ttlMs: config.llm.codexDeviceLoginTtlMs
-  });
+  let login: Awaited<ReturnType<ProviderLoginManager["startCodexLogin"]>>;
+  try {
+    login = await providerLoginManager.startCodexLogin({
+      codexHome: config.llm.codexHome,
+      clientId: config.llm.codexLoginClientId,
+      issuer: config.llm.codexAuthIssuer,
+      ttlMs: config.llm.codexDeviceLoginTtlMs
+    });
+  } catch (error) {
+    const reason = codexDeviceLoginErrorMessage(error);
+    console.warn(
+      JSON.stringify({
+        event: "codex_device_login_start_failed",
+        profileName: profile.name,
+        sourceType: event.source.type,
+        errorName: error instanceof Error ? error.name : typeof error,
+        reason
+      })
+    );
+    return {
+      ok: false,
+      replyText: [
+        "Codex device login 啟動失敗。",
+        `原因：${reason}`,
+        "請稍後再試；若持續失敗，請查看 ACA logs 或 /last-errors。"
+      ].join("\n")
+    };
+  }
   if (login.status === "already_logged_in") {
     return {
       ok: true,
