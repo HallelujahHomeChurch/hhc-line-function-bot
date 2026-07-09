@@ -4,6 +4,7 @@ import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { signLineBody } from "../line-signature.js";
 import { createApp } from "../server.js";
 import type { AppConfig, LineReplyClient } from "../types.js";
+import type { ProviderLoginManager } from "../llm/codex-device-login.js";
 
 function config(): AppConfig {
   return {
@@ -44,6 +45,9 @@ function config(): AppConfig {
       codexAppServerCommand: "codex",
       codexAppServerArgs: ["app-server", "--listen", "stdio://"],
       codexHome: "/tmp/codex-home",
+      codexLoginClientId: "app_test",
+      codexAuthIssuer: "https://auth.openai.com",
+      codexDeviceLoginTtlMs: 900_000,
       timeoutMs: 8000,
       keywordFallbackEnabled: true
     }
@@ -79,6 +83,23 @@ function signedHeaders(body: string) {
 }
 
 describe("LLM provider admin commands", () => {
+  function providerLoginManager(
+    overrides: Partial<ProviderLoginManager> = {}
+  ): ProviderLoginManager {
+    return {
+      startCodexLogin: vi.fn(async () => ({
+        status: "started",
+        provider: "codex_app_server",
+        verificationUrl: "https://auth.openai.com/codex/device",
+        userCode: "ABCD-EFGH",
+        expiresAt: "2026-07-09T00:15:00.000Z"
+      })),
+      getCodexStatus: vi.fn(async () => ({ loggedIn: false })),
+      logoutCodex: vi.fn(async () => ({ removed: true })),
+      ...overrides
+    };
+  }
+
   it("keeps provider login direct-chat superadmin only", async () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(config(), {
@@ -104,11 +125,13 @@ describe("LLM provider admin commands", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("請在 1 對 1 對話中使用");
   });
 
-  it("returns Codex runtime login guidance to the bootstrap superadmin", async () => {
+  it("starts Codex device login from LINE for the bootstrap superadmin", async () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const loginManager = providerLoginManager();
     const app = createApp(config(), {
       router: { route: vi.fn() },
       accessStore: new InMemoryAccessStore(),
+      providerLoginManager: loginManager,
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -126,9 +149,83 @@ describe("LLM provider admin commands", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(replyText.mock.calls[0]?.[1]).toContain("Codex app-server");
-    expect(replyText.mock.calls[0]?.[1]).toContain("CODEX_HOME");
+    expect(loginManager.startCodexLogin).toHaveBeenCalledWith({
+      codexHome: "/tmp/codex-home",
+      clientId: "app_test",
+      issuer: "https://auth.openai.com",
+      ttlMs: 900_000
+    });
+    expect(replyText.mock.calls[0]?.[1]).toContain("Codex device login");
+    expect(replyText.mock.calls[0]?.[1]).toContain("https://auth.openai.com/codex/device");
+    expect(replyText.mock.calls[0]?.[1]).toContain("ABCD-EFGH");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/llm-status");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/api/line/llm-auth/openai-codex");
+  });
+
+  it("reuses an active Codex device login session", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const loginManager = providerLoginManager({
+      startCodexLogin: vi.fn(async () => ({
+        status: "already_active",
+        provider: "codex_app_server",
+        verificationUrl: "https://auth.openai.com/codex/device",
+        userCode: "ABCD-EFGH",
+        expiresAt: "2026-07-09T00:15:00.000Z"
+      }))
+    });
+    const app = createApp(config(), {
+      router: { route: vi.fn() },
+      accessStore: new InMemoryAccessStore(),
+      providerLoginManager: loginManager,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "/llm-login codex" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText.mock.calls[0]?.[1]).toContain("Codex device login");
+    expect(replyText.mock.calls[0]?.[1]).toContain("An active login is already in progress");
+  });
+
+  it("clears Codex device login state from LINE for the bootstrap superadmin", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const loginManager = providerLoginManager({
+      logoutCodex: vi.fn(async () => ({ removed: true }))
+    });
+    const app = createApp(config(), {
+      router: { route: vi.fn() },
+      accessStore: new InMemoryAccessStore(),
+      providerLoginManager: loginManager,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "/llm-logout codex" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(loginManager.logoutCodex).toHaveBeenCalledWith({ codexHome: "/tmp/codex-home" });
+    expect(replyText.mock.calls[0]?.[1]).toContain("Codex device login 已清除");
   });
 
   it("reports the active provider without persisting a switch from LINE", async () => {

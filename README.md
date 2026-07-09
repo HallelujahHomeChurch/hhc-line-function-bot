@@ -168,7 +168,7 @@ Function toggles are profile-scoped:
 
 ## Routing
 
-Primary routing uses Ollama unless a profile or environment selects `codex_app_server`. The Codex provider starts the Codex app-server over stdio inside the container and uses the account state available in `CODEX_HOME`. The bot no longer owns browser OAuth callbacks, refresh tokens, or token storage.
+Primary routing uses Ollama unless a profile or environment selects `codex_app_server`. The Codex provider starts the Codex app-server over stdio inside the container and uses the account state available in `CODEX_HOME`. The bot can start Codex device login from LINE, but it does not expose provider OAuth callback routes or store provider tokens in PostgreSQL.
 
 Provider access is profile-scoped. Internal helper profiles may set `allowSubscriptionProviders=true` and explicitly list `codex_app_server` in `allowedProviders`. Future official `main` profiles should keep subscription providers disabled.
 
@@ -183,6 +183,9 @@ CODEX_APP_SERVER_COMMAND=codex
 CODEX_APP_SERVER_ARGS=app-server,--listen,stdio://
 CODEX_HOME=/mnt/codex-home
 PROVIDER_AUTH_HOME=/mnt/provider-auth
+CODEX_AUTH_ISSUER=https://auth.openai.com
+CODEX_LOGIN_CLIENT_ID=app_EMoamEEZ73f0CkXaXp7hrann
+CODEX_DEVICE_LOGIN_TTL_MS=900000
 CODEX_MODEL=gpt-5.1-codex
 CODEX_MODEL_PROVIDER=openai
 LLM_RUNTIME_CONTEXT_BUDGET_TOKENS=2000
@@ -200,7 +203,7 @@ Bootstrap superadmin direct-chat commands for LLM provider operations:
 /llm-status
 ```
 
-`/llm-login codex` does not create a browser link. It returns deployment guidance for the configured `CODEX_HOME`; complete the Codex login in the deployment environment or in a mounted volume before using `codex_app_server` as the primary provider. `/llm-use` reports the active provider and the provider names accepted by the runtime.
+`/llm-login codex` starts a Codex device login in direct chat for the bootstrap superadmin. The reply includes a verification URL, one-time user code, and quick replies for `/llm-status` and `/llm-use codex`. Successful login writes Codex account state to the configured `CODEX_HOME`; no public callback route, PostgreSQL token row, or LINE push message is used. `/llm-use` reports the active provider and the provider names accepted by the runtime.
 
 Keyword fallback is intentionally narrow:
 

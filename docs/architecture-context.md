@@ -19,9 +19,10 @@ The service is local-first for routing:
 - Provider runtimes may reason and generate text, but this bot owns authority:
   profile policy, function toggles, tool execution, memory writes, and deny or
   clarify flows remain server-side.
-- The line bot does not own browser OAuth callbacks or stored LLM tokens.
-  Provider login must be completed outside the webhook flow in the deployment
-  environment or a mounted account volume.
+- The line bot can start Codex device login from superadmin direct chat, but it
+  does not expose provider OAuth callback routes or store LLM tokens in
+  PostgreSQL. Successful provider state lives in mounted auth storage such as
+  `CODEX_HOME`.
 - Keyword fallback is conservative and only runs when Ollama is unavailable,
   times out, or returns invalid JSON.
 - Explicit model deny decisions do not fall back.
@@ -68,8 +69,9 @@ The main entrance behavior lives in `src/server.ts`; tests for it live mostly in
 
 For Codex app-server operations, the bootstrap superadmin sends `/llm-login
 codex`, `/llm-logout codex`, `/llm-use`, or `/llm-status` in direct chat.
-These commands report provider state and deployment guidance only; they never
-return browser OAuth URLs or handle callback codes through LINE.
+`/llm-login codex` returns the Codex device verification URL and user code.
+The admin completes login in a browser, and the bot writes the resulting Codex
+account state to `CODEX_HOME`. No public provider callback path is involved.
 Profile provider policy decides which providers may be used. Subscription
 providers are intended for the internal `helper` profile only.
 
@@ -290,8 +292,8 @@ Use this map for common issues:
 - Admin command denied: `adminUserId`, DB admin principals, `adminDirectOnly`,
   admin command parser, action policy tests.
 - `/llm-login codex` does not work: verify direct chat source, bootstrap
-  `adminUserId`, `LLM_PROVIDER=codex_app_server`, `CODEX_HOME`, the
-  configured app-server command, and the deployed account volume/state.
+  `adminUserId`, profile provider allowlist, `CODEX_AUTH_ISSUER`,
+  `CODEX_LOGIN_CLIENT_ID`, `CODEX_HOME`, and the deployed account volume.
 - Need to know where a text request stopped: admin direct-chat
   `/last-agent-turns`.
 - Readiness failed: public `/readyz` checks only Postgres and Redis; detailed

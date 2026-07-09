@@ -1,4 +1,5 @@
 import type { AdminHandler, FunctionExecutionResult, LlmConfig } from "./types.js";
+import { readCodexAuthStatus } from "./llm/codex-device-login.js";
 
 export interface LlmStatusAdminHandlerOptions {
   fetchImpl?: typeof fetch;
@@ -21,6 +22,7 @@ export function createLlmStatusAdminHandler(
 
   return async (): Promise<FunctionExecutionResult> => {
     if (config.provider === "codex_app_server") {
+      const auth = await readCodexAuthStatus(config.codexHome);
       return {
         ok: true,
         replyText: [
@@ -30,6 +32,13 @@ export function createLlmStatusAdminHandler(
           `args: ${(config.codexAppServerArgs ?? ["app-server", "--listen", "stdio://"]).join(" ")}`,
           `CODEX_HOME: ${config.codexHome ?? "(container default)"}`,
           `PROVIDER_AUTH_HOME: ${config.providerAuthHome ?? "(not configured)"}`,
+          `auth: ${auth.loggedIn ? "logged_in" : "missing"}`,
+          ...(auth.loggedIn
+            ? [
+                `account: ${auth.email ?? auth.accountId ?? "(unknown)"}`,
+                `plan: ${auth.plan ?? "(unknown)"}`
+              ]
+            : []),
           `model: ${config.codexModel ?? "gpt-5.1-codex"}`,
           `modelProvider: ${config.codexModelProvider ?? "openai"}`,
           `fallback: ${config.fallbackProvider ?? "ollama"}`

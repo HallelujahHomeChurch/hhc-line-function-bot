@@ -6,7 +6,7 @@
 - The bot is a restricted church helper, not an open-ended chat bot.
 - It should feel smart inside explicitly enabled functions, but deny or clarify requests outside those functions.
 - Runtime behavior is controlled by bot profiles, function toggles, access control, and state stores.
-- LLM routing defaults to Ollama, with optional `codex_app_server` support through mounted `CODEX_HOME` account state.
+- LLM routing defaults to Ollama, with optional `codex_app_server` support through LINE-started Codex device login and mounted `CODEX_HOME` account state.
 - Group follow-up context is requester-scoped and short-lived; never feed raw whole-group chat into the model.
 - Slow tasks may be stored as long-running jobs and returned through a LINE postback button; do not use LINE push quota for those results.
 - Public `/healthz` is minimal liveness. Public `/readyz` checks only Postgres and Redis.
@@ -34,7 +34,7 @@ Read these first when starting work:
   - future `main`: public direct users, groups blocked, registration disabled.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
 - `adminUserId` is the single bootstrap superadmin. Legacy `adminUserIds`, `allowedUserIds`, and `allowedGroupIds` should not be reintroduced.
-- The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`.
+- The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`; use provider device flows or mounted auth storage instead.
 - Subscription providers such as `codex_app_server` are internal-helper only; future `main` official profiles must not enable them.
 
 ## Function Surface
@@ -79,9 +79,9 @@ When adding or changing an admin action:
 - `src/config.ts`: env parsing and profile validation.
 - `src/profile-path.ts`: canonical profile name and webhook path contract.
 - `src/server.ts`: Fastify routes, LINE webhook entrance, access gates, admin commands, and postbacks.
-- `src/router.ts`: primary Ollama routing and router result model.
-- `src/clients/openai-codex-oauth.ts` and `src/llm/auth.ts`: optional Codex OAuth provider and encrypted auth profile storage.
-- `src/llm/oauth-state-store.ts`: one-time OAuth login state storage; use Redis in production.
+- `src/router.ts`: primary model routing and router result model.
+- `src/llm/codex-device-login.ts`: LINE-started Codex device login and `CODEX_HOME/auth.json` status/logout helpers.
+- `src/llm/provider-runtime.ts` and `src/llm/provider-metadata.ts`: provider allowlist/runtime metadata.
 - `src/keyword-router.ts`: conservative fallback routing when Ollama is unavailable or invalid.
 - `src/function-arguments.ts`: argument extraction and slot handling.
 - `src/functions/*`: function definitions, modules, and implementations.
@@ -140,7 +140,7 @@ When adding or changing an admin action:
 - `REDIS_URL` moves sessions, cache, recent errors, rate-limit state, and registration invite codes to Redis.
 - `REDIS_URL` also moves destructive-action confirmation codes to Redis.
 - `REDIS_URL` also moves requester-scoped conversation windows and long-running job results to Redis.
-- `/llm-login` must not create one-time provider OAuth states; provider account state belongs in mounted provider auth storage.
+- `/llm-login codex` starts Codex device login from superadmin direct chat, but must not add callback routes or PostgreSQL token storage.
 - Redis rate limiting must use atomic counters, not read-modify-write JSON buckets.
 - PostgreSQL backs managed access principals and audit events when registration is enabled.
 - PostgreSQL backs agent memory when configured. The app creates access and agent memory tables on startup.

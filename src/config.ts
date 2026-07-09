@@ -4,6 +4,11 @@ import { z } from "zod";
 
 import { assertCanonicalWebhookPath } from "./profile-path.js";
 import { readTimeZone } from "./time-zone.js";
+import {
+  DEFAULT_CODEX_AUTH_ISSUER,
+  DEFAULT_CODEX_DEVICE_LOGIN_TTL_MS,
+  DEFAULT_CODEX_LOGIN_CLIENT_ID
+} from "./llm/codex-device-login.js";
 import { providerCapabilities } from "./llm/provider-metadata.js";
 import { FUNCTION_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
 import type { AppConfig, FunctionName, ModelProviderName } from "./types.js";
@@ -103,6 +108,12 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       codexAppServerArgs: readList(env.CODEX_APP_SERVER_ARGS || "app-server,--listen,stdio://"),
       codexHome: env.CODEX_HOME || undefined,
       providerAuthHome: env.PROVIDER_AUTH_HOME || undefined,
+      codexAuthIssuer: env.CODEX_AUTH_ISSUER || DEFAULT_CODEX_AUTH_ISSUER,
+      codexLoginClientId: env.CODEX_LOGIN_CLIENT_ID || DEFAULT_CODEX_LOGIN_CLIENT_ID,
+      codexDeviceLoginTtlMs: readInt(
+        env.CODEX_DEVICE_LOGIN_TTL_MS,
+        DEFAULT_CODEX_DEVICE_LOGIN_TTL_MS
+      ),
       codexModel: env.CODEX_MODEL || "gpt-5.1-codex",
       codexModelProvider: env.CODEX_MODEL_PROVIDER || "openai",
       contextWindowTokens: readInt(env.LLM_CONTEXT_WINDOW_TOKENS, 128_000),

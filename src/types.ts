@@ -111,6 +111,9 @@ export interface LlmConfig {
   codexAppServerArgs?: string[];
   codexHome?: string;
   providerAuthHome?: string;
+  codexAuthIssuer?: string;
+  codexLoginClientId?: string;
+  codexDeviceLoginTtlMs?: number;
   codexModel?: string;
   codexModelProvider?: string;
   contextWindowTokens?: number;
