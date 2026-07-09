@@ -35,6 +35,9 @@ function config(): AppConfig {
     llm: {
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "qwen3:4b-instruct",
+      deepseekBaseUrl: "https://api.deepseek.com",
+      deepseekModel: "deepseek-v4-flash",
+      deepseekTimeoutMs: 8000,
       timeoutMs: 8000,
       keywordFallbackEnabled: true
     },

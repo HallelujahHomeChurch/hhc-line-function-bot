@@ -57,6 +57,7 @@ export interface AgentTurnRuntimeOptions {
   lastRouteStore: LastRouteStore;
   routeObserver?: RouteObserver;
   textGenerator?: TextGenerationProvider;
+  textFallbackGenerator?: TextGenerationProvider;
   contextManager?: ContextManager;
   conversationWindowStore?: ConversationWindowStore;
   now?: () => Date;
@@ -280,7 +281,8 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             profile: input.profile,
             text,
             category: smallTalkCategoryFromArguments(route.arguments),
-            generator: options.textGenerator
+            generator: options.textGenerator,
+            fallbackGenerator: options.textFallbackGenerator
           });
           return finish(input, steps, result);
         }

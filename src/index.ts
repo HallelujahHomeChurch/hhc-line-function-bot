@@ -1,5 +1,5 @@
 import { createOllamaProvider } from "./clients/ollama.js";
-import { createCodexAppServerProvider } from "./codex-app-server/provider.js";
+import { createDeepSeekProvider } from "./clients/deepseek.js";
 import { createAdminActionRouter } from "./admin-action-router.js";
 import { RedisConfirmationStore } from "./actions/confirmation-store.js";
 import { createAccessStore } from "./access/create-access-store.js";
@@ -40,7 +40,14 @@ const ollama = createOllamaProvider({
 });
 const providers = {
   ollama,
-  codex_app_server: createCodexAppServerProvider({ config: config.llm })
+  deepseek: createDeepSeekProvider({
+    apiKey: config.llm.deepseekApiKey,
+    baseUrl: config.llm.deepseekBaseUrl,
+    model: config.llm.deepseekModel,
+    timeoutMs: config.llm.deepseekTimeoutMs,
+    routeMaxOutputTokens: config.llm.routeMaxOutputTokens ?? 256,
+    generalMaxOutputTokens: config.llm.generalMaxOutputTokens ?? 512
+  })
 };
 const primary = createProfileAwareProvider({ config, providers, role: "primary" });
 const modelFallback = createProfileAwareProvider({ config, providers, role: "fallback" });
@@ -107,6 +114,7 @@ const app = createApp(config, {
   conversationWindowStore,
   webAllowlistStore,
   textGenerator: primary,
+  textFallbackGenerator: modelFallback,
   agentRuntime: createAgentRuntime({ memoryStore, graph }),
   diagnostics: createDependencyDiagnostics({
     config,

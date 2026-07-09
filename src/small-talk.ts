@@ -1,4 +1,5 @@
 import { SMALL_TALK_CATEGORIES } from "./types.js";
+import { providerCapabilities } from "./llm/provider-metadata.js";
 import type {
   BotProfileConfig,
   FunctionExecutionResult,
@@ -29,6 +30,7 @@ export interface ControlledSmallTalkInput {
   text: string;
   category: SmallTalkCategory;
   generator?: TextGenerationProvider;
+  fallbackGenerator?: TextGenerationProvider;
 }
 
 export async function createControlledSmallTalkReply(
@@ -40,25 +42,19 @@ export async function createControlledSmallTalkReply(
     return fallback;
   }
 
-  try {
-    const providerName =
-      input.generator.providerNameForProfile?.(input.profile.name) ?? input.generator.providerName;
-    const maxChars =
-      providerName === "codex_app_server" ? Math.max(config.maxChars, 320) : config.maxChars;
-    const reply = sanitizeGeneratedReply(
-      await input.generator.completeText({
-        prompt: buildSmallTalkPrompt(input.category, maxChars),
-        profileName: input.profile.name,
-        text: input.text,
-        category: input.category,
-        maxChars
-      }),
-      maxChars
-    );
-    return reply ? { ok: true, replyText: reply } : fallback;
-  } catch {
-    return fallback;
+  const primaryReply = await tryGeneratedReply(input, input.generator, config.maxChars);
+  if (primaryReply) {
+    return { ok: true, replyText: primaryReply };
   }
+
+  if (input.fallbackGenerator && input.fallbackGenerator !== input.generator) {
+    const fallbackReply = await tryGeneratedReply(input, input.fallbackGenerator, config.maxChars);
+    if (fallbackReply) {
+      return { ok: true, replyText: fallbackReply };
+    }
+  }
+
+  return fallback;
 }
 
 export function smallTalkCategoryFromArguments(args: JsonRecord): SmallTalkCategory {
@@ -80,6 +76,38 @@ function buildSmallTalkPrompt(category: SmallTalkCategory, maxChars: number): st
     "不要提到系統、模型、AI、Ollama、Notion、OneDrive、Graph、Azure、token、prompt。",
     "不要包含網址、Markdown、條列、引號、表情符號。"
   ].join("\n");
+}
+
+async function tryGeneratedReply(
+  input: ControlledSmallTalkInput,
+  generator: TextGenerationProvider,
+  baseMaxChars: number
+): Promise<string | undefined> {
+  const maxChars = effectiveSmartTalkMaxChars(generator, input.profile.name, baseMaxChars);
+  try {
+    return sanitizeGeneratedReply(
+      await generator.completeText({
+        prompt: buildSmallTalkPrompt(input.category, maxChars),
+        profileName: input.profile.name,
+        text: input.text,
+        category: input.category,
+        maxChars
+      }),
+      maxChars
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function effectiveSmartTalkMaxChars(
+  generator: TextGenerationProvider,
+  profileName: string,
+  baseMaxChars: number
+): number {
+  const providerName = generator.providerNameForProfile?.(profileName) ?? generator.providerName;
+  const capabilities = providerName ? providerCapabilities[providerName] : generator.capabilities;
+  return capabilities?.remoteApi ? Math.max(baseMaxChars, 320) : baseMaxChars;
 }
 
 function sanitizeGeneratedReply(value: string, maxChars: number): string | undefined {

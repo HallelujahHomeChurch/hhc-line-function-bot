@@ -8,6 +8,9 @@ function llmConfig(): LlmConfig {
     ollamaBaseUrl: "http://172.16.65.5:11434",
     ollamaModel: "qwen3:4b-instruct",
     ollamaKeepAlive: -1,
+    deepseekBaseUrl: "https://api.deepseek.com",
+    deepseekModel: "deepseek-v4-flash",
+    deepseekTimeoutMs: 8000,
     timeoutMs: 8000,
     keywordFallbackEnabled: true
   };
@@ -17,52 +20,84 @@ function llmConfigWithoutKeepAlive(): LlmConfig {
   return {
     ollamaBaseUrl: "http://172.16.65.5:11434",
     ollamaModel: "qwen3:4b-instruct",
+    deepseekBaseUrl: "https://api.deepseek.com",
+    deepseekModel: "deepseek-v4-flash",
+    deepseekTimeoutMs: 8000,
     timeoutMs: 8000,
     keywordFallbackEnabled: true
   };
 }
 
+function adminContext() {
+  return {
+    profile: {
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "secret",
+      channelAccessToken: "token",
+      allowDirectUser: true,
+      allowRooms: false,
+      allowedMessageTypes: ["text"],
+      groupRequireWakeWord: true,
+      wakeKeywords: ["小哈"],
+      acceptMention: true,
+      enabledFunctions: ["query_service_schedule"],
+      allowedProviders: ["ollama", "deepseek"],
+      allowSubscriptionProviders: false,
+      adminUserId: "Uadmin",
+      adminDirectOnly: true
+    },
+    event: { type: "message", source: { type: "user", userId: "Uadmin" } },
+    command: "llm-status",
+    args: []
+  } as const;
+}
+
 describe("LLM diagnostics admin handler", () => {
-  it("reports Codex app-server auth mount paths", async () => {
-    const handler = createLlmStatusAdminHandler({
-      provider: "codex_app_server",
-      fallbackProvider: "ollama",
-      ollamaBaseUrl: "http://127.0.0.1:11434",
-      ollamaModel: "qwen3:4b-instruct",
-      timeoutMs: 8000,
-      keywordFallbackEnabled: true,
-      codexAppServerCommand: "codex",
-      codexAppServerArgs: ["app-server", "--listen", "stdio://"],
-      codexHome: "/mnt/codex-home",
-      providerAuthHome: "/mnt/provider-auth"
-    });
-
-    const result = await handler({
-      profile: {
-        name: "helper",
-        webhookPath: "/api/line/webhook/helper",
-        channelSecret: "secret",
-        channelAccessToken: "token",
-        allowDirectUser: true,
-        allowRooms: false,
-        allowedMessageTypes: ["text"],
-        groupRequireWakeWord: true,
-        wakeKeywords: ["小哈"],
-        acceptMention: true,
-        enabledFunctions: ["query_service_schedule"],
-        allowedProviders: ["ollama", "codex_app_server"],
-        allowSubscriptionProviders: true,
-        adminUserId: "Uadmin",
-        adminDirectOnly: true
+  it("reports DeepSeek configured state without exposing the API key", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+        status: 200
+      })
+    );
+    const handler = createLlmStatusAdminHandler(
+      {
+        ...llmConfig(),
+        provider: "deepseek",
+        fallbackProvider: "ollama",
+        deepseekApiKey: "sk-secret"
       },
-      event: { type: "message", source: { type: "user", userId: "Uadmin" } },
-      command: "llm-status",
-      args: []
-    });
+      { fetchImpl }
+    );
 
-    expect(result.replyText).toContain("provider: codex_app_server");
-    expect(result.replyText).toContain("CODEX_HOME: /mnt/codex-home");
-    expect(result.replyText).toContain("PROVIDER_AUTH_HOME: /mnt/provider-auth");
+    const result = await handler(adminContext());
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://api.deepseek.com/chat/completions");
+    expect(result.replyText).toContain("provider: deepseek");
+    expect(result.replyText).toContain("apiKey: configured");
+    expect(result.replyText).toContain("model: deepseek-v4-flash");
+    expect(result.replyText).toContain("chat: ok");
+    expect(result.replyText).not.toContain("sk-secret");
+  });
+
+  it("skips DeepSeek chat probe when the API key is missing", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const handler = createLlmStatusAdminHandler(
+      {
+        ...llmConfig(),
+        provider: "deepseek",
+        fallbackProvider: "ollama"
+      },
+      { fetchImpl }
+    );
+
+    const result = await handler(adminContext());
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result.replyText).toContain("provider: deepseek");
+    expect(result.replyText).toContain("apiKey: missing");
+    expect(result.replyText).toContain("chat: skipped");
   });
 
   it("checks Ollama tags and chat without exposing the full base URL", async () => {
@@ -83,26 +118,7 @@ describe("LLM diagnostics admin handler", () => {
       );
     const handler = createLlmStatusAdminHandler(llmConfig(), { fetchImpl });
 
-    const result = await handler({
-      profile: {
-        name: "helper",
-        webhookPath: "/api/line/webhook/helper",
-        channelSecret: "secret",
-        channelAccessToken: "token",
-        allowDirectUser: true,
-        allowRooms: false,
-        allowedMessageTypes: ["text"],
-        groupRequireWakeWord: true,
-        wakeKeywords: ["小哈"],
-        acceptMention: true,
-        enabledFunctions: ["query_service_schedule"],
-        adminUserId: "Uadmin",
-        adminDirectOnly: true
-      },
-      event: { type: "message", source: { type: "user", userId: "Uadmin" } },
-      command: "llm-status",
-      args: []
-    });
+    const result = await handler(adminContext());
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://172.16.65.5:11434/api/tags");
@@ -131,26 +147,7 @@ describe("LLM diagnostics admin handler", () => {
       );
     const handler = createLlmStatusAdminHandler(llmConfigWithoutKeepAlive(), { fetchImpl });
 
-    await handler({
-      profile: {
-        name: "helper",
-        webhookPath: "/api/line/webhook/helper",
-        channelSecret: "secret",
-        channelAccessToken: "token",
-        allowDirectUser: true,
-        allowRooms: false,
-        allowedMessageTypes: ["text"],
-        groupRequireWakeWord: true,
-        wakeKeywords: ["小哈"],
-        acceptMention: true,
-        enabledFunctions: ["query_service_schedule"],
-        adminUserId: "Uadmin",
-        adminDirectOnly: true
-      },
-      event: { type: "message", source: { type: "user", userId: "Uadmin" } },
-      command: "llm-status",
-      args: []
-    });
+    await handler(adminContext());
 
     const body = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
     expect(body.keep_alive).toBeUndefined();
@@ -160,26 +157,7 @@ describe("LLM diagnostics admin handler", () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error("connect ECONNREFUSED"));
     const handler = createLlmStatusAdminHandler(llmConfig(), { fetchImpl });
 
-    const result = await handler({
-      profile: {
-        name: "helper",
-        webhookPath: "/api/line/webhook/helper",
-        channelSecret: "secret",
-        channelAccessToken: "token",
-        allowDirectUser: true,
-        allowRooms: false,
-        allowedMessageTypes: ["text"],
-        groupRequireWakeWord: true,
-        wakeKeywords: ["小哈"],
-        acceptMention: true,
-        enabledFunctions: ["query_service_schedule"],
-        adminUserId: "Uadmin",
-        adminDirectOnly: true
-      },
-      event: { type: "message", source: { type: "user", userId: "Uadmin" } },
-      command: "llm-status",
-      args: []
-    });
+    const result = await handler(adminContext());
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(result.replyText).toContain("LLM status");

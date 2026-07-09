@@ -37,10 +37,6 @@ import { MemoryInFlightStore, type InFlightStore } from "./in-flight/in-flight-s
 import { createIntroReply } from "./intro.js";
 import { buildFunctionQuickReplies, buildPostbackQuickReply } from "./line-reply.js";
 import { verifyLineSignature } from "./line-signature.js";
-import {
-  createCodexDeviceLoginManager,
-  type ProviderLoginManager
-} from "./llm/codex-device-login.js";
 import { allowedProvidersForProfile, providerIsAllowedForProfile } from "./llm/provider-runtime.js";
 import { messages } from "./messages.js";
 import { sanitizeActionTelemetryEvent } from "./observability/action-telemetry.js";
@@ -73,7 +69,6 @@ import type {
   LineEvent,
   ModelProviderName,
   LineReplyClient,
-  QuickReplyItem,
   LineWebhookPayload,
   FunctionName,
   PostbackHandlerRegistry,
@@ -113,7 +108,7 @@ export interface AppDependencies {
   agentJobStore?: AgentJobStore;
   conversationWindowStore?: ConversationWindowStore;
   webAllowlistStore?: WebAllowlistStore;
-  providerLoginManager?: ProviderLoginManager;
+  textFallbackGenerator?: TextGenerationProvider;
 }
 
 interface AllowResult {
@@ -186,8 +181,6 @@ const builtInAdminCommandGroups: AdminCommandHelpGroup[] = [
     entries: [
       { usage: "/admin-add <userId>", description: "superadmin 新增 admin" },
       { usage: "/admin-remove <userId>", description: "superadmin 停用 admin" },
-      { usage: "/llm-login [provider]", description: "superadmin direct chat provider login" },
-      { usage: "/llm-logout [provider]", description: "superadmin direct chat provider logout" },
       { usage: "/llm-use <provider>", description: "show/change the active provider" }
     ]
   },
@@ -223,7 +216,6 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   });
   const functionRegistry = deps.functionRegistry ?? {};
   const adminActionRouter = deps.adminActionRouter;
-  const providerLoginManager = deps.providerLoginManager ?? createCodexDeviceLoginManager();
   const createReplyClient = deps.createLineReplyClient ?? createLineSdkReplyClient;
   const createIdentityClient = deps.createLineIdentityClient ?? createLineSdkIdentityClient;
   const requestIdFactory = deps.requestIdFactory ?? randomUUID;
@@ -254,6 +246,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   const diagnostics = deps.diagnostics ?? createStaticAppDiagnostics(config);
   const inFlightStore = deps.inFlightStore ?? new MemoryInFlightStore();
   const textGenerator = deps.textGenerator;
+  const textFallbackGenerator = deps.textFallbackGenerator;
   const agentTraceStore =
     deps.agentTraceStore ?? new InMemoryAgentTraceStore(config.lastErrors?.maxEntries ?? 20);
   const agentJobStore = deps.agentJobStore ?? new InMemoryAgentJobStore();
@@ -280,6 +273,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
       lastRouteStore,
       routeObserver: deps.routeObserver,
       textGenerator,
+      textFallbackGenerator,
       contextManager,
       conversationWindowStore
     });
@@ -324,11 +318,11 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         agentTurnRuntime,
         agentTraceStore,
         textGenerator,
+        textFallbackGenerator,
         deps.agentRuntime,
         agentJobStore,
         conversationWindowStore,
-        webAllowlistStore,
-        providerLoginManager
+        webAllowlistStore
       );
     });
   }
@@ -359,11 +353,11 @@ async function handleWebhook(
   agentTurnRuntime: AgentTurnRuntime,
   agentTraceStore: AgentTraceStore,
   textGenerator: TextGenerationProvider | undefined,
+  textFallbackGenerator: TextGenerationProvider | undefined,
   agentRuntime: AgentRuntime | undefined,
   agentJobStore: AgentJobStore,
   conversationWindowStore: ConversationWindowStore,
-  webAllowlistStore: WebAllowlistStore,
-  providerLoginManager: ProviderLoginManager
+  webAllowlistStore: WebAllowlistStore
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -531,8 +525,7 @@ async function handleWebhook(
           diagnostics,
           agentTraceStore,
           requestId,
-          webAllowlistStore,
-          providerLoginManager
+          webAllowlistStore
         );
       } catch (error) {
         await lastErrorStore.record({
@@ -606,7 +599,8 @@ async function handleWebhook(
         profile: effectiveProfile,
         text: event.message.text,
         category: groupEngagement.smallTalkCategory,
-        generator: textGenerator
+        generator: textGenerator,
+        fallbackGenerator: textFallbackGenerator
       });
       await emitRouteEvent(routeObserver, {
         kind: "route",
@@ -1312,8 +1306,7 @@ async function handleAdminCommand(
   diagnostics: AppDiagnostics,
   agentTraceStore: AgentTraceStore,
   requestId: string,
-  webAllowlistStore: WebAllowlistStore,
-  providerLoginManager: ProviderLoginManager
+  webAllowlistStore: WebAllowlistStore
 ): Promise<FunctionExecutionResult> {
   const parsed = parseAdminCommand(text);
   if (!parsed) {
@@ -1322,14 +1315,6 @@ async function handleAdminCommand(
 
   if (!isKnownAdminCommand(parsed.command, adminHandlers)) {
     return { ok: true, replyText: "目前不支援這個 admin 指令。" };
-  }
-
-  if (parsed.command === "llm-login") {
-    return handleLlmLoginCommand(config, profile, event, parsed.args[0], providerLoginManager);
-  }
-
-  if (parsed.command === "llm-logout") {
-    return handleLlmLogoutCommand(config, profile, event, parsed.args[0], providerLoginManager);
   }
 
   if (parsed.command === "llm-use") {
@@ -1432,184 +1417,6 @@ async function handleAdminCommand(
   return { ok: true, replyText: "目前不支援這個 admin 指令。" };
 }
 
-function llmProviderQuickReplies(): QuickReplyItem[] {
-  return [
-    {
-      label: "LLM 狀態",
-      action: {
-        type: "message",
-        label: "LLM 狀態",
-        text: "/llm-status"
-      }
-    },
-    {
-      label: "使用 Codex",
-      action: {
-        type: "message",
-        label: "使用 Codex",
-        text: "/llm-use codex"
-      }
-    }
-  ];
-}
-
-function codexDeviceLoginErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.startsWith("Codex device code request failed:")) {
-    return message;
-  }
-  if (message === "fetch failed" || message.includes("fetch failed")) {
-    return "fetch_failed";
-  }
-  if (message.includes("missing required fields")) {
-    return "invalid_device_auth_response";
-  }
-  return "unexpected_error";
-}
-
-async function handleLlmLoginCommand(
-  config: AppConfig,
-  profile: BotProfileConfig,
-  event: LineEvent,
-  providerArg: string | undefined,
-  providerLoginManager: ProviderLoginManager
-): Promise<FunctionExecutionResult> {
-  const actorUserId = event.source.userId;
-  if (!isBootstrapSuperAdmin(profile, actorUserId)) {
-    return { ok: true, replyText: "你沒有權限使用 LLM 登入指令。" };
-  }
-  if (event.source.type !== "user") {
-    return { ok: true, replyText: "請在 1 對 1 對話中使用 LLM 登入指令。" };
-  }
-  const provider = resolveProviderArg(providerArg, profile, config);
-  if (!provider) {
-    return { ok: true, replyText: `不支援的 LLM provider：${providerArg ?? "(empty)"}` };
-  }
-  if (!providerIsAllowedForProfile(profile, provider)) {
-    return { ok: true, replyText: `provider is not allowed for this profile: ${provider}` };
-  }
-  if (provider === "ollama") {
-    return { ok: true, replyText: "Ollama 不需要登入。" };
-  }
-  if (provider !== "codex_app_server") {
-    return { ok: true, replyText: `不支援的 LLM provider：${providerArg ?? "(empty)"}` };
-  }
-  let login: Awaited<ReturnType<ProviderLoginManager["startCodexLogin"]>>;
-  try {
-    login = await providerLoginManager.startCodexLogin({
-      codexHome: config.llm.codexHome,
-      clientId: config.llm.codexLoginClientId,
-      issuer: config.llm.codexAuthIssuer,
-      ttlMs: config.llm.codexDeviceLoginTtlMs
-    });
-  } catch (error) {
-    const reason = codexDeviceLoginErrorMessage(error);
-    console.warn(
-      JSON.stringify({
-        event: "codex_device_login_start_failed",
-        profileName: profile.name,
-        sourceType: event.source.type,
-        errorName: error instanceof Error ? error.name : typeof error,
-        reason
-      })
-    );
-    return {
-      ok: false,
-      replyText: [
-        "Codex device login 啟動失敗。",
-        `原因：${reason}`,
-        "請稍後再試；若持續失敗，請查看 ACA logs 或 /last-errors。"
-      ].join("\n")
-    };
-  }
-  if (login.status === "already_logged_in") {
-    return {
-      ok: true,
-      replyText: [
-        "Codex device login",
-        "目前已登入。",
-        login.email ? `帳號：${login.email}` : undefined,
-        login.plan ? `方案：${login.plan}` : undefined,
-        "",
-        "可以使用：",
-        "/llm-status",
-        "/llm-use codex"
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join("\n"),
-      quickReplies: llmProviderQuickReplies()
-    };
-  }
-  const activeMessage =
-    login.status === "already_active"
-      ? "An active login is already in progress. 請使用同一組 code 完成登入。"
-      : "請在期限內打開連結並完成登入。";
-  return {
-    ok: true,
-    replyText: [
-      "Codex device login",
-      activeMessage,
-      "",
-      "1. 打開：",
-      login.verificationUrl ?? "(missing verification URL)",
-      "",
-      "2. 輸入一次性 code：",
-      login.userCode ?? "(missing code)",
-      "",
-      login.expiresAt ? `到期時間：${login.expiresAt}` : undefined,
-      "",
-      "完成後可以使用：",
-      "/llm-status",
-      "/llm-use codex"
-    ]
-      .filter((line): line is string => line !== undefined)
-      .join("\n"),
-    quickReplies: llmProviderQuickReplies()
-  };
-}
-
-async function handleLlmLogoutCommand(
-  config: AppConfig,
-  profile: BotProfileConfig,
-  event: LineEvent,
-  providerArg: string | undefined,
-  providerLoginManager: ProviderLoginManager
-): Promise<FunctionExecutionResult> {
-  const actorUserId = event.source.userId;
-  if (!isBootstrapSuperAdmin(profile, actorUserId)) {
-    return { ok: true, replyText: "你沒有權限使用 LLM 登出指令。" };
-  }
-  if (event.source.type !== "user") {
-    return { ok: true, replyText: "請在 1 對 1 對話中使用 LLM 登出指令。" };
-  }
-  const provider = resolveProviderArg(providerArg, profile, config);
-  if (!provider) {
-    return { ok: true, replyText: `不支援的 LLM provider：${providerArg ?? "(empty)"}` };
-  }
-  if (!providerIsAllowedForProfile(profile, provider)) {
-    return { ok: true, replyText: `provider is not allowed for this profile: ${provider}` };
-  }
-  if (provider === "codex_app_server") {
-    const logout = await providerLoginManager.logoutCodex({ codexHome: config.llm.codexHome });
-    return {
-      ok: true,
-      replyText: logout.removed
-        ? "Codex device login 已清除。"
-        : "這個 CODEX_HOME 目前沒有 Codex 登入狀態。"
-    };
-  }
-  if (provider === "ollama") {
-    return { ok: true, replyText: "Ollama 不需要登出。" };
-  }
-  return {
-    ok: true,
-    replyText:
-      provider === "codex_app_server"
-        ? `Codex app-server 登出需要清除部署環境的 CODEX_HOME 帳號狀態：${config.llm.codexHome ?? "(container default)"}`
-        : "Ollama 不需要登出。"
-  };
-}
-
 async function handleLlmUseCommand(
   config: AppConfig,
   profile: BotProfileConfig,
@@ -1655,11 +1462,11 @@ function resolveProviderArg(
   profile: BotProfileConfig,
   config: AppConfig
 ): ModelProviderName | undefined {
-  if (value === "codex" || value === "codex_app_server") {
-    return "codex_app_server";
-  }
   if (value === "ollama") {
     return "ollama";
+  }
+  if (value === "deepseek") {
+    return "deepseek";
   }
   if (value) {
     return undefined;

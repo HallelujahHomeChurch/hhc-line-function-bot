@@ -6,13 +6,15 @@ export const providerCapabilities: Record<ModelProviderName, ProviderCapabilitie
     smartTalk: true,
     largeContext: false,
     requiresExternalAuth: false,
-    subscriptionBased: false
+    subscriptionBased: false,
+    remoteApi: false
   },
-  codex_app_server: {
+  deepseek: {
     structuredOutput: true,
     smartTalk: true,
     largeContext: true,
-    requiresExternalAuth: true,
-    subscriptionBased: true
+    requiresExternalAuth: false,
+    subscriptionBased: false,
+    remoteApi: true
   }
 };

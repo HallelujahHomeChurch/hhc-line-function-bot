@@ -39,7 +39,7 @@ export type ActionName = FunctionName | SystemActionName | AdminActionName;
 
 export type JsonRecord = Record<string, unknown>;
 
-export const MODEL_PROVIDER_NAMES = ["ollama", "codex_app_server"] as const;
+export const MODEL_PROVIDER_NAMES = ["ollama", "deepseek"] as const;
 
 export type ModelProviderName = (typeof MODEL_PROVIDER_NAMES)[number];
 export type RouteProviderName = ModelProviderName | "keyword" | "router";
@@ -50,6 +50,7 @@ export interface ProviderCapabilities {
   largeContext: boolean;
   requiresExternalAuth: boolean;
   subscriptionBased: boolean;
+  remoteApi: boolean;
 }
 
 export type DirectAccessPolicy = "managed" | "public" | "blocked";
@@ -107,15 +108,10 @@ export interface LlmConfig {
   ollamaBaseUrl: string;
   ollamaModel: string;
   ollamaKeepAlive?: string | number;
-  codexAppServerCommand?: string;
-  codexAppServerArgs?: string[];
-  codexHome?: string;
-  providerAuthHome?: string;
-  codexAuthIssuer?: string;
-  codexLoginClientId?: string;
-  codexDeviceLoginTtlMs?: number;
-  codexModel?: string;
-  codexModelProvider?: string;
+  deepseekApiKey?: string;
+  deepseekBaseUrl: string;
+  deepseekModel: string;
+  deepseekTimeoutMs: number;
   contextWindowTokens?: number;
   runtimeContextBudgetTokens?: number;
   contextCompressionThresholdRatio?: number;

@@ -41,6 +41,9 @@ function config(profiles: BotProfileConfig[]): AppConfig {
       fallbackProvider: "ollama",
       ollamaBaseUrl: "http://127.0.0.1:11434",
       ollamaModel: "qwen3:4b-instruct",
+      deepseekBaseUrl: "https://api.deepseek.com",
+      deepseekModel: "deepseek-v4-flash",
+      deepseekTimeoutMs: 8000,
       timeoutMs: 8000,
       keywordFallbackEnabled: true
     }
@@ -58,16 +61,15 @@ describe("provider runtime", () => {
   it("selects the profile-specific primary provider", async () => {
     const appConfig = config([
       profile({
-        llmProvider: "codex_app_server",
-        allowedProviders: ["ollama", "codex_app_server"],
-        allowSubscriptionProviders: true
+        llmProvider: "deepseek",
+        allowedProviders: ["ollama", "deepseek"]
       })
     ]);
-    const codex = provider("codex");
+    const deepseek = provider("deepseek");
     const ollama = provider("ollama");
     const runtime = createProfileAwareProvider({
       config: appConfig,
-      providers: { ollama, codex_app_server: codex },
+      providers: { ollama, deepseek },
       role: "primary"
     });
 
@@ -78,22 +80,22 @@ describe("provider runtime", () => {
         text: "hello",
         enabledFunctions: []
       })
-    ).resolves.toBe("codex");
-    expect(codex.completeJson).toHaveBeenCalledOnce();
+    ).resolves.toBe("deepseek");
+    expect(deepseek.completeJson).toHaveBeenCalledOnce();
     expect(ollama.completeJson).not.toHaveBeenCalled();
   });
 
-  it("rejects subscription providers when the profile does not allow them", () => {
+  it("rejects providers outside the profile allowed provider list", () => {
     const appConfig = config([
       profile({
-        llmProvider: "codex_app_server",
+        llmProvider: "deepseek",
         allowedProviders: ["ollama"],
         allowSubscriptionProviders: false
       })
     ]);
 
     expect(() => resolvePrimaryProviderName(appConfig, appConfig.profiles[0])).toThrow(
-      "Provider codex_app_server is not allowed for profile helper"
+      "Provider deepseek is not allowed for profile helper"
     );
   });
 });

@@ -27,6 +27,8 @@ properties:
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
       - name: redis-url
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+      - name: deepseek-api-key
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
   template:
     containers:
       - name: hhc-line-function-bot
@@ -42,10 +44,6 @@ properties:
             value: /healthz
           - name: READY_PATH
             value: /readyz
-          - name: CODEX_HOME
-            value: /mnt/codex-home
-          - name: PROVIDER_AUTH_HOME
-            value: /mnt/provider-auth
           - name: BOT_PROFILES_BASE64_JSON
             secretRef: bot-profiles-base64-json
           - name: OLLAMA_BASE_URL
@@ -54,6 +52,14 @@ properties:
             value: qwen3:4b-instruct
           - name: KEYWORD_FALLBACK_ENABLED
             value: "true"
+          - name: DEEPSEEK_API_KEY
+            secretRef: deepseek-api-key
+          - name: DEEPSEEK_BASE_URL
+            value: https://api.deepseek.com
+          - name: DEEPSEEK_MODEL
+            value: deepseek-v4-flash
+          - name: DEEPSEEK_TIMEOUT_MS
+            value: "8000"
           - name: DATABASE_URL
             secretRef: database-url
           - name: DATABASE_SSL
@@ -102,11 +108,6 @@ properties:
             value: Role
           - name: NOTION_PERSON_PROPERTY
             value: Person
-        volumeMounts:
-          - volumeName: codex-home
-            mountPath: /mnt/codex-home
-          - volumeName: provider-auth
-            mountPath: /mnt/provider-auth
         probes:
           - type: Liveness
             httpGet:
@@ -120,10 +121,3 @@ properties:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
-    volumes:
-      - name: codex-home
-        storageType: AzureFile
-        storageName: codex-home
-      - name: provider-auth
-        storageType: AzureFile
-        storageName: provider-auth

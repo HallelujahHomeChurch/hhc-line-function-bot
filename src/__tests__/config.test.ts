@@ -286,7 +286,7 @@ describe("config", () => {
     expect(config.llm.ollamaKeepAlive).toBeUndefined();
   });
 
-  it("loads Codex app-server as a pluggable LLM provider", () => {
+  it("loads DeepSeek as a pluggable LLM provider", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),
       BOT_PROFILES_JSON: JSON.stringify([
@@ -295,35 +295,42 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "codex_app_server"],
-          allowSubscriptionProviders: true
+          allowedProviders: ["ollama", "deepseek"],
+          llmProvider: "deepseek"
         }
       ]),
-      LLM_PROVIDER: "codex_app_server",
+      LLM_PROVIDER: "deepseek",
       LLM_FALLBACK_PROVIDER: "ollama",
-      CODEX_APP_SERVER_COMMAND: "codex",
-      CODEX_APP_SERVER_ARGS: "app-server,--listen,stdio://",
-      CODEX_HOME: "/mnt/codex-home",
-      PROVIDER_AUTH_HOME: "/mnt/provider-auth"
+      DEEPSEEK_API_KEY: "sk-test",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+      DEEPSEEK_MODEL: "deepseek-v4-flash",
+      DEEPSEEK_TIMEOUT_MS: "7000"
     });
 
     expect(config.llm).toMatchObject({
-      provider: "codex_app_server",
+      provider: "deepseek",
       fallbackProvider: "ollama",
-      codexAppServerCommand: "codex",
-      codexAppServerArgs: ["app-server", "--listen", "stdio://"],
-      codexHome: "/mnt/codex-home",
-      providerAuthHome: "/mnt/provider-auth"
+      deepseekApiKey: "sk-test",
+      deepseekBaseUrl: "https://api.deepseek.com",
+      deepseekModel: "deepseek-v4-flash",
+      deepseekTimeoutMs: 7000
     });
   });
 
-  it("rejects the removed direct Codex OAuth provider", () => {
+  it("rejects removed Codex provider names", () => {
     expect(() =>
       loadConfigFromEnv({
         ...baseEnv(),
         LLM_PROVIDER: "openai_codex_oauth"
       })
     ).toThrow("openai_codex_oauth is no longer supported");
+
+    expect(() =>
+      loadConfigFromEnv({
+        ...baseEnv(),
+        LLM_PROVIDER: "codex_app_server"
+      })
+    ).toThrow("codex_app_server is no longer supported");
   });
 
   it("defaults profile provider policy to non-subscription providers only", () => {
@@ -335,7 +342,7 @@ describe("config", () => {
     });
   });
 
-  it("loads helper provider policy for internal subscription providers", () => {
+  it("loads helper provider policy for remote API providers", () => {
     const config = loadConfigFromEnv({
       BOT_PROFILES_JSON: JSON.stringify([
         {
@@ -343,21 +350,20 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          llmProvider: "codex_app_server",
-          allowedProviders: ["ollama", "codex_app_server"],
-          allowSubscriptionProviders: true
+          llmProvider: "deepseek",
+          allowedProviders: ["ollama", "deepseek"]
         }
       ])
     });
 
     expect(config.profiles[0]).toMatchObject({
-      llmProvider: "codex_app_server",
-      allowedProviders: ["ollama", "codex_app_server"],
-      allowSubscriptionProviders: true
+      llmProvider: "deepseek",
+      allowedProviders: ["ollama", "deepseek"],
+      allowSubscriptionProviders: false
     });
   });
 
-  it("rejects subscription providers when the profile policy does not allow them", () => {
+  it("rejects unsupported provider names in profile policy", () => {
     expect(() =>
       loadConfigFromEnv({
         BOT_PROFILES_JSON: JSON.stringify([
@@ -372,7 +378,7 @@ describe("config", () => {
           }
         ])
       })
-    ).toThrow("Profile main cannot allow subscription provider codex_app_server");
+    ).toThrow();
   });
 
   it("rejects fallback providers outside the profile provider policy", () => {
@@ -384,9 +390,8 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/helper",
             channelSecret: "secret",
             channelAccessToken: "token",
-            allowedProviders: ["codex_app_server"],
-            allowSubscriptionProviders: true,
-            llmProvider: "codex_app_server"
+            allowedProviders: ["deepseek"],
+            llmProvider: "deepseek"
           }
         ]),
         LLM_FALLBACK_PROVIDER: "ollama"

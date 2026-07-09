@@ -4,11 +4,6 @@ import { z } from "zod";
 
 import { assertCanonicalWebhookPath } from "./profile-path.js";
 import { readTimeZone } from "./time-zone.js";
-import {
-  DEFAULT_CODEX_AUTH_ISSUER,
-  DEFAULT_CODEX_DEVICE_LOGIN_TTL_MS,
-  DEFAULT_CODEX_LOGIN_CLIENT_ID
-} from "./llm/codex-device-login.js";
 import { providerCapabilities } from "./llm/provider-metadata.js";
 import { FUNCTION_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
 import type { AppConfig, FunctionName, ModelProviderName } from "./types.js";
@@ -104,18 +99,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       ollamaBaseUrl: env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
       ollamaModel: env.OLLAMA_MODEL || "qwen3:4b-instruct",
       ollamaKeepAlive: readOllamaKeepAlive(env.OLLAMA_KEEP_ALIVE),
-      codexAppServerCommand: env.CODEX_APP_SERVER_COMMAND || "codex",
-      codexAppServerArgs: readList(env.CODEX_APP_SERVER_ARGS || "app-server,--listen,stdio://"),
-      codexHome: env.CODEX_HOME || undefined,
-      providerAuthHome: env.PROVIDER_AUTH_HOME || undefined,
-      codexAuthIssuer: env.CODEX_AUTH_ISSUER || DEFAULT_CODEX_AUTH_ISSUER,
-      codexLoginClientId: env.CODEX_LOGIN_CLIENT_ID || DEFAULT_CODEX_LOGIN_CLIENT_ID,
-      codexDeviceLoginTtlMs: readInt(
-        env.CODEX_DEVICE_LOGIN_TTL_MS,
-        DEFAULT_CODEX_DEVICE_LOGIN_TTL_MS
-      ),
-      codexModel: env.CODEX_MODEL || "gpt-5.1-codex",
-      codexModelProvider: env.CODEX_MODEL_PROVIDER || "openai",
+      deepseekApiKey: env.DEEPSEEK_API_KEY || undefined,
+      deepseekBaseUrl: env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
+      deepseekModel: env.DEEPSEEK_MODEL || "deepseek-v4-flash",
+      deepseekTimeoutMs: readInt(env.DEEPSEEK_TIMEOUT_MS, 8000),
       contextWindowTokens: readInt(env.LLM_CONTEXT_WINDOW_TOKENS, 128_000),
       runtimeContextBudgetTokens: readInt(env.LLM_RUNTIME_CONTEXT_BUDGET_TOKENS, 24_000),
       contextCompressionThresholdRatio: readFloat(
@@ -384,13 +371,13 @@ function readFloat(value: string | undefined, fallback: number): number {
 
 function readModelProvider(
   value: string | undefined,
-  fallback: "ollama" | "codex_app_server"
-): "ollama" | "codex_app_server" {
-  if (value === "openai_codex_oauth") {
-    throw new Error("openai_codex_oauth is no longer supported");
+  fallback: ModelProviderName
+): ModelProviderName {
+  if (value === "openai_codex_oauth" || value === "codex_app_server" || value === "codex") {
+    throw new Error(`${value} is no longer supported`);
   }
-  if (value === "codex_app_server") {
-    return "codex_app_server";
+  if (value === "ollama" || value === "deepseek") {
+    return value;
   }
   return fallback;
 }

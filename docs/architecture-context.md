@@ -14,17 +14,15 @@ functions, and admin gates.
 The service is local-first for routing:
 
 - Ollama is the default natural-language router.
-- `codex_app_server` is an optional smarter provider that runs the Codex
-  app-server over stdio using account state from `CODEX_HOME`.
+- `deepseek` is an optional remote API provider that uses `DEEPSEEK_API_KEY`.
 - Provider runtimes may reason and generate text, but this bot owns authority:
   profile policy, function toggles, tool execution, memory writes, and deny or
   clarify flows remain server-side.
-- The line bot can start Codex device login from superadmin direct chat, but it
-  does not expose provider OAuth callback routes or store LLM tokens in
-  PostgreSQL. Successful provider state lives in mounted auth storage such as
-  `CODEX_HOME`.
-- Keyword fallback is conservative and only runs when Ollama is unavailable,
-  times out, or returns invalid JSON.
+- The line bot does not expose provider OAuth callback routes or store LLM
+  tokens in PostgreSQL. Remote provider API keys live in ACA secrets or local
+  `.env` only.
+- Keyword fallback is conservative and only runs when configured model
+  providers are unavailable, time out, or return invalid JSON.
 - Explicit model deny decisions do not fall back.
 - Function execution is still controlled by server-side policy and registered
   handlers.
@@ -67,13 +65,10 @@ For normal LINE webhook messages, read the flow in this order:
 The main entrance behavior lives in `src/server.ts`; tests for it live mostly in
 `src/__tests__/entrance.test.ts`.
 
-For Codex app-server operations, the bootstrap superadmin sends `/llm-login
-codex`, `/llm-logout codex`, `/llm-use`, or `/llm-status` in direct chat.
-`/llm-login codex` returns the Codex device verification URL and user code.
-The admin completes login in a browser, and the bot writes the resulting Codex
-account state to `CODEX_HOME`. No public provider callback path is involved.
-Profile provider policy decides which providers may be used. Subscription
-providers are intended for the internal `helper` profile only.
+For provider diagnostics, the bootstrap superadmin sends `/llm-use` or
+`/llm-status` in direct chat. Profile provider policy decides which providers
+may be used. Remote API providers such as `deepseek` are configured through
+secrets and profile allowlists.
 
 ## Action Types
 
@@ -121,8 +116,7 @@ Routing is deliberately layered:
 - `src/agent/slot-clarification.ts`: required-slot handling driven by function
   definition metadata.
 - `src/router.ts`: primary JSON router with provider/fallback diagnostics.
-- `src/codex-app-server/client.ts`: JSON-RPC client for Codex app-server stdio.
-- `src/codex-app-server/provider.ts`: Codex app-server chat/text provider.
+- `src/clients/deepseek.ts`: DeepSeek chat/text provider.
 - `src/keyword-router.ts`: narrow fallback when Ollama fails.
 - `src/function-arguments.ts` and `src/functions/argument-normalization.ts`:
   slot validation and cleanup.
@@ -253,7 +247,7 @@ Function dependencies are intentionally behind ports/clients:
 
 - LINE: `src/clients/line.ts`
 - Ollama: `src/clients/ollama.ts`
-- Codex app-server provider: `src/codex-app-server/*`
+- DeepSeek provider: `src/clients/deepseek.ts`
 - Microsoft Graph: `src/clients/graph.ts`
 - Notion: `src/clients/notion.ts`
 - Postgres access store: `src/access/postgres-access-store.ts`
@@ -291,9 +285,8 @@ Use this map for common issues:
   `src/agent/*memory-store.ts`, and `src/__tests__/agent-memory.test.ts`.
 - Admin command denied: `adminUserId`, DB admin principals, `adminDirectOnly`,
   admin command parser, action policy tests.
-- `/llm-login codex` does not work: verify direct chat source, bootstrap
-  `adminUserId`, profile provider allowlist, `CODEX_AUTH_ISSUER`,
-  `CODEX_LOGIN_CLIENT_ID`, `CODEX_HOME`, and the deployed account volume.
+- DeepSeek provider does not work: verify `DEEPSEEK_API_KEY`, profile provider
+  allowlist, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, and `/llm-status`.
 - Need to know where a text request stopped: admin direct-chat
   `/last-agent-turns`.
 - Readiness failed: public `/readyz` checks only Postgres and Redis; detailed

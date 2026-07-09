@@ -7,7 +7,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Fastify webhook server with LINE signature validation.
 - Multiple bot profiles in one service, each on its own webhook path.
 - Per-profile access policy, wake words, message type filtering, and function toggles.
-- Function router that uses Ollama `qwen3:4b-instruct` by default, with optional Codex app-server provider support.
+- Function router that uses Ollama `qwen3:4b-instruct` by default, with optional DeepSeek API key provider support.
 - Action catalog that separates user functions, admin actions, and system actions.
 - Policy gate and admin action registry for natural-language admin operations.
 - Conservative keyword fallback when Ollama times out, is unreachable, or returns invalid JSON.
@@ -168,9 +168,9 @@ Function toggles are profile-scoped:
 
 ## Routing
 
-Primary routing uses Ollama unless a profile or environment selects `codex_app_server`. The Codex provider starts the Codex app-server over stdio inside the container and uses the account state available in `CODEX_HOME`. The bot can start Codex device login from LINE, but it does not expose provider OAuth callback routes or store provider tokens in PostgreSQL.
+Primary routing uses Ollama unless a profile or environment selects `deepseek`. The DeepSeek provider calls the OpenAI-compatible `/chat/completions` API with `DEEPSEEK_API_KEY`; it does not require provider login routes, mounted auth state, or PostgreSQL token storage.
 
-Provider access is profile-scoped. Internal helper profiles may set `allowSubscriptionProviders=true` and explicitly list `codex_app_server` in `allowedProviders`. Future official `main` profiles should keep subscription providers disabled.
+Provider access is profile-scoped. Internal helper profiles may explicitly list `deepseek` in `allowedProviders`. Future official `main` profiles can stay on `ollama` or define their own allowed providers.
 
 If the primary provider returns invalid JSON, times out, or is unavailable, routing can fall back to Ollama through `LLM_FALLBACK_PROVIDER=ollama`. Explicit model deny decisions do not fall back.
 
@@ -179,15 +179,10 @@ Relevant env vars:
 ```text
 LLM_PROVIDER=ollama
 LLM_FALLBACK_PROVIDER=ollama
-CODEX_APP_SERVER_COMMAND=codex
-CODEX_APP_SERVER_ARGS=app-server,--listen,stdio://
-CODEX_HOME=/mnt/codex-home
-PROVIDER_AUTH_HOME=/mnt/provider-auth
-CODEX_AUTH_ISSUER=https://auth.openai.com
-CODEX_LOGIN_CLIENT_ID=app_EMoamEEZ73f0CkXaXp7hrann
-CODEX_DEVICE_LOGIN_TTL_MS=900000
-CODEX_MODEL=gpt-5.1-codex
-CODEX_MODEL_PROVIDER=openai
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_TIMEOUT_MS=8000
 LLM_RUNTIME_CONTEXT_BUDGET_TOKENS=2000
 LLM_CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.75
 LLM_GENERAL_MAX_OUTPUT_TOKENS=160
@@ -197,13 +192,11 @@ LLM_ROUTE_MAX_OUTPUT_TOKENS=256
 Bootstrap superadmin direct-chat commands for LLM provider operations:
 
 ```text
-/llm-login codex
-/llm-logout codex
 /llm-use
 /llm-status
 ```
 
-`/llm-login codex` starts a Codex device login in direct chat for the bootstrap superadmin. The reply includes a verification URL, one-time user code, and quick replies for `/llm-status` and `/llm-use codex`. Successful login writes Codex account state to the configured `CODEX_HOME`; no public callback route, PostgreSQL token row, or LINE push message is used. `/llm-use` reports the active provider and the provider names accepted by the runtime.
+`/llm-use` reports the active provider and the provider names accepted by the current profile. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes.
 
 Keyword fallback is intentionally narrow:
 
@@ -327,8 +320,7 @@ Advanced commands:
 /last-routes
 /last-agent-turns [limit]
 /memory-status
-/llm-login
-/llm-logout
+/llm-use
 /web-allowlist-add <domain> [pathPrefix]
 /web-allowlist-enable <id>
 /web-allowlist-disable <id>
@@ -371,6 +363,7 @@ Do not commit real `.env` files. In Azure Container Apps, store runtime values i
 - `GRAPH_CLIENT_SECRET`
 - `DATABASE_URL`
 - `REDIS_URL`
+- `DEEPSEEK_API_KEY`
 
 ## Governance
 

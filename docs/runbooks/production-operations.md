@@ -12,9 +12,8 @@ Direct-message admin commands:
 
 ```text
 /diag
-/llm-login
-/llm-logout
 /llm-status
+/llm-use
 /last-routes
 /last-errors
 /last-agent-turns
@@ -26,18 +25,16 @@ Direct-message admin commands:
 
 `/diag` may show dependency status for Ollama, Redis, Postgres, Graph, and Notion, but must not print tenant IDs, database IDs, folder IDs, LINE IDs, tokens, secrets, credential URLs, raw user messages, or invite codes.
 
-`/llm-login`, `/llm-logout`, and `/llm-use` are bootstrap superadmin direct-chat only. `/llm-login codex` starts Codex device login from LINE and returns a verification URL plus one-time user code. Successful login writes Codex account state to the configured `CODEX_HOME`; it does not create a public callback route, PostgreSQL token row, or LINE push message. Use `/llm-status` after completing the browser login, then switch the profile or env to `codex_app_server` only when status is healthy.
+`/llm-use` and `/llm-status` are bootstrap superadmin direct-chat only. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes. DeepSeek uses `DEEPSEEK_API_KEY` from ACA secrets or local `.env`.
 
 If upgrading from the removed direct OAuth provider, review `docs/sql/drop-legacy-llm-auth.sql` before manually dropping the old `llm_auth_profiles` table.
 
-Subscription providers are helper-only. Configure the internal `helper` profile with `allowSubscriptionProviders=true` and explicit `allowedProviders`. Future official `main` profiles should keep `allowSubscriptionProviders=false` and use only non-subscription providers.
+Remote API providers are profile-scoped. Configure the internal `helper` profile with explicit `allowedProviders` such as `["ollama","deepseek"]`. Future official `main` profiles should define their own provider allowlist.
 
-## Provider Auth Storage
+## Provider Secrets
 
-- Codex app-server account state must live under `CODEX_HOME`, normally `/mnt/codex-home`.
-- Future subscription provider state should live under `PROVIDER_AUTH_HOME`, normally `/mnt/provider-auth`.
-- Store provider tokens in mounted auth storage, not PostgreSQL.
-- On Azure Container Apps, mount dedicated Azure Files shares named `codex-home` and `provider-auth` as ReadWrite volumes.
+- Store remote provider API keys in ACA secrets, not PostgreSQL.
+- DeepSeek requires `DEEPSEEK_API_KEY`; `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, and `DEEPSEEK_TIMEOUT_MS` are normal runtime config.
 - The public API gateway should expose only `/api/line/webhook/{profileName}` for this service; do not expose `/api/line/llm-auth/*`.
 
 ## Registration And Admin Safety
@@ -104,6 +101,7 @@ Then send `/diag` from a direct admin LINE chat.
 Do not paste these into LINE, logs, commits, screenshots, or public issues:
 
 - LINE channel secret or access token.
+- `DEEPSEEK_API_KEY`.
 - Invite codes that have not expired.
 - `DATABASE_URL`, `REDIS_URL`, `OLLAMA_BASE_URL` if it reveals private network layout.
 - Graph tenant/client/folder/drive IDs.

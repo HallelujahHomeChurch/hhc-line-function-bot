@@ -1,5 +1,4 @@
 import type { AdminHandler, FunctionExecutionResult, LlmConfig } from "./types.js";
-import { readCodexAuthStatus } from "./llm/codex-device-login.js";
 
 export interface LlmStatusAdminHandlerOptions {
   fetchImpl?: typeof fetch;
@@ -21,29 +20,8 @@ export function createLlmStatusAdminHandler(
   const fetchImpl = options.fetchImpl ?? fetch;
 
   return async (): Promise<FunctionExecutionResult> => {
-    if (config.provider === "codex_app_server") {
-      const auth = await readCodexAuthStatus(config.codexHome);
-      return {
-        ok: true,
-        replyText: [
-          "LLM status",
-          "provider: codex_app_server",
-          `command: ${config.codexAppServerCommand ?? "codex"}`,
-          `args: ${(config.codexAppServerArgs ?? ["app-server", "--listen", "stdio://"]).join(" ")}`,
-          `CODEX_HOME: ${config.codexHome ?? "(container default)"}`,
-          `PROVIDER_AUTH_HOME: ${config.providerAuthHome ?? "(not configured)"}`,
-          `auth: ${auth.loggedIn ? "logged_in" : "missing"}`,
-          ...(auth.loggedIn
-            ? [
-                `account: ${auth.email ?? auth.accountId ?? "(unknown)"}`,
-                `plan: ${auth.plan ?? "(unknown)"}`
-              ]
-            : []),
-          `model: ${config.codexModel ?? "gpt-5.1-codex"}`,
-          `modelProvider: ${config.codexModelProvider ?? "openai"}`,
-          `fallback: ${config.fallbackProvider ?? "ollama"}`
-        ].join("\n")
-      };
+    if (config.provider === "deepseek") {
+      return probeDeepSeekStatus(fetchImpl, config);
     }
     const baseUrl = normalizeBaseUrl(config.ollamaBaseUrl);
     const endpoint = describeEndpoint(baseUrl);
@@ -69,6 +47,82 @@ export function createLlmStatusAdminHandler(
       ].join("\n")
     };
   };
+}
+
+async function probeDeepSeekStatus(
+  fetchImpl: typeof fetch,
+  config: LlmConfig
+): Promise<FunctionExecutionResult> {
+  const baseUrl = normalizeBaseUrl(config.deepseekBaseUrl);
+  const endpoint = describeEndpoint(baseUrl);
+  const configured = Boolean(config.deepseekApiKey);
+  const chat = configured
+    ? await probeDeepSeekChat(fetchImpl, baseUrl, config)
+    : skippedProbe("missing api key");
+
+  return {
+    ok: true,
+    replyText: [
+      "LLM status",
+      "provider: deepseek",
+      `endpoint: ${endpoint.scheme}:${endpoint.port}`,
+      `host: ${endpoint.hostClass}`,
+      `model: ${config.deepseekModel}`,
+      `apiKey: ${configured ? "configured" : "missing"}`,
+      `fallback: ${config.fallbackProvider ?? "ollama"}`,
+      formatChat(chat)
+    ].join("\n")
+  };
+}
+
+async function probeDeepSeekChat(
+  fetchImpl: typeof fetch,
+  baseUrl: string,
+  config: LlmConfig
+): Promise<ProbeResult> {
+  const startedAt = Date.now();
+  try {
+    const response = await fetchWithTimeout(
+      fetchImpl,
+      `${baseUrl}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${config.deepseekApiKey ?? ""}`
+        },
+        body: JSON.stringify({
+          model: config.deepseekModel,
+          stream: false,
+          temperature: 0,
+          max_tokens: 16,
+          thinking: { type: "disabled" },
+          messages: [
+            { role: "system", content: "Reply ok." },
+            { role: "user", content: "ping" }
+          ]
+        })
+      },
+      config.deepseekTimeoutMs
+    );
+    const latencyMs = elapsedMs(startedAt);
+    if (!response.ok) {
+      return {
+        status: "error",
+        httpStatus: response.status,
+        latencyMs,
+        detail: `http_${response.status}`
+      };
+    }
+    await response.json();
+    return { status: "ok", httpStatus: response.status, latencyMs };
+  } catch (error) {
+    return {
+      status: "error",
+      latencyMs: elapsedMs(startedAt),
+      detail: safeErrorMessage(error, baseUrl)
+    };
+  }
 }
 
 async function probeTags(
