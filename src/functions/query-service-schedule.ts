@@ -98,10 +98,10 @@ export function createQueryServiceScheduleHandler(
     );
 
     const rows = pages.map((page) => ({
-      date: propertyToText(page.properties[options.properties.date]),
-      meeting: propertyToText(page.properties[options.properties.meeting]),
-      role: propertyToText(page.properties[options.properties.role]),
-      person: propertyToText(page.properties[options.properties.person])
+      date: configuredPropertyToText(page.properties, options.properties.date),
+      meeting: configuredPropertyToText(page.properties, options.properties.meeting),
+      role: configuredPropertyToText(page.properties, options.properties.role),
+      person: configuredPropertyToText(page.properties, options.properties.person)
     }));
 
     const filteredRows = rows
@@ -534,6 +534,30 @@ function propertyToText(property: unknown): string {
     default:
       return "";
   }
+}
+
+function configuredPropertyToText(
+  properties: Record<string, unknown>,
+  configuredKey: string
+): string {
+  return propertyToText(findConfiguredProperty(properties, configuredKey));
+}
+
+function findConfiguredProperty(
+  properties: Record<string, unknown>,
+  configuredKey: string
+): unknown {
+  if (configuredKey in properties) {
+    return properties[configuredKey];
+  }
+
+  return Object.values(properties).find(
+    (property) =>
+      property &&
+      typeof property === "object" &&
+      "id" in property &&
+      String((property as { id?: unknown }).id) === configuredKey
+  );
 }
 
 function richTextArrayToText(value: unknown): string {

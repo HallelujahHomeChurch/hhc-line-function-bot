@@ -673,6 +673,42 @@ describe("query_service_schedule", () => {
     expect(result.replyText).toContain("- 司會：Ray");
   });
 
+  it("maps Notion page properties by configured property id metadata", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "page-1",
+          properties: {
+            DateName: { id: "date-id", type: "date", date: { start: "2026-07-05" } },
+            MeetingName: { id: "meeting-id", type: "select", select: { name: "Sunday" } },
+            RoleName: { id: "role-id", type: "title", title: [{ plain_text: "Audio" }] },
+            PersonName: { id: "person-id", type: "people", people: [{ name: "Ray" }] }
+          }
+        }
+      ])
+    };
+    const handler = createQueryServiceScheduleHandler({
+      notion,
+      databaseId: "notion-db",
+      properties: {
+        date: "date-id",
+        meeting: "meeting-id",
+        role: "role-id",
+        person: "person-id"
+      }
+    });
+
+    const result = await handler(
+      { query: "service schedule", dateIntent: "specific_date", specificDate: "2026-07-05" },
+      handlerContext()
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("Sunday");
+    expect(result.replyText).toContain("Audio");
+    expect(result.replyText).toContain("Ray");
+  });
+
   it("filters this-week service schedule requests", async () => {
     const notion: NotionDatabaseClient = {
       queryDatabase: vi.fn().mockResolvedValue([

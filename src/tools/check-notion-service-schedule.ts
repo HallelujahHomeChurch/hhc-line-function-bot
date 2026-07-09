@@ -161,24 +161,41 @@ function inspectPropertyMapping(
     {
       name: "date",
       property: config.properties.date,
-      present: config.properties.date in properties
+      present: hasConfiguredProperty(properties, config.properties.date)
     },
     {
       name: "meeting",
       property: config.properties.meeting,
-      present: config.properties.meeting in properties
+      present: hasConfiguredProperty(properties, config.properties.meeting)
     },
     {
       name: "role",
       property: config.properties.role,
-      present: config.properties.role in properties
+      present: hasConfiguredProperty(properties, config.properties.role)
     },
     {
       name: "person",
       property: config.properties.person,
-      present: config.properties.person in properties
+      present: hasConfiguredProperty(properties, config.properties.person)
     }
   ];
+}
+
+function hasConfiguredProperty(
+  properties: Record<string, unknown>,
+  configuredKey: string
+): boolean {
+  if (configuredKey in properties) {
+    return true;
+  }
+
+  return Object.values(properties).some(
+    (property) =>
+      property &&
+      typeof property === "object" &&
+      "id" in property &&
+      String((property as { id?: unknown }).id) === configuredKey
+  );
 }
 
 function handlerContext(): FunctionHandlerContext {

@@ -15,6 +15,8 @@ trigger:
       - vitest.config.ts
       - src/**
       - aca.containerapp.yaml
+    exclude:
+      - skills/**
 
 pr:
   branches:
@@ -33,6 +35,8 @@ pr:
       - vitest.config.ts
       - src/**
       - aca.containerapp.yaml
+    exclude:
+      - skills/**
 
 pool:
   vmImage: ubuntu-latest
@@ -136,6 +140,35 @@ stages:
 
                 image_ref="$(acrLoginServer)/$(imageRepository):$(imageTag)"
                 echo "Deploying ${image_ref} to $(containerAppName)"
+
+                profiles_b64="$(az containerapp secret show \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(containerAppName)" \
+                  --secret-name bot-profiles-base64-json \
+                  --query value \
+                  --output tsv)"
+
+                PROFILES_B64="${profiles_b64}" python3 - <<'PY'
+                import base64
+                import json
+                import os
+                import sys
+
+                try:
+                    decoded = base64.b64decode(os.environ["PROFILES_B64"]).decode("utf-8")
+                    parsed = json.loads(decoded)
+                except Exception as exc:
+                    print(f"bot-profiles-base64-json is not valid base64 JSON: {exc}")
+                    sys.exit(1)
+
+                if not isinstance(parsed, list):
+                    print("bot-profiles-base64-json must decode to a JSON array root.")
+                    print("Use skills/hhc-line-deploy-guard/scripts/profile-secret.ps1 -Action repair-array-root -Apply")
+                    sys.exit(1)
+
+                names = [profile.get("name", "<missing>") for profile in parsed if isinstance(profile, dict)]
+                print(f"bot-profiles-base64-json root=array profiles={','.join(names)}")
+                PY
 
                 az containerapp update \
                   --resource-group "$(resourceGroup)" \
