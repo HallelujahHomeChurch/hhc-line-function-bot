@@ -84,6 +84,11 @@ describe("Codex device login manager", () => {
       const url = String(input);
       if (url.endsWith("/api/accounts/deviceauth/usercode")) {
         expect(init?.method).toBe("POST");
+        expect(init?.headers).toEqual({
+          accept: "application/json",
+          "content-type": "application/json",
+          "user-agent": "codex_cli_rs/0.142.5"
+        });
         expect(JSON.parse(String(init?.body))).toEqual({
           client_id: "app_test"
         });
@@ -94,6 +99,11 @@ describe("Codex device login manager", () => {
         });
       }
       if (url.endsWith("/api/accounts/deviceauth/token")) {
+        expect(init?.headers).toEqual({
+          accept: "application/json",
+          "content-type": "application/json",
+          "user-agent": "codex_cli_rs/0.142.5"
+        });
         return jsonResponse({
           authorization_code: "auth-code",
           code_challenge: "challenge",
@@ -101,7 +111,11 @@ describe("Codex device login manager", () => {
         });
       }
       if (url.endsWith("/oauth/token")) {
-        expect(init?.headers).toEqual({ "content-type": "application/x-www-form-urlencoded" });
+        expect(init?.headers).toEqual({
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+          "user-agent": "codex_cli_rs/0.142.5"
+        });
         const form = new URLSearchParams(String(init?.body));
         expect(form.get("grant_type")).toBe("authorization_code");
         expect(form.get("code")).toBe("auth-code");
@@ -217,6 +231,32 @@ describe("Codex device login manager", () => {
       plan: "pro"
     });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("includes a safe response marker when the device code request is rejected", async () => {
+    const codexHome = await tempCodexHome();
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response("<html>Just a moment... Cloudflare access denied</html>", {
+          status: 403,
+          headers: {
+            "content-type": "text/html",
+            server: "cloudflare"
+          }
+        })
+    );
+    const manager = createCodexDeviceLoginManager({ fetchImpl });
+
+    await expect(
+      manager.startCodexLogin({
+        codexHome,
+        clientId: "app_test",
+        issuer: "https://auth.openai.com",
+        ttlMs: 900_000
+      })
+    ).rejects.toThrow(
+      "Codex device code request failed: http_403:html_server_cloudflare_cloudflare_challenge_forbidden"
+    );
   });
 
   it("reports and clears Codex auth status from CODEX_HOME", async () => {

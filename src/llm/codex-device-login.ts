@@ -7,6 +7,7 @@ import type { ModelProviderName } from "../types.js";
 export const DEFAULT_CODEX_AUTH_ISSUER = "https://auth.openai.com";
 export const DEFAULT_CODEX_LOGIN_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const DEFAULT_CODEX_DEVICE_LOGIN_TTL_MS = 15 * 60 * 1000;
+export const CODEX_DEVICE_LOGIN_USER_AGENT = "codex_cli_rs/0.142.5";
 
 export type CodexLoginStartStatus = "started" | "already_active" | "already_logged_in";
 
@@ -183,11 +184,13 @@ class CodexDeviceLoginManager implements ProviderLoginManager {
   ): Promise<{ deviceAuthId: string; userCode: string; intervalSeconds: number }> {
     const response = await this.fetchImpl(`${issuer}/api/accounts/deviceauth/usercode`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: codexJsonHeaders(),
       body: JSON.stringify({ client_id: clientId })
     });
     if (!response.ok) {
-      throw new Error(`Codex device code request failed: http_${response.status}`);
+      throw new Error(
+        `Codex device code request failed: http_${response.status}:${await readFailureMarker(response)}`
+      );
     }
     const payload = (await response.json()) as UserCodeResponse;
     const deviceAuthId = payload.device_auth_id?.trim();
@@ -207,7 +210,7 @@ class CodexDeviceLoginManager implements ProviderLoginManager {
       while (this.now().getTime() <= login.expiresAtMs) {
         const response = await this.fetchImpl(`${login.issuer}/api/accounts/deviceauth/token`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: codexJsonHeaders(),
           body: JSON.stringify({
             device_auth_id: login.deviceAuthId,
             user_code: login.userCode
@@ -251,7 +254,11 @@ class CodexDeviceLoginManager implements ProviderLoginManager {
     });
     const response = await this.fetchImpl(`${login.issuer}/oauth/token`, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+        "user-agent": CODEX_DEVICE_LOGIN_USER_AGENT
+      },
       body: form.toString()
     });
     if (!response.ok) {
@@ -351,6 +358,46 @@ function parseIntervalSeconds(value: string | number | undefined): number {
   }
   const parsed = Number.parseInt(String(value ?? "5"), 10);
   return Number.isFinite(parsed) ? parsed : 5;
+}
+
+function codexJsonHeaders(): Record<string, string> {
+  return {
+    accept: "application/json",
+    "content-type": "application/json",
+    "user-agent": CODEX_DEVICE_LOGIN_USER_AGENT
+  };
+}
+
+async function readFailureMarker(response: Response): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const server = response.headers.get("server") ?? "";
+  const text = await response.text().catch(() => "");
+  const lower = text.toLowerCase();
+  const markers: string[] = [];
+  if (contentType.includes("html")) {
+    markers.push("html");
+  }
+  if (server) {
+    markers.push(`server_${safeMarker(server)}`);
+  }
+  if (lower.includes("cloudflare")) {
+    markers.push("cloudflare");
+  }
+  if (lower.includes("just a moment")) {
+    markers.push("challenge");
+  }
+  if (lower.includes("access denied") || lower.includes("forbidden")) {
+    markers.push("forbidden");
+  }
+  return markers.length > 0 ? markers.join("_") : "no_marker";
+}
+
+function safeMarker(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
 }
 
 function decodeJwtPayload(jwt: string): Record<string, unknown> {
