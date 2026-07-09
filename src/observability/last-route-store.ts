@@ -7,6 +7,7 @@ export interface LastRouteRecord {
   sourceType: string;
   phase: "route" | "function" | "admin_route" | "admin_action";
   provider?: string;
+  lane?: string;
   outcome?: "execute" | "respond" | "deny";
   action?: string;
   reason?: string;
@@ -59,6 +60,7 @@ export function formatLastRoutes(routes: LastRouteRecord[]): string {
         `requestId=${route.requestId}`,
         `phase=${route.phase}`,
         route.provider ? `provider=${route.provider}` : undefined,
+        route.lane ? `lane=${route.lane}` : undefined,
         route.outcome ? `outcome=${route.outcome}` : undefined,
         route.action ? `action=${route.action}` : undefined,
         route.reason ? `reason=${route.reason}` : undefined,

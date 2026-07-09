@@ -18,6 +18,7 @@ export interface AgentTurnTraceStep {
   outcome?: string;
   action?: string;
   provider?: string;
+  lane?: string;
   reason?: string;
   query?: "present" | "empty" | "missing";
   ok?: boolean;
@@ -95,6 +96,7 @@ function sanitizeStep(step: AgentTurnTraceStep): AgentTurnTraceStep {
     outcome: sanitizeString(step.outcome),
     action: sanitizeString(step.action),
     provider: sanitizeString(step.provider),
+    lane: sanitizeString(step.lane),
     reason: sanitizeString(step.reason),
     query: step.query,
     ok: step.ok,
@@ -113,6 +115,7 @@ function formatStep(step: AgentTurnTraceStep): string {
     step.outcome,
     step.action ? `action:${step.action}` : undefined,
     step.provider ? `provider:${step.provider}` : undefined,
+    step.lane ? `lane:${step.lane}` : undefined,
     step.reason ? `reason:${step.reason}` : undefined,
     step.query ? `query:${step.query}` : undefined,
     typeof step.ok === "boolean" ? `ok:${step.ok}` : undefined,

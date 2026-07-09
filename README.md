@@ -168,11 +168,15 @@ Function toggles are profile-scoped:
 
 ## Routing
 
-Primary routing uses Ollama unless a profile or environment selects `deepseek`. The DeepSeek provider calls the OpenAI-compatible `/chat/completions` API with `DEEPSEEK_API_KEY`; it does not require provider login routes, mounted auth state, or PostgreSQL token storage.
+Provider selection is lane-based. Function routing, admin routing, and memory routing default to local Ollama so routine JSON classification stays cheap. Smart talk and future higher-value generation lanes such as `general_agent` and `context_compression` default to DeepSeek when the current profile explicitly allows `deepseek`; otherwise they stay on Ollama.
+
+The DeepSeek provider calls the OpenAI-compatible `/chat/completions` API with `DEEPSEEK_API_KEY`; it does not require provider login routes, mounted auth state, or PostgreSQL token storage.
 
 Provider access is profile-scoped. Internal helper profiles may explicitly list `deepseek` in `allowedProviders`. Future official `main` profiles can stay on `ollama` or define their own allowed providers.
 
-If the primary provider returns invalid JSON, times out, or is unavailable, routing can fall back to Ollama through `LLM_FALLBACK_PROVIDER=ollama`. Explicit model deny decisions do not fall back.
+Each profile can override lane policy with `providerPolicy`. For example, the internal helper profile can keep `function_routing`, `admin_routing`, and `memory_routing` on `ollama`, while using `deepseek -> ollama` for `smart_talk` and `general_agent`.
+
+If a lane's primary provider returns invalid JSON, times out, or is unavailable, the lane can fall back to its configured fallback provider. Function routing can still fall back to conservative keyword routing after model failures. Explicit model deny decisions do not fall back.
 
 Relevant env vars:
 
@@ -196,7 +200,7 @@ Bootstrap superadmin direct-chat commands for LLM provider operations:
 /llm-status
 ```
 
-`/llm-use` reports the active provider and the provider names accepted by the current profile. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes.
+`/llm-use` reports the active legacy default provider and the provider names accepted by the current profile. `/llm-status` reports the current profile's lane policy. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes.
 
 Keyword fallback is intentionally narrow:
 

@@ -16,6 +16,7 @@ describe("observability sanitization", () => {
       profileName: "helper",
       sourceType: "user",
       provider: "ollama",
+      lane: "function_routing",
       outcome: "execute",
       action: "find_ppt_slides",
       confidence: 0.91,
@@ -34,6 +35,7 @@ describe("observability sanitization", () => {
       profileName: "helper",
       sourceType: "user",
       provider: "ollama",
+      lane: "function_routing",
       outcome: "execute",
       action: "find_ppt_slides",
       confidence: 0.91,
@@ -62,6 +64,7 @@ describe("observability sanitization", () => {
       sourceType: "user",
       phase: "route",
       provider: "ollama",
+      lane: "function_routing",
       outcome: "execute",
       action: "find_ppt_slides",
       query: "奇異恩典",
@@ -71,6 +74,7 @@ describe("observability sanitization", () => {
     const [record] = await store.list();
 
     expect(record).toMatchObject({
+      lane: "function_routing",
       query: "present"
     });
     expect(JSON.stringify(record)).not.toContain("奇異恩典");

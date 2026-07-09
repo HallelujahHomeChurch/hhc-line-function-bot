@@ -748,6 +748,43 @@ describe("function router", () => {
     });
   });
 
+  it("does not retry the same provider before keyword fallback", async () => {
+    const primary: ChatProvider = {
+      providerName: "ollama",
+      completeJson: vi.fn().mockRejectedValue(new ProviderResponseError("timeout"))
+    };
+    const modelFallback: ChatProvider = {
+      providerName: "ollama",
+      completeJson: vi
+        .fn()
+        .mockResolvedValue(
+          JSON.stringify({ action: "query_service_schedule", arguments: { query: "wrong" } })
+        )
+    };
+    const router = createFunctionRouter({
+      primary,
+      modelFallback,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "main",
+      text: "小哈 查服事表",
+      enabledFunctions: ["query_service_schedule"],
+      source: { type: "group", groupId: "C1", userId: "U1" }
+    });
+
+    expect(result).toMatchObject({
+      type: "execute",
+      action: "query_service_schedule",
+      provider: "keyword",
+      fallbackProvider: "ollama",
+      fallbackReason: "timeout"
+    });
+    expect(modelFallback.completeJson).not.toHaveBeenCalled();
+  });
+
   it("does not treat poetry or pop-song keywords as PPT requests", async () => {
     const qwen = provider("not-json");
     const router = createFunctionRouter({

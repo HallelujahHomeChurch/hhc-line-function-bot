@@ -11,9 +11,13 @@ It is intentionally not an open-ended chatbot. User messages are allowed to feel
 natural, but execution is limited to configured profiles, access policy, enabled
 functions, and admin gates.
 
-The service is local-first for routing:
+The service is lane-based and local-first for controlled routing:
 
-- Ollama is the default natural-language router.
+- Ollama is the default provider for `function_routing`, `admin_routing`, and
+  `memory_routing`.
+- DeepSeek can be enabled per profile for `smart_talk` and future
+  higher-value generation lanes such as `general_agent` and
+  `context_compression`, with Ollama fallback where configured.
 - `deepseek` is an optional remote API provider that uses `DEEPSEEK_API_KEY`.
 - Provider runtimes may reason and generate text, but this bot owns authority:
   profile policy, function toggles, tool execution, memory writes, and deny or
@@ -69,6 +73,8 @@ For provider diagnostics, the bootstrap superadmin sends `/llm-use` or
 `/llm-status` in direct chat. Profile provider policy decides which providers
 may be used. Remote API providers such as `deepseek` are configured through
 secrets and profile allowlists.
+`/llm-status` includes the current profile's lane policy, so route debugging can
+distinguish cheap local classification from remote smart-talk generation.
 
 ## Action Types
 

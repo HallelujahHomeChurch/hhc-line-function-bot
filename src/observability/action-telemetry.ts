@@ -11,6 +11,7 @@ const allowedTelemetryKeys = new Set([
   "sourceType",
   "phase",
   "provider",
+  "lane",
   "outcome",
   "action",
   "reason",
@@ -49,6 +50,7 @@ export function sanitizeLastRouteRecord(record: LastRouteRecord): LastRouteRecor
     phase: record.phase
   };
   if (record.provider) sanitized.provider = record.provider;
+  if (record.lane) sanitized.lane = record.lane;
   if (record.outcome) sanitized.outcome = record.outcome;
   if (record.action) sanitized.action = record.action;
   if (record.reason) sanitized.reason = record.reason;

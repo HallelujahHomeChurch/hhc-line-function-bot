@@ -363,6 +363,56 @@ describe("config", () => {
     });
   });
 
+  it("loads lane provider policy for cost-aware routing", () => {
+    const config = loadConfigFromEnv({
+      BOT_PROFILES_JSON: JSON.stringify([
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          allowedProviders: ["ollama", "deepseek"],
+          providerPolicy: {
+            function_routing: { primary: "ollama" },
+            admin_routing: { primary: "ollama" },
+            memory_routing: { primary: "ollama" },
+            smart_talk: { primary: "deepseek", fallback: "ollama" },
+            general_agent: { primary: "deepseek", fallback: "ollama" },
+            context_compression: { primary: "deepseek" }
+          }
+        }
+      ])
+    });
+
+    expect(config.profiles[0].providerPolicy).toMatchObject({
+      function_routing: { primary: "ollama" },
+      admin_routing: { primary: "ollama" },
+      memory_routing: { primary: "ollama" },
+      smart_talk: { primary: "deepseek", fallback: "ollama" },
+      general_agent: { primary: "deepseek", fallback: "ollama" },
+      context_compression: { primary: "deepseek" }
+    });
+  });
+
+  it("rejects lane provider policy outside the profile allowed provider list", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        BOT_PROFILES_JSON: JSON.stringify([
+          {
+            name: "helper",
+            webhookPath: "/api/line/webhook/helper",
+            channelSecret: "secret",
+            channelAccessToken: "token",
+            allowedProviders: ["ollama"],
+            providerPolicy: {
+              smart_talk: { primary: "deepseek" }
+            }
+          }
+        ])
+      })
+    ).toThrow("Profile helper providerPolicy.smart_talk primary provider deepseek is not allowed");
+  });
+
   it("rejects unsupported provider names in profile policy", () => {
     expect(() =>
       loadConfigFromEnv({

@@ -9,6 +9,7 @@ import type {
   FunctionName,
   FunctionRouterPort,
   JsonRecord,
+  ModelProviderLane,
   ModelProviderName,
   RouteInput,
   RouteResult
@@ -34,6 +35,7 @@ export interface FunctionRouterOptions {
   modelFallback?: ChatProvider;
   keywordFallback?: KeywordFallbackRouter;
   keywordFallbackEnabled: boolean;
+  lane?: ModelProviderLane;
 }
 
 export function createFunctionRouter(options: FunctionRouterOptions): FunctionRouterPort {
@@ -49,55 +51,63 @@ class FunctionRouter implements FunctionRouterPort {
     let keywordFallbackProvider = this.primaryProviderName(input.profileName);
 
     try {
-      return parseProviderDecision(
-        this.primaryProviderName(input.profileName),
-        await this.options.primary.completeJson({ ...input, prompt }),
-        input
+      return this.withLane(
+        parseProviderDecision(
+          this.primaryProviderName(input.profileName),
+          await this.options.primary.completeJson({ ...input, prompt }),
+          input
+        )
       );
     } catch (error) {
       fallbackReason = providerErrorReason(error);
       if (this.shouldFallback(error) && this.options.modelFallback) {
         const modelFallbackProvider = this.modelFallbackProviderName(input.profileName);
-        try {
-          return withFallbackDiagnostics(
-            parseProviderDecision(
-              modelFallbackProvider,
-              await this.options.modelFallback.completeJson({ ...input, prompt }),
-              input
-            ),
-            this.primaryProviderName(input.profileName),
-            fallbackReason
-          );
-        } catch (fallbackError) {
-          fallbackReason = providerErrorReason(fallbackError);
-          keywordFallbackProvider = modelFallbackProvider;
+        if (modelFallbackProvider !== this.primaryProviderName(input.profileName)) {
+          try {
+            return this.withLane(
+              withFallbackDiagnostics(
+                parseProviderDecision(
+                  modelFallbackProvider,
+                  await this.options.modelFallback.completeJson({ ...input, prompt }),
+                  input
+                ),
+                this.primaryProviderName(input.profileName),
+                fallbackReason
+              )
+            );
+          } catch (fallbackError) {
+            fallbackReason = providerErrorReason(fallbackError);
+            keywordFallbackProvider = modelFallbackProvider;
+          }
         }
       }
       if (!this.shouldFallback(error)) {
-        return {
+        return this.withLane({
           type: "deny",
           reason: "router_failed",
           provider: "router",
           fallbackProvider: this.primaryProviderName(input.profileName),
           fallbackReason
-        };
+        });
       }
     }
 
     if (!this.options.keywordFallback || !this.options.keywordFallbackEnabled) {
-      return {
+      return this.withLane({
         type: "deny",
         reason: "keyword_fallback_not_configured",
         provider: "router",
         fallbackProvider: this.primaryProviderName(input.profileName),
         fallbackReason
-      };
+      });
     }
 
-    return withFallbackDiagnostics(
-      this.options.keywordFallback.route(input),
-      keywordFallbackProvider,
-      fallbackReason
+    return this.withLane(
+      withFallbackDiagnostics(
+        this.options.keywordFallback.route(input),
+        keywordFallbackProvider,
+        fallbackReason
+      )
     );
   }
 
@@ -120,6 +130,13 @@ class FunctionRouter implements FunctionRouterPort {
       return this.options.modelFallback.providerNameForProfile(profileName);
     }
     return this.options.modelFallback?.providerName ?? "ollama";
+  }
+
+  private withLane(result: RouteResult): RouteResult {
+    if (!this.options.lane) {
+      return result;
+    }
+    return { ...result, lane: this.options.lane };
   }
 }
 

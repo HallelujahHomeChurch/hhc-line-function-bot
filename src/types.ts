@@ -44,6 +44,24 @@ export const MODEL_PROVIDER_NAMES = ["ollama", "deepseek"] as const;
 export type ModelProviderName = (typeof MODEL_PROVIDER_NAMES)[number];
 export type RouteProviderName = ModelProviderName | "keyword" | "router";
 
+export const MODEL_PROVIDER_LANE_NAMES = [
+  "function_routing",
+  "admin_routing",
+  "memory_routing",
+  "smart_talk",
+  "general_agent",
+  "context_compression"
+] as const;
+
+export type ModelProviderLane = (typeof MODEL_PROVIDER_LANE_NAMES)[number];
+
+export interface ProviderLanePolicy {
+  primary: ModelProviderName;
+  fallback?: ModelProviderName;
+}
+
+export type ProviderPolicy = Record<ModelProviderLane, ProviderLanePolicy>;
+
 export interface ProviderCapabilities {
   structuredOutput: boolean;
   smartTalk: boolean;
@@ -98,6 +116,7 @@ export interface BotProfileConfig {
   llmProvider?: ModelProviderName;
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
+  providerPolicy?: ProviderPolicy;
   generalAgent?: GeneralAgentConfig;
   longRunningJobs?: LongRunningJobsConfig;
 }
@@ -274,6 +293,7 @@ export type RouteResult =
       arguments: JsonRecord;
       confidence?: number;
       provider: ModelProviderName | "keyword";
+      lane?: ModelProviderLane;
       fallbackProvider?: ModelProviderName;
       fallbackReason?: string;
     }
@@ -283,6 +303,7 @@ export type RouteResult =
       arguments: JsonRecord;
       confidence?: number;
       provider: ModelProviderName | "keyword";
+      lane?: ModelProviderLane;
       fallbackProvider?: ModelProviderName;
       fallbackReason?: string;
     }
@@ -290,6 +311,7 @@ export type RouteResult =
       type: "deny";
       reason: string;
       provider: RouteProviderName;
+      lane?: ModelProviderLane;
       fallbackProvider?: ModelProviderName;
       fallbackReason?: string;
     };
@@ -312,6 +334,7 @@ export type AdminActionRouteResult =
       arguments: JsonRecord;
       confidence?: number;
       provider: ModelProviderName;
+      lane?: ModelProviderLane;
       fallbackProvider?: ModelProviderName;
       fallbackReason?: string;
     }
@@ -319,6 +342,7 @@ export type AdminActionRouteResult =
       type: "deny";
       reason: string;
       provider: ModelProviderName | "router";
+      lane?: ModelProviderLane;
       fallbackProvider?: ModelProviderName;
       fallbackReason?: string;
     };
@@ -343,6 +367,7 @@ export interface RouteObserverEvent {
   requestId?: string;
   durationMs?: number;
   provider?: RouteResult["provider"];
+  lane?: ModelProviderLane;
   outcome?: RouteResult["type"];
   action?: FunctionName | string;
   reason?: string;

@@ -4,9 +4,11 @@ import type {
   AppConfig,
   BotProfileConfig,
   ChatProvider,
+  ModelProviderLane,
   ModelProviderName,
   TextGenerationProvider
 } from "../types.js";
+import { defaultPolicyForLane } from "./provider-policy.js";
 
 export type ProviderRegistry = Record<ModelProviderName, ChatProvider & TextGenerationProvider>;
 
@@ -58,10 +60,11 @@ export function createProfileAwareProvider(options: {
   config: AppConfig;
   providers: ProviderRegistry;
   role: "primary" | "fallback";
+  lane?: ModelProviderLane;
 }): ChatProvider & TextGenerationProvider {
   return {
     providerNameForProfile: (profileName) =>
-      resolveProviderNameForProfile(options.config, profileName, options.role),
+      resolveProviderNameForProfile(options.config, profileName, options.role, options.lane),
     async completeJson(request) {
       const provider = resolveProvider(options, request.profileName);
       return provider.completeJson(request);
@@ -78,10 +81,16 @@ function resolveProvider(
     config: AppConfig;
     providers: ProviderRegistry;
     role: "primary" | "fallback";
+    lane?: ModelProviderLane;
   },
   profileName: string
 ): ChatProvider & TextGenerationProvider {
-  const providerName = resolveProviderNameForProfile(options.config, profileName, options.role);
+  const providerName = resolveProviderNameForProfile(
+    options.config,
+    profileName,
+    options.role,
+    options.lane
+  );
   const provider = options.providers[providerName];
   if (!provider) {
     throw new ProviderResponseError(`provider_not_configured:${providerName}`);
@@ -92,8 +101,12 @@ function resolveProvider(
 function resolveProviderNameForProfile(
   config: AppConfig,
   profileName: string,
-  role: "primary" | "fallback"
+  role: "primary" | "fallback",
+  lane?: ModelProviderLane
 ): ModelProviderName {
+  if (lane) {
+    return resolveProviderNameForLane(config, profileName, lane, role);
+  }
   const profile = config.profiles.find((candidate) => candidate.name === profileName);
   if (!profile) {
     throw new ProviderResponseError(`profile_not_found:${profileName}`);
@@ -101,4 +114,21 @@ function resolveProviderNameForProfile(
   return role === "primary"
     ? resolvePrimaryProviderName(config, profile)
     : resolveFallbackProviderName(config, profile);
+}
+
+export function resolveProviderNameForLane(
+  config: AppConfig,
+  profileName: string,
+  lane: ModelProviderLane,
+  role: "primary" | "fallback"
+): ModelProviderName {
+  const profile = config.profiles.find((candidate) => candidate.name === profileName);
+  if (!profile) {
+    throw new ProviderResponseError(`profile_not_found:${profileName}`);
+  }
+  const policy =
+    profile.providerPolicy?.[lane] ?? defaultPolicyForLane(lane, profile.allowedProviders);
+  const provider = role === "primary" ? policy.primary : (policy.fallback ?? policy.primary);
+  assertProviderAllowedForProfile(profile, provider);
+  return provider;
 }

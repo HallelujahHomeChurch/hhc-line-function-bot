@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createAdminActionRouter } from "../admin-action-router.js";
+import { ProviderResponseError } from "../router.js";
 import type { ChatProvider } from "../types.js";
 
 function provider(raw: string): ChatProvider {
@@ -96,5 +97,34 @@ describe("admin action router", () => {
       provider: "router",
       fallbackProvider: "ollama"
     });
+  });
+
+  it("does not retry the same provider as an admin action fallback", async () => {
+    const primary: ChatProvider = {
+      providerName: "ollama",
+      completeJson: vi.fn().mockRejectedValue(new ProviderResponseError("invalid_json"))
+    };
+    const modelFallback: ChatProvider = {
+      providerName: "ollama",
+      completeJson: vi
+        .fn()
+        .mockResolvedValue(JSON.stringify({ action: "invite_code_create", arguments: {} }))
+    };
+    const router = createAdminActionRouter({ primary, modelFallback });
+
+    const result = await router.route({
+      profileName: "helper",
+      text: "please create an invite code",
+      enabledActions: ["invite_code_create"],
+      source: { type: "user", userId: "Uroot" }
+    });
+
+    expect(result).toMatchObject({
+      type: "deny",
+      reason: "invalid_json",
+      provider: "router",
+      fallbackProvider: "ollama"
+    });
+    expect(modelFallback.completeJson).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createLlmStatusAdminHandler } from "../llm-diagnostics.js";
-import type { LlmConfig } from "../types.js";
+import type { LlmConfig, ProviderPolicy } from "../types.js";
 
 function llmConfig(): LlmConfig {
   return {
@@ -28,6 +28,17 @@ function llmConfigWithoutKeepAlive(): LlmConfig {
   };
 }
 
+function providerPolicy(): ProviderPolicy {
+  return {
+    function_routing: { primary: "ollama" },
+    admin_routing: { primary: "ollama" },
+    memory_routing: { primary: "ollama" },
+    smart_talk: { primary: "deepseek", fallback: "ollama" },
+    general_agent: { primary: "deepseek", fallback: "ollama" },
+    context_compression: { primary: "deepseek" }
+  };
+}
+
 function adminContext() {
   return {
     profile: {
@@ -43,6 +54,7 @@ function adminContext() {
       acceptMention: true,
       enabledFunctions: ["query_service_schedule"],
       allowedProviders: ["ollama", "deepseek"],
+      providerPolicy: providerPolicy(),
       allowSubscriptionProviders: false,
       adminUserId: "Uadmin",
       adminDirectOnly: true
@@ -126,6 +138,10 @@ describe("LLM diagnostics admin handler", () => {
     expect(result.replyText).toContain("LLM status");
     expect(result.replyText).toContain("host: private-ip");
     expect(result.replyText).toContain("model: qwen3:4b-instruct");
+    expect(result.replyText).toContain("profile: helper");
+    expect(result.replyText).toContain("- function_routing: ollama");
+    expect(result.replyText).toContain("- smart_talk: deepseek -> ollama");
+    expect(result.replyText).toContain("- context_compression: deepseek");
     expect(result.replyText).toContain("tags: ok");
     expect(result.replyText).toContain("modelPresent: true");
     expect(result.replyText).toContain("chat: ok");

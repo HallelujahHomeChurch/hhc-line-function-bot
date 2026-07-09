@@ -8,6 +8,7 @@ import type {
   AdminActionRouteResult,
   AdminActionRouterPort,
   ChatProvider,
+  ModelProviderLane,
   ModelProviderName
 } from "./types.js";
 
@@ -21,6 +22,7 @@ const modelDecisionSchema = z.object({
 export interface AdminActionRouterOptions {
   primary: ChatProvider;
   modelFallback?: ChatProvider;
+  lane?: ModelProviderLane;
 }
 
 export function createAdminActionRouter(options: AdminActionRouterOptions): AdminActionRouterPort {
@@ -33,43 +35,48 @@ class AdminActionRouter implements AdminActionRouterPort {
   async route(input: AdminActionRouteInput): Promise<AdminActionRouteResult> {
     const prompt = buildAdminRouterPrompt(input.enabledActions);
     try {
-      return parseProviderDecision(
-        this.primaryProviderName(input.profileName),
-        await this.options.primary.completeJson({ ...input, enabledFunctions: [], prompt }),
-        input
+      return this.withLane(
+        parseProviderDecision(
+          this.primaryProviderName(input.profileName),
+          await this.options.primary.completeJson({ ...input, enabledFunctions: [], prompt }),
+          input
+        )
       );
     } catch (error) {
       if (error instanceof ProviderResponseError && this.options.modelFallback) {
-        try {
-          const result = parseProviderDecision(
-            this.modelFallbackProviderName(input.profileName),
-            await this.options.modelFallback.completeJson({
-              ...input,
-              enabledFunctions: [],
-              prompt
-            }),
-            input
-          );
-          return {
-            ...result,
-            fallbackProvider: this.primaryProviderName(input.profileName),
-            fallbackReason: providerErrorReason(error)
-          };
-        } catch (fallbackError) {
-          return {
-            type: "deny",
-            reason: providerErrorReason(fallbackError),
-            provider: "router",
-            fallbackProvider: this.modelFallbackProviderName(input.profileName)
-          };
+        const modelFallbackProvider = this.modelFallbackProviderName(input.profileName);
+        if (modelFallbackProvider !== this.primaryProviderName(input.profileName)) {
+          try {
+            const result = parseProviderDecision(
+              modelFallbackProvider,
+              await this.options.modelFallback.completeJson({
+                ...input,
+                enabledFunctions: [],
+                prompt
+              }),
+              input
+            );
+            return this.withLane({
+              ...result,
+              fallbackProvider: this.primaryProviderName(input.profileName),
+              fallbackReason: providerErrorReason(error)
+            });
+          } catch (fallbackError) {
+            return this.withLane({
+              type: "deny",
+              reason: providerErrorReason(fallbackError),
+              provider: "router",
+              fallbackProvider: modelFallbackProvider
+            });
+          }
         }
       }
-      return {
+      return this.withLane({
         type: "deny",
         reason: providerErrorReason(error),
         provider: "router",
         fallbackProvider: this.primaryProviderName(input.profileName)
-      };
+      });
     }
   }
 
@@ -85,6 +92,13 @@ class AdminActionRouter implements AdminActionRouterPort {
       return this.options.modelFallback.providerNameForProfile(profileName);
     }
     return this.options.modelFallback?.providerName ?? "ollama";
+  }
+
+  private withLane(result: AdminActionRouteResult): AdminActionRouteResult {
+    if (!this.options.lane) {
+      return result;
+    }
+    return { ...result, lane: this.options.lane };
   }
 }
 

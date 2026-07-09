@@ -1,4 +1,10 @@
-import type { AdminHandler, FunctionExecutionResult, LlmConfig } from "./types.js";
+import { MODEL_PROVIDER_LANE_NAMES } from "./types.js";
+import type {
+  AdminHandler,
+  BotProfileConfig,
+  FunctionExecutionResult,
+  LlmConfig
+} from "./types.js";
 
 export interface LlmStatusAdminHandlerOptions {
   fetchImpl?: typeof fetch;
@@ -19,9 +25,9 @@ export function createLlmStatusAdminHandler(
 ): AdminHandler {
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  return async (): Promise<FunctionExecutionResult> => {
+  return async (context): Promise<FunctionExecutionResult> => {
     if (config.provider === "deepseek") {
-      return probeDeepSeekStatus(fetchImpl, config);
+      return probeDeepSeekStatus(fetchImpl, config, context.profile);
     }
     const baseUrl = normalizeBaseUrl(config.ollamaBaseUrl);
     const endpoint = describeEndpoint(baseUrl);
@@ -40,6 +46,7 @@ export function createLlmStatusAdminHandler(
         `host: ${endpoint.hostClass}`,
         `model: ${config.ollamaModel}`,
         `fallback: ${config.keywordFallbackEnabled ? "keyword" : "disabled"}`,
+        ...formatProfileProviderPolicy(context.profile),
         formatTags(tags),
         `modelPresent: ${tags.modelPresent ?? "unknown"}`,
         `modelCount: ${tags.modelCount ?? "unknown"}`,
@@ -51,7 +58,8 @@ export function createLlmStatusAdminHandler(
 
 async function probeDeepSeekStatus(
   fetchImpl: typeof fetch,
-  config: LlmConfig
+  config: LlmConfig,
+  profile: BotProfileConfig
 ): Promise<FunctionExecutionResult> {
   const baseUrl = normalizeBaseUrl(config.deepseekBaseUrl);
   const endpoint = describeEndpoint(baseUrl);
@@ -70,9 +78,29 @@ async function probeDeepSeekStatus(
       `model: ${config.deepseekModel}`,
       `apiKey: ${configured ? "configured" : "missing"}`,
       `fallback: ${config.fallbackProvider ?? "ollama"}`,
+      ...formatProfileProviderPolicy(profile),
       formatChat(chat)
     ].join("\n")
   };
+}
+
+function formatProfileProviderPolicy(profile: BotProfileConfig): string[] {
+  const lines = [`profile: ${profile.name}`];
+  const policy = profile.providerPolicy;
+  if (!policy) {
+    return [...lines, "lanes: not configured"];
+  }
+  return [
+    ...lines,
+    "lanes:",
+    ...MODEL_PROVIDER_LANE_NAMES.map((lane) => {
+      const lanePolicy = policy[lane];
+      const route = lanePolicy.fallback
+        ? `${lanePolicy.primary} -> ${lanePolicy.fallback}`
+        : lanePolicy.primary;
+      return `- ${lane}: ${route}`;
+    })
+  ];
 }
 
 async function probeDeepSeekChat(

@@ -49,17 +49,53 @@ const providers = {
     generalMaxOutputTokens: config.llm.generalMaxOutputTokens ?? 512
   })
 };
-const primary = createProfileAwareProvider({ config, providers, role: "primary" });
-const modelFallback = createProfileAwareProvider({ config, providers, role: "fallback" });
+const functionRoutingPrimary = createProfileAwareProvider({
+  config,
+  providers,
+  role: "primary",
+  lane: "function_routing"
+});
+const functionRoutingFallback = createProfileAwareProvider({
+  config,
+  providers,
+  role: "fallback",
+  lane: "function_routing"
+});
+const adminRoutingPrimary = createProfileAwareProvider({
+  config,
+  providers,
+  role: "primary",
+  lane: "admin_routing"
+});
+const adminRoutingFallback = createProfileAwareProvider({
+  config,
+  providers,
+  role: "fallback",
+  lane: "admin_routing"
+});
+const smartTalkPrimary = createProfileAwareProvider({
+  config,
+  providers,
+  role: "primary",
+  lane: "smart_talk"
+});
+const smartTalkFallback = createProfileAwareProvider({
+  config,
+  providers,
+  role: "fallback",
+  lane: "smart_talk"
+});
 const router = createFunctionRouter({
-  primary,
-  modelFallback,
+  primary: functionRoutingPrimary,
+  modelFallback: functionRoutingFallback,
   keywordFallback: createKeywordFallbackRouter(),
-  keywordFallbackEnabled: config.llm.keywordFallbackEnabled
+  keywordFallbackEnabled: config.llm.keywordFallbackEnabled,
+  lane: "function_routing"
 });
 const adminActionRouter = createAdminActionRouter({
-  primary,
-  modelFallback
+  primary: adminRoutingPrimary,
+  modelFallback: adminRoutingFallback,
+  lane: "admin_routing"
 });
 const accessStore = await createAccessStore({ db: postgres?.pool });
 const memoryStore = await createAgentMemoryStore({ db: postgres?.pool });
@@ -113,8 +149,8 @@ const app = createApp(config, {
   agentJobStore,
   conversationWindowStore,
   webAllowlistStore,
-  textGenerator: primary,
-  textFallbackGenerator: modelFallback,
+  textGenerator: smartTalkPrimary,
+  textFallbackGenerator: smartTalkFallback,
   agentRuntime: createAgentRuntime({ memoryStore, graph }),
   diagnostics: createDependencyDiagnostics({
     config,

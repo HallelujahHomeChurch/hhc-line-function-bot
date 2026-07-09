@@ -27,6 +27,7 @@ import type {
   FunctionRouterPort,
   JsonRecord,
   LineEvent,
+  ModelProviderLane,
   LineSource,
   ModelProviderName,
   RouteObserver,
@@ -257,6 +258,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         lastRouteStore: options.lastRouteStore,
         input,
         provider: route.provider,
+        lane: route.lane,
         outcome: route.type,
         action: route.type === "execute" || route.type === "respond" ? route.action : undefined,
         reason: route.type === "deny" ? route.reason : undefined,
@@ -530,6 +532,7 @@ async function handleNaturalLanguageAdminAction(input: {
     sourceType: input.event.source.type,
     requestId: input.requestId,
     provider: route.provider,
+    lane: route.lane,
     outcome: route.type,
     action: route.type === "execute" ? route.action : undefined,
     reason: route.type === "deny" ? route.reason : undefined,
@@ -663,6 +666,7 @@ async function recordRoute(input: {
   lastRouteStore: LastRouteStore;
   input: AgentTextTurnInput;
   provider: RouteProviderName;
+  lane?: ModelProviderLane;
   outcome: "execute" | "respond" | "deny";
   action?: string;
   reason?: string;
@@ -678,6 +682,7 @@ async function recordRoute(input: {
     sourceType: input.input.event.source.type,
     requestId: input.input.requestId,
     provider: input.provider,
+    lane: input.lane,
     outcome: input.outcome,
     action: input.action,
     reason: input.reason,
@@ -694,6 +699,7 @@ async function recordRoute(input: {
     sourceType: input.input.event.source.type,
     phase: "route",
     provider: input.provider,
+    lane: input.lane,
     outcome: input.outcome,
     action: input.action,
     reason: input.reason,

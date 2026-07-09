@@ -25,11 +25,11 @@ Direct-message admin commands:
 
 `/diag` may show dependency status for Ollama, Redis, Postgres, Graph, and Notion, but must not print tenant IDs, database IDs, folder IDs, LINE IDs, tokens, secrets, credential URLs, raw user messages, or invite codes.
 
-`/llm-use` and `/llm-status` are bootstrap superadmin direct-chat only. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes. DeepSeek uses `DEEPSEEK_API_KEY` from ACA secrets or local `.env`.
+`/llm-use` and `/llm-status` are bootstrap superadmin direct-chat only. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes. `/llm-status` lists the current profile's lane policy, including which lanes use Ollama and which use DeepSeek. DeepSeek uses `DEEPSEEK_API_KEY` from ACA secrets or local `.env`.
 
 If upgrading from the removed direct OAuth provider, review `docs/sql/drop-legacy-llm-auth.sql` before manually dropping the old `llm_auth_profiles` table.
 
-Remote API providers are profile-scoped. Configure the internal `helper` profile with explicit `allowedProviders` such as `["ollama","deepseek"]`. Future official `main` profiles should define their own provider allowlist.
+Remote API providers are profile-scoped. Configure the internal `helper` profile with explicit `allowedProviders` such as `["ollama","deepseek"]` and a `providerPolicy` that keeps `function_routing`, `admin_routing`, and `memory_routing` on Ollama while using DeepSeek only for higher-value generation lanes such as `smart_talk`. Future official `main` profiles should define their own provider allowlist and lane policy.
 
 ## Provider Secrets
 

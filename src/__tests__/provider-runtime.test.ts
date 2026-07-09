@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createProfileAwareProvider, resolvePrimaryProviderName } from "../llm/provider-runtime.js";
+import {
+  createProfileAwareProvider,
+  resolvePrimaryProviderName,
+  resolveProviderNameForLane
+} from "../llm/provider-runtime.js";
 import type {
   AppConfig,
   BotProfileConfig,
@@ -83,6 +87,80 @@ describe("provider runtime", () => {
     ).resolves.toBe("deepseek");
     expect(deepseek.completeJson).toHaveBeenCalledOnce();
     expect(ollama.completeJson).not.toHaveBeenCalled();
+  });
+
+  it("uses local routing lanes while using DeepSeek for smart talk when allowed", async () => {
+    const appConfig = config([
+      profile({
+        allowedProviders: ["ollama", "deepseek"]
+      })
+    ]);
+    const deepseek = provider("deepseek");
+    const ollama = provider("ollama");
+
+    expect(resolveProviderNameForLane(appConfig, "helper", "function_routing", "primary")).toBe(
+      "ollama"
+    );
+    expect(resolveProviderNameForLane(appConfig, "helper", "smart_talk", "primary")).toBe(
+      "deepseek"
+    );
+    expect(resolveProviderNameForLane(appConfig, "helper", "smart_talk", "fallback")).toBe(
+      "ollama"
+    );
+
+    const smartTalkRuntime = createProfileAwareProvider({
+      config: appConfig,
+      providers: { ollama, deepseek },
+      role: "primary",
+      lane: "smart_talk"
+    });
+    await expect(
+      smartTalkRuntime.completeText({
+        profileName: "helper",
+        prompt: "talk",
+        text: "hello",
+        category: "greeting",
+        maxChars: 80
+      })
+    ).resolves.toBe("deepseek");
+    expect(deepseek.completeText).toHaveBeenCalledOnce();
+    expect(ollama.completeText).not.toHaveBeenCalled();
+
+    const routingRuntime = createProfileAwareProvider({
+      config: appConfig,
+      providers: { ollama, deepseek },
+      role: "primary",
+      lane: "function_routing"
+    });
+    await expect(
+      routingRuntime.completeJson({
+        profileName: "helper",
+        prompt: "route",
+        text: "查服事表",
+        enabledFunctions: ["query_service_schedule"]
+      })
+    ).resolves.toBe("ollama");
+    expect(ollama.completeJson).toHaveBeenCalledOnce();
+  });
+
+  it("honors explicit lane provider policy overrides", () => {
+    const appConfig = config([
+      profile({
+        allowedProviders: ["ollama", "deepseek"],
+        providerPolicy: {
+          smart_talk: { primary: "ollama" },
+          general_agent: { primary: "deepseek", fallback: "ollama" }
+        }
+      })
+    ]);
+
+    expect(resolveProviderNameForLane(appConfig, "helper", "smart_talk", "primary")).toBe("ollama");
+    expect(resolveProviderNameForLane(appConfig, "helper", "general_agent", "primary")).toBe(
+      "deepseek"
+    );
+    expect(resolveProviderNameForLane(appConfig, "helper", "general_agent", "fallback")).toBe(
+      "ollama"
+    );
   });
 
   it("rejects providers outside the profile allowed provider list", () => {

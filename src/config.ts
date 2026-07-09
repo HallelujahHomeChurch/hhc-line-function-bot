@@ -5,8 +5,14 @@ import { z } from "zod";
 import { assertCanonicalWebhookPath } from "./profile-path.js";
 import { readTimeZone } from "./time-zone.js";
 import { providerCapabilities } from "./llm/provider-metadata.js";
-import { FUNCTION_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
-import type { AppConfig, FunctionName, ModelProviderName } from "./types.js";
+import { normalizeProviderPolicy } from "./llm/provider-policy.js";
+import { FUNCTION_NAMES, MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
+import type { AppConfig, FunctionName, ModelProviderName, ProviderPolicy } from "./types.js";
+
+const providerLanePolicySchema = z.object({
+  primary: z.enum(MODEL_PROVIDER_NAMES).optional(),
+  fallback: z.enum(MODEL_PROVIDER_NAMES).optional()
+});
 
 const profileSchema = z.object({
   name: z
@@ -43,6 +49,9 @@ const profileSchema = z.object({
   llmProvider: z.enum(MODEL_PROVIDER_NAMES).optional(),
   allowedProviders: z.array(z.enum(MODEL_PROVIDER_NAMES)).optional(),
   allowSubscriptionProviders: z.boolean().default(false),
+  providerPolicy: z
+    .partialRecord(z.enum(MODEL_PROVIDER_LANE_NAMES), providerLanePolicySchema)
+    .optional(),
   generalAgent: z
     .object({
       enabled: z.boolean().default(false),
@@ -189,6 +198,7 @@ type ParsedProfile = z.infer<typeof profileSchema>;
 type NormalizedProfile = ParsedProfile & {
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
+  providerPolicy: ProviderPolicy;
 };
 
 function normalizeProfile(profile: ParsedProfile): NormalizedProfile {
@@ -196,6 +206,11 @@ function normalizeProfile(profile: ParsedProfile): NormalizedProfile {
   return {
     ...profile,
     allowedProviders,
+    providerPolicy: normalizeProviderPolicy({
+      profileName: profile.name,
+      allowedProviders,
+      explicitPolicy: profile.providerPolicy
+    }),
     directAccessPolicy:
       profile.directAccessPolicy ?? (profile.allowDirectUser ? "managed" : "blocked"),
     groupAccessPolicy: profile.groupAccessPolicy ?? "blocked"
