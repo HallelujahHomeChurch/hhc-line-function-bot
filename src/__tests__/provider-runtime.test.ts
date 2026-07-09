@@ -31,7 +31,10 @@ function profile(overrides: Partial<BotProfileConfig> = {}): BotProfileConfig {
   };
 }
 
-function config(profiles: BotProfileConfig[]): AppConfig {
+function config(
+  profiles: BotProfileConfig[],
+  llmOverrides: Partial<AppConfig["llm"]> = {}
+): AppConfig {
   return {
     serviceName: "hhc-line-function-bot",
     host: "127.0.0.1",
@@ -49,7 +52,8 @@ function config(profiles: BotProfileConfig[]): AppConfig {
       deepseekModel: "deepseek-v4-flash",
       deepseekTimeoutMs: 8000,
       timeoutMs: 8000,
-      keywordFallbackEnabled: true
+      keywordFallbackEnabled: true,
+      ...llmOverrides
     }
   };
 }
@@ -62,13 +66,15 @@ function provider(raw: string): ChatProvider & TextGenerationProvider {
 }
 
 describe("provider runtime", () => {
-  it("selects the profile-specific primary provider", async () => {
-    const appConfig = config([
-      profile({
-        llmProvider: "deepseek",
-        allowedProviders: ["ollama", "deepseek"]
-      })
-    ]);
+  it("selects the global primary provider when no lane is requested", async () => {
+    const appConfig = config(
+      [
+        profile({
+          allowedProviders: ["ollama", "deepseek"]
+        })
+      ],
+      { provider: "deepseek" }
+    );
     const deepseek = provider("deepseek");
     const ollama = provider("ollama");
     const runtime = createProfileAwareProvider({
@@ -164,13 +170,15 @@ describe("provider runtime", () => {
   });
 
   it("rejects providers outside the profile allowed provider list", () => {
-    const appConfig = config([
-      profile({
-        llmProvider: "deepseek",
-        allowedProviders: ["ollama"],
-        allowSubscriptionProviders: false
-      })
-    ]);
+    const appConfig = config(
+      [
+        profile({
+          allowedProviders: ["ollama"],
+          allowSubscriptionProviders: false
+        })
+      ],
+      { provider: "deepseek" }
+    );
 
     expect(() => resolvePrimaryProviderName(appConfig, appConfig.profiles[0])).toThrow(
       "Provider deepseek is not allowed for profile helper"

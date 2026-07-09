@@ -16,6 +16,13 @@ function baseEnv(): NodeJS.ProcessEnv {
   };
 }
 
+const layeredPrompting = {
+  personaPrompt: "PERSONA",
+  conversationRulesPrompt: "CONVERSATION_RULES",
+  safetyRulesPrompt: "SAFETY_RULES",
+  formatRulesPrompt: "FORMAT_RULES"
+};
+
 describe("config", () => {
   it("defaults the app time zone to Asia/Taipei", () => {
     const config = loadConfigFromEnv(baseEnv());
@@ -117,6 +124,48 @@ describe("config", () => {
       adminDirectOnly: true
     });
     expect(config.profiles[0]).not.toHaveProperty("adminUserIds");
+  });
+
+  it("resolves profile credentials and bootstrap admin from environment references", () => {
+    const config = loadConfigFromEnv({
+      BOT_PROFILES_JSON: JSON.stringify([
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
+          channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
+          adminUserIdEnv: "LINE_HELPER_ADMIN_USER_ID"
+        }
+      ]),
+      LINE_HELPER_CHANNEL_SECRET: "resolved-secret",
+      LINE_HELPER_CHANNEL_ACCESS_TOKEN: "resolved-token",
+      LINE_HELPER_ADMIN_USER_ID: "Uadmin"
+    });
+
+    expect(config.profiles[0]).toMatchObject({
+      channelSecret: "resolved-secret",
+      channelAccessToken: "resolved-token",
+      adminUserId: "Uadmin"
+    });
+    expect(config.profiles[0]).not.toHaveProperty("channelSecretEnv");
+    expect(config.profiles[0]).not.toHaveProperty("channelAccessTokenEnv");
+    expect(config.profiles[0]).not.toHaveProperty("adminUserIdEnv");
+  });
+
+  it("rejects missing environment references for profile credentials", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        BOT_PROFILES_JSON: JSON.stringify([
+          {
+            name: "helper",
+            webhookPath: "/api/line/webhook/helper",
+            channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
+            channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN"
+          }
+        ]),
+        LINE_HELPER_CHANNEL_SECRET: "resolved-secret"
+      })
+    ).toThrow("Profile helper environment reference LINE_HELPER_CHANNEL_ACCESS_TOKEN is missing");
   });
 
   it("loads a single bootstrap admin user id", () => {
@@ -295,8 +344,7 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"],
-          llmProvider: "deepseek"
+          allowedProviders: ["ollama", "deepseek"]
         }
       ]),
       LLM_PROVIDER: "deepseek",
@@ -350,17 +398,16 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          llmProvider: "deepseek",
           allowedProviders: ["ollama", "deepseek"]
         }
       ])
     });
 
     expect(config.profiles[0]).toMatchObject({
-      llmProvider: "deepseek",
       allowedProviders: ["ollama", "deepseek"],
       allowSubscriptionProviders: false
     });
+    expect(config.profiles[0]).not.toHaveProperty("llmProvider");
   });
 
   it("loads lane provider policy for cost-aware routing", () => {
@@ -422,7 +469,6 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/main",
             channelSecret: "secret",
             channelAccessToken: "token",
-            llmProvider: "codex_app_server",
             allowedProviders: ["ollama", "codex_app_server"],
             allowSubscriptionProviders: false
           }
@@ -440,10 +486,10 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/helper",
             channelSecret: "secret",
             channelAccessToken: "token",
-            allowedProviders: ["deepseek"],
-            llmProvider: "deepseek"
+            allowedProviders: ["deepseek"]
           }
         ]),
+        LLM_PROVIDER: "deepseek",
         LLM_FALLBACK_PROVIDER: "ollama"
       })
     ).toThrow("Profile helper fallback provider ollama must be listed in allowedProviders");
@@ -469,7 +515,7 @@ describe("config", () => {
           smallTalk: {
             mode: "llm",
             maxChars: 80,
-            personaPrompt: "你像一位可靠、懂生活的基督徒朋友。"
+            prompting: layeredPrompting
           }
         }
       ])
@@ -478,7 +524,33 @@ describe("config", () => {
     expect(config.profiles[0].smallTalk).toEqual({
       mode: "llm",
       maxChars: 80,
-      personaPrompt: "你像一位可靠、懂生活的基督徒朋友。"
+      prompting: layeredPrompting
+    });
+  });
+
+  it("normalizes legacy profile personaPrompt into layered prompting", () => {
+    const config = loadConfigFromEnv({
+      BOT_PROFILES_JSON: JSON.stringify([
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          smallTalk: {
+            mode: "llm",
+            maxChars: 80,
+            personaPrompt: "LEGACY_PERSONA"
+          }
+        }
+      ])
+    });
+
+    expect(config.profiles[0].smallTalk).toEqual({
+      mode: "llm",
+      maxChars: 80,
+      prompting: {
+        personaPrompt: "LEGACY_PERSONA"
+      }
     });
   });
 

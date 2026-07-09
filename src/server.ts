@@ -1431,8 +1431,11 @@ async function handleLlmUseCommand(
     return { ok: true, replyText: "請在 1 對 1 對話中使用 LLM provider 指令。" };
   }
   if (!providerArg) {
-    const active = resolveProviderArg(undefined, profile, config);
-    const available = allowedProvidersForProfile(profile).join(", ") || "(none)";
+    const availableProviders = allowedProvidersForProfile(profile);
+    const active = profile.providerPolicy?.smart_talk
+      ? formatLanePolicy(profile.providerPolicy.smart_talk)
+      : (availableProviders[0] ?? "ollama");
+    const available = availableProviders.join(", ") || "(none)";
     return {
       ok: true,
       replyText: [
@@ -1444,7 +1447,7 @@ async function handleLlmUseCommand(
       ].join("\n")
     };
   }
-  const provider = resolveProviderArg(providerArg, profile, config);
+  const provider = resolveProviderArg(providerArg, profile);
   if (!provider) {
     return { ok: true, replyText: `不支援的 LLM provider：${providerArg}` };
   }
@@ -1459,8 +1462,7 @@ async function handleLlmUseCommand(
 
 function resolveProviderArg(
   value: string | undefined,
-  profile: BotProfileConfig,
-  config: AppConfig
+  profile: BotProfileConfig
 ): ModelProviderName | undefined {
   if (value === "ollama") {
     return "ollama";
@@ -1471,7 +1473,14 @@ function resolveProviderArg(
   if (value) {
     return undefined;
   }
-  return profile.llmProvider ?? config.llm.provider ?? "ollama";
+  return profile.providerPolicy?.smart_talk.primary ?? "ollama";
+}
+
+function formatLanePolicy(policy: {
+  primary: ModelProviderName;
+  fallback?: ModelProviderName;
+}): string {
+  return policy.fallback ? `${policy.primary} -> ${policy.fallback}` : policy.primary;
 }
 
 async function handleAdminAccessCommand(

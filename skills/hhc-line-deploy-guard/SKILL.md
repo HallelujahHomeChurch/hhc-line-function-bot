@@ -34,6 +34,7 @@ BOT_PROFILES_JSON or BOT_PROFILES_BASE64_JSON must be a JSON array
 - Use `ConvertTo-Json -InputObject $profiles -Depth 100 -Compress` when a manual JSON conversion is unavoidable.
 - Do not pipe a single-element profile array into `ConvertTo-Json`; PowerShell may serialize a single object root.
 - Do not print LINE tokens, Graph secrets, Notion tokens, database URLs, Redis URLs, or provider API keys.
+- Production profile JSON should use `channelSecretEnv`, `channelAccessTokenEnv`, and `adminUserIdEnv` instead of inline LINE credentials or bootstrap IDs.
 - Treat `git push origin main` as a production deployment action when trigger paths are changed.
 
 ## Secret Workflow
@@ -48,6 +49,19 @@ Show a non-sensitive profile summary:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File skills\hhc-line-deploy-guard\scripts\profile-secret.ps1 -Action summary
+```
+
+Verify the production profile is safe to paste and that env references exist:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File skills\hhc-line-deploy-guard\scripts\profile-secret.ps1 -Action check-production-safe
+```
+
+Migrate existing inline LINE credentials/bootstrap IDs into separate ACA secrets and env refs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File skills\hhc-line-deploy-guard\scripts\profile-secret.ps1 -Action migrate-inline-credentials
+powershell -ExecutionPolicy Bypass -File skills\hhc-line-deploy-guard\scripts\profile-secret.ps1 -Action migrate-inline-credentials -Apply -BumpConfigVersion
 ```
 
 Repair a bad single-object root by wrapping it in an array:

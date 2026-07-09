@@ -42,7 +42,7 @@ export function resolvePrimaryProviderName(
   config: AppConfig,
   profile: BotProfileConfig
 ): ModelProviderName {
-  const provider = profile.llmProvider ?? config.llm.provider ?? "ollama";
+  const provider = config.llm.provider ?? "ollama";
   assertProviderAllowedForProfile(profile, provider);
   return provider;
 }

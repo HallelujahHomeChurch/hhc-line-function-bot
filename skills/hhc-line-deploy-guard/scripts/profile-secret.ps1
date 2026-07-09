@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("check", "summary", "repair-array-root", "bump-config-version")]
+  [ValidateSet("check", "summary", "check-production-safe", "migrate-inline-credentials", "repair-array-root", "bump-config-version")]
   [string] $Action = "check",
   [string] $ResourceGroup = "alive",
   [string] $ContainerAppName = "hhc-line-function-bot",
@@ -81,15 +81,43 @@ function Show-ProfileSummary {
     [pscustomobject]@{
       name = $_.name
       webhookPath = $_.webhookPath
+      channelSecret = Get-ProfileValueMode $_ "channelSecret" "channelSecretEnv"
+      channelAccessToken = Get-ProfileValueMode $_ "channelAccessToken" "channelAccessTokenEnv"
+      adminUserId = Get-ProfileValueMode $_ "adminUserId" "adminUserIdEnv"
       enabledFunctions = if ($_.enabledFunctions) { ($_.enabledFunctions -join ",") } else { "" }
       smallTalkMode = $_.smallTalk.mode
       smallTalkMaxChars = $_.smallTalk.maxChars
-      personaPromptConfigured = [bool] $_.smallTalk.personaPrompt
+      promptingConfigured = [bool] $_.smallTalk.prompting
       generalAgentEnabled = $_.generalAgent.enabled
       conversationWindowSeconds = $_.generalAgent.conversationWindowSeconds
       registrationEnabled = $_.registration.enabled
     }
   } | Format-Table -AutoSize
+}
+
+function Test-HasProperty {
+  param(
+    [Parameter(Mandatory = $true)] $Object,
+    [Parameter(Mandatory = $true)][string] $Name
+  )
+
+  return $null -ne $Object.PSObject.Properties[$Name]
+}
+
+function Get-ProfileValueMode {
+  param(
+    [Parameter(Mandatory = $true)] $Profile,
+    [Parameter(Mandatory = $true)][string] $DirectName,
+    [Parameter(Mandatory = $true)][string] $EnvName
+  )
+
+  if (Test-HasProperty $Profile $EnvName) {
+    return "env:$($Profile.$EnvName)"
+  }
+  if (Test-HasProperty $Profile $DirectName) {
+    return "direct"
+  }
+  return "missing"
 }
 
 function Assert-ArrayRoot {
@@ -118,6 +146,195 @@ function Set-ProfileSecretJson {
   Assert-ArrayRoot $verified
 }
 
+function Convert-ToEnvProfileName {
+  param([Parameter(Mandatory = $true)][string] $Name)
+
+  return ($Name.ToUpperInvariant() -replace "[^A-Z0-9]", "_")
+}
+
+function Convert-ToSecretProfileName {
+  param([Parameter(Mandatory = $true)][string] $Name)
+
+  return ($Name.ToLowerInvariant() -replace "[^a-z0-9]", "-")
+}
+
+function Set-ContainerSecretValue {
+  param(
+    [Parameter(Mandatory = $true)][string] $Name,
+    [Parameter(Mandatory = $true)][string] $Value
+  )
+
+  & az containerapp secret set `
+    --resource-group $ResourceGroup `
+    --name $ContainerAppName `
+    --secrets "$Name=$Value" `
+    --output none
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to set ACA secret '$Name'."
+  }
+}
+
+function Set-ContainerEnvRefs {
+  param([Parameter(Mandatory = $true)][string[]] $EnvRefs)
+
+  if ($EnvRefs.Count -eq 0) {
+    return
+  }
+
+  & az containerapp update `
+    --resource-group $ResourceGroup `
+    --name $ContainerAppName `
+    --set-env-vars @EnvRefs `
+    --output none
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to update ACA environment variable references."
+  }
+}
+
+function Set-ProfileEnvReference {
+  param(
+    [Parameter(Mandatory = $true)] $Profile,
+    [Parameter(Mandatory = $true)][string] $DirectName,
+    [Parameter(Mandatory = $true)][string] $EnvRefName,
+    [Parameter(Mandatory = $true)][string] $EnvVarName,
+    [Parameter(Mandatory = $true)][string] $SecretName,
+    [System.Collections.Generic.List[string]] $EnvRefs,
+    [System.Collections.Generic.List[string]] $Operations
+  )
+
+  if (-not (Test-HasProperty $Profile $DirectName)) {
+    return
+  }
+
+  $value = [string] $Profile.$DirectName
+  if ([string]::IsNullOrWhiteSpace($value)) {
+    return
+  }
+
+  if ($Apply) {
+    Set-ContainerSecretValue -Name $SecretName -Value $value
+  }
+
+  $EnvRefs.Add("$EnvVarName=secretref:$SecretName")
+  if (Test-HasProperty $Profile $EnvRefName) {
+    $Profile.$EnvRefName = $EnvVarName
+  } else {
+    $Profile | Add-Member -NotePropertyName $EnvRefName -NotePropertyValue $EnvVarName
+  }
+  $Profile.PSObject.Properties.Remove($DirectName)
+  $Operations.Add("Profile '$($Profile.name)': moved '$DirectName' to env '$EnvVarName' backed by ACA secret '$SecretName'.")
+}
+
+function Convert-InlineCredentialsToEnvRefs {
+  param([Parameter(Mandatory = $true)] $Secret)
+
+  Assert-ArrayRoot $Secret
+  $profiles = Get-ProfilesArray $Secret
+  $envRefs = New-Object System.Collections.Generic.List[string]
+  $operations = New-Object System.Collections.Generic.List[string]
+
+  foreach ($profile in $profiles) {
+    $envProfile = Convert-ToEnvProfileName $profile.name
+    $secretProfile = Convert-ToSecretProfileName $profile.name
+    Set-ProfileEnvReference `
+      -Profile $profile `
+      -DirectName "channelSecret" `
+      -EnvRefName "channelSecretEnv" `
+      -EnvVarName "LINE_$($envProfile)_CHANNEL_SECRET" `
+      -SecretName "line-$($secretProfile)-channel-secret" `
+      -EnvRefs $envRefs `
+      -Operations $operations
+    Set-ProfileEnvReference `
+      -Profile $profile `
+      -DirectName "channelAccessToken" `
+      -EnvRefName "channelAccessTokenEnv" `
+      -EnvVarName "LINE_$($envProfile)_CHANNEL_ACCESS_TOKEN" `
+      -SecretName "line-$($secretProfile)-channel-access-token" `
+      -EnvRefs $envRefs `
+      -Operations $operations
+    Set-ProfileEnvReference `
+      -Profile $profile `
+      -DirectName "adminUserId" `
+      -EnvRefName "adminUserIdEnv" `
+      -EnvVarName "LINE_$($envProfile)_ADMIN_USER_ID" `
+      -SecretName "line-$($secretProfile)-admin-user-id" `
+      -EnvRefs $envRefs `
+      -Operations $operations
+  }
+
+  if ($operations.Count -eq 0) {
+    Write-Output "OK: no inline profile credentials found."
+    return
+  }
+
+  if (-not $Apply) {
+    Write-Output "DRY RUN: inline credentials can be migrated. Re-run with -Apply to write ACA secrets, env refs, and profile JSON."
+    $operations | ForEach-Object { Write-Output $_ }
+    return
+  }
+
+  Set-ContainerEnvRefs -EnvRefs ([string[]] $envRefs.ToArray())
+  $json = ConvertTo-Json -InputObject $profiles -Depth 100 -Compress
+  $check = $json.TrimStart()
+  if (-not $check.StartsWith("[")) {
+    throw "Internal error: migrated JSON is not an array."
+  }
+  Set-ProfileSecretJson $json
+  Write-Output "OK: migrated inline credentials to env references."
+  $operations | ForEach-Object { Write-Output $_ }
+}
+
+function Get-ContainerEnvNames {
+  $app = Invoke-AzJson -Arguments @(
+    "containerapp", "show",
+    "--resource-group", $ResourceGroup,
+    "--name", $ContainerAppName
+  )
+  $envItems = @($app.properties.template.containers[0].env)
+  return @($envItems | ForEach-Object { $_.name } | Where-Object { $_ })
+}
+
+function Assert-ProductionSafeProfiles {
+  param([Parameter(Mandatory = $true)] $Secret)
+
+  Assert-ArrayRoot $Secret
+  $profiles = Get-ProfilesArray $Secret
+  $containerEnvNames = @(Get-ContainerEnvNames)
+  $errors = New-Object System.Collections.Generic.List[string]
+
+  foreach ($profile in $profiles) {
+    foreach ($name in @("channelSecret", "channelAccessToken", "adminUserId")) {
+      if (Test-HasProperty $profile $name) {
+        $errors.Add("Profile '$($profile.name)' contains inline '$name'; use '$($name)Env' for production.")
+      }
+    }
+
+    foreach ($name in @("channelSecretEnv", "channelAccessTokenEnv")) {
+      if (-not (Test-HasProperty $profile $name)) {
+        $errors.Add("Profile '$($profile.name)' is missing required production env reference '$name'.")
+        continue
+      }
+      $envRef = [string] $profile.$name
+      if (-not $containerEnvNames.Contains($envRef)) {
+        $errors.Add("Profile '$($profile.name)' references '$envRef', but the container environment does not define it.")
+      }
+    }
+
+    if (Test-HasProperty $profile "adminUserIdEnv") {
+      $adminEnvRef = [string] $profile.adminUserIdEnv
+      if (-not $containerEnvNames.Contains($adminEnvRef)) {
+        $errors.Add("Profile '$($profile.name)' references '$adminEnvRef', but the container environment does not define it.")
+      }
+    }
+  }
+
+  if ($errors.Count -gt 0) {
+    throw ($errors -join "`n")
+  }
+}
+
 function Update-ProfileConfigVersion {
   $version = "profiles-$(Get-Date -Format 'yyyyMMddHHmmss')"
   & az containerapp update `
@@ -143,6 +360,19 @@ switch ($Action) {
     $secret = Get-ProfileSecret
     Write-Output "Root kind: $($secret.RootKind)"
     Show-ProfileSummary $secret
+  }
+  "check-production-safe" {
+    $secret = Get-ProfileSecret
+    Assert-ProductionSafeProfiles $secret
+    Write-Output "OK: '$SecretName' is production-safe and uses environment references for LINE credentials."
+    Show-ProfileSummary $secret
+  }
+  "migrate-inline-credentials" {
+    $secret = Get-ProfileSecret
+    Convert-InlineCredentialsToEnvRefs $secret
+    if ($Apply -and $BumpConfigVersion) {
+      Update-ProfileConfigVersion
+    }
   }
   "repair-array-root" {
     $secret = Get-ProfileSecret

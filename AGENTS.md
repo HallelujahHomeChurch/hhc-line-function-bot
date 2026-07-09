@@ -30,14 +30,16 @@ Use `skills/hhc-line-deploy-guard/SKILL.md` before updating ACA profile secrets,
 
 - One service can host multiple LINE bot profiles on canonical webhook paths, for example `/api/line/webhook/helper`.
 - Profile names must be lowercase URL-safe names, and `webhookPath` must equal `/api/line/webhook/{profileName}`. Do not reintroduce `/line/{profile}/webhook`.
-- Each profile has its own LINE credentials, access policy, wake-word behavior, enabled functions, and bootstrap `adminUserId`.
+- Each profile has its own LINE credential references, access policy, wake-word behavior, enabled functions, and bootstrap `adminUserId`.
 - The intended split is:
   - `helper`: managed direct users, managed groups, registration enabled.
   - future `main`: public direct users, groups blocked, registration disabled.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
 - `adminUserId` is the single bootstrap superadmin. Legacy `adminUserIds`, `allowedUserIds`, and `allowedGroupIds` should not be reintroduced.
+- Production profile JSON should use `channelSecretEnv`, `channelAccessTokenEnv`, and `adminUserIdEnv`; do not put real LINE credentials or bootstrap user IDs inline in `BOT_PROFILES_BASE64_JSON`.
 - The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`; use API keys from ACA/local secrets for remote providers.
 - Remote API providers such as `deepseek` are profile-scoped; future `main` official profiles should define their own provider allowlist.
+- Small-talk prompt behavior is profile config, not code personality. Use `smallTalk.prompting.personaPrompt`, `conversationRulesPrompt`, `safetyRulesPrompt`, and `formatRulesPrompt`. Keep house-church quote/golden-sentence behavior out of small talk; it should become a separate function if needed.
 
 ## Function Surface
 

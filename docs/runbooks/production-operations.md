@@ -37,6 +37,13 @@ Remote API providers are profile-scoped. Configure the internal `helper` profile
 - DeepSeek requires `DEEPSEEK_API_KEY`; `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, and `DEEPSEEK_TIMEOUT_MS` are normal runtime config.
 - The public API gateway should expose only `/api/line/webhook/{profileName}` for this service; do not expose `/api/line/llm-auth/*`.
 
+## Profile Config Safety
+
+- Production profile JSON should be safe to paste for review. Use `channelSecretEnv`, `channelAccessTokenEnv`, and `adminUserIdEnv` in `BOT_PROFILES_BASE64_JSON`.
+- Store the referenced LINE values as separate ACA secrets/env vars, for example `LINE_HELPER_CHANNEL_SECRET`, `LINE_HELPER_CHANNEL_ACCESS_TOKEN`, and `LINE_HELPER_ADMIN_USER_ID`.
+- Keep small-talk persona and rules in `smallTalk.prompting`. Do not hard-code bot personality in code, and do not put house-church quote behavior into small talk.
+- Before and after profile changes, run `skills\hhc-line-deploy-guard\scripts\profile-secret.ps1 -Action check-production-safe`.
+
 ## Registration And Admin Safety
 
 - The bootstrap `adminUserId` is the single superadmin for each profile.

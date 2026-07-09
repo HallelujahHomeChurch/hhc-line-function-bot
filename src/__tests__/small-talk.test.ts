@@ -64,23 +64,34 @@ describe("small talk replies", () => {
     );
   });
 
-  it("uses a lifestyle-aware Christian persona without forcing church context", async () => {
+  it("builds small talk prompts from layered profile configuration", async () => {
     const completeText = vi
       .fn<TextGenerationProvider["completeText"]>()
       .mockResolvedValue("好啊。");
 
     await createControlledSmallTalkReply({
-      profile: profile({ smallTalk: { mode: "llm", maxChars: 80 } }),
+      profile: profile({
+        smallTalk: {
+          mode: "llm",
+          maxChars: 80,
+          prompting: {
+            personaPrompt: "PERSONA_PROMPT",
+            conversationRulesPrompt: "CONVERSATION_RULES_PROMPT",
+            safetyRulesPrompt: "SAFETY_RULES_PROMPT",
+            formatRulesPrompt: "FORMAT_RULES_PROMPT"
+          }
+        }
+      }),
       text: "說個笑話",
       category: "light_joke",
       generator: { providerName: "deepseek", completeText }
     });
 
     const prompt = completeText.mock.calls[0]?.[0].prompt ?? "";
-    expect(prompt).toContain("成熟、溫和、懂生活的基督徒朋友");
-    expect(prompt).toContain("除非使用者主動提到信仰、教會、服事、聚會、詩歌或相關情境");
-    expect(prompt).not.toContain("台灣教會同工的小助理");
-    expect(prompt).not.toContain("教會同工，溫和");
+    expect(prompt).toContain("PERSONA_PROMPT");
+    expect(prompt).toContain("CONVERSATION_RULES_PROMPT");
+    expect(prompt).toContain("SAFETY_RULES_PROMPT");
+    expect(prompt).toContain("FORMAT_RULES_PROMPT");
   });
 
   it("allows the small talk persona to come from profile config", async () => {
@@ -93,7 +104,9 @@ describe("small talk replies", () => {
         smallTalk: {
           mode: "llm",
           maxChars: 80,
-          personaPrompt: "你像一位可靠、懂生活、也理解信仰背景的朋友。"
+          prompting: {
+            personaPrompt: "你像一位可靠、懂生活、也理解信仰背景的朋友。"
+          }
         }
       }),
       text: "小哈你好",
@@ -103,7 +116,7 @@ describe("small talk replies", () => {
 
     const prompt = completeText.mock.calls[0]?.[0].prompt ?? "";
     expect(prompt).toContain("你像一位可靠、懂生活、也理解信仰背景的朋友。");
-    expect(prompt).not.toContain("成熟、溫和、懂生活的基督徒朋友");
+    expect(prompt).not.toContain("你是小哈，來自哈利路亞家教會的內部小幫手");
   });
 
   it("does not echo the bot name back at the start of generated replies", async () => {

@@ -84,7 +84,14 @@ export interface RegistrationConfig {
 export interface SmallTalkConfig {
   mode: "template" | "llm";
   maxChars: number;
+  prompting?: SmallTalkPromptingConfig;
+}
+
+export interface SmallTalkPromptingConfig {
   personaPrompt?: string;
+  conversationRulesPrompt?: string;
+  safetyRulesPrompt?: string;
+  formatRulesPrompt?: string;
 }
 
 export interface GeneralAgentConfig {
@@ -116,7 +123,6 @@ export interface BotProfileConfig {
   groupAccessPolicy?: GroupAccessPolicy;
   registration?: RegistrationConfig;
   smallTalk?: SmallTalkConfig;
-  llmProvider?: ModelProviderName;
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
   providerPolicy?: ProviderPolicy;

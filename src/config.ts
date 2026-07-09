@@ -7,11 +7,25 @@ import { readTimeZone } from "./time-zone.js";
 import { providerCapabilities } from "./llm/provider-metadata.js";
 import { normalizeProviderPolicy } from "./llm/provider-policy.js";
 import { FUNCTION_NAMES, MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
-import type { AppConfig, FunctionName, ModelProviderName, ProviderPolicy } from "./types.js";
+import type {
+  AppConfig,
+  FunctionName,
+  ModelProviderName,
+  ProviderPolicy,
+  SmallTalkConfig,
+  SmallTalkPromptingConfig
+} from "./types.js";
 
 const providerLanePolicySchema = z.object({
   primary: z.enum(MODEL_PROVIDER_NAMES).optional(),
   fallback: z.enum(MODEL_PROVIDER_NAMES).optional()
+});
+
+const smallTalkPromptingSchema = z.object({
+  personaPrompt: z.string().trim().min(1).max(2000).optional(),
+  conversationRulesPrompt: z.string().trim().min(1).max(2000).optional(),
+  safetyRulesPrompt: z.string().trim().min(1).max(2000).optional(),
+  formatRulesPrompt: z.string().trim().min(1).max(2000).optional()
 });
 
 const profileSchema = z.object({
@@ -22,8 +36,10 @@ const profileSchema = z.object({
       message: "Profile name must use lowercase letters, numbers, dash, or underscore"
     }),
   webhookPath: z.string().startsWith("/"),
-  channelSecret: z.string().min(1),
-  channelAccessToken: z.string().min(1),
+  channelSecret: z.string().min(1).optional(),
+  channelSecretEnv: z.string().trim().min(1).optional(),
+  channelAccessToken: z.string().min(1).optional(),
+  channelAccessTokenEnv: z.string().trim().min(1).optional(),
   allowDirectUser: z.boolean().default(false),
   allowRooms: z.boolean().default(false),
   allowedMessageTypes: z.array(z.string()).default(["text"]),
@@ -32,6 +48,7 @@ const profileSchema = z.object({
   acceptMention: z.boolean().default(true),
   enabledFunctions: z.array(z.enum(FUNCTION_NAMES)).default([]),
   adminUserId: z.string().optional(),
+  adminUserIdEnv: z.string().trim().min(1).optional(),
   adminDirectOnly: z.boolean().default(true),
   directAccessPolicy: z.enum(["managed", "public", "blocked"]).optional(),
   groupAccessPolicy: z.enum(["managed", "blocked"]).optional(),
@@ -44,10 +61,10 @@ const profileSchema = z.object({
     .object({
       mode: z.enum(["template", "llm"]).default("template"),
       maxChars: z.number().int().min(20).max(120).default(80),
-      personaPrompt: z.string().trim().min(1).max(2000).optional()
+      personaPrompt: z.string().trim().min(1).max(2000).optional(),
+      prompting: smallTalkPromptingSchema.optional()
     })
     .default({ mode: "template", maxChars: 80 }),
-  llmProvider: z.enum(MODEL_PROVIDER_NAMES).optional(),
   allowedProviders: z.array(z.enum(MODEL_PROVIDER_NAMES)).optional(),
   allowSubscriptionProviders: z.boolean().default(false),
   providerPolicy: z
@@ -87,7 +104,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   assertCompleteGroup(env, notionRequiredKeys, "Incomplete Notion configuration");
   const llmProvider = readModelProvider(env.LLM_PROVIDER, "ollama");
   const llmFallbackProvider = readModelProvider(env.LLM_FALLBACK_PROVIDER, "ollama");
-  const normalizedProfiles = profiles.map((profile) => normalizeProfile(profile));
+  const normalizedProfiles = profiles.map((profile) => normalizeProfile(profile, env));
   validateProviderPolicy(normalizedProfiles, llmProvider, llmFallbackProvider);
   validateAccessConfig(normalizedProfiles, env);
 
@@ -196,16 +213,58 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
 }
 
 type ParsedProfile = z.infer<typeof profileSchema>;
-type NormalizedProfile = ParsedProfile & {
+type NormalizedProfile = Omit<
+  ParsedProfile,
+  | "channelSecret"
+  | "channelSecretEnv"
+  | "channelAccessToken"
+  | "channelAccessTokenEnv"
+  | "adminUserId"
+  | "adminUserIdEnv"
+  | "smallTalk"
+> & {
+  channelSecret: string;
+  channelAccessToken: string;
+  adminUserId?: string;
+  smallTalk: SmallTalkConfig;
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
   providerPolicy: ProviderPolicy;
 };
 
-function normalizeProfile(profile: ParsedProfile): NormalizedProfile {
+function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): NormalizedProfile {
   const allowedProviders = uniqueProviders(profile.allowedProviders ?? ["ollama"]);
+  const channelSecret = resolveRequiredProfileValue(
+    profile.name,
+    "channelSecret",
+    profile.channelSecret,
+    profile.channelSecretEnv,
+    env
+  );
+  const channelAccessToken = resolveRequiredProfileValue(
+    profile.name,
+    "channelAccessToken",
+    profile.channelAccessToken,
+    profile.channelAccessTokenEnv,
+    env
+  );
+  const adminUserId = resolveOptionalProfileValue(
+    profile.name,
+    "adminUserId",
+    profile.adminUserId,
+    profile.adminUserIdEnv,
+    env
+  );
+  const profileConfig = { ...profile };
+  delete profileConfig.channelSecretEnv;
+  delete profileConfig.channelAccessTokenEnv;
+  delete profileConfig.adminUserIdEnv;
   return {
-    ...profile,
+    ...profileConfig,
+    channelSecret,
+    channelAccessToken,
+    ...(adminUserId ? { adminUserId } : {}),
+    smallTalk: normalizeSmallTalkConfig(profile.smallTalk),
     allowedProviders,
     providerPolicy: normalizeProviderPolicy({
       profileName: profile.name,
@@ -216,6 +275,58 @@ function normalizeProfile(profile: ParsedProfile): NormalizedProfile {
       profile.directAccessPolicy ?? (profile.allowDirectUser ? "managed" : "blocked"),
     groupAccessPolicy: profile.groupAccessPolicy ?? "blocked"
   };
+}
+
+function resolveRequiredProfileValue(
+  profileName: string,
+  fieldName: string,
+  directValue: string | undefined,
+  envName: string | undefined,
+  env: NodeJS.ProcessEnv
+): string {
+  const value = resolveOptionalProfileValue(profileName, fieldName, directValue, envName, env);
+  if (!value) {
+    throw new Error(`Profile ${profileName} must configure ${fieldName} or ${fieldName}Env`);
+  }
+  return value;
+}
+
+function resolveOptionalProfileValue(
+  profileName: string,
+  fieldName: string,
+  directValue: string | undefined,
+  envName: string | undefined,
+  env: NodeJS.ProcessEnv
+): string | undefined {
+  if (envName) {
+    const value = env[envName]?.trim();
+    if (!value) {
+      throw new Error(`Profile ${profileName} environment reference ${envName} is missing`);
+    }
+    return value;
+  }
+  return directValue?.trim() || undefined;
+}
+
+function normalizeSmallTalkConfig(config: ParsedProfile["smallTalk"]): SmallTalkConfig {
+  const prompting = normalizeSmallTalkPrompting(config);
+  return {
+    mode: config.mode,
+    maxChars: config.maxChars,
+    ...(prompting ? { prompting } : {})
+  };
+}
+
+function normalizeSmallTalkPrompting(
+  config: ParsedProfile["smallTalk"]
+): SmallTalkPromptingConfig | undefined {
+  const prompting: SmallTalkPromptingConfig = {
+    ...(config.prompting ?? {})
+  };
+  if (config.personaPrompt && !prompting.personaPrompt) {
+    prompting.personaPrompt = config.personaPrompt;
+  }
+  return Object.keys(prompting).length > 0 ? prompting : undefined;
 }
 
 function uniqueProviders(providers: ModelProviderName[]): ModelProviderName[] {
@@ -240,15 +351,9 @@ function validateProviderPolicy(
         throw new Error(`Profile ${profile.name} cannot allow subscription provider ${provider}`);
       }
     }
-    if (profile.llmProvider && !profile.allowedProviders.includes(profile.llmProvider)) {
+    if (!profile.allowedProviders.includes(defaultProvider)) {
       throw new Error(
-        `Profile ${profile.name} llmProvider ${profile.llmProvider} must be listed in allowedProviders`
-      );
-    }
-    const effectiveProvider = profile.llmProvider ?? defaultProvider;
-    if (!profile.allowedProviders.includes(effectiveProvider)) {
-      throw new Error(
-        `Profile ${profile.name} effective provider ${effectiveProvider} must be listed in allowedProviders`
+        `Profile ${profile.name} default provider ${defaultProvider} must be listed in allowedProviders`
       );
     }
     if (!profile.allowedProviders.includes(fallbackProvider)) {

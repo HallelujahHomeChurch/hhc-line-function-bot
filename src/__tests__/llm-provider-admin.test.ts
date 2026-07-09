@@ -31,9 +31,16 @@ function config(): AppConfig {
         adminDirectOnly: true,
         directAccessPolicy: "managed",
         groupAccessPolicy: "managed",
-        llmProvider: "deepseek",
         allowedProviders: ["ollama", "deepseek"],
-        allowSubscriptionProviders: false
+        allowSubscriptionProviders: false,
+        providerPolicy: {
+          function_routing: { primary: "ollama" },
+          admin_routing: { primary: "ollama" },
+          memory_routing: { primary: "ollama" },
+          smart_talk: { primary: "deepseek", fallback: "ollama" },
+          general_agent: { primary: "deepseek", fallback: "ollama" },
+          context_compression: { primary: "deepseek" }
+        }
       }
     ],
     llm: {
@@ -59,8 +66,8 @@ function mainConfig(): AppConfig {
         ...value.profiles[0],
         name: "main",
         webhookPath: "/api/line/webhook/main",
-        llmProvider: "ollama",
-        allowedProviders: ["ollama"]
+        allowedProviders: ["ollama"],
+        providerPolicy: undefined
       }
     ]
   };
@@ -100,7 +107,7 @@ describe("LLM provider admin commands", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(replyText.mock.calls[0]?.[1]).toContain("active: deepseek");
+    expect(replyText.mock.calls[0]?.[1]).toContain("active: deepseek -> ollama");
     expect(replyText.mock.calls[0]?.[1]).toContain("available: ollama, deepseek");
   });
 
