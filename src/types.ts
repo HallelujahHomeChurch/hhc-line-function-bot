@@ -82,6 +82,7 @@ export interface RegistrationConfig {
 export interface SmallTalkConfig {
   mode: "template" | "llm";
   maxChars: number;
+  personaPrompt?: string;
 }
 
 export interface GeneralAgentConfig {

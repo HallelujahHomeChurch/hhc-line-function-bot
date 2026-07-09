@@ -468,7 +468,8 @@ describe("config", () => {
           channelAccessToken: "token",
           smallTalk: {
             mode: "llm",
-            maxChars: 80
+            maxChars: 80,
+            personaPrompt: "你像一位可靠、懂生活的基督徒朋友。"
           }
         }
       ])
@@ -476,7 +477,29 @@ describe("config", () => {
 
     expect(config.profiles[0].smallTalk).toEqual({
       mode: "llm",
-      maxChars: 80
+      maxChars: 80,
+      personaPrompt: "你像一位可靠、懂生活的基督徒朋友。"
+    });
+  });
+
+  it("defaults the group conversation window to 60 seconds", () => {
+    const config = loadConfigFromEnv({
+      BOT_PROFILES_JSON: JSON.stringify([
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          generalAgent: {
+            enabled: true
+          }
+        }
+      ])
+    });
+
+    expect(config.profiles[0].generalAgent).toEqual({
+      enabled: true,
+      conversationWindowSeconds: 60
     });
   });
 

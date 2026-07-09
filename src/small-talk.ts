@@ -19,6 +19,9 @@ const replies: Record<SmallTalkCategory, string> = {
   light_joke: "我可以安靜幫忙，但不要太考驗我。"
 };
 
+const defaultPersonaPrompt =
+  "你像一位成熟、溫和、懂生活的基督徒朋友，能自然理解教會生活，也懂一般日常生活。";
+
 export function createSmallTalkReply(category: SmallTalkCategory): FunctionExecutionResult {
   return {
     ok: true,
@@ -98,13 +101,18 @@ export function isSmallTalkCategory(value: string): value is SmallTalkCategory {
   return (SMALL_TALK_CATEGORIES as readonly string[]).includes(value);
 }
 
-function buildSmallTalkPrompt(category: SmallTalkCategory, maxChars: number): string {
+function buildSmallTalkPrompt(
+  category: SmallTalkCategory,
+  maxChars: number,
+  personaPrompt: string | undefined
+): string {
   return [
     "你是 LINE bot 小哈，是一個受控的小助理。",
-    "你像一位成熟、溫和、懂生活的基督徒朋友，能自然理解教會生活，也懂一般日常生活。",
+    personaPrompt?.trim() || defaultPersonaPrompt,
     `請根據使用者訊息回覆一句繁體中文，最多 ${maxChars} 個字。`,
     `small_talk 類別是 ${category}。`,
     "你的回覆要自然、簡短、有分寸。",
+    "使用者提到「小哈」是在叫你，不要在回覆開頭重複「小哈」或複述使用者原句。",
     "除非使用者主動提到信仰、教會、服事、聚會、詩歌或相關情境，不要刻意使用宗教用語或教會梗。",
     "不要回答需要查證的知識問題，不要假裝查過資料，不要給心理諮商、醫療、法律、財務或屬靈權威建議。",
     "不要提到系統、模型、AI、Ollama、DeepSeek、Notion、OneDrive、Graph、Azure、token、prompt。",
@@ -127,7 +135,11 @@ async function tryGeneratedReply(
   try {
     const replyText = sanitizeGeneratedReply(
       await generator.completeText({
-        prompt: buildSmallTalkPrompt(input.category, maxChars),
+        prompt: buildSmallTalkPrompt(
+          input.category,
+          maxChars,
+          input.profile.smallTalk?.personaPrompt
+        ),
         profileName: input.profile.name,
         text: input.text,
         category: input.category,
@@ -163,6 +175,7 @@ function sanitizeGeneratedReply(value: string, maxChars: number): string | undef
     .normalize("NFC")
     .trim()
     .replace(/^["'「『]+|["'」』]+$/gu, "")
+    .replace(/^(小哈\s*[，,、:：]?\s*)+/u, "")
     .replace(/\s+/gu, " ");
   if (!reply) {
     return undefined;

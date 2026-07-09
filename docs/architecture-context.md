@@ -170,6 +170,7 @@ handler:
 - definition-driven missing-slot clarification
 - in-flight duplicate protection for long-running lookups
 - requester-scoped conversation windows for natural follow-up messages
+  (default 60 seconds; each handled reply refreshes the requester window)
 - bounded runtime context building and compression
 - postback-based long-running job result retrieval
 - recent file recall such as "再給我一次"

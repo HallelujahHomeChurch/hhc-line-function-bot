@@ -83,6 +83,44 @@ describe("small talk replies", () => {
     expect(prompt).not.toContain("教會同工，溫和");
   });
 
+  it("allows the small talk persona to come from profile config", async () => {
+    const completeText = vi
+      .fn<TextGenerationProvider["completeText"]>()
+      .mockResolvedValue("我在。");
+
+    await createControlledSmallTalkReply({
+      profile: profile({
+        smallTalk: {
+          mode: "llm",
+          maxChars: 80,
+          personaPrompt: "你像一位可靠、懂生活、也理解信仰背景的朋友。"
+        }
+      }),
+      text: "小哈你好",
+      category: "greeting",
+      generator: { providerName: "deepseek", completeText }
+    });
+
+    const prompt = completeText.mock.calls[0]?.[0].prompt ?? "";
+    expect(prompt).toContain("你像一位可靠、懂生活、也理解信仰背景的朋友。");
+    expect(prompt).not.toContain("成熟、溫和、懂生活的基督徒朋友");
+  });
+
+  it("does not echo the bot name back at the start of generated replies", async () => {
+    const completeText = vi
+      .fn<TextGenerationProvider["completeText"]>()
+      .mockResolvedValue("小哈你好，願你平安。");
+
+    const result = await createControlledSmallTalkReply({
+      profile: profile({ smallTalk: { mode: "llm", maxChars: 80 } }),
+      text: "小哈你好",
+      category: "greeting",
+      generator: { providerName: "deepseek", completeText }
+    });
+
+    expect(result.replyText).toBe("你好，願你平安。");
+  });
+
   it("falls back to a template when controlled generation is invalid", async () => {
     const completeText = vi
       .fn<TextGenerationProvider["completeText"]>()

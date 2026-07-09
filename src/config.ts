@@ -43,7 +43,8 @@ const profileSchema = z.object({
   smallTalk: z
     .object({
       mode: z.enum(["template", "llm"]).default("template"),
-      maxChars: z.number().int().min(20).max(120).default(80)
+      maxChars: z.number().int().min(20).max(120).default(80),
+      personaPrompt: z.string().trim().min(1).max(2000).optional()
     })
     .default({ mode: "template", maxChars: 80 }),
   llmProvider: z.enum(MODEL_PROVIDER_NAMES).optional(),
@@ -55,9 +56,9 @@ const profileSchema = z.object({
   generalAgent: z
     .object({
       enabled: z.boolean().default(false),
-      conversationWindowSeconds: z.number().int().min(10).max(900).default(90)
+      conversationWindowSeconds: z.number().int().min(10).max(900).default(60)
     })
-    .default({ enabled: false, conversationWindowSeconds: 90 }),
+    .default({ enabled: false, conversationWindowSeconds: 60 }),
   longRunningJobs: z
     .object({
       enabled: z.boolean().default(false),

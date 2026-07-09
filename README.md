@@ -101,11 +101,12 @@ Example shape:
     },
     "smallTalk": {
       "mode": "llm",
-      "maxChars": 80
+      "maxChars": 80,
+      "personaPrompt": "你像一位成熟、溫和、懂生活的基督徒朋友，能自然理解教會生活，也懂一般日常生活。"
     },
     "generalAgent": {
       "enabled": true,
-      "conversationWindowSeconds": 90
+      "conversationWindowSeconds": 60
     },
     "longRunningJobs": {
       "enabled": true,
@@ -220,7 +221,7 @@ Set `TIME_ZONE` for all calendar date range decisions, including `今天`, `明�
 
 ## State
 
-When `generalAgent.enabled=true`, group conversations get a short requester-scoped follow-up window. If one user has just addressed the bot, that same user can send the next related message without repeating the wake word. Other group members do not inherit that window.
+When `generalAgent.enabled=true`, group conversations get a short requester-scoped follow-up window. The default is 60 seconds. If one user has just addressed the bot, that same user can send the next related message without repeating the wake word. Each handled reply records the latest turn and refreshes the window. Other group members do not inherit that window.
 
 When `longRunningJobs.enabled=true`, slow text turns race against `inlineReplyTimeoutMs`. If the turn is still running, the bot replies with a Quick Reply postback to check the result later. The stored result is scoped by profile, LINE source, and requester user id, and should use Redis in production.
 
