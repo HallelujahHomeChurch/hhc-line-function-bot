@@ -13,10 +13,14 @@ import type {
   FunctionHandler,
   FunctionRouterPort,
   GraphDriveClient,
-  LineEvent
+  LineEvent,
+  TextGenerationProvider
 } from "../types.js";
 
-function profile(enabledFunctions: BotProfileConfig["enabledFunctions"]): BotProfileConfig {
+function profile(
+  enabledFunctions: BotProfileConfig["enabledFunctions"],
+  overrides: Partial<BotProfileConfig> = {}
+): BotProfileConfig {
   return {
     name: "helper",
     webhookPath: "/api/line/webhook/helper",
@@ -28,7 +32,8 @@ function profile(enabledFunctions: BotProfileConfig["enabledFunctions"]): BotPro
     groupRequireWakeWord: true,
     wakeKeywords: ["小哈"],
     acceptMention: true,
-    enabledFunctions
+    enabledFunctions,
+    ...overrides
   };
 }
 
@@ -48,6 +53,8 @@ function createRuntime(options: {
   traceStore?: InMemoryAgentTraceStore;
   graph?: GraphDriveClient;
   memoryStore?: InMemoryAgentMemoryStore;
+  textGenerator?: TextGenerationProvider;
+  textFallbackGenerator?: TextGenerationProvider;
 }) {
   const now = () => new Date("2026-07-08T00:00:00.000Z");
   const memoryStore = options.memoryStore ?? new InMemoryAgentMemoryStore({ now });
@@ -74,6 +81,8 @@ function createRuntime(options: {
     traceStore: options.traceStore,
     lastErrorStore: new InMemoryLastErrorStore(10),
     lastRouteStore: new InMemoryLastRouteStore(10),
+    textGenerator: options.textGenerator,
+    textFallbackGenerator: options.textFallbackGenerator,
     now
   });
 }
@@ -182,5 +191,55 @@ describe("AgentTurnRuntime", () => {
     expect(serialized).toContain('"query":"present"');
     expect(serialized).toContain('"action":"find_ppt_slides"');
     expect(serialized).not.toContain("secret song title");
+  });
+
+  it("records the provider used for generated small talk", async () => {
+    const traceStore = new InMemoryAgentTraceStore(10);
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "respond",
+      action: "small_talk",
+      arguments: { category: "light_joke" },
+      provider: "ollama",
+      lane: "function_routing"
+    });
+    const completeText = vi
+      .fn<TextGenerationProvider["completeText"]>()
+      .mockResolvedValue("今天先輕鬆一下。");
+    const runtime = createRuntime({
+      router: { route },
+      traceStore,
+      textGenerator: {
+        providerNameForProfile: () => "deepseek",
+        completeText
+      }
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile([], { smallTalk: { mode: "llm", maxChars: 80 } }),
+      event: textEvent("說個笑話"),
+      requestId: "req-4"
+    });
+
+    expect(result?.replyText).toBe("今天先輕鬆一下。");
+    await expect(traceStore.list()).resolves.toMatchObject([
+      {
+        requestId: "req-4",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            phase: "route",
+            outcome: "respond",
+            provider: "ollama",
+            lane: "function_routing",
+            action: "small_talk"
+          }),
+          expect.objectContaining({
+            phase: "small_talk",
+            outcome: "generated",
+            provider: "deepseek",
+            lane: "smart_talk"
+          })
+        ])
+      }
+    ]);
   });
 });

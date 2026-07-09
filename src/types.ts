@@ -452,6 +452,12 @@ export interface FunctionExecutionResult {
   replyText: string;
   quickReplies?: QuickReplyItem[];
   agentResource?: AgentResourceReference;
+  smallTalkTrace?: {
+    lane: "smart_talk";
+    outcome: "generated" | "fallback" | "template";
+    provider?: ModelProviderName;
+    reason?: string;
+  };
 }
 
 export interface FunctionHandlerContext {

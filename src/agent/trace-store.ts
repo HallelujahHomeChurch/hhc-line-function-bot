@@ -7,6 +7,7 @@ export type AgentTurnTracePhase =
   | "admin_action_route"
   | "admin_action_result"
   | "route"
+  | "small_talk"
   | "slot_clarification"
   | "memory_alias"
   | "in_flight"

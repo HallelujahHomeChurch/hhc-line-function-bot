@@ -64,6 +64,25 @@ describe("small talk replies", () => {
     );
   });
 
+  it("uses a lifestyle-aware Christian persona without forcing church context", async () => {
+    const completeText = vi
+      .fn<TextGenerationProvider["completeText"]>()
+      .mockResolvedValue("好啊。");
+
+    await createControlledSmallTalkReply({
+      profile: profile({ smallTalk: { mode: "llm", maxChars: 80 } }),
+      text: "說個笑話",
+      category: "light_joke",
+      generator: { providerName: "deepseek", completeText }
+    });
+
+    const prompt = completeText.mock.calls[0]?.[0].prompt ?? "";
+    expect(prompt).toContain("成熟、溫和、懂生活的基督徒朋友");
+    expect(prompt).toContain("除非使用者主動提到信仰、教會、服事、聚會、詩歌或相關情境");
+    expect(prompt).not.toContain("台灣教會同工的小助理");
+    expect(prompt).not.toContain("教會同工，溫和");
+  });
+
   it("falls back to a template when controlled generation is invalid", async () => {
     const completeText = vi
       .fn<TextGenerationProvider["completeText"]>()
@@ -112,6 +131,12 @@ describe("small talk replies", () => {
     });
 
     expect(result.replyText).toBe("我在，慢慢來。");
+    expect(result.smallTalkTrace).toMatchObject({
+      provider: "ollama",
+      lane: "smart_talk",
+      outcome: "fallback",
+      reason: "primary_failed"
+    });
     expect(primaryCompleteText).toHaveBeenCalledWith(expect.objectContaining({ maxChars: 320 }));
     expect(fallbackCompleteText).toHaveBeenCalledWith(expect.objectContaining({ maxChars: 80 }));
   });

@@ -4,6 +4,7 @@ import type {
   BotProfileConfig,
   FunctionExecutionResult,
   JsonRecord,
+  ModelProviderName,
   SmallTalkCategory,
   TextGenerationProvider
 } from "./types.js";
@@ -39,22 +40,53 @@ export async function createControlledSmallTalkReply(
   const fallback = createSmallTalkReply(input.category);
   const config = input.profile.smallTalk ?? { mode: "template" as const, maxChars: 80 };
   if (config.mode !== "llm" || !input.generator) {
-    return fallback;
+    return {
+      ...fallback,
+      smallTalkTrace: {
+        lane: "smart_talk",
+        outcome: "template",
+        reason: config.mode !== "llm" ? "template_mode" : "generator_missing"
+      }
+    };
   }
 
   const primaryReply = await tryGeneratedReply(input, input.generator, config.maxChars);
-  if (primaryReply) {
-    return { ok: true, replyText: primaryReply };
+  if (primaryReply.replyText) {
+    return {
+      ok: true,
+      replyText: primaryReply.replyText,
+      smallTalkTrace: {
+        lane: "smart_talk",
+        outcome: "generated",
+        provider: primaryReply.provider
+      }
+    };
   }
 
   if (input.fallbackGenerator && input.fallbackGenerator !== input.generator) {
     const fallbackReply = await tryGeneratedReply(input, input.fallbackGenerator, config.maxChars);
-    if (fallbackReply) {
-      return { ok: true, replyText: fallbackReply };
+    if (fallbackReply.replyText) {
+      return {
+        ok: true,
+        replyText: fallbackReply.replyText,
+        smallTalkTrace: {
+          lane: "smart_talk",
+          outcome: "fallback",
+          provider: fallbackReply.provider,
+          reason: "primary_failed"
+        }
+      };
     }
   }
 
-  return fallback;
+  return {
+    ...fallback,
+    smallTalkTrace: {
+      lane: "smart_talk",
+      outcome: "template",
+      reason: "generation_failed"
+    }
+  };
 }
 
 export function smallTalkCategoryFromArguments(args: JsonRecord): SmallTalkCategory {
@@ -68,24 +100,32 @@ export function isSmallTalkCategory(value: string): value is SmallTalkCategory {
 
 function buildSmallTalkPrompt(category: SmallTalkCategory, maxChars: number): string {
   return [
-    "你是 LINE bot 小哈，是台灣教會同工的小助理。",
+    "你是 LINE bot 小哈，是一個受控的小助理。",
+    "你像一位成熟、溫和、懂生活的基督徒朋友，能自然理解教會生活，也懂一般日常生活。",
     `請根據使用者訊息回覆一句繁體中文，最多 ${maxChars} 個字。`,
     `small_talk 類別是 ${category}。`,
-    "語氣要像熟悉但安靜的教會同工，溫和、簡短、自然。",
-    "不要回答知識問題，不要給心理諮商或屬靈權威建議，不要編造資料。",
-    "不要提到系統、模型、AI、Ollama、Notion、OneDrive、Graph、Azure、token、prompt。",
+    "你的回覆要自然、簡短、有分寸。",
+    "除非使用者主動提到信仰、教會、服事、聚會、詩歌或相關情境，不要刻意使用宗教用語或教會梗。",
+    "不要回答需要查證的知識問題，不要假裝查過資料，不要給心理諮商、醫療、法律、財務或屬靈權威建議。",
+    "不要提到系統、模型、AI、Ollama、DeepSeek、Notion、OneDrive、Graph、Azure、token、prompt。",
     "不要包含網址、Markdown、條列、引號、表情符號。"
   ].join("\n");
+}
+
+interface GeneratedReplyAttempt {
+  replyText?: string;
+  provider?: ModelProviderName;
 }
 
 async function tryGeneratedReply(
   input: ControlledSmallTalkInput,
   generator: TextGenerationProvider,
   baseMaxChars: number
-): Promise<string | undefined> {
+): Promise<GeneratedReplyAttempt> {
   const maxChars = effectiveSmartTalkMaxChars(generator, input.profile.name, baseMaxChars);
+  const provider = providerNameForGenerator(generator, input.profile.name);
   try {
-    return sanitizeGeneratedReply(
+    const replyText = sanitizeGeneratedReply(
       await generator.completeText({
         prompt: buildSmallTalkPrompt(input.category, maxChars),
         profileName: input.profile.name,
@@ -95,9 +135,17 @@ async function tryGeneratedReply(
       }),
       maxChars
     );
+    return { replyText, provider };
   } catch {
-    return undefined;
+    return { provider };
   }
+}
+
+function providerNameForGenerator(
+  generator: TextGenerationProvider,
+  profileName: string
+): ModelProviderName | undefined {
+  return generator.providerNameForProfile?.(profileName) ?? generator.providerName;
 }
 
 function effectiveSmartTalkMaxChars(
@@ -105,7 +153,7 @@ function effectiveSmartTalkMaxChars(
   profileName: string,
   baseMaxChars: number
 ): number {
-  const providerName = generator.providerNameForProfile?.(profileName) ?? generator.providerName;
+  const providerName = providerNameForGenerator(generator, profileName);
   const capabilities = providerName ? providerCapabilities[providerName] : generator.capabilities;
   return capabilities?.remoteApi ? Math.max(baseMaxChars, 320) : baseMaxChars;
 }

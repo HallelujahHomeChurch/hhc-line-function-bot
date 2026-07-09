@@ -248,6 +248,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         phase: "route",
         outcome: route.type,
         provider: route.provider,
+        lane: route.lane,
         action: route.type === "execute" || route.type === "respond" ? route.action : undefined,
         reason: route.type === "deny" ? route.reason : undefined,
         query: route.type === "execute" ? queryMarker(route.arguments) : undefined,
@@ -286,6 +287,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             generator: options.textGenerator,
             fallbackGenerator: options.textFallbackGenerator
           });
+          if (result.smallTalkTrace) {
+            steps.push({
+              phase: "small_talk",
+              outcome: result.smallTalkTrace.outcome,
+              provider: result.smallTalkTrace.provider,
+              lane: result.smallTalkTrace.lane,
+              reason: result.smallTalkTrace.reason
+            });
+          }
           return finish(input, steps, result);
         }
         return finish(input, steps, { ok: true, replyText: messages.unsupported });
