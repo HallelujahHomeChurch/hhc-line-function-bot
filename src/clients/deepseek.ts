@@ -47,7 +47,7 @@ export function createDeepSeekProvider(
         model: options.model,
         stream: false,
         temperature: 0.4,
-        max_tokens: request.maxChars,
+        max_tokens: request.maxChars ?? options.generalMaxOutputTokens,
         thinking: { type: "disabled" },
         messages: [
           { role: "system", content: request.prompt },

@@ -415,7 +415,7 @@ export interface TextGenerationRequest {
   profileName: string;
   text: string;
   category: SmallTalkCategory;
-  maxChars: number;
+  maxChars?: number;
 }
 
 export interface TextGenerationProvider {

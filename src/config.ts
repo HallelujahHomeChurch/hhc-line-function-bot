@@ -426,6 +426,19 @@ function assertProductionSafeProfiles(profiles: ParsedProfile[]): void {
         `Production profile ${profile.name} must use adminUserIdEnv instead of adminUserId`
       );
     }
+    if (profile.smallTalk.mode === "llm") {
+      const prompting = profile.smallTalk.prompting;
+      for (const key of [
+        "personaPrompt",
+        "conversationRulesPrompt",
+        "safetyRulesPrompt",
+        "formatRulesPrompt"
+      ] as const) {
+        if (!prompting?.[key]?.trim()) {
+          throw new Error(`Production LLM smallTalk prompting for ${profile.name} must include ${key}`);
+        }
+      }
+    }
   }
 }
 

@@ -74,6 +74,24 @@ describe("DeepSeek client", () => {
     });
   });
 
+  it("uses the configured token budget when a text request has no character limit", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "hello" } }] }), {
+        status: 200
+      })
+    );
+
+    await provider(fetchImpl).completeText({
+      prompt: "Reply naturally.",
+      profileName: "helper",
+      text: "hello",
+      category: "greeting"
+    });
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(body.max_tokens).toBe(512);
+  });
+
   it("fails fast when the API key is missing", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const client = createDeepSeekProvider({

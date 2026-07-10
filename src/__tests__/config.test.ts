@@ -600,6 +600,38 @@ describe("config", () => {
     });
   });
 
+  it("requires all prompting layers for a production LLM profile", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
+          channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
+          smallTalk: {
+            mode: "llm",
+            maxChars: 80,
+            prompting: {
+              personaPrompt: "persona",
+              conversationRulesPrompt: "conversation",
+              formatRulesPrompt: "format"
+            }
+          }
+        }
+      ],
+      async (path) => {
+        expect(() =>
+          loadConfigFromEnv({
+            NODE_ENV: "production",
+            PROFILE_CONFIG_PATH: path,
+            LINE_HELPER_CHANNEL_SECRET: "secret",
+            LINE_HELPER_CHANNEL_ACCESS_TOKEN: "token"
+          })
+        ).toThrow("Production LLM smallTalk prompting for helper must include safetyRulesPrompt");
+      }
+    );
+  });
+
   it("normalizes legacy profile personaPrompt into layered prompting", () => {
     const config = loadConfigFromEnv({
       BOT_PROFILES_JSON: JSON.stringify([

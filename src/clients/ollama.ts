@@ -65,7 +65,7 @@ export function createOllamaProvider(
           think: false,
           options: {
             temperature: 0.4,
-            num_predict: request.maxChars
+            num_predict: request.maxChars ?? 80
           },
           messages: [
             { role: "system", content: request.prompt },

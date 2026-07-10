@@ -119,6 +119,23 @@ describe("small talk replies", () => {
     expect(prompt).not.toContain("你是小哈，來自哈利路亞家教會的內部小幫手");
   });
 
+  it("does not add code-owned persona or safety fallback text", async () => {
+    const completeText = vi
+      .fn<TextGenerationProvider["completeText"]>()
+      .mockResolvedValue("可以。 ");
+
+    await createControlledSmallTalkReply({
+      profile: profile({ smallTalk: { mode: "llm", maxChars: 80 } }),
+      text: "小哈你好",
+      category: "greeting",
+      generator: { providerName: "ollama", completeText }
+    });
+
+    const prompt = completeText.mock.calls[0]?.[0].prompt ?? "";
+    expect(prompt).not.toContain("你是小哈，一位溫和、簡短、有分寸的小助理。");
+    expect(prompt).not.toContain("不要假裝查過資料");
+  });
+
   it("does not echo the bot name back at the start of generated replies", async () => {
     const completeText = vi
       .fn<TextGenerationProvider["completeText"]>()
@@ -162,7 +179,8 @@ describe("small talk replies", () => {
     });
 
     expect(result.replyText).toBe(reply);
-    expect(completeText).toHaveBeenCalledWith(expect.objectContaining({ maxChars: 320 }));
+    expect(completeText).toHaveBeenCalledWith(expect.objectContaining({ maxChars: undefined }));
+    expect(completeText.mock.calls[0]?.[0].prompt).not.toContain("最多");
   });
 
   it("falls back to local short controlled replies when the remote API provider fails", async () => {
@@ -188,7 +206,7 @@ describe("small talk replies", () => {
       outcome: "fallback",
       reason: "primary_failed"
     });
-    expect(primaryCompleteText).toHaveBeenCalledWith(expect.objectContaining({ maxChars: 320 }));
+    expect(primaryCompleteText).toHaveBeenCalledWith(expect.objectContaining({ maxChars: undefined }));
     expect(fallbackCompleteText).toHaveBeenCalledWith(expect.objectContaining({ maxChars: 80 }));
   });
 
