@@ -88,6 +88,25 @@ function createRuntime(options: {
 }
 
 describe("AgentTurnRuntime", () => {
+  it("clarifies a generic query before invoking the router", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "ollama"
+    });
+    const runtime = createRuntime({ router: { route } });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["find_ppt_slides", "query_service_schedule", "save_schedule_memory"]),
+      event: textEvent("小哈，幫我查東西"),
+      requestId: "req-generic-query"
+    });
+
+    expect(result?.replyText).toContain("想查什麼");
+    expect(result?.quickReplies?.map((item) => item.label)).toEqual(["查投影片", "查服事表"]);
+    expect(route).not.toHaveBeenCalled();
+  });
+
   it("answers recent resource follow-ups before calling the router", async () => {
     const now = () => new Date("2026-07-08T00:00:00.000Z");
     const memoryStore = new InMemoryAgentMemoryStore({ now });

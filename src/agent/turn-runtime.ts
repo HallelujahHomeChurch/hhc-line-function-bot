@@ -11,6 +11,7 @@ import { messages } from "../messages.js";
 import { buildFunctionQuickReplies } from "../line-reply.js";
 import { createControlledSmallTalkReply, smallTalkCategoryFromArguments } from "../small-talk.js";
 import { createIntroReply } from "../intro.js";
+import { createQueryClarificationReply } from "../query-clarification.js";
 import { sanitizeActionTelemetryEvent } from "../observability/action-telemetry.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
 import type { LastRouteRecord, LastRouteStore } from "../observability/last-route-store.js";
@@ -193,6 +194,12 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
 
       if (input.allowRouting === false) {
         return undefined;
+      }
+
+      const queryClarification = createQueryClarificationReply(input.profile, text);
+      if (queryClarification) {
+        steps.push({ phase: "query_clarification", outcome: "handled", ok: true });
+        return finish(input, steps, queryClarification);
       }
 
       const adminActionResult = await handleNaturalLanguageAdminAction({

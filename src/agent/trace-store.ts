@@ -3,6 +3,7 @@ import { redactSensitiveText } from "../observability/action-telemetry.js";
 export type AgentTurnTracePhase =
   | "context"
   | "pre_route_memory"
+  | "query_clarification"
   | "text_handler"
   | "admin_action_route"
   | "admin_action_result"
