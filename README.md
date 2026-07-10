@@ -14,7 +14,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - LINE Quick Reply suggestions for supported functions.
 - Postback-based selection state for multi-result flows, currently used by PPT and sheet music search.
 - Hermes-compatible numeric selection replies, so users can tap a Quick Reply or reply with `1`, `2`, `3`.
-- Clarification state for missing slots, so users can ask `查投影片`, `查流行歌譜`, or generic `查服事表` and answer the follow-up with just the missing value.
+- Definition-driven clarification state for missing slots. A generic capability request such as `查投影片`, `查流行歌譜`, `查維基百科`, or `查服事表` never runs a lookup; the bot asks for the missing value first.
 - Intro/help replies for `小哈`, `小哈可以幹嘛`, `help`, and related prompts, scoped to each profile's enabled functions.
 - Controlled agent turn runtime for routing, slot clarification, in-flight locks, recent file recall, and explicit text/resource memories.
 - Requester-scoped short conversation windows, so group follow-up messages can continue naturally without letting other users inherit context.
@@ -198,7 +198,7 @@ Multi-result PPT and sheet music searches store short-lived in-memory sessions a
 
 If a PPT or sheet music request is missing the title keyword, the bot stores a short-lived pending function session and asks for the missing title. The user's next plain-text reply from the same LINE source and requester fills the missing `query` argument and runs the original function.
 
-If a schedule request is too generic, such as `查服事表`, the bot asks which date, meeting, or schedule type to use and offers Quick Replies.
+If a request only selects a capability—such as `查投影片`, `查流行歌譜`, `查維基百科`, or `查服事表`—the bot asks for the required title, topic, date, meeting, or schedule type before any lookup runs. This rule is declared on the function's required slot, so it also overrides a model-inferred query that the user did not supply.
 
 ## Agent Runtime And Memory
 

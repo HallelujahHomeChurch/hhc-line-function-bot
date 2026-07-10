@@ -61,6 +61,7 @@ When adding or changing a function:
 
 - Add or update the function definition.
 - Include capability metadata: `displayName`, `shortDescription`, `examples`, `requires`, `scope`, `sideEffectLevel`, `allowedSources`, `requiredSlots`, `resourcePolicy`, `memoryPolicy`, and `clarificationPrompt`.
+- For a required value that users can omit by naming only the capability, declare `genericRequest.phrases` on that required slot (and `clearArguments` for related model-inferred fields). Do not add function-specific generic-request checks in routers or handlers.
 - Register the function module.
 - Update routing and argument extraction.
 - Add clarification behavior for missing required slots.

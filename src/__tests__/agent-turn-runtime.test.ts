@@ -213,6 +213,37 @@ describe("AgentTurnRuntime", () => {
     });
   });
 
+  it("clarifies a generic Wikipedia request even when the model supplies a topic", async () => {
+    const sessionStore = new InMemorySessionStore({
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "query_wikipedia",
+      arguments: { query: "烏戈·查維茲" },
+      provider: "ollama"
+    });
+    const handler = vi.fn<FunctionHandler>();
+    const runtime = createRuntime({
+      router: { route },
+      functionRegistry: { query_wikipedia: handler },
+      sessionStore
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["query_wikipedia"]),
+      event: textEvent("小哈 查維基百科"),
+      requestId: "req-wikipedia-generic"
+    });
+
+    expect(result?.replyText).toContain("想查哪個維基百科主題");
+    expect(handler).not.toHaveBeenCalled();
+    await expect(sessionStore.summary()).resolves.toMatchObject({
+      total: 1,
+      byType: { pending_function: 1 }
+    });
+  });
+
   it("clarifies a generic service schedule request even when the model infers next meeting", async () => {
     const sessionStore = new InMemorySessionStore({
       now: () => new Date("2026-07-08T00:00:00.000Z")

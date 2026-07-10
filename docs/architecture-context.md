@@ -61,7 +61,8 @@ For normal LINE webhook messages, read the flow in this order:
 11. `src/router.ts` asks the configured LLM provider for a strict JSON route.
 12. `src/keyword-router.ts` may provide conservative fallback.
 13. Definition-driven slot clarification asks for missing required metadata
-    before handlers run.
+    before handlers run. Generic capability-only requests are identified by the
+    same slot metadata and override model-inferred values.
 14. Agent memory can resolve aliases before expensive file searches.
 15. The turn runtime applies in-flight locks, calls the registered handler, and
     records sanitized route/function/turn diagnostics.

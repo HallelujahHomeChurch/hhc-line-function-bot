@@ -1,4 +1,5 @@
 import { getFunctionDefinition, type FunctionRequiredSlot } from "../functions/definitions.js";
+import { isGenericSlotValue } from "../functions/generic-slot.js";
 import { withRequesterDisplayName } from "../requester-personalization.js";
 import { canCreateRequesterScopedSession } from "../state/session-safety.js";
 import type { SessionStore } from "../state/session-store.js";
@@ -100,32 +101,7 @@ export function applyPendingSlotAnswer(
 }
 
 function slotMissing(slot: FunctionRequiredSlot, args: JsonRecord): boolean {
-  switch (slot.missingWhen) {
-    case "blank":
-      return !stringArgument(args, slot.argument);
-    case "service_schedule_generic":
-      return isGenericServiceScheduleRequest(args);
-    default:
-      return false;
-  }
-}
-
-function isGenericServiceScheduleRequest(args: JsonRecord): boolean {
-  const structuredKeys = ["date", "dateIntent", "specificDate", "meeting", "role"];
-  if (structuredKeys.some((key) => stringArgument(args, key))) {
-    return false;
-  }
-  const query = normalizeServiceScheduleQuery(stringArgument(args, "query") ?? "");
-  return ["", "服事", "服事表", "服事人員", "服事安排", "聚會服事", "聚會服事表"].includes(query);
-}
-
-function normalizeServiceScheduleQuery(value: string): string {
-  return value
-    .normalize("NFKC")
-    .trim()
-    .replace(/^小哈[，,：:\s]*/u, "")
-    .replace(/^(請|幫我|幫忙|查詢|查|找|搜尋)\s*/u, "")
-    .replace(/\s+/g, "");
+  return !stringArgument(args, slot.argument) || isGenericSlotValue(slot, args);
 }
 
 function stringArgument(args: JsonRecord, key: string): string | undefined {

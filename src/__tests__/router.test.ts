@@ -302,8 +302,7 @@ describe("function router", () => {
       action: "find_ppt_slides",
       provider: "ollama",
       arguments: {
-        query: "",
-        originalQuery: "小哈 查投影片"
+        query: ""
       }
     });
   });
@@ -744,7 +743,7 @@ describe("function router", () => {
       provider: "keyword",
       fallbackProvider: "ollama",
       fallbackReason: "timeout",
-      arguments: { query: "小哈 查服事表" }
+      arguments: { query: "" }
     });
   });
 

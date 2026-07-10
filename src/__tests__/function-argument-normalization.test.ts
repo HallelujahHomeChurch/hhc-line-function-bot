@@ -3,6 +3,42 @@ import { describe, expect, it } from "vitest";
 import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
 
 describe("function argument normalization", () => {
+  it("clears a model-inferred Wikipedia topic when the user only selects Wikipedia lookup", () => {
+    expect(
+      normalizeFunctionArguments(
+        "query_wikipedia",
+        { query: "烏戈·查維茲" },
+        { text: "小哈 查維基百科" }
+      )
+    ).toMatchObject({
+      query: ""
+    });
+  });
+
+  it("clears a model-inferred schedule range when the user only asks for service staff", () => {
+    expect(
+      normalizeFunctionArguments(
+        "query_schedule",
+        { query: "下一場服事", dateIntent: "next_meeting" },
+        { text: "小哈 查服事人員" }
+      )
+    ).toMatchObject({
+      query: ""
+    });
+  });
+
+  it("clears a model-inferred sheet title when the user only asks for a score", () => {
+    expect(
+      normalizeFunctionArguments(
+        "find_pop_sheet_music",
+        { query: "Yesterday" },
+        { text: "小哈 查譜" }
+      )
+    ).toMatchObject({
+      query: ""
+    });
+  });
+
   it("extracts a sheet music title from natural user text when the model omits the query", () => {
     expect(
       normalizeFunctionArguments(
@@ -102,7 +138,7 @@ describe("function argument normalization", () => {
     );
 
     expect(result).toMatchObject({
-      query: "小哈查服事表",
+      query: "",
       limit: 1
     });
     expect(result).not.toHaveProperty("dateIntent");

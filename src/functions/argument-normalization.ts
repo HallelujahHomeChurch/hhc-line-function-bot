@@ -1,4 +1,6 @@
 import { extractPptSlideQuery } from "../ppt-query.js";
+import { getFunctionDefinition } from "./definitions.js";
+import { clearGenericSlotArguments, findGenericRequestSlot } from "./generic-slot.js";
 import type { FunctionName, JsonRecord } from "../types.js";
 
 export interface FunctionArgumentNormalizationInput {
@@ -32,6 +34,14 @@ export function normalizeFunctionArguments(
   args: JsonRecord,
   input: FunctionArgumentNormalizationInput
 ): JsonRecord {
+  const genericRequestSlot = findGenericRequestSlot(
+    getFunctionDefinition(action)?.requiredSlots ?? [],
+    input.text
+  );
+  if (genericRequestSlot) {
+    return clearGenericSlotArguments(genericRequestSlot, args);
+  }
+
   switch (action) {
     case "find_ppt_slides":
       return normalizePptSlideArguments(args, input);
@@ -74,11 +84,10 @@ function normalizeSheetMusicArguments(
   const query = stringArg(args, "query");
   const inputQuery = extractSheetMusicQuery(input.text);
   const modelQuery = extractSheetMusicQuery(query);
-  const normalizedQuery = isGenericSheetMusicQuery(inputQuery)
-    ? ""
-    : inputQuery && modelQuery && queryContains(inputQuery, modelQuery)
+  const normalizedQuery =
+    inputQuery && modelQuery && queryContains(inputQuery, modelQuery)
       ? modelQuery
-      : inputQuery || (isGenericSheetMusicRequest(input.text) ? "" : modelQuery);
+      : inputQuery || modelQuery;
   const next: JsonRecord = { ...args };
 
   if (normalizedQuery !== query) {
@@ -99,16 +108,6 @@ function normalizeServiceScheduleArguments(
   args: JsonRecord,
   input: FunctionArgumentNormalizationInput
 ): JsonRecord {
-  if (isGenericServiceScheduleRequest(input.text)) {
-    const next = { ...args };
-    delete next.date;
-    delete next.dateIntent;
-    delete next.specificDate;
-    delete next.meeting;
-    delete next.role;
-    return { ...next, query: input.text.trim() };
-  }
-
   const query = stringArg(args, "query");
   if (query === "主日") {
     return { ...args, query: "主日服事" };
@@ -147,29 +146,6 @@ export function extractSheetMusicQuery(text: string): string {
   return query;
 }
 
-function isGenericSheetMusicRequest(text: string): boolean {
-  return isGenericSheetMusicQuery(extractSheetMusicQuery(text));
-}
-
-function isGenericSheetMusicQuery(query: string): boolean {
-  const normalized = query
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[\s,，、:：。.!！?？_-]+/g, "");
-  return [
-    "",
-    "譜",
-    "查譜",
-    "找譜",
-    "樂譜",
-    "歌譜",
-    "流行歌譜",
-    "流行歌曲樂譜",
-    "sheetmusic",
-    "score"
-  ].includes(normalized);
-}
-
 function queryContains(value: string, expected: string): boolean {
   return normalizeComparableQuery(value).includes(normalizeComparableQuery(expected));
 }
@@ -179,50 +155,6 @@ function normalizeComparableQuery(value: string): string {
     .normalize("NFKC")
     .toLowerCase()
     .replace(/[\s,，、:：。.!！?？'"“”‘’()[\]{}_-]+/g, "");
-}
-
-function isGenericServiceScheduleRequest(text: string): boolean {
-  const normalized = normalizeGenericChineseRequest(text);
-  return ["服事表", "服事", "服事人員", "聚會服事表", "聚會服事", "聚會服事人員"].includes(
-    normalized
-  );
-}
-
-function normalizeGenericChineseRequest(text: string): string {
-  let normalized = text
-    .normalize("NFKC")
-    .trim()
-    .replace(/^小哈[\s,，、:：]*/u, "")
-    .replace(/[，,。.!！?？、:：\s]/g, "");
-  const leadingWords = [
-    "請問",
-    "請",
-    "麻煩",
-    "幫我",
-    "幫忙",
-    "查詢",
-    "查",
-    "看",
-    "找",
-    "給我",
-    "告訴我",
-    "想知道"
-  ];
-
-  for (let index = 0; index < 4; index += 1) {
-    const before = normalized;
-    for (const word of leadingWords) {
-      if (normalized.startsWith(word)) {
-        normalized = normalized.slice(word.length);
-        break;
-      }
-    }
-    if (normalized === before) {
-      break;
-    }
-  }
-
-  return normalized;
 }
 
 function stripLeadingRequestWords(value: string): string {

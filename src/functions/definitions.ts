@@ -23,12 +23,18 @@ export interface FunctionKeywordFallback {
 
 export type FunctionSideEffectLevel = "read" | "write" | "admin" | "destructive";
 export type FunctionAllowedSource = "user" | "group";
-export type FunctionRequiredSlotMissingWhen = "blank" | "service_schedule_generic";
+export type FunctionRequiredSlotMissingWhen = "blank";
+
+export interface FunctionGenericRequest {
+  phrases: string[];
+  clearArguments?: string[];
+}
 
 export interface FunctionRequiredSlot {
   name: string;
   argument: string;
   missingWhen: FunctionRequiredSlotMissingWhen;
+  genericRequest?: FunctionGenericRequest;
   prompt: string;
   quickReplies?: Array<{
     label: string;
@@ -88,6 +94,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         name: "query",
         argument: "query",
         missingWhen: "blank",
+        genericRequest: {
+          phrases: ["投影片", "ppt", "powerpoint", "slides", "pdf"]
+        },
         prompt: "要查哪一份投影片？請直接回覆名稱。"
       }
     ],
@@ -131,7 +140,19 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       {
         name: "schedule_range_or_type",
         argument: "query",
-        missingWhen: "service_schedule_generic",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: [
+            "服事",
+            "服事表",
+            "服事人員",
+            "服事安排",
+            "聚會服事",
+            "聚會服事表",
+            "聚會服事人員"
+          ],
+          clearArguments: ["date", "dateIntent", "specificDate", "meeting", "role"]
+        },
         prompt: "要查哪一天、哪一場聚會，或哪一類服事？",
         quickReplies: [
           { label: "下一場", text: "下一場服事" },
@@ -204,7 +225,19 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       {
         name: "service_schedule_range",
         argument: "query",
-        missingWhen: "service_schedule_generic",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: [
+            "服事",
+            "服事表",
+            "服事人員",
+            "服事安排",
+            "聚會服事",
+            "聚會服事表",
+            "聚會服事人員"
+          ],
+          clearArguments: ["date", "dateIntent", "specificDate", "meeting", "role"]
+        },
         prompt: "要查哪一場聚會或哪一天的服事？",
         quickReplies: [
           { label: "下一場", text: "下一場" },
@@ -244,6 +277,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         name: "query",
         argument: "query",
         missingWhen: "blank",
+        genericRequest: {
+          phrases: ["譜", "流行歌譜", "流行歌曲樂譜", "歌譜", "樂譜", "sheet music", "score"]
+        },
         prompt: "要查哪一首流行歌曲樂譜？請直接回覆歌名。"
       }
     ],
@@ -332,6 +368,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         name: "query",
         argument: "query",
         missingWhen: "blank",
+        genericRequest: {
+          phrases: ["記住的服事", "保存的服事", "服事表"]
+        },
         prompt: "請告訴我要查哪個已記住的服事，例如 7/19 舉牌。"
       }
     ],
@@ -365,6 +404,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         name: "query",
         argument: "query",
         missingWhen: "blank",
+        genericRequest: {
+          phrases: ["維基百科", "wiki", "wikipedia"]
+        },
         prompt: "想查哪個維基百科主題？"
       }
     ],
@@ -484,6 +526,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         name: "query",
         argument: "query",
         missingWhen: "blank",
+        genericRequest: {
+          phrases: ["記憶", "記住的資訊", "已記住的資訊", "保存的資訊", "已保存的資訊"]
+        },
         prompt: "要查哪一段記住的資訊？請回覆關鍵字。"
       }
     ],

@@ -14,6 +14,22 @@ describe("function definitions", () => {
     expect(FUNCTION_NAMES).toContain("query_wikipedia");
   });
 
+  it("uses one declarative generic-slot contract for user-facing lookups", () => {
+    const lookupNames = [
+      "find_ppt_slides",
+      "query_schedule",
+      "find_pop_sheet_music",
+      "query_wikipedia",
+      "retrieve_memory"
+    ] as const;
+
+    for (const name of lookupNames) {
+      const slot = getFunctionDefinition(name)?.requiredSlots[0];
+      expect(slot?.missingWhen).toBe("blank");
+      expect(slot?.genericRequest?.phrases.length).toBeGreaterThan(0);
+    }
+  });
+
   it("carries router prompt, keyword fallback, and quick reply metadata for sheet music", () => {
     const definition = getFunctionDefinition("find_pop_sheet_music");
 
