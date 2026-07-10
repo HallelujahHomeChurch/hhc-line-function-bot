@@ -70,6 +70,15 @@ export function applyPendingSlotAnswer(
   args: JsonRecord,
   answer: string
 ): JsonRecord {
+  const missingSlot = findMissingRequiredSlot(action, args);
+  if (missingSlot) {
+    return {
+      ...args,
+      [missingSlot.argument]: answer,
+      ...(missingSlot.argument === "query" ? { originalQuery: answer } : {})
+    };
+  }
+
   if (
     action === "save_schedule_memory" ||
     action === "save_schedule" ||
@@ -84,19 +93,10 @@ export function applyPendingSlotAnswer(
     };
   }
 
-  const missingSlot = findMissingRequiredSlot(action, args);
-  if (!missingSlot) {
-    return {
-      ...args,
-      query: answer,
-      originalQuery: answer
-    };
-  }
-
   return {
     ...args,
-    [missingSlot.argument]: answer,
-    ...(missingSlot.argument === "query" ? { originalQuery: answer } : {})
+    query: answer,
+    originalQuery: answer
   };
 }
 

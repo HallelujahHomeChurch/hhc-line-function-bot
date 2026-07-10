@@ -157,4 +157,14 @@ describe("function argument normalization", () => {
       limit: 1
     });
   });
+
+  it("clears model-inferred content when the user only asks to remember a schedule", () => {
+    expect(
+      normalizeFunctionArguments(
+        "save_schedule",
+        { content: "服事表" },
+        { text: "小哈幫我記住服事表" }
+      )
+    ).toMatchObject({ content: "" });
+  });
 });

@@ -192,6 +192,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         name: "content",
         argument: "content",
         missingWhen: "blank",
+        genericRequest: {
+          phrases: ["服事表", "記住服事表", "保存服事表", "儲存服事表"]
+        },
         prompt: "請貼上要記住的服事表文字內容。"
       }
     ],
@@ -334,6 +337,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         name: "content",
         argument: "content",
         missingWhen: "blank",
+        genericRequest: {
+          phrases: ["服事表", "記住服事表", "保存服事表", "儲存服事表"]
+        },
         prompt: "請貼上要記住的服事表文字內容。"
       }
     ],
