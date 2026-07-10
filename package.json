@@ -14,6 +14,7 @@
     "eval:router": "tsx src/tools/eval-router.ts",
     "eval:router:ollama": "tsx src/tools/eval-router-ollama.ts",
     "eval:admin": "tsx src/tools/eval-admin-actions.ts",
+    "config:validate": "tsx src/tools/check-profile-config.ts",
     "smoke:webhook": "tsx src/tools/smoke-webhook.ts",
     "check:notion": "tsx src/tools/check-notion-service-schedule.ts",
     "format:check": "prettier --check ."

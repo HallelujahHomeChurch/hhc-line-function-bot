@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 
 import { z } from "zod";
 
@@ -93,6 +94,9 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   }
   assertNoLegacyProfileFields(parsedProfiles);
   const profiles = z.array(profileSchema).min(1).parse(parsedProfiles);
+  if (env.NODE_ENV === "production") {
+    assertProductionSafeProfiles(profiles);
+  }
   for (const profile of profiles) {
     assertCanonicalWebhookPath(profile.name, profile.webhookPath);
   }
@@ -405,6 +409,26 @@ function assertNoLegacyProfileFields(parsedProfiles: unknown): void {
   }
 }
 
+function assertProductionSafeProfiles(profiles: ParsedProfile[]): void {
+  for (const profile of profiles) {
+    if (profile.channelSecret) {
+      throw new Error(
+        `Production profile ${profile.name} must use channelSecretEnv instead of channelSecret`
+      );
+    }
+    if (profile.channelAccessToken) {
+      throw new Error(
+        `Production profile ${profile.name} must use channelAccessTokenEnv instead of channelAccessToken`
+      );
+    }
+    if (profile.adminUserId) {
+      throw new Error(
+        `Production profile ${profile.name} must use adminUserIdEnv instead of adminUserId`
+      );
+    }
+  }
+}
+
 function validateAccessConfig(profiles: ParsedProfile[], env: NodeJS.ProcessEnv): void {
   const registrationProfiles = profiles.filter((profile) => profile.registration.enabled);
   if (registrationProfiles.length === 0) {
@@ -458,6 +482,22 @@ function assertCompleteGroup(
 }
 
 function readProfilesJson(env: NodeJS.ProcessEnv): string {
+  const hasLegacyProfileConfig = Boolean(
+    env.BOT_PROFILES_JSON?.trim() || env.BOT_PROFILES_BASE64_JSON?.trim()
+  );
+  if (env.NODE_ENV === "production") {
+    if (hasLegacyProfileConfig) {
+      throw new Error("Production profile config must use PROFILE_CONFIG_PATH");
+    }
+    const configPath = env.PROFILE_CONFIG_PATH?.trim();
+    if (!configPath) {
+      throw new Error("PROFILE_CONFIG_PATH is required in production");
+    }
+    return readFileSync(configPath, "utf8");
+  }
+  if (env.PROFILE_CONFIG_PATH?.trim()) {
+    return readFileSync(env.PROFILE_CONFIG_PATH, "utf8");
+  }
   if (env.BOT_PROFILES_JSON?.trim()) {
     return env.BOT_PROFILES_JSON;
   }

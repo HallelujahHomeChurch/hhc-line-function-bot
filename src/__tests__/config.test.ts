@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { loadConfigFromEnv } from "../config.js";
@@ -23,7 +27,75 @@ const layeredPrompting = {
   formatRulesPrompt: "FORMAT_RULES"
 };
 
+async function withProfileFile<T>(profiles: unknown, callback: (path: string) => Promise<T>): Promise<T> {
+  const directory = await mkdtemp(join(tmpdir(), "hhc-line-function-bot-profile-"));
+  const path = join(directory, "profiles.json");
+  await writeFile(path, JSON.stringify(profiles), "utf8");
+  try {
+    return await callback(path);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 describe("config", () => {
+  it("loads a production profile from PROFILE_CONFIG_PATH", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
+          channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
+          adminUserIdEnv: "LINE_HELPER_ADMIN_USER_ID",
+          enabledFunctions: ["query_service_schedule"],
+          registration: { enabled: true }
+        }
+      ],
+      async (path) => {
+        const config = loadConfigFromEnv({
+          NODE_ENV: "production",
+          PROFILE_CONFIG_PATH: path,
+          LINE_HELPER_CHANNEL_SECRET: "secret",
+          LINE_HELPER_CHANNEL_ACCESS_TOKEN: "token",
+          LINE_HELPER_ADMIN_USER_ID: "admin",
+          DATABASE_URL: "postgres://placeholder",
+          REDIS_URL: "redis://placeholder"
+        });
+
+        expect(config.profiles.map((profile) => profile.name)).toEqual(["helper"]);
+      }
+    );
+  });
+
+  it("rejects legacy profile JSON environment values in production", () => {
+    expect(() => loadConfigFromEnv({ ...baseEnv(), NODE_ENV: "production" })).toThrow(
+      "Production profile config must use PROFILE_CONFIG_PATH"
+    );
+  });
+
+  it("rejects inline profile credentials from a production profile file", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          adminUserId: "admin"
+        }
+      ],
+      async (path) => {
+        expect(() =>
+          loadConfigFromEnv({
+            NODE_ENV: "production",
+            PROFILE_CONFIG_PATH: path
+          })
+        ).toThrow("Production profile helper must use channelSecretEnv instead of channelSecret");
+      }
+    );
+  });
+
   it("defaults the app time zone to Asia/Taipei", () => {
     const config = loadConfigFromEnv(baseEnv());
 
