@@ -2903,6 +2903,109 @@ describe("LINE entrance", () => {
     expect(router.route).not.toHaveBeenCalled();
   });
 
+  it("stores an allowed direct attachment as a requester-scoped pending save-resource request", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      allowedMessageTypes: ["text", "image", "file"],
+      enabledFunctions: ["save_resource"]
+    };
+    const router: FunctionRouterPort = { route: vi.fn() };
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const sessionStore = new InMemorySessionStore();
+    const app = createTestApp(config, {
+      router,
+      sessionStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uadmin" },
+      message: { type: "image", id: "image-1" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.stringContaining("請說明這個檔案要存成什麼用途"),
+      expect.anything()
+    );
+    await expect(
+      sessionStore.findPendingAttachment({
+        profileName: "main",
+        source: { type: "user", userId: "Uadmin" },
+        requesterUserId: "Uadmin"
+      })
+    ).resolves.toMatchObject({
+      action: "save_resource",
+      attachment: { messageId: "image-1", messageType: "image" }
+    });
+    expect(router.route).not.toHaveBeenCalled();
+  });
+
+  it("does not let another group requester continue a pending attachment", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      allowedMessageTypes: ["text", "file"],
+      groupRequireWakeWord: false,
+      enabledFunctions: ["save_resource"]
+    };
+    const accessStore = defaultAccessStore();
+    await accessStore.addGroupFunctionGrant({
+      profileName: "main",
+      groupId: "Cmain",
+      functionName: "save_resource",
+      grantedBy: "Uadmin"
+    });
+    const sessionStore = new InMemorySessionStore();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(config, {
+      router: { route: vi.fn() },
+      accessStore,
+      sessionStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "file", id: "file-1", fileName: "主日投影片.pptx", fileSize: 1234 }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    await expect(
+      sessionStore.findPendingAttachment({
+        profileName: "main",
+        source: { type: "group", groupId: "Cmain", userId: "U2" },
+        requesterUserId: "U2"
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      sessionStore.findPendingAttachment({
+        profileName: "main",
+        source: { type: "group", groupId: "Cmain", userId: "U1" },
+        requesterUserId: "U1"
+      })
+    ).resolves.toMatchObject({
+      attachment: { messageId: "file-1", messageType: "file", fileName: "主日投影片.pptx" }
+    });
+  });
+
   it("allows postback events for allowlisted groups and dispatches by action", async () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const handleSelect = vi.fn().mockResolvedValue({

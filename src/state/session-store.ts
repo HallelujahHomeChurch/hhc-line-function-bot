@@ -44,7 +44,24 @@ export interface PendingFunctionSession {
   expiresAt: string;
 }
 
-export type ConversationSession = PptSelectionSession | SelectionSession | PendingFunctionSession;
+export interface PendingAttachmentSession {
+  id: string;
+  type: "pending_attachment";
+  action: "save_resource";
+  profileName: string;
+  requesterUserId?: string;
+  source: LineSource;
+  attachment: {
+    messageId: string;
+    messageType: "image" | "file";
+    fileName?: string;
+    fileSize?: number;
+  };
+  expiresAt: string;
+}
+
+export type ConversationSession =
+  PptSelectionSession | SelectionSession | PendingFunctionSession | PendingAttachmentSession;
 export type ConversationSessionType = ConversationSession["type"];
 
 export interface SessionStoreSummary {
@@ -73,6 +90,7 @@ export interface SessionStore {
   findPptSelection(lookup: PptSelectionLookup): Promise<PptSelectionSession | undefined>;
   findSelection(lookup: SelectionLookup): Promise<SelectionSession | undefined>;
   findPendingFunction(lookup: PendingFunctionLookup): Promise<PendingFunctionSession | undefined>;
+  findPendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
   summary(): Promise<SessionStoreSummary>;
   clear(): Promise<number>;
 }
@@ -138,6 +156,24 @@ export class InMemorySessionStore implements SessionStore {
       .filter((session): session is PendingFunctionSession => Boolean(session))
       .filter((session) => session.type === "pending_function")
       .filter((session) => !lookup.action || session.action === lookup.action)
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
+
+    return liveSessions.sort(
+      (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+    )[0];
+  }
+
+  async findPendingAttachment(
+    lookup: PptSelectionLookup
+  ): Promise<PendingAttachmentSession | undefined> {
+    const liveSessions = Array.from(this.sessions.values())
+      .map((session) => this.liveSession(session))
+      .filter((session): session is PendingAttachmentSession => Boolean(session))
+      .filter((session) => session.type === "pending_attachment")
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
       .filter((session) =>

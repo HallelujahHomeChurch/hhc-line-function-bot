@@ -297,6 +297,12 @@ the scheduled sync job writes them into `schedule_items` as read-model rows with
 live Notion. LINE-created schedules remain write-controlled through the schedule
 memory flow and must not write back to Notion-origin rows.
 
+LINE attachment handling is gated before storage. If a profile explicitly allows
+`image` or `file` messages and the requester has effective `save_resource`
+permission, the webhook stores only a short-lived requester/source-scoped
+pending attachment session and asks for the intended purpose. It does not
+download, scan, upload, or publish the binary at this stage.
+
 ## External Dependencies
 
 Function dependencies are intentionally behind ports/clients:

@@ -156,7 +156,7 @@ When adding or changing an admin action:
 - Structured schedules are profile-shared, not requester/source-scoped. The same helper schedule can be queried from managed direct chats and groups.
 - Structured schedule replacement and entry add/update/delete require preview and confirmation. The same schedule type and month has one active canonical record.
 - Do not add automatic group-chat recording. Text memory must be explicit user intent.
-- Do not add LINE attachment download/storage without an explicit new plan; current resource memory v2 is text/link only.
+- Do not add LINE attachment download/storage without an explicit new plan. The current attachment path is only a controlled pending gate: if a profile explicitly allows `image` or `file` and the requester has effective `save_resource`, the webhook may store a short-lived requester/source-scoped pending attachment session and ask for purpose, but it must not download, scan, upload, publish, or catalog the binary yet.
 - Agent turn traces are diagnostic metadata only. Do not store raw user text, file names, invite codes, secrets, or generated sharing links in traces.
 - Do not assume multi-replica safety without Redis for sessions/cache/invite codes.
 - Group and room clarification/selection sessions are requester-scoped. They require the same `source.userId` to continue, and should not be created or matched when LINE does not provide a requester user id.

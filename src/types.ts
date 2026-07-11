@@ -312,6 +312,8 @@ export interface LineMessage {
   type: string;
   id?: string;
   text?: string;
+  fileName?: string;
+  fileSize?: number;
   mention?: {
     mentionees?: Array<{
       type?: string;

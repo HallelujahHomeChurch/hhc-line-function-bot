@@ -1,5 +1,6 @@
 import type {
   ConversationSession,
+  PendingAttachmentSession,
   PendingFunctionLookup,
   PendingFunctionSession,
   PptSelectionLookup,
@@ -81,6 +82,22 @@ export class RedisSessionStore implements SessionStore {
     const liveSessions = (await this.liveSessions())
       .filter((session): session is PendingFunctionSession => session.type === "pending_function")
       .filter((session) => !lookup.action || session.action === lookup.action)
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
+
+    return latestSession(liveSessions);
+  }
+
+  async findPendingAttachment(
+    lookup: PptSelectionLookup
+  ): Promise<PendingAttachmentSession | undefined> {
+    const liveSessions = (await this.liveSessions())
+      .filter(
+        (session): session is PendingAttachmentSession => session.type === "pending_attachment"
+      )
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
       .filter((session) =>

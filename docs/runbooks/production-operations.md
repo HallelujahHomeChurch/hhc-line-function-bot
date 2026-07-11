@@ -168,3 +168,7 @@ Do not paste these into LINE, logs, commits, screenshots, or public issues:
 ## Wikipedia Lookup
 
 The bot does not perform arbitrary web browsing or maintain an administrator web allowlist. `query_wikipedia` uses the public Wikipedia API only, tries Chinese before English, and passes the selected article introduction to the configured source-bounded summarizer.
+
+## Attachment Save Gate
+
+Do not add `image` or `file` to a production profile's `allowedMessageTypes` until the remaining file security pipeline is deployed. The current gate only creates a short-lived pending attachment session and asks the requester for purpose. It intentionally does not download the LINE content, scan it, upload it to OneDrive, or upsert a catalog item.

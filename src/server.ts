@@ -37,6 +37,11 @@ import {
   isGrantableFunctionName,
   userFacingFunctionNames
 } from "./functions/definitions.js";
+import {
+  isSupportedAttachment,
+  pendingAttachmentPrompt,
+  storePendingAttachment
+} from "./functions/pending-attachment.js";
 import { MemoryInFlightStore, type InFlightStore } from "./in-flight/in-flight-store.js";
 import { createIntroReply } from "./intro.js";
 import { buildPostbackQuickReply } from "./line-reply.js";
@@ -314,7 +319,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         textFallbackGenerator,
         deps.agentRuntime,
         agentJobStore,
-        conversationWindowStore
+        conversationWindowStore,
+        deps.sessionStore
       );
     });
   }
@@ -348,7 +354,8 @@ async function handleWebhook(
   textFallbackGenerator: TextGenerationProvider | undefined,
   agentRuntime: AgentRuntime | undefined,
   agentJobStore: AgentJobStore,
-  conversationWindowStore: ConversationWindowStore
+  conversationWindowStore: ConversationWindowStore,
+  sessionStore: SessionStore | undefined
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -437,6 +444,45 @@ async function handleWebhook(
         result.replyText,
         result.quickReplies ? { quickReplies: result.quickReplies } : undefined
       );
+      continue;
+    }
+
+    if (event.type === "message" && event.message?.type !== "text") {
+      if (!event.replyToken) {
+        continue;
+      }
+      const rateLimit = await rateLimiter.check({
+        profileName: profile.name,
+        source: event.source
+      });
+      if (!rateLimit.allowed) {
+        await line.replyText(event.replyToken, "你傳得太快了，請稍後再試。", undefined);
+        await emitRouteEvent(routeObserver, {
+          kind: "rate_limited",
+          profileName: profile.name,
+          sourceType: event.source.type,
+          requestId,
+          ok: false
+        });
+        continue;
+      }
+      const attachmentResult = await handleAttachmentMessage({
+        profile: effectiveProfile,
+        event,
+        requestId,
+        requesterDisplayName,
+        sessionStore,
+        now: new Date()
+      });
+      if (attachmentResult) {
+        await line.replyText(
+          event.replyToken,
+          attachmentResult.replyText,
+          attachmentResult.quickReplies
+            ? { quickReplies: attachmentResult.quickReplies }
+            : undefined
+        );
+      }
       continue;
     }
 
@@ -654,6 +700,49 @@ async function handleWebhook(
     allowedEvents: allowedEvents.length,
     ignored: ignoredCounts.size > 0 ? formatIgnoredSummary(ignoredCounts) : undefined
   });
+}
+
+async function handleAttachmentMessage(input: {
+  profile: BotProfileConfig;
+  event: LineEvent;
+  requestId: string;
+  requesterDisplayName?: string;
+  sessionStore?: SessionStore;
+  now: Date;
+}): Promise<FunctionExecutionResult | undefined> {
+  if (!isSupportedAttachment(input.event.message)) {
+    return { ok: true, replyText: "目前只支援圖片或檔案附件。" };
+  }
+  if (!input.profile.enabledFunctions.includes("save_resource")) {
+    return { ok: true, replyText: "目前沒有開放保存檔案。" };
+  }
+  if (!input.sessionStore) {
+    return { ok: true, replyText: "目前無法保存檔案，請稍後再試。" };
+  }
+
+  const stored = await storePendingAttachment({
+    sessionStore: input.sessionStore,
+    requestId: input.requestId,
+    context: {
+      profile: input.profile,
+      event: input.event,
+      requestId: input.requestId,
+      requesterDisplayName: input.requesterDisplayName
+    },
+    message: input.event.message,
+    now: input.now
+  });
+
+  if (!stored) {
+    return { ok: true, replyText: "目前無法建立檔案保存流程，請改用直接訊息再試一次。" };
+  }
+
+  const prompt = pendingAttachmentPrompt(input.event.message);
+  return {
+    ok: true,
+    replyText: prompt.replyText,
+    quickReplies: prompt.quickReplies
+  };
 }
 
 async function resolveEffectiveProfile(
