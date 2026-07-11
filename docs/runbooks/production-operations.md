@@ -172,6 +172,8 @@ Do not paste these into LINE, logs, commits, screenshots, or public issues:
 
 The bot does not perform arbitrary web browsing or maintain an administrator web allowlist. `query_wikipedia` uses the public Wikipedia API only, tries Chinese before English, and passes the selected article introduction to the configured source-bounded summarizer.
 
+Sheet music has one controlled public-search fallback. If `SEARXNG_BASE_URL` points to an internal SearXNG service and local sheet music lookup finds nothing, the bot asks the requester whether to search public results. It calls SearXNG only after consent, uses only title/snippet/url fields, sends those fields to the `web_summarization` provider for summary/ranking, and does not fetch pages, download files, or save the results. Leave `SEARXNG_BASE_URL` unset to disable this fallback.
+
 ## Attachment Save Gate
 
 Do not add `image` or `file` to a production profile's `allowedMessageTypes` until all attachment prerequisites are configured:

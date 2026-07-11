@@ -1,5 +1,7 @@
 import type {
   ConversationSession,
+  ExternalSearchConsentLookup,
+  ExternalSearchConsentSession,
   PendingAttachmentSession,
   PendingFunctionLookup,
   PendingFunctionSession,
@@ -98,6 +100,24 @@ export class RedisSessionStore implements SessionStore {
       .filter(
         (session): session is PendingAttachmentSession => session.type === "pending_attachment"
       )
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
+
+    return latestSession(liveSessions);
+  }
+
+  async findExternalSearchConsent(
+    lookup: ExternalSearchConsentLookup
+  ): Promise<ExternalSearchConsentSession | undefined> {
+    const liveSessions = (await this.liveSessions())
+      .filter(
+        (session): session is ExternalSearchConsentSession =>
+          session.type === "external_search_consent"
+      )
+      .filter((session) => session.action === lookup.action)
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
       .filter((session) =>

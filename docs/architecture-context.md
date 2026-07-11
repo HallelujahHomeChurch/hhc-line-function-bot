@@ -269,9 +269,14 @@ random job id but can only be read from the same profile, LINE source, and
 requester user id. With Redis configured, job results survive app restarts until
 their TTL expires.
 
-Public web lookup is intentionally not supported. The only external knowledge
-function is `query_wikipedia`, which uses the Wikipedia API with a fixed
-language fallback and never fetches arbitrary user-supplied URLs.
+General public web lookup is intentionally not supported. The external
+knowledge function is `query_wikipedia`, which uses the Wikipedia API with a
+fixed language fallback and never fetches arbitrary user-supplied URLs. Sheet
+music has a separate not-found fallback: when local catalog/OneDrive lookup
+returns nothing, the bot may ask the requester for consent and then call the
+configured internal SearXNG endpoint. That fallback only uses returned
+title/snippet/url fields, passes them to the `web_summarization` provider for
+ranking/summary, and never downloads, crawls, or saves web results.
 
 Catalog-backed lookups are separated from user-facing function names. The
 canonical functions are `find_ppt_slides`, `find_sheet_music`, and
@@ -318,6 +323,7 @@ Function dependencies are intentionally behind ports/clients:
 
 - LINE: `src/clients/line.ts`
 - Virus scanner: `src/clients/virus-scan.ts`
+- SearXNG web search: `src/clients/searxng.ts`
 - Ollama: `src/clients/ollama.ts`
 - DeepSeek provider: `src/clients/deepseek.ts`
 - Microsoft Graph: `src/clients/graph.ts`

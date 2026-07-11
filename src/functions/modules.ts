@@ -1,5 +1,6 @@
 import type { CacheStore } from "../cache/cache-store.js";
 import type { AgentMemoryStore } from "../agent/memory-store.js";
+import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
 import type { SessionStore } from "../state/session-store.js";
 import { FUNCTION_NAMES } from "../types.js";
 import type {
@@ -13,7 +14,8 @@ import type {
   PostbackHandlerRegistry,
   TextMessageHandlerRegistry,
   AdminHandlerRegistry,
-  VirusScanner
+  VirusScanner,
+  WebSearchClient
 } from "../types.js";
 import { getFunctionDefinition, type FunctionDefinition } from "./definitions.js";
 import {
@@ -57,6 +59,8 @@ export interface FunctionModuleContext {
     virusScanner?: VirusScanner;
     wikipedia?: WikipediaClient;
     wikipediaSummarizer?: WikipediaSummarizer;
+    webSearch?: WebSearchClient;
+    sheetMusicExternalSearchSummarizer?: SheetMusicExternalSearchSummarizer;
     now?: () => Date;
     requestIdFactory?: () => string;
   };
@@ -471,6 +475,13 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             memoryStore: clients.memoryStore,
             cache: clients.cache,
             sessionStore: clients.sessionStore,
+            externalSearch:
+              clients.webSearch && clients.sheetMusicExternalSearchSummarizer
+                ? {
+                    webSearch: clients.webSearch,
+                    summarize: clients.sheetMusicExternalSearchSummarizer
+                  }
+                : undefined,
             now: clients.now,
             requestIdFactory: clients.requestIdFactory,
             functionName: "find_sheet_music"
@@ -487,6 +498,13 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           sheet_music_numeric_selection: createFindPopSheetMusicTextMessageHandler({
             graph: clients.graph,
             sessionStore: clients.sessionStore,
+            externalSearch:
+              clients.webSearch && clients.sheetMusicExternalSearchSummarizer
+                ? {
+                    webSearch: clients.webSearch,
+                    summarize: clients.sheetMusicExternalSearchSummarizer
+                  }
+                : undefined,
             now: clients.now
           })
         },
@@ -589,6 +607,13 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             memoryStore: clients.memoryStore,
             cache: clients.cache,
             sessionStore: clients.sessionStore,
+            externalSearch:
+              clients.webSearch && clients.sheetMusicExternalSearchSummarizer
+                ? {
+                    webSearch: clients.webSearch,
+                    summarize: clients.sheetMusicExternalSearchSummarizer
+                  }
+                : undefined,
             now: clients.now,
             requestIdFactory: clients.requestIdFactory
           })
@@ -604,6 +629,13 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           sheet_music_numeric_selection: createFindPopSheetMusicTextMessageHandler({
             graph: clients.graph,
             sessionStore: clients.sessionStore,
+            externalSearch:
+              clients.webSearch && clients.sheetMusicExternalSearchSummarizer
+                ? {
+                    webSearch: clients.webSearch,
+                    summarize: clients.sheetMusicExternalSearchSummarizer
+                  }
+                : undefined,
             now: clients.now
           })
         },

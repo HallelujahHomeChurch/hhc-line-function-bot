@@ -76,8 +76,24 @@ export interface PendingAttachmentSession {
   expiresAt: string;
 }
 
+export interface ExternalSearchConsentSession {
+  id: string;
+  type: "external_search_consent";
+  action: string;
+  profileName: string;
+  requesterUserId?: string;
+  source: LineSource;
+  query: string;
+  arguments?: JsonRecord;
+  expiresAt: string;
+}
+
 export type ConversationSession =
-  PptSelectionSession | SelectionSession | PendingFunctionSession | PendingAttachmentSession;
+  | PptSelectionSession
+  | SelectionSession
+  | PendingFunctionSession
+  | PendingAttachmentSession
+  | ExternalSearchConsentSession;
 export type ConversationSessionType = ConversationSession["type"];
 
 export interface SessionStoreSummary {
@@ -99,6 +115,10 @@ export interface PendingFunctionLookup extends PptSelectionLookup {
   action?: FunctionName;
 }
 
+export interface ExternalSearchConsentLookup extends PptSelectionLookup {
+  action: string;
+}
+
 export interface SessionStore {
   get(id: string): Promise<ConversationSession | undefined>;
   set(session: ConversationSession): Promise<void>;
@@ -107,6 +127,9 @@ export interface SessionStore {
   findSelection(lookup: SelectionLookup): Promise<SelectionSession | undefined>;
   findPendingFunction(lookup: PendingFunctionLookup): Promise<PendingFunctionSession | undefined>;
   findPendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
+  findExternalSearchConsent(
+    lookup: ExternalSearchConsentLookup
+  ): Promise<ExternalSearchConsentSession | undefined>;
   summary(): Promise<SessionStoreSummary>;
   clear(): Promise<number>;
 }
@@ -190,6 +213,25 @@ export class InMemorySessionStore implements SessionStore {
       .map((session) => this.liveSession(session))
       .filter((session): session is PendingAttachmentSession => Boolean(session))
       .filter((session) => session.type === "pending_attachment")
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
+
+    return liveSessions.sort(
+      (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+    )[0];
+  }
+
+  async findExternalSearchConsent(
+    lookup: ExternalSearchConsentLookup
+  ): Promise<ExternalSearchConsentSession | undefined> {
+    const liveSessions = Array.from(this.sessions.values())
+      .map((session) => this.liveSession(session))
+      .filter((session): session is ExternalSearchConsentSession => Boolean(session))
+      .filter((session) => session.type === "external_search_consent")
+      .filter((session) => session.action === lookup.action)
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
       .filter((session) =>

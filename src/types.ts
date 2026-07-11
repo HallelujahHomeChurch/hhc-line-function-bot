@@ -192,6 +192,11 @@ export interface VirusScanConfig {
   timeoutMs: number;
 }
 
+export interface WebSearchConfig {
+  searxngBaseUrl?: string;
+  timeoutMs: number;
+}
+
 export interface CatalogSourceConfig {
   profileName: string;
   sourceKey: string;
@@ -228,6 +233,7 @@ export interface AppConfig {
   notion?: NotionConfig;
   wikipedia?: WikipediaConfig;
   virusScan?: VirusScanConfig;
+  webSearch?: WebSearchConfig;
   catalog?: CatalogConfig;
   redis?: RedisConfig;
   database?: DatabaseConfig;
@@ -655,6 +661,22 @@ export interface VirusScanResult {
 
 export interface VirusScanner {
   scan(input: VirusScanInput): Promise<VirusScanResult>;
+}
+
+export interface WebSearchInput {
+  query: string;
+  language?: string;
+  limit?: number;
+}
+
+export interface WebSearchResult {
+  title: string;
+  snippet?: string;
+  url: string;
+}
+
+export interface WebSearchClient {
+  search(input: WebSearchInput): Promise<WebSearchResult[]>;
 }
 
 export interface NotionPage {

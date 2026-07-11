@@ -298,6 +298,21 @@ describe("config", () => {
     });
   });
 
+  it("loads optional SearXNG web search configuration only when a base URL is set", () => {
+    expect(loadConfigFromEnv(baseEnv()).webSearch).toBeUndefined();
+
+    const config = loadConfigFromEnv({
+      ...baseEnv(),
+      SEARXNG_BASE_URL: "https://searxng.internal",
+      SEARXNG_TIMEOUT_MS: "3000"
+    });
+
+    expect(config.webSearch).toEqual({
+      searxngBaseUrl: "https://searxng.internal",
+      timeoutMs: 3000
+    });
+  });
+
   it("does not allow environment variables to widen PPT file types", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),

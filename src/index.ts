@@ -13,6 +13,7 @@ import { createCacheStore } from "./cache/create-cache-store.js";
 import { createCatalogStore } from "./catalog/create-catalog-store.js";
 import { createGraphDriveClient } from "./clients/graph.js";
 import { createNotionDatabaseClient } from "./clients/notion.js";
+import { createSearxngClient } from "./clients/searxng.js";
 import { createHttpVirusScanner } from "./clients/virus-scan.js";
 import { loadConfigFromEnv } from "./config.js";
 import { createDependencyDiagnostics } from "./diagnostics/dependencies.js";
@@ -26,6 +27,7 @@ import { createConsoleRouteObserver } from "./observability/route-observer.js";
 import { createRateLimiter } from "./rate-limit.js";
 import { createRedisRuntime } from "./redis.js";
 import { createScheduleStore } from "./schedules/create-schedule-store.js";
+import { createSheetMusicExternalSearchSummarizer } from "./search/sheet-music-external-summarizer.js";
 import { createFunctionRouter } from "./router.js";
 import { createApp } from "./server.js";
 import { createSessionStore } from "./state/create-session-store.js";
@@ -125,6 +127,12 @@ memoryPurgeTimer.unref();
 const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
 const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
 const virusScanner = config.virusScan ? createHttpVirusScanner(config.virusScan) : undefined;
+const webSearch = config.webSearch?.searxngBaseUrl
+  ? createSearxngClient({
+      baseUrl: config.webSearch.searxngBaseUrl,
+      timeoutMs: config.webSearch.timeoutMs
+    })
+  : undefined;
 const registrationInviteCodeStore = redis
   ? new RedisRegistrationInviteCodeStore({ client: redis.client, keyPrefix: redis.keyPrefix })
   : undefined;
@@ -162,6 +170,11 @@ const registries = createFunctionRegistries(config, {
   scheduleStore,
   memoryStore,
   virusScanner,
+  webSearch,
+  sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
+    primary: wikipediaSummaryPrimary,
+    fallback: wikipediaSummaryFallback
+  }),
   wikipediaSummarizer: createWikipediaSummarizer({
     primary: wikipediaSummaryPrimary,
     fallback: wikipediaSummaryFallback

@@ -224,6 +224,12 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
           timeoutMs: readInt(env.VIRUS_SCAN_TIMEOUT_MS, 8000)
         }
       : undefined,
+    webSearch: env.SEARXNG_BASE_URL?.trim()
+      ? {
+          searxngBaseUrl: env.SEARXNG_BASE_URL.trim(),
+          timeoutMs: readInt(env.SEARXNG_TIMEOUT_MS, 8000)
+        }
+      : undefined,
     ...(catalogSources.length ? { catalog: { sources: catalogSources } } : {}),
     redis: env.REDIS_URL?.trim()
       ? {

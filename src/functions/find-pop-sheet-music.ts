@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { CacheStore } from "../cache/cache-store.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
 import type { CatalogItemRecord, CatalogStore } from "../catalog/store.js";
+import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
 import {
   findPopSheetMusicArgumentsSchema,
   type FindPopSheetMusicArguments
@@ -25,12 +26,16 @@ import type {
   PostbackHandler,
   TextMessageContext,
   TextMessageHandler,
-  FunctionName
+  FunctionName,
+  WebSearchClient,
+  WebSearchResult
 } from "../types.js";
 
 const POSTBACK_ACTION = "select_sheet_music";
+const EXTERNAL_SEARCH_ACTION = "sheet_music_external_search";
 const MAX_CANDIDATES = 5;
 const SELECTION_TTL_MS = 10 * 60 * 1000;
+const EXTERNAL_SEARCH_CONSENT_TTL_MS = 10 * 60 * 1000;
 const FILE_INDEX_TTL_MS = 30 * 60 * 1000;
 const MIN_FUZZY_SCORE = 0.42;
 const INVALID_SELECTION_MESSAGE = "請只回覆清單中的數字，例如：1。不要加上其他字。";
@@ -50,6 +55,7 @@ export interface FindPopSheetMusicOptions {
   now?: () => Date;
   requestIdFactory?: () => string;
   functionName?: Extract<FunctionName, "find_sheet_music" | "find_pop_sheet_music">;
+  externalSearch?: SheetMusicExternalSearchOptions;
 }
 
 export interface FindPopSheetMusicPostbackOptions {
@@ -58,7 +64,14 @@ export interface FindPopSheetMusicPostbackOptions {
   now?: () => Date;
 }
 
-export type FindPopSheetMusicTextMessageOptions = FindPopSheetMusicPostbackOptions;
+export interface SheetMusicExternalSearchOptions {
+  webSearch: WebSearchClient;
+  summarize: SheetMusicExternalSearchSummarizer;
+}
+
+export type FindPopSheetMusicTextMessageOptions = FindPopSheetMusicPostbackOptions & {
+  externalSearch?: SheetMusicExternalSearchOptions;
+};
 
 interface ScoredItem {
   item: DriveItem;
@@ -185,6 +198,29 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     ].slice(0, MAX_CANDIDATES);
 
     if (candidates.length === 0) {
+      if (options.externalSearch && canCreateRequesterScopedSession(context.event.source)) {
+        const requestId = requestIdFactory();
+        await sessionStore.set({
+          id: requestId,
+          type: "external_search_consent",
+          action: EXTERNAL_SEARCH_ACTION,
+          profileName: context.profile.name,
+          requesterUserId: context.event.source.userId,
+          source: context.event.source,
+          query: rawQuery,
+          arguments: args,
+          expiresAt: new Date(now().getTime() + EXTERNAL_SEARCH_CONSENT_TTL_MS).toISOString()
+        });
+        return {
+          ok: true,
+          replyText: [
+            "本地歌譜資料庫找不到符合的結果。",
+            "要不要上網找公開搜尋結果？",
+            "我只會查看搜尋結果的標題、摘要與網址，不會下載或保存檔案。"
+          ].join("\n"),
+          quickReplies: externalSearchConsentQuickReplies()
+        };
+      }
       return {
         ok: true,
         replyText: "找不到符合的流行歌曲樂譜，請提供更完整英文歌名或歌手。",
@@ -287,26 +323,51 @@ export function createFindPopSheetMusicTextMessageHandler(
   return {
     matches: async (request, context) =>
       sheetMusicFunctionEnabled(context.profile.enabledFunctions) &&
-      numericSelectionToIndex(request.text) !== undefined &&
-      Boolean(await findSheetMusicSelection(options.sessionStore, context)),
+      (Boolean(
+        numericSelectionToIndex(request.text) !== undefined &&
+        (await findSheetMusicSelection(options.sessionStore, context))
+      ) ||
+        Boolean(await findSheetMusicExternalSearchConsent(options.sessionStore, context))),
 
     handle: async (request, context) => {
       const selectedIndex = numericSelectionToIndex(request.text);
-      if (selectedIndex === undefined) {
+      if (selectedIndex !== undefined) {
+        const session = await findSheetMusicSelection(options.sessionStore, context);
+        if (session) {
+          return selectSheetMusicCandidate({
+            graph: options.graph,
+            sessionStore: options.sessionStore,
+            session,
+            selectedIndex,
+            context,
+            now: now(),
+            invalidSelectionMessage: INVALID_SELECTION_MESSAGE
+          });
+        }
+      }
+      const externalSearchConsent = await findSheetMusicExternalSearchConsent(
+        options.sessionStore,
+        context
+      );
+      if (!externalSearchConsent) {
         return undefined;
       }
-      const session = await findSheetMusicSelection(options.sessionStore, context);
-      if (!session) {
-        return undefined;
+      if (isExternalSearchCancel(request.text)) {
+        await options.sessionStore.delete(externalSearchConsent.id);
+        return { ok: true, replyText: "好，我不做外部搜尋。" };
       }
-      return selectSheetMusicCandidate({
-        graph: options.graph,
-        sessionStore: options.sessionStore,
-        session,
-        selectedIndex,
-        context,
-        now: now(),
-        invalidSelectionMessage: INVALID_SELECTION_MESSAGE
+      if (!isExternalSearchConfirm(request.text)) {
+        return {
+          ok: true,
+          replyText: "請回覆「上網找」或「不用」。",
+          quickReplies: externalSearchConsentQuickReplies()
+        };
+      }
+      await options.sessionStore.delete(externalSearchConsent.id);
+      return runExternalSheetMusicSearch({
+        externalSearch: options.externalSearch,
+        profileName: context.profile.name,
+        query: externalSearchConsent.query
       });
     }
   };
@@ -617,6 +678,72 @@ async function findSheetMusicSelection(sessionStore: SessionStore, context: Text
     source: context.event.source,
     requesterUserId: context.event.source.userId
   });
+}
+
+async function findSheetMusicExternalSearchConsent(
+  sessionStore: SessionStore,
+  context: TextMessageContext
+) {
+  return sessionStore.findExternalSearchConsent({
+    action: EXTERNAL_SEARCH_ACTION,
+    profileName: context.profile.name,
+    source: context.event.source,
+    requesterUserId: context.event.source.userId
+  });
+}
+
+async function runExternalSheetMusicSearch(input: {
+  externalSearch: SheetMusicExternalSearchOptions | undefined;
+  profileName: string;
+  query: string;
+}): Promise<FunctionExecutionResult> {
+  if (!input.externalSearch) {
+    return { ok: true, replyText: "外部搜尋目前沒有設定。" };
+  }
+  let results: WebSearchResult[];
+  try {
+    results = await input.externalSearch.webSearch.search({
+      query: `${input.query} 歌譜`,
+      limit: MAX_CANDIDATES,
+      language: "zh-TW"
+    });
+  } catch {
+    return { ok: true, replyText: "外部搜尋目前不可用，請稍後再試。" };
+  }
+  if (results.length === 0) {
+    return { ok: true, replyText: "公開搜尋結果也找不到相關歌譜。" };
+  }
+  try {
+    const summary = await input.externalSearch.summarize({
+      profileName: input.profileName,
+      query: input.query,
+      results
+    });
+    return {
+      ok: true,
+      replyText: ["公開搜尋結果（未下載、未保存）：", summary].join("\n")
+    };
+  } catch {
+    return { ok: true, replyText: "外部搜尋整理目前不可用，請稍後再試。" };
+  }
+}
+
+function isExternalSearchConfirm(text: string): boolean {
+  return /^(上網找|好|可以|找找看|yes|y)(?:[，,\s].*)?$/iu.test(text.trim());
+}
+
+function isExternalSearchCancel(text: string): boolean {
+  return /^(不用|不要|取消|先不要|no|n)$/iu.test(text.trim());
+}
+
+function externalSearchConsentQuickReplies() {
+  return [
+    {
+      label: "上網找",
+      action: { type: "message" as const, label: "上網找", text: "上網找" }
+    },
+    { label: "不用", action: { type: "message" as const, label: "不用", text: "不用" } }
+  ];
 }
 
 function numericSelectionToIndex(text: string): number | undefined {

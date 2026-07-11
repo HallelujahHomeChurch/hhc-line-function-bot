@@ -3,6 +3,7 @@ import { createLineSdkContentClient } from "../clients/line.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createWikipediaClient, type WikipediaClient } from "../wikipedia/client.js";
 import type { WikipediaSummarizer } from "../wikipedia/lookup.js";
+import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
 import { InMemoryAgentMemoryStore, type AgentMemoryStore } from "../agent/memory-store.js";
 import { MemoryCacheStore, type CacheStore } from "../cache/cache-store.js";
 import { InMemoryCatalogStore, type CatalogStore } from "../catalog/store.js";
@@ -18,7 +19,8 @@ import type {
   NotionDatabaseClient,
   PostbackHandlerRegistry,
   TextMessageHandlerRegistry,
-  VirusScanner
+  VirusScanner,
+  WebSearchClient
 } from "../types.js";
 import { FUNCTION_MODULES } from "./modules.js";
 import { createPendingFunctionTextMessageHandler } from "./pending-function.js";
@@ -35,6 +37,8 @@ export interface RegistryClients {
   virusScanner?: VirusScanner;
   wikipedia?: WikipediaClient;
   wikipediaSummarizer?: WikipediaSummarizer;
+  webSearch?: WebSearchClient;
+  sheetMusicExternalSearchSummarizer?: SheetMusicExternalSearchSummarizer;
   now?: () => Date;
   requestIdFactory?: () => string;
   fetchImpl?: typeof fetch;
@@ -73,6 +77,8 @@ export function createFunctionRegistries(
         ? (clients.wikipedia ?? createWikipediaClient(config.wikipedia))
         : undefined,
       wikipediaSummarizer: clients.wikipediaSummarizer,
+      webSearch: clients.webSearch,
+      sheetMusicExternalSearchSummarizer: clients.sheetMusicExternalSearchSummarizer,
       sessionStore,
       cache,
       memoryStore,
