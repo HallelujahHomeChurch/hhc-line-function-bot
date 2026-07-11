@@ -99,7 +99,6 @@ When adding or changing an admin action:
 - `src/cache/*`: shared cache abstractions, including Redis-backed cache.
 - `src/observability/*`: recent errors and route diagnostics used by admin commands.
 - `src/diagnostics/*`: public data-layer readiness and admin-only dependency diagnostics.
-- `src/web/allowlist.ts`: controlled profile-scoped HTTPS allowlist for future safe web lookup.
 - `src/tools/*`: local verification helpers such as router eval, Notion checks, and signed webhook smoke tests.
 
 ## Access And Admin Model
@@ -147,7 +146,7 @@ When adding or changing an admin action:
 - Redis rate limiting must use atomic counters, not read-modify-write JSON buckets.
 - PostgreSQL backs managed access principals and audit events when registration is enabled.
 - PostgreSQL backs agent memory when configured. The app creates access and agent memory tables on startup.
-- PostgreSQL must not store remote provider API keys, access tokens, or refresh tokens. Use it only for policy, registry, audit, allowlist, and memory metadata.
+- PostgreSQL must not store remote provider API keys, access tokens, or refresh tokens. Use it only for policy, registry, audit, and memory/catalog metadata.
 - Remote provider API keys belong in ACA secrets or local `.env`, never in PostgreSQL or committed files.
 - Agent memory must not store temporary sharing links. Store Graph drive/item metadata and regenerate short-lived links on demand.
 - Successful PPT and sheet-music lookup metadata is a controlled `read`-function exception: it may store short-lived, scope-local resource metadata for recall, but it is not user-authored saved content and must not store raw files or generated sharing links.
