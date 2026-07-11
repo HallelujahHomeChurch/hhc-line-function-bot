@@ -106,6 +106,10 @@ Profiles are independent bot configurations served by one process. In practice:
 - group-specific function grants are additive and stored by profile/group.
 - user-specific function grants are additive and stored by profile/user. They
   apply to direct chat and to that requester inside a registered group.
+- future role/capability bindings are documented in
+  [`docs/rbac-capability-model.md`](rbac-capability-model.md), but v1 runtime
+  behavior still uses explicit function grants as the operative override
+  mechanism.
 - `adminUserId` is the single bootstrap superadmin.
 - `config/profiles.json` is the sole complete production profile definition.
   It contains env-variable names for LINE credentials but never their values.

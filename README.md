@@ -284,6 +284,8 @@ Admins can also use natural language for selected admin actions: invite-code cre
 
 Destructive admin actions must be confirmed with `/confirm <code>`. Invite-code creation is a `security_change` action and remains admin direct-chat only plus audited, but does not require confirmation.
 
+The target role/capability model is documented in [`docs/rbac-capability-model.md`](docs/rbac-capability-model.md). v1 keeps the existing function grant mechanism; roles are a design contract for future binding work, not active runtime behavior yet.
+
 Common commands:
 
 ```text
