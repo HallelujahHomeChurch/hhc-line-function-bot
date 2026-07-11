@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import type { CacheStore } from "../cache/cache-store.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
-import type { CatalogItemRecord, CatalogStore } from "../catalog/store.js";
+import {
+  catalogSourceAllowsRead,
+  type CatalogItemRecord,
+  type CatalogStore
+} from "../catalog/store.js";
 import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
 import {
   findPopSheetMusicArgumentsSchema,
@@ -503,6 +507,13 @@ async function findCatalogSheetMusic(
     limit: MAX_CANDIDATES
   });
   return items
+    .filter((item) =>
+      catalogSourceAllowsRead(item.source, [
+        profileName,
+        "find_sheet_music",
+        "find_pop_sheet_music"
+      ])
+    )
     .filter((item) => item.storageRef.provider === "graph")
     .filter((item) => extensions.some((extension) => catalogItemExtension(item) === extension));
 }

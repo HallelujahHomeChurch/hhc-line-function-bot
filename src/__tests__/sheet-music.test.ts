@@ -63,7 +63,7 @@ describe("find_pop_sheet_music", () => {
       rootLocation: { driveId: "drive-id", folderItemId: "sheet-folder-id" },
       enabled: true,
       syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-      capabilities: { read: ["helper"], write: [] }
+      capabilities: { read: ["main"], write: [] }
     });
     await catalog.upsertItem({
       sourceId: source.id,

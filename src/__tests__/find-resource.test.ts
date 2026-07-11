@@ -86,4 +86,41 @@ describe("find_resource", () => {
 
     expect(result.replyText).toContain("請告訴我要查什麼");
   });
+
+  it("does not return catalog items from sources without read capability", async () => {
+    const catalog = new InMemoryCatalogStore();
+    const source = await catalog.upsertSource({
+      profileName: "helper",
+      sourceKey: "private_audio",
+      adapterType: "onedrive",
+      domain: "audio",
+      defaultItemKind: "weekly_report_audio",
+      rootLocation: { driveId: "drive-1", folderItemId: "folder-1" },
+      enabled: true,
+      syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
+      capabilities: { read: ["main"], write: [] }
+    });
+    await catalog.upsertItem({
+      sourceId: source.id,
+      itemKind: "weekly_report_audio",
+      domain: "audio",
+      title: "2026-07-週報音檔.mp3",
+      storageRef: { provider: "graph", driveId: "drive-1", itemId: "audio-1" }
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      createSharingLink: vi.fn()
+    };
+    const handler = createFindResourceHandler({
+      catalog,
+      graph,
+      allowedItemKinds: ["weekly_report_audio"],
+      now: () => new Date("2026-07-11T00:00:00.000Z")
+    });
+
+    const result = await handler({ query: "週報音檔" }, context());
+
+    expect(result.replyText).toBe("查不到符合的教會資料。");
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
+  });
 });

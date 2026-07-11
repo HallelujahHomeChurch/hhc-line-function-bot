@@ -177,3 +177,11 @@ export function catalogStorageIdentity(storage: AgentResourceStorage): string {
       return `external_link:${storage.url}`;
   }
 }
+
+export function catalogSourceAllowsRead(
+  source: CatalogSourceRecord,
+  capabilities: string[]
+): boolean {
+  const allowed = new Set(source.capabilities.read);
+  return capabilities.some((capability) => allowed.has(capability));
+}

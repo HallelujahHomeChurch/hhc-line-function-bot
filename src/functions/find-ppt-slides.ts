@@ -5,7 +5,11 @@ import {
   type FindPptSlidesArguments
 } from "../function-arguments.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
-import type { CatalogItemRecord, CatalogStore } from "../catalog/store.js";
+import {
+  catalogSourceAllowsRead,
+  type CatalogItemRecord,
+  type CatalogStore
+} from "../catalog/store.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
 import { withRequesterDisplayName } from "../requester-personalization.js";
@@ -468,6 +472,7 @@ async function findCatalogPptSlides(
     limit: MAX_CANDIDATES
   });
   return items
+    .filter((item) => catalogSourceAllowsRead(item.source, [profileName, "find_ppt_slides"]))
     .filter((item) => item.storageRef.provider === "graph")
     .filter((item) => extensions.some((extension) => catalogItemExtension(item) === extension));
 }

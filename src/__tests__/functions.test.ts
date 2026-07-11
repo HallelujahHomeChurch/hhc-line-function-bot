@@ -64,7 +64,7 @@ describe("find_ppt_slides", () => {
       rootLocation: { driveId: "drive-id", folderItemId: "folder-id" },
       enabled: true,
       syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-      capabilities: { read: ["helper"], write: [] }
+      capabilities: { read: ["main"], write: [] }
     });
     await catalog.upsertItem({
       sourceId: source.id,

@@ -1,4 +1,4 @@
-import type { CatalogStore } from "../catalog/store.js";
+import { catalogSourceAllowsRead, type CatalogStore } from "../catalog/store.js";
 import { findResourceArgumentsSchema } from "../function-arguments.js";
 import type { FunctionExecutionResult, FunctionHandler, GraphDriveClient } from "../types.js";
 
@@ -29,14 +29,21 @@ export function createFindResourceHandler(options: FindResourceOptions): Functio
       ...(options.allowedItemKinds ?? []),
       ...(args.itemKind ? [args.itemKind] : [])
     ];
-    const items = await options.catalog.searchItems({
-      profileName: context.profile.name,
-      query,
-      itemKinds: itemKinds.length ? itemKinds : undefined,
-      domains: args.domain ? [args.domain] : undefined,
-      allowedSourceKeys: options.allowedSourceKeys,
-      limit: args.limit ?? 5
-    });
+    const limit = args.limit ?? 5;
+    const items = (
+      await options.catalog.searchItems({
+        profileName: context.profile.name,
+        query,
+        itemKinds: itemKinds.length ? itemKinds : undefined,
+        domains: args.domain ? [args.domain] : undefined,
+        allowedSourceKeys: options.allowedSourceKeys,
+        limit: Math.max(limit, 20)
+      })
+    )
+      .filter((item) =>
+        catalogSourceAllowsRead(item.source, [context.profile.name, "find_resource"])
+      )
+      .slice(0, limit);
 
     if (items.length === 0) {
       return { ok: true, replyText: "查不到符合的教會資料。" };
