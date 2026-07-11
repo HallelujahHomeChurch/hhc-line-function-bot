@@ -6,10 +6,7 @@ properties:
   configuration:
     activeRevisionsMode: Single
     dapr:
-      enabled: true
-      appId: hhc-line-function-bot
-      appPort: 3000
-      appProtocol: http
+      enabled: false
     ingress:
       external: false
       targetPort: 3000
@@ -122,6 +119,8 @@ properties:
             value: PLACEHOLDER_GRAPH_PPT_FOLDER_ITEM_ID
           - name: GRAPH_POP_SHEET_FOLDER_ITEM_ID
             value: PLACEHOLDER_GRAPH_POP_SHEET_FOLDER_ITEM_ID
+          - name: GRAPH_POP_SHEET_DRIVE_ID
+            value: PLACEHOLDER_GRAPH_POP_SHEET_DRIVE_ID
           - name: GRAPH_HYMN_SHEET_FOLDER_ITEM_ID
             value: PLACEHOLDER_GRAPH_HYMN_SHEET_FOLDER_ITEM_ID
           - name: GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID
@@ -132,16 +131,12 @@ properties:
             value: PLACEHOLDER_GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID
           - name: GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID
             value: PLACEHOLDER_GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID
-          - name: GRAPH_SHEET_MUSIC_FOLDER_PATH
-            value: "文件/流行歌譜 (捷徑)"
           - name: GRAPH_LINK_SCOPE
             value: anonymous
           - name: GRAPH_LINK_TYPE
             value: view
           - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
             value: pdf,jpg,jpeg
-          - name: SHEET_MUSIC_DEFAULT_RECURSIVE
-            value: "true"
           - name: NOTION_TOKEN
             secretRef: notion-token
           - name: NOTION_SERVICE_DATABASE_ID

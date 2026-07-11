@@ -17,6 +17,7 @@ export interface CatalogSourceInput {
   syncPolicy: {
     mode: CatalogSyncMode;
     intervalMinutes?: number;
+    allowedExtensions?: string[];
   };
   capabilities: {
     read: string[];

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
+import { InMemoryCatalogStore } from "../catalog/store.js";
 import { createFunctionRegistries } from "../functions/registry.js";
 import { signLineBody } from "../line-signature.js";
 import { createApp } from "../server.js";
@@ -53,16 +54,37 @@ function testConfig(): AppConfig {
       clientSecret: "secret",
       driveId: "drive-id",
       pptFolderItemId: "ppt-folder",
-      sheetMusicFolderItemId: "sheet-folder",
-      sheetMusicFolderPath: "文件/流行歌譜 (捷徑)",
       sheetMusicAllowedExtensions: [".pdf", ".jpg", ".jpeg"],
-      sheetMusicRecursive: true,
       allowedExtensions: [".ppt", ".pptx", ".pdf"],
       defaultIncludePdf: false,
       linkType: "view",
       linkScope: "anonymous"
     }
   };
+}
+
+async function sheetMusicCatalog(): Promise<InMemoryCatalogStore> {
+  const catalog = new InMemoryCatalogStore();
+  const source = await catalog.upsertSource({
+    profileName: "helper",
+    sourceKey: "pop_sheet_music",
+    adapterType: "onedrive",
+    domain: "sheet_music",
+    defaultItemKind: "pop_sheet",
+    rootLocation: { driveId: "drive-id", folderItemId: "sheet-folder" },
+    enabled: true,
+    syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
+    capabilities: { read: ["helper"], write: [] }
+  });
+  await catalog.upsertItem({
+    sourceId: source.id,
+    itemKind: "pop_sheet",
+    domain: "sheet_music",
+    title: "YESTERDAY-The Beatles-001.pdf",
+    extension: ".pdf",
+    storageRef: { provider: "graph", driveId: "drive-id", itemId: "sheet-1" }
+  });
+  return catalog;
 }
 
 function lineBody(event: Record<string, unknown>) {
@@ -115,6 +137,7 @@ describe("clarification flow", () => {
     const config = testConfig();
     const registries = createFunctionRegistries(config, {
       graph,
+      catalog: await sheetMusicCatalog(),
       sessionStore: new InMemorySessionStore()
     });
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
@@ -196,6 +219,7 @@ describe("clarification flow", () => {
     const config = testConfig();
     const registries = createFunctionRegistries(config, {
       graph,
+      catalog: await sheetMusicCatalog(),
       sessionStore: new InMemorySessionStore()
     });
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
@@ -262,6 +286,7 @@ describe("clarification flow", () => {
     const config = testConfig();
     const registries = createFunctionRegistries(config, {
       graph,
+      catalog: await sheetMusicCatalog(),
       sessionStore: new InMemorySessionStore()
     });
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
@@ -334,6 +359,7 @@ describe("clarification flow", () => {
     const config = testConfig();
     const registries = createFunctionRegistries(config, {
       graph,
+      catalog: await sheetMusicCatalog(),
       sessionStore: new InMemorySessionStore()
     });
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({

@@ -176,6 +176,36 @@ describe("catalog store", () => {
     ]);
   });
 
+  it("skips files outside the source extension policy", async () => {
+    const store = new InMemoryCatalogStore();
+    const source = await store.upsertSource({
+      ...helperSource,
+      defaultItemKind: "pop_sheet",
+      domain: "sheet_music",
+      syncPolicy: {
+        mode: "scheduled",
+        intervalMinutes: 15,
+        allowedExtensions: [".pdf", ".jpg", ".jpeg"]
+      }
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: async () => [],
+      listFolderFilesRecursive: async () => [
+        { id: "pdf-1", driveId: "pop-drive", name: "A TIME FOR US.pdf" },
+        { id: "gif-1", driveId: "pop-drive", name: "cover.gif" },
+        { id: "db-1", driveId: "pop-drive", name: "Thumbs.db" }
+      ],
+      createSharingLink: async () => "unused"
+    };
+
+    const result = await syncOneDriveCatalogSource({ catalog: store, graph, source });
+
+    expect(result).toEqual({ upserted: 1, skipped: 2, tombstoned: 0 });
+    await expect(
+      store.searchItems({ profileName: "helper", itemKinds: ["pop_sheet"] })
+    ).resolves.toMatchObject([{ title: "A TIME FOR US.pdf" }]);
+  });
+
   it("tombstones catalog items missing from a later OneDrive full crawl", async () => {
     const store = new InMemoryCatalogStore();
     const source = await store.upsertSource(helperSource);

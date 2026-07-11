@@ -26,8 +26,7 @@ import {
 import {
   createFindPopSheetMusicHandler,
   createFindPopSheetMusicPostbackHandler,
-  createFindPopSheetMusicTextMessageHandler,
-  SHEET_MUSIC_INDEX_CACHE_PREFIX
+  createFindPopSheetMusicTextMessageHandler
 } from "./find-pop-sheet-music.js";
 import { createQueryServiceScheduleHandler } from "./query-service-schedule.js";
 import { createQueryScheduleHandler } from "./query-schedule.js";
@@ -468,12 +467,8 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             graph: clients.graph,
             catalog: clients.catalog,
             driveId: config.graph.driveId,
-            folderItemId: config.graph.sheetMusicFolderItemId,
-            folderPath: config.graph.sheetMusicFolderPath,
             allowedExtensions: config.graph.sheetMusicAllowedExtensions,
-            recursive: config.graph.sheetMusicRecursive,
             memoryStore: clients.memoryStore,
-            cache: clients.cache,
             sessionStore: clients.sessionStore,
             externalSearch:
               clients.webSearch && clients.sheetMusicExternalSearchSummarizer
@@ -507,15 +502,6 @@ export const FUNCTION_MODULES: FunctionModule[] = [
                 : undefined,
             now: clients.now
           })
-        },
-        adminHandlers: {
-          "refresh-sheet-music-cache": async () => {
-            const removed = await clients.cache.deleteByPrefix(SHEET_MUSIC_INDEX_CACHE_PREFIX);
-            return {
-              ok: true,
-              replyText: `已清除歌譜 cache（${removed} 筆），下次查詢會重新建立。`
-            };
-          }
         }
       };
     }
@@ -600,12 +586,8 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             graph: clients.graph,
             catalog: clients.catalog,
             driveId: config.graph.driveId,
-            folderItemId: config.graph.sheetMusicFolderItemId,
-            folderPath: config.graph.sheetMusicFolderPath,
             allowedExtensions: config.graph.sheetMusicAllowedExtensions,
-            recursive: config.graph.sheetMusicRecursive,
             memoryStore: clients.memoryStore,
-            cache: clients.cache,
             sessionStore: clients.sessionStore,
             externalSearch:
               clients.webSearch && clients.sheetMusicExternalSearchSummarizer
@@ -638,15 +620,6 @@ export const FUNCTION_MODULES: FunctionModule[] = [
                 : undefined,
             now: clients.now
           })
-        },
-        adminHandlers: {
-          "refresh-sheet-music-cache": async () => {
-            const removed = await clients.cache.deleteByPrefix(SHEET_MUSIC_INDEX_CACHE_PREFIX);
-            return {
-              ok: true,
-              replyText: `已清除流行歌譜 cache（${removed} 筆），下次查詢會重新建立。`
-            };
-          }
         }
       };
     }

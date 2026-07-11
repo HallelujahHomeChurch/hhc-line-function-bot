@@ -101,6 +101,29 @@ describe("find_pop_sheet_music", () => {
     );
   });
 
+  it("does not crawl OneDrive when the catalog has no match", async () => {
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      listFolderFilesRecursive: vi
+        .fn()
+        .mockResolvedValue([{ id: "legacy", driveId: "legacy-drive", name: "A TIME FOR US.pdf" }]),
+      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/legacy")
+    };
+    const handler = createFindPopSheetMusicHandler({
+      graph,
+      catalog: new InMemoryCatalogStore(),
+      driveId: "drive-id",
+      folderItemId: "sheet-folder-id",
+      allowedExtensions: [".pdf", ".jpg", ".jpeg"]
+    });
+
+    const result = await handler({ query: "A TIME FOR US", fileType: "pdf" }, handlerContext());
+
+    expect(result.replyText).not.toContain("https://download.invalid/legacy");
+    expect(graph.listFolderFilesRecursive).not.toHaveBeenCalled();
+    expect(graph.createSharingLink).not.toHaveBeenCalled();
+  });
+
   it("softly personalizes missing sheet music title clarification", async () => {
     const now = new Date("2026-07-04T10:00:00.000Z");
     const handler = createFindPopSheetMusicHandler({

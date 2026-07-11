@@ -207,16 +207,13 @@ describe("config", () => {
       GRAPH_CLIENT_SECRET: "secret",
       GRAPH_DRIVE_ID: "drive",
       GRAPH_PPT_FOLDER_ITEM_ID: "ppt-folder",
-      GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID: "sheet-folder"
+      SHEET_MUSIC_ALLOWED_EXTENSIONS: "pdf,jpg,jpeg"
     });
 
     expect(config.graph).toMatchObject({
       allowedExtensions: [".pptx", ".ppt", ".key", ".odp"],
       defaultIncludePdf: false,
-      sheetMusicFolderItemId: "sheet-folder",
-      sheetMusicFolderPath: "文件/流行歌譜 (捷徑)",
-      sheetMusicAllowedExtensions: [".pdf", ".jpg", ".jpeg"],
-      sheetMusicRecursive: true
+      sheetMusicAllowedExtensions: [".pdf", ".jpg", ".jpeg"]
     });
   });
 

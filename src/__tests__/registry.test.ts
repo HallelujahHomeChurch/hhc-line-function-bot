@@ -49,10 +49,7 @@ function config(): AppConfig {
       clientSecret: "secret",
       driveId: "drive-id",
       pptFolderItemId: "ppt-folder",
-      sheetMusicFolderItemId: "sheet-folder",
-      sheetMusicFolderPath: "文件/流行歌譜 (捷徑)",
       sheetMusicAllowedExtensions: [".pdf", ".jpg", ".jpeg"],
-      sheetMusicRecursive: true,
       allowedExtensions: [".ppt", ".pptx", ".pdf"],
       defaultIncludePdf: false,
       linkType: "view",
@@ -74,37 +71,18 @@ const weeklyAudioSource: CatalogSourceInput = {
 };
 
 describe("function registry", () => {
-  it("registers sheet music handlers and admin cache refresh when Graph is configured", async () => {
+  it("registers catalog-backed sheet music handlers when Graph is configured", () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
       listFolderFilesRecursive: vi.fn(),
       createSharingLink: vi.fn()
     };
-    const cache = new MemoryCacheStore();
-    await cache.set("sheet-music-index:drive-id:sheet-folder", [{ id: "1", name: "A.pdf" }], 1000);
-    await cache.set("other-cache-key", "kept", 1000);
-
-    const registries = createFunctionRegistries(config(), { graph, cache });
+    const registries = createFunctionRegistries(config(), { graph });
 
     expect(registries.functions.find_pop_sheet_music).toBeDefined();
     expect(registries.postbacks.select_sheet_music).toBeDefined();
     expect(registries.textMessages.sheet_music_numeric_selection).toBeDefined();
-    expect(registries.adminHandlers["refresh-sheet-music-cache"]).toBeDefined();
-
-    const result = await registries.adminHandlers["refresh-sheet-music-cache"]({
-      profile: profile(),
-      event: {
-        type: "message",
-        source: { type: "user", userId: "Uadmin" },
-        message: { type: "text", text: "/refresh-sheet-music-cache" }
-      },
-      command: "refresh-sheet-music-cache",
-      args: []
-    });
-
-    expect(result.replyText).toBe("已清除流行歌譜 cache（1 筆），下次查詢會重新建立。");
-    expect(await cache.get("sheet-music-index:drive-id:sheet-folder")).toBeUndefined();
-    expect(await cache.get("other-cache-key")).toBe("kept");
+    expect(registries.adminHandlers["refresh-sheet-music-cache"]).toBeUndefined();
   });
 
   it("registers debug admin handlers for functions, sessions, cache, and LLM status", async () => {

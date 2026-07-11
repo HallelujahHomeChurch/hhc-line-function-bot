@@ -145,7 +145,7 @@ stages:
                 echo "Deploying ${image_ref} to $(containerAppName)"
 
                 legacy_profile_envs=()
-                for env_name in BOT_PROFILES_BASE64_JSON BOT_PROFILES_JSON PROFILE_CONFIG_VERSION PPT_ALLOWED_EXTENSIONS PPT_DEFAULT_INCLUDE_PDF; do
+                for env_name in BOT_PROFILES_BASE64_JSON BOT_PROFILES_JSON PROFILE_CONFIG_VERSION PPT_ALLOWED_EXTENSIONS PPT_DEFAULT_INCLUDE_PDF GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID GRAPH_SHEET_MUSIC_FOLDER_PATH SHEET_MUSIC_DEFAULT_RECURSIVE; do
                   value="$(az containerapp show \
                     --resource-group "$(resourceGroup)" \
                     --name "$(containerAppName)" \
@@ -173,15 +173,19 @@ stages:
                   "RATE_LIMIT_WINDOW_MS=60000"
                   "RATE_LIMIT_MAX_REQUESTS=20"
                   "LAST_ERRORS_MAX_ENTRIES=20"
-                  "GRAPH_SHEET_MUSIC_FOLDER_PATH=文件/流行歌譜 (捷徑)"
                   "SHEET_MUSIC_ALLOWED_EXTENSIONS=pdf,jpg,jpeg"
-                  "SHEET_MUSIC_DEFAULT_RECURSIVE=true"
                 )
                 if [[ ${#legacy_profile_envs[@]} -gt 0 ]]; then
                   update_args+=(--remove-env-vars "${legacy_profile_envs[@]}")
                 fi
 
                 az containerapp update "${update_args[@]}" \
+                  --only-show-errors \
+                  --output none
+
+                az containerapp dapr disable \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(containerAppName)" \
                   --only-show-errors \
                   --output none
 

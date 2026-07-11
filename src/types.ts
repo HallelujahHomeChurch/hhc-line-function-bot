@@ -160,10 +160,7 @@ export interface GraphConfig {
   clientSecret: string;
   driveId: string;
   pptFolderItemId: string;
-  sheetMusicFolderItemId?: string;
-  sheetMusicFolderPath: string;
   sheetMusicAllowedExtensions: string[];
-  sheetMusicRecursive: boolean;
   allowedExtensions: string[];
   defaultIncludePdf: boolean;
   linkType: "view" | "edit" | "embed";

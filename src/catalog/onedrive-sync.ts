@@ -37,8 +37,17 @@ export async function syncOneDriveCatalogSource(
   let upserted = 0;
   let skipped = 0;
   const liveStorageIdentities: string[] = [];
+  const allowedExtensions = new Set(
+    source.syncPolicy.allowedExtensions?.map((extension) => extension.toLowerCase()) ?? []
+  );
   for (const item of items) {
-    if (item.isFolder || !item.id || !item.name) {
+    const extension = extname(item.name).toLowerCase();
+    if (
+      item.isFolder ||
+      !item.id ||
+      !item.name ||
+      (allowedExtensions.size > 0 && !allowedExtensions.has(extension))
+    ) {
       skipped += 1;
       continue;
     }
@@ -54,7 +63,7 @@ export async function syncOneDriveCatalogSource(
       domain: source.domain,
       title: item.name,
       path: item.path,
-      extension: extname(item.name).toLowerCase(),
+      extension,
       mimeType: guessMimeType(item.name),
       storageRef
     });

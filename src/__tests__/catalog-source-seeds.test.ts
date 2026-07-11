@@ -9,6 +9,7 @@ describe("catalog source seeds", () => {
       env: {
         GRAPH_DRIVE_ID: "drive-1",
         GRAPH_PPT_FOLDER_ITEM_ID: "ppt-root",
+        GRAPH_POP_SHEET_DRIVE_ID: "pop-drive",
         GRAPH_POP_SHEET_FOLDER_ITEM_ID: "pop-root",
         GRAPH_HYMN_SHEET_FOLDER_ITEM_ID: "hymn-root",
         GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID: "doc-root",
@@ -29,6 +30,10 @@ describe("catalog source seeds", () => {
     expect(seeds.find((source) => source.sourceKey === "ppt_slides")?.rootLocation).toEqual({
       driveId: "drive-1",
       folderItemId: "ppt-root"
+    });
+    expect(seeds.find((source) => source.sourceKey === "pop_sheet_music")).toMatchObject({
+      rootLocation: { driveId: "pop-drive", folderItemId: "pop-root" },
+      syncPolicy: { allowedExtensions: [".pdf", ".jpg", ".jpeg"] }
     });
     expect(seeds.find((source) => source.sourceKey === "xiaoha_database")?.rootLocation).toEqual({
       driveId: "drive-1",

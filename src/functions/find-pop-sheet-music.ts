@@ -187,6 +187,18 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       };
     }
 
+    if (options.catalog) {
+      return createSheetMusicNotFoundResult({
+        args,
+        context,
+        externalSearch: options.externalSearch,
+        now: now(),
+        rawQuery,
+        requestIdFactory,
+        sessionStore
+      });
+    }
+
     const root = await resolveSheetMusicRoot(options);
     const allItems = await getCachedFileIndex(options, root);
     const graphCandidates = rankSheetMusicCandidates(
@@ -202,47 +214,15 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     ].slice(0, MAX_CANDIDATES);
 
     if (candidates.length === 0) {
-      if (options.externalSearch && canCreateRequesterScopedSession(context.event.source)) {
-        const requestId = requestIdFactory();
-        await sessionStore.set({
-          id: requestId,
-          type: "external_search_consent",
-          action: EXTERNAL_SEARCH_ACTION,
-          profileName: context.profile.name,
-          requesterUserId: context.event.source.userId,
-          source: context.event.source,
-          query: rawQuery,
-          arguments: args,
-          expiresAt: new Date(now().getTime() + EXTERNAL_SEARCH_CONSENT_TTL_MS).toISOString()
-        });
-        return {
-          ok: true,
-          replyText: [
-            "本地歌譜資料庫找不到符合的結果。",
-            "要不要上網找公開搜尋結果？",
-            "我只會查看搜尋結果的標題、摘要與網址，不會下載或保存檔案。"
-          ].join("\n"),
-          quickReplies: externalSearchConsentQuickReplies()
-        };
-      }
-      return {
-        ok: true,
-        replyText: "找不到符合的流行歌曲樂譜，請提供更完整英文歌名或歌手。",
-        quickReplies: [
-          {
-            label: "重新查歌譜",
-            action: { type: "message", label: "重新查歌譜", text: "小哈 查流行歌譜" }
-          },
-          {
-            label: "查圖片歌譜",
-            action: {
-              type: "message",
-              label: "查圖片歌譜",
-              text: "小哈 查流行歌譜 圖片"
-            }
-          }
-        ]
-      };
+      return createSheetMusicNotFoundResult({
+        args,
+        context,
+        externalSearch: options.externalSearch,
+        now: now(),
+        rawQuery,
+        requestIdFactory,
+        sessionStore
+      });
     }
 
     if (candidates.length === 1) {
@@ -285,6 +265,58 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
         )
       )
     };
+  };
+}
+
+async function createSheetMusicNotFoundResult(options: {
+  args: FindPopSheetMusicArguments;
+  context: FunctionHandlerContext;
+  externalSearch?: SheetMusicExternalSearchOptions;
+  now: Date;
+  rawQuery: string;
+  requestIdFactory: () => string;
+  sessionStore: SessionStore;
+}): Promise<FunctionExecutionResult> {
+  if (options.externalSearch && canCreateRequesterScopedSession(options.context.event.source)) {
+    const requestId = options.requestIdFactory();
+    await options.sessionStore.set({
+      id: requestId,
+      type: "external_search_consent",
+      action: EXTERNAL_SEARCH_ACTION,
+      profileName: options.context.profile.name,
+      requesterUserId: options.context.event.source.userId,
+      source: options.context.event.source,
+      query: options.rawQuery,
+      arguments: options.args,
+      expiresAt: new Date(options.now.getTime() + EXTERNAL_SEARCH_CONSENT_TTL_MS).toISOString()
+    });
+    return {
+      ok: true,
+      replyText: [
+        "本地歌譜資料庫找不到符合的結果。",
+        "要不要上網找公開搜尋結果？",
+        "我只會查看搜尋結果的標題、摘要與網址，不會下載或保存檔案。"
+      ].join("\n"),
+      quickReplies: externalSearchConsentQuickReplies()
+    };
+  }
+  return {
+    ok: true,
+    replyText: "找不到符合的流行歌曲樂譜，請提供更完整英文歌名或歌手。",
+    quickReplies: [
+      {
+        label: "重新查歌譜",
+        action: { type: "message", label: "重新查歌譜", text: "小哈 查流行歌譜" }
+      },
+      {
+        label: "查圖片歌譜",
+        action: {
+          type: "message",
+          label: "查圖片歌譜",
+          text: "小哈 查流行歌譜 圖片"
+        }
+      }
+    ]
   };
 }
 

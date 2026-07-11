@@ -270,11 +270,7 @@ Set `REDIS_URL` to move sessions, cache, recent errors, rate-limit state, conver
 
 Set `DATABASE_URL` to persist access state and agent memory. If PostgreSQL is configured, the app creates both access tables and agent memory tables on startup. Agent resource storage supports Graph file metadata and user-provided external links. If PostgreSQL is missing, agent memory falls back to in-memory and is lost on restart.
 
-Sheet music search uses a short-lived in-memory file index cache. Admins can clear it from a direct LINE chat:
-
-```text
-/refresh-sheet-music-cache
-```
+Sheet music search reads the PostgreSQL catalog populated by the scheduled sync job; LINE requests do not crawl OneDrive folders directly.
 
 Admin commands use slash syntax and are gated by each profile's bootstrap `adminUserId` or DB-managed admin principals. `/help` lists public commands and enabled functions. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
 
@@ -331,7 +327,7 @@ Advanced commands:
 /catalog-sync-now [sourceKey]
 ```
 
-Registered function modules may add more admin commands, such as `/llm-status`, `/functions`, `/sessions`, `/cache`, `/clear-sessions`, `/refresh-sheet-music-cache`, and catalog source operations. `/catalog-sources` lists DB-owned source registry rows for the current profile. `/catalog-source-enable <sourceKey>` and `/catalog-source-disable <sourceKey>` toggle source availability without changing root metadata or capabilities. `/catalog-sync-now [sourceKey]` runs the catalog sync service manually for one source or all current-profile sources and records access audit events. `/route-test <text>` reports the selected provider, action, arguments, and any fallback reason. `/last-routes` reports recent sanitized route/function outcomes, including whether a query was present, without echoing the raw query. `/last-agent-turns` shows the latest sanitized agent runtime phases so admins can debug whether a request stopped at memory, clarification, routing, in-flight locking, or function execution.
+Registered function modules may add more admin commands, such as `/llm-status`, `/functions`, `/sessions`, `/cache`, `/clear-sessions`, and catalog source operations. `/catalog-sources` lists DB-owned source registry rows for the current profile. `/catalog-source-enable <sourceKey>` and `/catalog-source-disable <sourceKey>` toggle source availability without changing root metadata or capabilities. `/catalog-sync-now [sourceKey]` runs the catalog sync service manually for one source or all current-profile sources and records access audit events. `/route-test <text>` reports the selected provider, action, arguments, and any fallback reason. `/last-routes` reports recent sanitized route/function outcomes, including whether a query was present, without echoing the raw query. `/last-agent-turns` shows the latest sanitized agent runtime phases so admins can debug whether a request stopped at memory, clarification, routing, in-flight locking, or function execution.
 
 ## OneDrive And Graph
 
@@ -339,16 +335,15 @@ Graph access uses app-only Microsoft 365 auth. Configure the main drive id and f
 
 - `GRAPH_DRIVE_ID`
 - `GRAPH_PPT_FOLDER_ITEM_ID`
+- `GRAPH_POP_SHEET_DRIVE_ID` when the pop sheet source is on another drive
 - `GRAPH_POP_SHEET_FOLDER_ITEM_ID`
 - `GRAPH_HYMN_SHEET_FOLDER_ITEM_ID`
 - `GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID`
 - `GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID`
 - `GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID`
-- `GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID` or `GRAPH_SHEET_MUSIC_FOLDER_PATH`
 - `SHEET_MUSIC_ALLOWED_EXTENSIONS`
-- `SHEET_MUSIC_DEFAULT_RECURSIVE`
 
-When recursive sheet music lookup is enabled, the Graph client follows folder children and OneDrive shortcut folders by using each shortcut's `remoteItem` drive and item ids.
+Catalog sync recursively scans each registered OneDrive source. Cross-drive shortcuts must register the resolved remote drive and folder item ids as the source root.
 
 ## Notion Service Schedule
 

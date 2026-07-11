@@ -25,6 +25,7 @@ export function buildCatalogSourceSeeds(
   const env = options.env;
   const sources: CatalogSourceInput[] = [];
   const driveId = env.GRAPH_DRIVE_ID?.trim();
+  const sheetMusicExtensions = readExtensions(env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg");
 
   addOneDriveSource(sources, {
     profileName: "helper",
@@ -41,9 +42,10 @@ export function buildCatalogSourceSeeds(
     sourceKey: "pop_sheet_music",
     domain: "sheet_music",
     defaultItemKind: "pop_sheet",
-    driveId,
+    driveId: env.GRAPH_POP_SHEET_DRIVE_ID?.trim() || driveId,
     folderItemId: env.GRAPH_POP_SHEET_FOLDER_ITEM_ID,
     enabled: true,
+    allowedExtensions: sheetMusicExtensions,
     capabilities: { read: ["helper"], write: ["helper:pop_sheet:write"] }
   });
   addOneDriveSource(sources, {
@@ -54,6 +56,7 @@ export function buildCatalogSourceSeeds(
     driveId,
     folderItemId: env.GRAPH_HYMN_SHEET_FOLDER_ITEM_ID,
     enabled: true,
+    allowedExtensions: sheetMusicExtensions,
     capabilities: { read: ["helper"], write: ["helper:hymn_sheet:write"] }
   });
   const databaseId = env.NOTION_SERVICE_DATABASE_ID?.trim();
@@ -119,6 +122,7 @@ function addOneDriveSource(
     driveId: string | undefined;
     folderItemId: string | undefined;
     enabled: boolean;
+    allowedExtensions?: string[];
     capabilities: CatalogSourceInput["capabilities"];
   }
 ): void {
@@ -134,9 +138,25 @@ function addOneDriveSource(
     defaultItemKind: input.defaultItemKind,
     rootLocation: { driveId: input.driveId, folderItemId },
     enabled: input.enabled,
-    syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
+    syncPolicy: {
+      mode: "scheduled",
+      intervalMinutes: 15,
+      ...(input.allowedExtensions ? { allowedExtensions: input.allowedExtensions } : {})
+    },
     capabilities: input.capabilities
   });
+}
+
+function readExtensions(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(",")
+        .map((extension) => extension.trim().toLowerCase())
+        .filter(Boolean)
+        .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`))
+    )
+  );
 }
 
 function addXiaohaDatabaseSource(
