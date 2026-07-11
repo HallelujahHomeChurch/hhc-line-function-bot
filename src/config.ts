@@ -10,6 +10,7 @@ import { normalizeProviderPolicy } from "./llm/provider-policy.js";
 import { FUNCTION_NAMES, MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
 import type {
   AppConfig,
+  CatalogSourceConfig,
   FunctionName,
   ModelProviderName,
   ProviderPolicy,
@@ -20,6 +21,27 @@ import type {
 const providerLanePolicySchema = z.object({
   primary: z.enum(MODEL_PROVIDER_NAMES).optional(),
   fallback: z.enum(MODEL_PROVIDER_NAMES).optional()
+});
+
+const catalogSourceSchema = z.object({
+  profileName: z.string().min(1),
+  sourceKey: z
+    .string()
+    .min(1)
+    .regex(/^[a-z0-9][a-z0-9_-]*$/),
+  adapterType: z.enum(["onedrive", "notion", "manual"]),
+  domain: z.string().min(1),
+  defaultItemKind: z.string().min(1),
+  rootLocation: z.record(z.string(), z.string()),
+  enabled: z.boolean().default(true),
+  syncPolicy: z.object({
+    mode: z.enum(["scheduled", "manual"]),
+    intervalMinutes: z.number().int().min(1).max(1440).optional()
+  }),
+  capabilities: z.object({
+    read: z.array(z.string()).default([]),
+    write: z.array(z.string()).default([])
+  })
 });
 
 const smallTalkPromptingSchema = z.object({
@@ -111,6 +133,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   const normalizedProfiles = profiles.map((profile) => normalizeProfile(profile, env));
   validateProviderPolicy(normalizedProfiles, llmProvider, llmFallbackProvider);
   validateAccessConfig(normalizedProfiles, env);
+  const catalogSources = readCatalogSources(
+    env,
+    normalizedProfiles.map((profile) => profile.name)
+  );
 
   return {
     serviceName: env.SERVICE_NAME || "hhc-line-function-bot",
@@ -191,6 +217,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       userAgent: env.WIKIMEDIA_USER_AGENT || "HHCLineBot/1.0 (https://alive.org.tw/contact)",
       timeoutMs: readInt(env.WIKIPEDIA_TIMEOUT_MS, 8000)
     },
+    ...(catalogSources.length ? { catalog: { sources: catalogSources } } : {}),
     redis: env.REDIS_URL?.trim()
       ? {
           url: env.REDIS_URL,
@@ -457,6 +484,24 @@ function validateAccessConfig(profiles: ParsedProfile[], env: NodeJS.ProcessEnv)
   if (!env.REDIS_URL?.trim()) {
     throw new Error("REDIS_URL is required when profile registration is enabled");
   }
+}
+
+function readCatalogSources(env: NodeJS.ProcessEnv, profileNames: string[]): CatalogSourceConfig[] {
+  const path = env.CATALOG_SOURCES_PATH?.trim();
+  if (!path) {
+    return [];
+  }
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  const sources = z.array(catalogSourceSchema).parse(parsed);
+  const knownProfiles = new Set(profileNames);
+  for (const source of sources) {
+    if (!knownProfiles.has(source.profileName)) {
+      throw new Error(
+        `Catalog source ${source.sourceKey} references unknown profile ${source.profileName}`
+      );
+    }
+  }
+  return sources;
 }
 
 const graphRequiredKeys = [

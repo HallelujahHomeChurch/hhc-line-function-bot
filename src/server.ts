@@ -411,7 +411,10 @@ async function handleWebhook(
         requesterDisplayName,
         agentJobStore
       );
-      const postbackFunctionName = functionNameForAgentResource(result.agentResource?.resourceType);
+      const postbackFunctionName = functionNameForAgentResource(
+        result.agentResource?.resourceType,
+        effectiveProfile.enabledFunctions
+      );
       if (postbackFunctionName) {
         await agentRuntime?.afterFunctionResult({
           context: { profile: effectiveProfile, event, requestId, requesterDisplayName },
@@ -1990,12 +1993,17 @@ function formatFallbackDiagnostics(route: {
   ];
 }
 
-function functionNameForAgentResource(resourceType: AgentResourceType | undefined) {
+function functionNameForAgentResource(
+  resourceType: AgentResourceType | undefined,
+  enabledFunctions: FunctionName[]
+) {
   switch (resourceType) {
     case "ppt_slide":
       return "find_ppt_slides";
     case "sheet_music":
-      return "find_pop_sheet_music";
+      return enabledFunctions.includes("find_sheet_music")
+        ? "find_sheet_music"
+        : "find_pop_sheet_music";
     default:
       return undefined;
   }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { parseFunctionArguments } from "./function-arguments.js";
 import { normalizeFunctionArguments } from "./functions/argument-normalization.js";
 import { getFunctionDefinition, getFunctionDefinitions } from "./functions/definitions.js";
+import { queryDomainIntentToRoute, resolveQueryDomainIntent } from "./query-domain-resolver.js";
 import { FUNCTION_NAMES, isFunctionName, isSystemActionName } from "./types.js";
 import type {
   ChatProvider,
@@ -153,6 +154,23 @@ function applyRoutePolicy(
   input: RouteInput,
   keywordFallback: KeywordFallbackRouter | undefined
 ): RouteResult {
+  const deterministicIntent = resolveQueryDomainIntent(input);
+  if (
+    deterministicIntent &&
+    (route.type === "respond" ||
+      (route.type === "execute" &&
+        (route.action !== deterministicIntent.action ||
+          (deterministicIntent.missingRequiredSlot && routeQueryHasContent(route.arguments)))))
+  ) {
+    return {
+      ...queryDomainIntentToRoute(deterministicIntent),
+      fallbackProvider:
+        route.provider === "ollama" || route.provider === "deepseek" ? route.provider : undefined,
+      fallbackReason: deterministicIntent.missingRequiredSlot
+        ? "query_domain_missing_slot"
+        : "query_domain_override"
+    };
+  }
   if (route.type === "deny") {
     return route;
   }
@@ -185,6 +203,10 @@ function applyRoutePolicy(
     return { type: "deny", reason: "write_evidence_missing", provider: "router" };
   }
   return route;
+}
+
+function routeQueryHasContent(args: JsonRecord): boolean {
+  return typeof args.query === "string" && args.query.trim().length > 0;
 }
 
 function recoverControlledRoute(

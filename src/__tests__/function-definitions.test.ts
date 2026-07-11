@@ -14,6 +14,21 @@ describe("function definitions", () => {
     expect(FUNCTION_NAMES).toContain("query_wikipedia");
   });
 
+  it("uses find_sheet_music as the canonical sheet music function", () => {
+    expect(FUNCTION_NAMES).toContain("find_sheet_music");
+    expect(getFunctionDefinition("find_sheet_music")).toMatchObject({
+      name: "find_sheet_music",
+      sideEffectLevel: "read",
+      resourcePolicy: {
+        kind: "graph_file",
+        resourceTypes: ["sheet_music"]
+      },
+      keywordFallback: {
+        defaultArguments: { fileType: "pdf", matchMode: "fuzzy" }
+      }
+    });
+  });
+
   it("uses one declarative generic-slot contract for user-facing lookups", () => {
     const lookupNames = [
       "find_ppt_slides",

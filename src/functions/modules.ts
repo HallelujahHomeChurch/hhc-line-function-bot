@@ -30,6 +30,8 @@ import { createQueryScheduleHandler } from "./query-schedule.js";
 import { createWikipediaLookupHandler, type WikipediaSummarizer } from "../wikipedia/lookup.js";
 import type { WikipediaClient } from "../wikipedia/client.js";
 import { createRetrieveMemoryHandler, createSaveMemoryHandler } from "./agent-memory-functions.js";
+import { createFindResourceHandler } from "./find-resource.js";
+import type { CatalogStore } from "../catalog/store.js";
 import { createSaveResourceHandler } from "./save-resource.js";
 import {
   createQueryScheduleMemoryHandler,
@@ -45,6 +47,7 @@ export interface FunctionModuleContext {
     sessionStore: SessionStore;
     cache: CacheStore;
     memoryStore?: AgentMemoryStore;
+    catalog?: CatalogStore;
     wikipedia?: WikipediaClient;
     wikipediaSummarizer?: WikipediaSummarizer;
     now?: () => Date;
@@ -130,7 +133,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         text: "小哈 查流行歌曲樂譜 奇異恩典",
         expected: {
           type: "execute",
-          action: "find_pop_sheet_music",
+          action: "find_sheet_music",
           arguments: { query: "奇異恩典", fileType: "pdf", matchMode: "fuzzy" }
         }
       }
@@ -386,6 +389,105 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             now: clients.now,
             requestIdFactory: clients.requestIdFactory
           })
+        }
+      };
+    }
+  },
+  {
+    name: "find_sheet_music",
+    definition: requiredDefinition("find_sheet_music"),
+    routerEvalCases: [
+      {
+        kind: "positive",
+        text: "小哈 查歌譜 A TIME FOR US",
+        expected: {
+          type: "execute",
+          action: "find_sheet_music",
+          arguments: { query: "A TIME FOR US", fileType: "pdf", matchMode: "fuzzy" }
+        }
+      },
+      {
+        kind: "missing_slot",
+        text: "小哈 查歌譜",
+        expected: {
+          type: "execute",
+          action: "find_sheet_music",
+          arguments: { query: "", fileType: "pdf", matchMode: "fuzzy" }
+        }
+      },
+      {
+        kind: "typo",
+        text: "小哈 查歌譜 Yestarday",
+        expected: {
+          type: "execute",
+          action: "find_sheet_music",
+          arguments: { query: "Yestarday", fileType: "pdf", matchMode: "fuzzy" }
+        }
+      },
+      {
+        kind: "negative",
+        text: "小哈 查天氣",
+        expected: { type: "deny", reason: "keyword_no_match" }
+      },
+      {
+        kind: "disabled",
+        text: "小哈 查歌譜 Yesterday",
+        enabledFunctions: withoutFunction("find_sheet_music"),
+        expected: { type: "deny", reason: "function_disabled" }
+      },
+      {
+        kind: "cross_function",
+        text: "小哈 查維基百科 馬丁路德",
+        expected: {
+          type: "execute",
+          action: "query_wikipedia",
+          arguments: { query: "馬丁路德" }
+        }
+      }
+    ],
+    register: ({ config, clients }) => {
+      if (!config.graph || !clients.graph) {
+        return {};
+      }
+      return {
+        functions: {
+          find_sheet_music: createFindPopSheetMusicHandler({
+            graph: clients.graph,
+            driveId: config.graph.driveId,
+            folderItemId: config.graph.sheetMusicFolderItemId,
+            folderPath: config.graph.sheetMusicFolderPath,
+            allowedExtensions: config.graph.sheetMusicAllowedExtensions,
+            recursive: config.graph.sheetMusicRecursive,
+            memoryStore: clients.memoryStore,
+            cache: clients.cache,
+            sessionStore: clients.sessionStore,
+            now: clients.now,
+            requestIdFactory: clients.requestIdFactory,
+            functionName: "find_sheet_music"
+          })
+        },
+        postbacks: {
+          select_sheet_music: createFindPopSheetMusicPostbackHandler({
+            graph: clients.graph,
+            sessionStore: clients.sessionStore,
+            now: clients.now
+          })
+        },
+        textMessages: {
+          sheet_music_numeric_selection: createFindPopSheetMusicTextMessageHandler({
+            graph: clients.graph,
+            sessionStore: clients.sessionStore,
+            now: clients.now
+          })
+        },
+        adminHandlers: {
+          "refresh-sheet-music-cache": async () => {
+            const removed = await clients.cache.deleteByPrefix(SHEET_MUSIC_INDEX_CACHE_PREFIX);
+            return {
+              ok: true,
+              replyText: `已清除歌譜 cache（${removed} 筆），下次查詢會重新建立。`
+            };
+          }
         }
       };
     }
@@ -652,6 +754,84 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         functions: {
           query_schedule_memory: createQueryScheduleMemoryHandler({
             memoryStore: clients.memoryStore,
+            now: clients.now
+          })
+        }
+      };
+    }
+  },
+  {
+    name: "find_resource",
+    definition: requiredDefinition("find_resource"),
+    routerEvalCases: [
+      {
+        kind: "positive",
+        text: "小哈 查教會資料 週報音檔",
+        expected: {
+          type: "execute",
+          action: "find_resource",
+          arguments: { query: "", itemKind: "weekly_report_audio", domain: "audio" }
+        }
+      },
+      {
+        kind: "missing_slot",
+        text: "小哈 查教會資料",
+        expected: {
+          type: "execute",
+          action: "find_resource",
+          arguments: { query: "" }
+        }
+      },
+      {
+        kind: "typo",
+        text: "小哈 查教會資料 weekly report",
+        expected: {
+          type: "execute",
+          action: "find_resource",
+          arguments: { query: "weekly report" }
+        }
+      },
+      {
+        kind: "negative",
+        text: "小哈 幫我查資料",
+        expected: { type: "deny", reason: "keyword_no_match" }
+      },
+      {
+        kind: "cross_function",
+        text: "小哈 查服事表",
+        expected: { type: "execute", action: "query_schedule", arguments: { query: "" } }
+      },
+      {
+        kind: "disabled",
+        text: "小哈 查教會資料 週報音檔",
+        enabledFunctions: withoutFunction("find_resource"),
+        expected: { type: "deny", reason: "function_disabled" }
+      },
+      {
+        kind: "cross_function",
+        text: "小哈 查歌譜 Amazing Grace",
+        expected: {
+          type: "execute",
+          action: "find_sheet_music",
+          arguments: { query: "Amazing Grace", fileType: "pdf", matchMode: "fuzzy" }
+        }
+      }
+    ],
+    register: ({ clients }) => {
+      if (!clients.catalog || !clients.graph) {
+        return {};
+      }
+      return {
+        functions: {
+          find_resource: createFindResourceHandler({
+            catalog: clients.catalog,
+            graph: clients.graph,
+            allowedItemKinds: [
+              "church_document",
+              "church_image",
+              "church_other",
+              "weekly_report_audio"
+            ],
             now: clients.now
           })
         }
@@ -932,7 +1112,9 @@ function withoutFunction(name: FunctionName): FunctionName[] {
       ? "query_service_schedule"
       : name === "save_schedule"
         ? "save_schedule_memory"
-        : undefined;
+        : name === "find_sheet_music"
+          ? "find_pop_sheet_music"
+          : undefined;
   return FUNCTION_NAMES.filter(
     (functionName) => functionName !== name && functionName !== legacyAlias
   );

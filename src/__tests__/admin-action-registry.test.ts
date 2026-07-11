@@ -134,7 +134,7 @@ describe("admin action registry", () => {
       action: "function_scope_grant",
       profile: profile(),
       event: groupEvent,
-      arguments: { functionName: "find_pop_sheet_music" }
+      arguments: { functionName: "find_sheet_music" }
     });
     const list = await registry.execute({
       action: "function_scope_list",
@@ -145,24 +145,24 @@ describe("admin action registry", () => {
       action: "function_scope_revoke",
       profile: profile(),
       event: groupEvent,
-      arguments: { functionName: "find_pop_sheet_music" }
+      arguments: { functionName: "find_sheet_music" }
     });
 
     await expect(accessStore.listGroupFunctionGrants("helper", "Cmain")).resolves.toEqual([]);
-    expect(grant.replyText).toContain("find_pop_sheet_music");
-    expect(list.replyText).toContain("group-grants: find_pop_sheet_music");
-    expect(revoke.replyText).toContain("find_pop_sheet_music");
+    expect(grant.replyText).toContain("find_sheet_music");
+    expect(list.replyText).toContain("group-grants: find_sheet_music");
+    expect(revoke.replyText).toContain("find_sheet_music");
     expect(accessStore.audit).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           action: "access.function.grant",
           targetId: "Cmain",
-          metadata: { functionName: "find_pop_sheet_music" }
+          metadata: { functionName: "find_sheet_music" }
         }),
         expect.objectContaining({
           action: "access.function.revoke",
           targetId: "Cmain",
-          metadata: { functionName: "find_pop_sheet_music" }
+          metadata: { functionName: "find_sheet_music" }
         })
       ])
     );

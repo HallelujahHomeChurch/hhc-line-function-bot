@@ -1,3 +1,4 @@
+import { getFunctionDefinitions } from "./functions/definitions.js";
 import type { BotProfileConfig, FunctionExecutionResult } from "./types.js";
 
 export function createQueryClarificationReply(
@@ -12,10 +13,27 @@ export function createQueryClarificationReply(
     return { ok: true, replyText: "目前沒有開放可查詢的內容。" };
   }
 
+  const capabilities = queryCapabilities(profile);
+  if (capabilities.length === 0) {
+    return { ok: true, replyText: "目前沒有開放可查詢的內容。" };
+  }
+
   return {
     ok: true,
-    replyText: "你想查什麼？請直接告訴我名稱、日期或主題。"
+    replyText: [
+      "你想查什麼？請直接告訴我名稱、日期或主題。",
+      "",
+      "目前可以查：",
+      ...capabilities.map((capability) => `- ${capability}`)
+    ].join("\n")
   };
+}
+
+function queryCapabilities(profile: BotProfileConfig): string[] {
+  const definitions = getFunctionDefinitions(profile.enabledFunctions).filter(
+    (definition) => definition.sideEffectLevel === "read" && !definition.deprecated
+  );
+  return definitions.map((definition) => definition.displayName);
 }
 
 function isGenericQueryRequest(text: string, wakeKeywords: string[]): boolean {

@@ -292,6 +292,7 @@ function resourceTypesForAction(action: FunctionName): AgentResourceType[] | und
   switch (action) {
     case "find_ppt_slides":
       return ["ppt_slide"];
+    case "find_sheet_music":
     case "find_pop_sheet_music":
       return ["sheet_music"];
     default:

@@ -1,6 +1,7 @@
 import { FUNCTION_DEFINITIONS, type FunctionDefinition } from "./functions/definitions.js";
 import { normalizeFunctionArguments } from "./functions/argument-normalization.js";
 import { extractPptSlideQuery } from "./ppt-query.js";
+import { queryDomainIntentToRoute, resolveQueryDomainIntent } from "./query-domain-resolver.js";
 import type {
   FunctionName,
   JsonRecord,
@@ -39,6 +40,11 @@ export function createKeywordFallbackRouter(): KeywordFallbackRouter {
           }),
           provider: "keyword"
         };
+      }
+
+      const domainIntent = resolveQueryDomainIntent(input);
+      if (domainIntent) {
+        return queryDomainIntentToRoute(domainIntent);
       }
 
       const wikipediaIntent = extractWikipediaIntent(text);
@@ -83,6 +89,9 @@ export function createKeywordFallbackRouter(): KeywordFallbackRouter {
       let enabledMatches = matches.filter((match) => input.enabledFunctions.includes(match.name));
       if (input.enabledFunctions.includes("query_schedule")) {
         enabledMatches = enabledMatches.filter((match) => match.name !== "query_service_schedule");
+      }
+      if (input.enabledFunctions.includes("find_sheet_music")) {
+        enabledMatches = enabledMatches.filter((match) => match.name !== "find_pop_sheet_music");
       }
       if (enabledMatches.length === 0) {
         return { type: "deny", reason: "function_disabled", provider: "keyword" };
@@ -294,6 +303,7 @@ function extractArguments(rule: KeywordRule, text: string): JsonRecord {
   const query =
     cleanedQuery ||
     (rule.name === "find_ppt_slides" ||
+    rule.name === "find_sheet_music" ||
     rule.name === "find_pop_sheet_music" ||
     rule.name === "query_wikipedia"
       ? ""
@@ -307,7 +317,7 @@ function extractArguments(rule: KeywordRule, text: string): JsonRecord {
       argumentsRecord.fileType = "pdf";
     }
   }
-  if (rule.name === "find_pop_sheet_music") {
+  if (rule.name === "find_sheet_music" || rule.name === "find_pop_sheet_music") {
     argumentsRecord.fileType =
       includesKeyword(text, "jpg") || includesKeyword(text, "圖片") ? "image" : "pdf";
   }

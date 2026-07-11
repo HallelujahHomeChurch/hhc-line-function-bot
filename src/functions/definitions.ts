@@ -1,6 +1,7 @@
 import type { z } from "zod";
 
 import {
+  findResourceArgumentsSchema,
   findPopSheetMusicArgumentsSchema,
   findPptSlidesArgumentsSchema,
   queryWikipediaArgumentsSchema,
@@ -267,7 +268,63 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     }
   },
   {
+    name: "find_sheet_music",
+    displayName: "查歌譜",
+    shortDescription: "搜尋已設定的流行歌譜與詩歌歌譜，並回傳可開啟的臨時連結。",
+    examples: ["小哈 查歌譜 Yesterday", "小哈 找 A TIME FOR US 歌譜"],
+    requires: ["graph", "cache"],
+    scope: "group_capable",
+    sideEffectLevel: "read",
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "query",
+        argument: "query",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["歌譜", "樂譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"]
+        },
+        prompt: "請告訴我要查哪一首歌的歌譜。"
+      }
+    ],
+    resourcePolicy: {
+      kind: "graph_file",
+      resourceTypes: ["sheet_music"],
+      remember: true,
+      alias: true
+    },
+    memoryPolicy: { kind: "resource_metadata" },
+    clarificationPrompt: "請告訴我要查哪一首歌的歌譜。",
+    description:
+      '- find_sheet_music: find configured sheet music PDF/image files by song title or artist. It may search multiple configured catalog item kinds such as pop_sheet and hymn_sheet without asking the user to choose an internal source. Arguments: {"query":"song title keyword", "artist":"artist optional", "fileType":"pdf|image|any optional", "matchMode":"fuzzy|exact optional"}.',
+    argumentSchema: findPopSheetMusicArgumentsSchema,
+    quickReply: {
+      label: "查歌譜",
+      command: "小哈 查歌譜"
+    },
+    helpText: "查詢已設定的流行歌譜或詩歌歌譜。",
+    keywordFallback: {
+      keywords: ["歌譜", "樂譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"],
+      stripWords: [
+        ...commonStripWords,
+        "歌譜",
+        "樂譜",
+        "流行歌譜",
+        "詩歌歌譜",
+        "sheet music",
+        "score",
+        "pdf",
+        "jpg",
+        "jpeg",
+        "png",
+        "image"
+      ],
+      defaultArguments: { fileType: "pdf", matchMode: "fuzzy" }
+    }
+  },
+  {
     name: "find_pop_sheet_music",
+    deprecated: true,
     displayName: "查流行歌譜",
     shortDescription: "協助查找流行歌曲樂譜，適合同工臨時找譜使用。",
     examples: ["小哈 查流行歌譜 Yesterday", "小哈 幫我找 A TIME FOR US 的樂譜"],
@@ -357,6 +414,43 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     keywordFallback: {
       keywords: ["記住服事表", "保存服事表", "儲存服事表", "記住晨更", "記住舉牌"],
       stripWords: [...commonStripWords, "記住", "保存", "儲存", "服事表"]
+    }
+  },
+  {
+    name: "find_resource",
+    displayName: "查教會資料",
+    shortDescription: "搜尋已同步的小哈資料庫或其他泛用教會資料。",
+    examples: ["小哈 查教會資料 週報音檔", "小哈 找 2026-07 週報音檔"],
+    requires: ["graph"],
+    scope: "group_capable",
+    sideEffectLevel: "read",
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "query",
+        argument: "query",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["教會資料", "小哈資料庫", "文件", "音檔"]
+        },
+        prompt: "請告訴我要查什麼教會資料。"
+      }
+    ],
+    resourcePolicy: { kind: "none", remember: false, alias: false },
+    memoryPolicy: { kind: "none" },
+    clarificationPrompt: "請告訴我要查什麼教會資料。",
+    description:
+      '- find_resource: search the authorized internal church catalog for general resources such as documents, images, or future audio sources. Do not use this for clear schedule, presentation, or sheet-music requests; use the specialized functions instead. Arguments: {"query":"keyword", "itemKind":"optional catalog item kind", "domain":"optional domain", "limit":number optional}.',
+    argumentSchema: findResourceArgumentsSchema,
+    quickReply: {
+      label: "查教會資料",
+      command: "小哈 查教會資料"
+    },
+    helpText: "查詢小哈資料庫或其他已授權的泛用教會資料。",
+    keywordFallback: {
+      keywords: ["教會資料", "小哈資料庫", "文件", "音檔"],
+      stripWords: [...commonStripWords, "教會資料", "小哈資料庫", "文件", "音檔"],
+      defaultArguments: {}
     }
   },
   {

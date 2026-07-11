@@ -273,6 +273,23 @@ Public web lookup is intentionally not supported. The only external knowledge
 function is `query_wikipedia`, which uses the Wikipedia API with a fixed
 language fallback and never fetches arbitrary user-supplied URLs.
 
+Catalog-backed lookups are separated from user-facing function names. The
+canonical functions are `find_ppt_slides`, `find_sheet_music`, and
+`find_resource`; they should call the catalog/search layer with different
+filters instead of implementing separate source-specific searches. Legacy
+`find_pop_sheet_music` is an internal alias only. Future OneDrive-backed
+folders such as weekly report audio should be added as catalog source config,
+an item kind value, resolver aliases, and tests; they must not add another
+OneDrive crawl/search implementation.
+
+The shared query-domain resolver lives in `src/query-domain-resolver.ts` and is
+used by both model-route policy and keyword fallback. It handles explicit
+domains such as service schedules, slides, sheet music, church resources,
+weekly report audio, and Wikipedia. If a user names a domain but omits the
+required topic/title/date, the resolver must preserve the missing slot and let
+the shared slot clarification path ask instead of letting the LLM invent a
+query.
+
 ## External Dependencies
 
 Function dependencies are intentionally behind ports/clients:
@@ -282,6 +299,7 @@ Function dependencies are intentionally behind ports/clients:
 - DeepSeek provider: `src/clients/deepseek.ts`
 - Microsoft Graph: `src/clients/graph.ts`
 - Notion: `src/clients/notion.ts`
+- Catalog source/item store abstraction: `src/catalog/*`
 - Postgres access store: `src/access/postgres-access-store.ts`
 - Postgres agent memory store: `src/agent/postgres-memory-store.ts`
 - Redis wiring: `src/redis.ts`
@@ -298,7 +316,8 @@ Use this map for common issues:
 - Bot responds when merely mentioned in third person: `src/engagement.ts` and
   entrance tests for `third_person`.
 - Wrong function route: `src/router.ts`, `src/keyword-router.ts`,
-  `src/functions/definitions.ts`, router eval cases.
+  `src/query-domain-resolver.ts`, `src/functions/definitions.ts`, router eval
+  cases.
 - Missing query or wrong slot: `src/function-arguments.ts`,
   `src/functions/argument-normalization.ts`, `src/agent/slot-clarification.ts`,
   and clarification tests.

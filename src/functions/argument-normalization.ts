@@ -45,6 +45,7 @@ export function normalizeFunctionArguments(
   switch (action) {
     case "find_ppt_slides":
       return normalizePptSlideArguments(args, input);
+    case "find_sheet_music":
     case "find_pop_sheet_music":
       return normalizeSheetMusicArguments(args, input);
     case "query_schedule":

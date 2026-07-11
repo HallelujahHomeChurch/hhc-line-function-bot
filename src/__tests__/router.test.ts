@@ -179,6 +179,61 @@ describe("function router", () => {
     expect(result).toMatchObject({ type: "deny", reason: "system_route_evidence_missing" });
   });
 
+  it("overrides a model-invented Wikipedia topic when the user did not provide one", async () => {
+    const qwen = provider(
+      JSON.stringify({
+        action: "query_wikipedia",
+        arguments: { query: "烏戈·查維茲" }
+      })
+    );
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "helper",
+      text: "小哈 查維基百科",
+      enabledFunctions: ["query_wikipedia"],
+      source: { type: "user", userId: "U1" }
+    });
+
+    expect(result).toMatchObject({
+      type: "execute",
+      action: "query_wikipedia",
+      arguments: { query: "" }
+    });
+  });
+
+  it("routes explicit future catalog domains to internal resources instead of Wikipedia", async () => {
+    const qwen = provider(
+      JSON.stringify({
+        action: "query_wikipedia",
+        arguments: { query: "週報音檔" }
+      })
+    );
+    const router = createFunctionRouter({
+      primary: qwen,
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    const result = await router.route({
+      profileName: "helper",
+      text: "小哈 查週報音檔",
+      enabledFunctions: ["find_resource", "query_wikipedia"],
+      source: { type: "user", userId: "U1" }
+    });
+
+    expect(result).toMatchObject({
+      type: "execute",
+      action: "find_resource",
+      provider: "keyword",
+      arguments: { query: "", itemKind: "weekly_report_audio", domain: "audio" }
+    });
+  });
+
   it("accepts a structured schedule update grounded in the user text", async () => {
     const qwen = provider(
       JSON.stringify({

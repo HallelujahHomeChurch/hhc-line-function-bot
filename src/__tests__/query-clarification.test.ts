@@ -24,7 +24,7 @@ function profile(enabledFunctions: BotProfileConfig["enabledFunctions"]): BotPro
 describe("generic query clarification", () => {
   it("asks for a query target and exposes only effective read capabilities", () => {
     const result = createQueryClarificationReply(
-      profile(["find_ppt_slides", "query_service_schedule", "save_schedule_memory"]),
+      profile(["find_ppt_slides", "query_schedule", "find_sheet_music", "save_schedule"]),
       "小哈，幫我查東西"
     );
 
@@ -33,8 +33,9 @@ describe("generic query clarification", () => {
       replyText: expect.stringContaining("想查什麼")
     });
     expect(result?.replyText).toContain("名稱、日期或主題");
-    expect(result?.replyText).not.toContain("查投影片");
-    expect(result?.replyText).not.toContain("查服事表");
+    expect(result?.replyText).toContain("查投影片");
+    expect(result?.replyText).toContain("查服事表");
+    expect(result?.replyText).toContain("查歌譜");
     expect(result?.replyText).not.toContain("儲存服事表");
     expect(result?.quickReplies).toBeUndefined();
   });

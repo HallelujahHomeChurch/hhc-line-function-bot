@@ -23,7 +23,8 @@ import type {
   GraphDriveClient,
   PostbackHandler,
   TextMessageContext,
-  TextMessageHandler
+  TextMessageHandler,
+  FunctionName
 } from "../types.js";
 
 const POSTBACK_ACTION = "select_sheet_music";
@@ -46,6 +47,7 @@ export interface FindPopSheetMusicOptions {
   sessionStore?: SessionStore;
   now?: () => Date;
   requestIdFactory?: () => string;
+  functionName?: Extract<FunctionName, "find_sheet_music" | "find_pop_sheet_music">;
 }
 
 export interface FindPopSheetMusicPostbackOptions {
@@ -79,6 +81,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
   const sessionStore =
     options.sessionStore ?? new InMemorySessionStore({ now, ttlMs: SELECTION_TTL_MS });
   const requestIdFactory = options.requestIdFactory ?? randomUUID;
+  const functionName = options.functionName ?? "find_pop_sheet_music";
 
   return async (rawArgs, context) => {
     const args = findPopSheetMusicArgumentsSchema.parse(rawArgs);
@@ -88,7 +91,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       await storePendingFunctionQuery({
         sessionStore,
         requestId: requestIdFactory(),
-        action: "find_pop_sheet_music",
+        action: functionName,
         arguments: args,
         context,
         now: now()
@@ -192,7 +195,7 @@ export function createFindPopSheetMusicPostbackHandler(
   const now = options.now ?? (() => new Date());
 
   return async (request, context) => {
-    if (!context.profile.enabledFunctions.includes("find_pop_sheet_music")) {
+    if (!sheetMusicFunctionEnabled(context.profile.enabledFunctions)) {
       return { ok: true, replyText: "這個功能目前沒有開放。" };
     }
 
@@ -224,7 +227,7 @@ export function createFindPopSheetMusicTextMessageHandler(
 
   return {
     matches: async (request, context) =>
-      context.profile.enabledFunctions.includes("find_pop_sheet_music") &&
+      sheetMusicFunctionEnabled(context.profile.enabledFunctions) &&
       numericSelectionToIndex(request.text) !== undefined &&
       Boolean(await findSheetMusicSelection(options.sessionStore, context)),
 
@@ -248,6 +251,13 @@ export function createFindPopSheetMusicTextMessageHandler(
       });
     }
   };
+}
+
+function sheetMusicFunctionEnabled(enabledFunctions: FunctionName[]): boolean {
+  return (
+    enabledFunctions.includes("find_sheet_music") ||
+    enabledFunctions.includes("find_pop_sheet_music")
+  );
 }
 
 async function findRememberedSheetMusic(

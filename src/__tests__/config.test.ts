@@ -41,6 +41,21 @@ async function withProfileFile<T>(
   }
 }
 
+async function withJsonFile<T>(
+  prefix: string,
+  value: unknown,
+  callback: (path: string) => Promise<T>
+) {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  const path = join(directory, "config.json");
+  await writeFile(path, JSON.stringify(value), "utf8");
+  try {
+    return await callback(path);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 describe("config", () => {
   it("configures an identifiable Wikimedia API client without a secret", () => {
     const config = loadConfigFromEnv({
@@ -192,6 +207,40 @@ describe("config", () => {
       sheetMusicAllowedExtensions: [".pdf", ".jpg", ".jpeg"],
       sheetMusicRecursive: true
     });
+  });
+
+  it("loads catalog sources from a deployment config file", async () => {
+    await withJsonFile(
+      "hhc-line-function-bot-catalog-",
+      [
+        {
+          profileName: "main",
+          sourceKey: "weekly_report_audio",
+          adapterType: "onedrive",
+          domain: "audio",
+          defaultItemKind: "weekly_report_audio",
+          rootLocation: { driveId: "drive", folderItemId: "weekly-folder" },
+          enabled: true,
+          syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
+          capabilities: { read: ["helper"], write: [] }
+        }
+      ],
+      async (path) => {
+        const config = loadConfigFromEnv({
+          ...baseEnv(),
+          CATALOG_SOURCES_PATH: path
+        });
+
+        expect(config.catalog?.sources).toEqual([
+          expect.objectContaining({
+            profileName: "main",
+            sourceKey: "weekly_report_audio",
+            adapterType: "onedrive",
+            defaultItemKind: "weekly_report_audio"
+          })
+        ]);
+      }
+    );
   });
 
   it("does not allow environment variables to widen PPT file types", () => {

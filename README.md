@@ -20,6 +20,7 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Requester-scoped short conversation windows, so group follow-up messages can continue naturally without letting other users inherit context.
 - Long-running task handoff: slow turns can reply with a "check result" postback instead of using LINE push quota.
 - Free Wikipedia-only lookup: Chinese Wikipedia first, English fallback, then source-bounded summary generation.
+- Catalog-driven resource search foundation: OneDrive-style sources can be registered as catalog sources and indexed into a unified item table abstraction. User-facing lookup functions do not expose whether data came from OneDrive, Notion, PostgreSQL, or a future source.
 - Optional Redis backend for sessions, cache, recent errors, rate limiting, and one-time registration invite codes.
 - Per-profile access policy with PostgreSQL-backed user/group/admin registration.
 - Public `/help`, `/registry <code>`, and `/whoami` commands.
@@ -30,7 +31,8 @@ LINE webhook service for routing selected church bot requests to local-first fun
 - Function handlers:
   - `find_ppt_slides`: searches a configured presentation folder, fuzzy-matches `.pptx`, `.ppt`, `.key`, and `.odp` names, and returns 24 hour sharing links.
   - `query_schedule`: one user-facing service-schedule query that selects configured sources without exposing them.
-  - `find_pop_sheet_music`: searches a configured OneDrive/SharePoint sheet music folder recursively, including shortcut folders, and returns 24 hour sharing links.
+  - `find_sheet_music`: canonical sheet-music lookup for configured pop and hymn sheet sources. `find_pop_sheet_music` remains an internal legacy alias only.
+  - `find_resource`: generic authorized church catalog lookup for non-schedule, non-slide, non-sheet-music resources such as future weekly report audio.
   - `query_wikipedia`: reads a matching Wikipedia introduction and returns a source-bounded summary.
   - `save_schedule`: previews and manages the helper profile's shared canonical text-only service schedules with one-year retention.
 
@@ -174,12 +176,15 @@ Keyword fallback is intentionally narrow:
 
 - `find_ppt_slides`: `投影片`, `ppt`, `powerpoint`, `slides`, `keynote`, `odp`
 - `query_schedule`: `服事表`, `服事`
-- `find_pop_sheet_music`: `流行歌譜`, `流行歌曲樂譜`, `樂譜`, `歌譜`, `sheet music`
+- `find_sheet_music`: `流行歌譜`, `詩歌歌譜`, `樂譜`, `歌譜`, `sheet music`
+- `find_resource`: `教會資料`, `小哈資料庫`, and explicit catalog aliases such as `週報音檔`
 - `save_schedule`: `記住晨更`, `記住舉牌`, or pasted text schedules with date rows.
 
 Keyword fallback does not treat `詩歌` or `流行歌` alone as PPT requests. PPT fuzzy matching happens inside `find_ppt_slides`; for example, `奇易恩點` can match `奇異恩典.pptx`.
 
 For sheet music requests, Ollama can extract the song title, optional artist, requested file type, and fuzzy/exact match preference. Keyword fallback stays conservative and only routes requests that explicitly mention sheet music wording.
+
+The shared query-domain resolver runs before keyword fallback and guards model output when the user names an explicit domain. For example, `查維基百科` with no topic asks for the missing topic instead of letting a model invent one, and `查週報音檔` resolves to internal catalog search rather than Wikipedia when `find_resource` is enabled.
 
 Router behavior is guarded by a deterministic offline eval corpus in each function module. Run `pnpm eval:router` for CI-safe keyword fallback checks. Run `pnpm eval:router:ollama` manually when validating a live Ollama model.
 
@@ -198,6 +203,14 @@ Multi-result PPT and sheet music searches store short-lived in-memory sessions a
 If a PPT or sheet music request is missing the title keyword, the bot stores a short-lived pending function session and asks for the missing title. The user's next plain-text reply from the same LINE source and requester fills the missing `query` argument and runs the original function.
 
 If a request only selects a capability—such as `查投影片`, `查流行歌譜`, `查維基百科`, or `查服事表`—the bot asks for the required title, topic, date, meeting, or schedule type before any lookup runs. This rule is declared on the function's required slot, so it also overrides a model-inferred query that the user did not supply.
+
+## Catalog Sources
+
+Catalog source config is deployment-owned in v1. Set `CATALOG_SOURCES_PATH` to a JSON file containing source registrations. Each source includes `profileName`, `sourceKey`, `adapterType`, `domain`, `defaultItemKind`, `rootLocation`, `enabled`, `syncPolicy`, and read/write capability names. The app validates that every source references an existing profile.
+
+`catalog_sources` and `catalog_items` are created automatically when `DATABASE_URL` is configured; local single-process development falls back to the in-memory catalog store. Item kinds are data values, not a closed TypeScript enum. Existing values include `ppt_slide`, `pop_sheet`, `hymn_sheet`, `church_document`, `church_image`, and `church_other`; a future folder such as weekly report audio can add `weekly_report_audio` by source config plus resolver aliases without schema changes.
+
+Binary files are not stored in PostgreSQL by this abstraction. Catalog items store metadata and a storage reference. Temporary Graph sharing links are generated only when replying to a lookup result.
 
 ## Agent Runtime And Memory
 

@@ -44,7 +44,7 @@ describe("function modules", () => {
     const cases = getRouterEvalCases().filter((entry) => entry.expected.type === "execute");
 
     expect(cases.map((entry) => entry.expected.action)).toEqual(
-      expect.arrayContaining(["find_ppt_slides", "query_schedule", "find_pop_sheet_music"])
+      expect.arrayContaining(["find_ppt_slides", "query_schedule", "find_sheet_music"])
     );
     expect(cases.every((entry) => entry.text.trim())).toBe(true);
   });

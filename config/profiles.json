@@ -13,7 +13,7 @@
     "enabledFunctions": [
       "find_ppt_slides",
       "query_schedule",
-      "find_pop_sheet_music",
+      "find_sheet_music",
       "query_wikipedia",
       "save_schedule"
     ],

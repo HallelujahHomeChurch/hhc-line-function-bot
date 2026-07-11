@@ -3,7 +3,9 @@ export const FUNCTION_NAMES = [
   "query_schedule",
   "save_schedule",
   "query_service_schedule",
+  "find_sheet_music",
   "find_pop_sheet_music",
+  "find_resource",
   "query_wikipedia",
   "save_memory",
   "save_resource",
@@ -184,6 +186,28 @@ export interface WikipediaConfig {
   timeoutMs: number;
 }
 
+export interface CatalogSourceConfig {
+  profileName: string;
+  sourceKey: string;
+  adapterType: "onedrive" | "notion" | "manual";
+  domain: string;
+  defaultItemKind: string;
+  rootLocation: Record<string, string>;
+  enabled: boolean;
+  syncPolicy: {
+    mode: "scheduled" | "manual";
+    intervalMinutes?: number;
+  };
+  capabilities: {
+    read: string[];
+    write: string[];
+  };
+}
+
+export interface CatalogConfig {
+  sources: CatalogSourceConfig[];
+}
+
 export interface AppConfig {
   serviceName: string;
   host: string;
@@ -197,6 +221,7 @@ export interface AppConfig {
   graph?: GraphConfig;
   notion?: NotionConfig;
   wikipedia?: WikipediaConfig;
+  catalog?: CatalogConfig;
   redis?: RedisConfig;
   database?: DatabaseConfig;
   access?: AccessConfig;

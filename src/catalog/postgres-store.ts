@@ -1,0 +1,282 @@
+import { randomUUID } from "node:crypto";
+
+import type { AgentResourceStorage } from "../types.js";
+import {
+  normalizeCatalogText,
+  type CatalogItemInput,
+  type CatalogItemRecord,
+  type CatalogSearchInput,
+  type CatalogSourceInput,
+  type CatalogSourceRecord,
+  type CatalogStore
+} from "./store.js";
+
+export interface PgQueryable {
+  query<T extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    values?: unknown[]
+  ): Promise<{ rows: T[] }>;
+}
+
+type CatalogSourceRow = {
+  id: string;
+  profile_name: string;
+  source_key: string;
+  adapter_type: string;
+  domain: string;
+  default_item_kind: string;
+  root_location: Record<string, string>;
+  enabled: boolean;
+  sync_policy: CatalogSourceRecord["syncPolicy"];
+  capabilities: CatalogSourceRecord["capabilities"];
+};
+
+type CatalogItemRow = {
+  id: string;
+  source_id: string;
+  item_kind: string;
+  domain: string;
+  title: string;
+  normalized_title: string;
+  path: string | null;
+  mime_type: string | null;
+  extension: string | null;
+  size_bytes: string | number | null;
+  sha256: string | null;
+  storage_ref: AgentResourceStorage;
+  external_updated_at: Date | string | null;
+  deleted_at: Date | string | null;
+  source_id_join: string;
+  profile_name: string;
+  source_key: string;
+  adapter_type: string;
+  source_domain: string;
+  default_item_kind: string;
+  root_location: Record<string, string>;
+  enabled: boolean;
+  sync_policy: CatalogSourceRecord["syncPolicy"];
+  capabilities: CatalogSourceRecord["capabilities"];
+};
+
+export class PostgresCatalogStore implements CatalogStore {
+  constructor(private readonly db: PgQueryable) {}
+
+  async upsertSource(input: CatalogSourceInput): Promise<CatalogSourceRecord> {
+    const result = await this.db.query<CatalogSourceRow>(
+      `
+      insert into catalog_sources
+        (id, profile_name, source_key, adapter_type, domain, default_item_kind,
+         root_location, enabled, sync_policy, capabilities, updated_at)
+      values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb, now())
+      on conflict (profile_name, source_key) do update
+      set adapter_type = excluded.adapter_type,
+          domain = excluded.domain,
+          default_item_kind = excluded.default_item_kind,
+          root_location = excluded.root_location,
+          enabled = excluded.enabled,
+          sync_policy = excluded.sync_policy,
+          capabilities = excluded.capabilities,
+          updated_at = now()
+      returning *
+      `,
+      [
+        randomUUID(),
+        input.profileName,
+        input.sourceKey,
+        input.adapterType,
+        input.domain,
+        input.defaultItemKind,
+        JSON.stringify(input.rootLocation),
+        input.enabled,
+        JSON.stringify(input.syncPolicy),
+        JSON.stringify(input.capabilities)
+      ]
+    );
+    return mapSource(result.rows[0]);
+  }
+
+  async upsertItem(input: CatalogItemInput): Promise<CatalogItemRecord> {
+    const normalizedTitle = input.normalizedTitle ?? normalizeCatalogText(input.title);
+    const result = await this.db.query<{ id: string }>(
+      `
+      insert into catalog_items
+        (id, source_id, item_kind, domain, title, normalized_title, path, mime_type,
+         extension, size_bytes, sha256, storage_ref, storage_identity,
+         external_updated_at, deleted_at, updated_at)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, now())
+      on conflict (source_id, storage_identity) do update
+      set item_kind = excluded.item_kind,
+          domain = excluded.domain,
+          title = excluded.title,
+          normalized_title = excluded.normalized_title,
+          path = excluded.path,
+          mime_type = excluded.mime_type,
+          extension = excluded.extension,
+          size_bytes = excluded.size_bytes,
+          sha256 = excluded.sha256,
+          storage_ref = excluded.storage_ref,
+          external_updated_at = excluded.external_updated_at,
+          deleted_at = excluded.deleted_at,
+          updated_at = now()
+      returning id
+      `,
+      [
+        randomUUID(),
+        input.sourceId,
+        input.itemKind,
+        input.domain,
+        input.title,
+        normalizedTitle,
+        input.path ?? null,
+        input.mimeType ?? null,
+        input.extension ?? null,
+        input.sizeBytes ?? null,
+        input.sha256 ?? null,
+        JSON.stringify(input.storageRef),
+        storageIdentity(input.storageRef),
+        input.externalUpdatedAt ?? null,
+        input.deletedAt ?? null
+      ]
+    );
+    return this.getItemById(result.rows[0].id);
+  }
+
+  async searchItems(input: CatalogSearchInput): Promise<CatalogItemRecord[]> {
+    const values: unknown[] = [input.profileName];
+    const conditions = [
+      "catalog_sources.profile_name = $1",
+      "catalog_sources.enabled = true",
+      "catalog_items.deleted_at is null"
+    ];
+
+    if (input.itemKinds?.length) {
+      values.push(input.itemKinds);
+      conditions.push(`catalog_items.item_kind = any($${values.length}::text[])`);
+    }
+    if (input.domains?.length) {
+      values.push(input.domains);
+      conditions.push(`catalog_items.domain = any($${values.length}::text[])`);
+    }
+    if (input.allowedSourceKeys?.length) {
+      values.push(input.allowedSourceKeys);
+      conditions.push(`catalog_sources.source_key = any($${values.length}::text[])`);
+    }
+    const query = normalizeCatalogText(input.query ?? "");
+    if (query) {
+      values.push(`%${query}%`);
+      values.push(`%${(input.query ?? "").normalize("NFKC").toLowerCase()}%`);
+      conditions.push(
+        `(catalog_items.normalized_title like $${values.length - 1}
+          or lower(coalesce(catalog_items.path, '')) like $${values.length}
+          or lower(catalog_items.item_kind) like $${values.length})`
+      );
+    }
+    values.push(input.limit ?? 5);
+
+    const result = await this.db.query<CatalogItemRow>(
+      `
+      select catalog_items.*,
+        catalog_sources.id as source_id_join,
+        catalog_sources.profile_name,
+        catalog_sources.source_key,
+        catalog_sources.adapter_type,
+        catalog_sources.domain as source_domain,
+        catalog_sources.default_item_kind,
+        catalog_sources.root_location,
+        catalog_sources.enabled,
+        catalog_sources.sync_policy,
+        catalog_sources.capabilities
+      from catalog_items
+      join catalog_sources on catalog_sources.id = catalog_items.source_id
+      where ${conditions.join("\n        and ")}
+      order by catalog_items.title asc
+      limit $${values.length}
+      `,
+      values
+    );
+    return result.rows.map(mapItem);
+  }
+
+  private async getItemById(id: string): Promise<CatalogItemRecord> {
+    const result = await this.db.query<CatalogItemRow>(
+      `
+      select catalog_items.*,
+        catalog_sources.id as source_id_join,
+        catalog_sources.profile_name,
+        catalog_sources.source_key,
+        catalog_sources.adapter_type,
+        catalog_sources.domain as source_domain,
+        catalog_sources.default_item_kind,
+        catalog_sources.root_location,
+        catalog_sources.enabled,
+        catalog_sources.sync_policy,
+        catalog_sources.capabilities
+      from catalog_items
+      join catalog_sources on catalog_sources.id = catalog_items.source_id
+      where catalog_items.id = $1
+      `,
+      [id]
+    );
+    if (!result.rows[0]) {
+      throw new Error(`catalog_item_not_found:${id}`);
+    }
+    return mapItem(result.rows[0]);
+  }
+}
+
+function mapSource(row: CatalogSourceRow): CatalogSourceRecord {
+  return {
+    id: row.id,
+    profileName: row.profile_name,
+    sourceKey: row.source_key,
+    adapterType: row.adapter_type as CatalogSourceRecord["adapterType"],
+    domain: row.domain,
+    defaultItemKind: row.default_item_kind,
+    rootLocation: row.root_location,
+    enabled: row.enabled,
+    syncPolicy: row.sync_policy,
+    capabilities: row.capabilities
+  };
+}
+
+function mapItem(row: CatalogItemRow): CatalogItemRecord {
+  return {
+    id: row.id,
+    sourceId: row.source_id,
+    itemKind: row.item_kind,
+    domain: row.domain,
+    title: row.title,
+    normalizedTitle: row.normalized_title,
+    path: row.path ?? undefined,
+    mimeType: row.mime_type ?? undefined,
+    extension: row.extension ?? undefined,
+    sizeBytes: row.size_bytes === null ? undefined : Number(row.size_bytes),
+    sha256: row.sha256 ?? undefined,
+    storageRef: row.storage_ref,
+    externalUpdatedAt: row.external_updated_at
+      ? new Date(row.external_updated_at).toISOString()
+      : undefined,
+    deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : undefined,
+    source: {
+      id: row.source_id_join,
+      profileName: row.profile_name,
+      sourceKey: row.source_key,
+      adapterType: row.adapter_type as CatalogSourceRecord["adapterType"],
+      domain: row.source_domain,
+      defaultItemKind: row.default_item_kind,
+      rootLocation: row.root_location,
+      enabled: row.enabled,
+      syncPolicy: row.sync_policy,
+      capabilities: row.capabilities
+    }
+  };
+}
+
+function storageIdentity(storage: AgentResourceStorage): string {
+  switch (storage.provider) {
+    case "graph":
+      return `${storage.provider}:${storage.driveId}:${storage.itemId}`;
+    case "external_link":
+      return `${storage.provider}:${storage.url}`;
+  }
+}

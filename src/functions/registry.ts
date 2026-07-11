@@ -4,6 +4,7 @@ import { createWikipediaClient, type WikipediaClient } from "../wikipedia/client
 import type { WikipediaSummarizer } from "../wikipedia/lookup.js";
 import { InMemoryAgentMemoryStore, type AgentMemoryStore } from "../agent/memory-store.js";
 import { MemoryCacheStore, type CacheStore } from "../cache/cache-store.js";
+import { InMemoryCatalogStore, type CatalogStore } from "../catalog/store.js";
 import { createLlmStatusAdminHandler } from "../llm-diagnostics.js";
 import { InMemorySessionStore, type SessionStore } from "../state/session-store.js";
 import type {
@@ -24,6 +25,7 @@ export interface RegistryClients {
   sessionStore?: SessionStore;
   cache?: CacheStore;
   memoryStore?: AgentMemoryStore;
+  catalog?: CatalogStore;
   wikipedia?: WikipediaClient;
   wikipediaSummarizer?: WikipediaSummarizer;
   now?: () => Date;
@@ -49,6 +51,7 @@ export function createFunctionRegistries(
   const sessionStore = clients.sessionStore ?? new InMemorySessionStore();
   const cache = clients.cache ?? new MemoryCacheStore();
   const memoryStore = clients.memoryStore ?? new InMemoryAgentMemoryStore({ now: clients.now });
+  const catalog = clients.catalog ?? new InMemoryCatalogStore();
 
   const moduleContext = {
     config,
@@ -64,6 +67,7 @@ export function createFunctionRegistries(
       sessionStore,
       cache,
       memoryStore,
+      catalog,
       now: clients.now,
       requestIdFactory: clients.requestIdFactory
     }

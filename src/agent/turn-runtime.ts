@@ -82,6 +82,7 @@ export interface AgentTurnRuntime {
 const IN_FLIGHT_TTL_MS = 120_000;
 const IN_FLIGHT_FUNCTIONS = new Set<FunctionName>([
   "find_ppt_slides",
+  "find_sheet_music",
   "find_pop_sheet_music",
   "query_schedule",
   "query_service_schedule"
@@ -188,7 +189,8 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             );
           }
           const textHandlerFunctionName = functionNameForAgentResource(
-            result.agentResource?.resourceType
+            result.agentResource?.resourceType,
+            context.profile.enabledFunctions
           );
           if (textHandlerFunctionName) {
             await options.agentRuntime?.afterFunctionResult({
@@ -813,12 +815,17 @@ function queryMarker(args: JsonRecord): "present" | "empty" | "missing" {
   return query.trim() ? "present" : "empty";
 }
 
-function functionNameForAgentResource(resourceType: string | undefined): FunctionName | undefined {
+function functionNameForAgentResource(
+  resourceType: string | undefined,
+  enabledFunctions: FunctionName[]
+): FunctionName | undefined {
   switch (resourceType) {
     case "ppt_slide":
       return "find_ppt_slides";
     case "sheet_music":
-      return "find_pop_sheet_music";
+      return enabledFunctions.includes("find_sheet_music")
+        ? "find_sheet_music"
+        : "find_pop_sheet_music";
     default:
       return undefined;
   }
