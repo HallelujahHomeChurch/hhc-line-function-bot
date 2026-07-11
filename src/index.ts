@@ -24,6 +24,7 @@ import { createLastErrorStore } from "./observability/create-last-error-store.js
 import { createConsoleRouteObserver } from "./observability/route-observer.js";
 import { createRateLimiter } from "./rate-limit.js";
 import { createRedisRuntime } from "./redis.js";
+import { createScheduleStore } from "./schedules/create-schedule-store.js";
 import { createFunctionRouter } from "./router.js";
 import { createApp } from "./server.js";
 import { createSessionStore } from "./state/create-session-store.js";
@@ -134,6 +135,7 @@ const catalog = await createCatalogStore({ db: postgres?.pool });
 for (const source of config.catalog?.sources ?? []) {
   await catalog.upsertSource(source);
 }
+const scheduleStore = await createScheduleStore({ db: postgres?.pool });
 const inFlightStore = createInFlightStore({ redis });
 const agentJobStore = redis
   ? new RedisAgentJobStore({ client: redis.client, keyPrefix: redis.keyPrefix })
@@ -155,6 +157,7 @@ const registries = createFunctionRegistries(config, {
   sessionStore,
   cache,
   catalog,
+  scheduleStore,
   memoryStore,
   wikipediaSummarizer: createWikipediaSummarizer({
     primary: wikipediaSummaryPrimary,

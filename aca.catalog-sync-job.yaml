@@ -12,7 +12,15 @@ properties:
       parallelism: 1
       replicaCompletionCount: 1
     secrets:
+      - name: line-helper-channel-secret
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+      - name: line-helper-channel-access-token
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+      - name: line-helper-admin-user-id
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
       - name: graph-client-secret
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+      - name: notion-token
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
       - name: database-url
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
@@ -35,6 +43,12 @@ properties:
             value: /app/config/profiles.json
           - name: CATALOG_SOURCES_PATH
             value: /app/config/catalog-sources.json
+          - name: LINE_HELPER_CHANNEL_SECRET
+            secretRef: line-helper-channel-secret
+          - name: LINE_HELPER_CHANNEL_ACCESS_TOKEN
+            secretRef: line-helper-channel-access-token
+          - name: LINE_HELPER_ADMIN_USER_ID
+            secretRef: line-helper-admin-user-id
           - name: DATABASE_URL
             secretRef: database-url
           - name: DATABASE_SSL
@@ -69,6 +83,10 @@ properties:
             value: pdf,jpg,jpeg
           - name: SHEET_MUSIC_DEFAULT_RECURSIVE
             value: "true"
+          - name: NOTION_TOKEN
+            secretRef: notion-token
+          - name: NOTION_SERVICE_DATABASE_ID
+            value: PLACEHOLDER_NOTION_SERVICE_DATABASE_ID
         resources:
           cpu: 0.5
           memory: 1Gi

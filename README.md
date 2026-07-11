@@ -345,6 +345,8 @@ For the current HHC media service schedule database, use these property mappings
 
 `NOTION_SERVICE_DATABASE_ID` can be the database id. The app resolves the queryable Notion data source internally.
 
+The production catalog sync job also registers the media team service schedule as a Notion `schedule` source and writes rows into the PostgreSQL `schedule_items` read model. `query_schedule` checks that read model before any live Notion fallback, so users only ask for a service schedule; they never need to choose Notion or PostgreSQL. LINE-created schedules remain separate write-controlled schedule records and do not write back to Notion.
+
 ## Runtime Secrets
 
 Do not commit real `.env` files. In Azure Container Apps, store only real credentials in ACA secrets:

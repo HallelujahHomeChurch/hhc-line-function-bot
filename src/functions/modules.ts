@@ -32,6 +32,7 @@ import type { WikipediaClient } from "../wikipedia/client.js";
 import { createRetrieveMemoryHandler, createSaveMemoryHandler } from "./agent-memory-functions.js";
 import { createFindResourceHandler } from "./find-resource.js";
 import type { CatalogStore } from "../catalog/store.js";
+import type { ScheduleStore } from "../schedules/store.js";
 import { createSaveResourceHandler } from "./save-resource.js";
 import {
   createQueryScheduleMemoryHandler,
@@ -48,6 +49,7 @@ export interface FunctionModuleContext {
     cache: CacheStore;
     memoryStore?: AgentMemoryStore;
     catalog?: CatalogStore;
+    scheduleStore?: ScheduleStore;
     wikipedia?: WikipediaClient;
     wikipediaSummarizer?: WikipediaSummarizer;
     now?: () => Date;
@@ -234,6 +236,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         functions: {
           query_schedule: createQueryScheduleHandler({
             memoryStore: clients.memoryStore,
+            scheduleStore: clients.scheduleStore,
             notion: clients.notion,
             databaseId: config.notion?.databaseId,
             properties: config.notion?.properties,

@@ -100,6 +100,9 @@ Required job settings:
 - `CATALOG_SOURCES_PATH=/app/config/catalog-sources.json`
 - `DATABASE_URL`
 - `DATABASE_SSL=true`
+- `LINE_HELPER_CHANNEL_SECRET`
+- `LINE_HELPER_CHANNEL_ACCESS_TOKEN`
+- `LINE_HELPER_ADMIN_USER_ID`
 - `GRAPH_TENANT_ID`
 - `GRAPH_CLIENT_ID`
 - `GRAPH_CLIENT_SECRET`
@@ -108,6 +111,8 @@ Required job settings:
 - `GRAPH_POP_SHEET_FOLDER_ITEM_ID`
 - `GRAPH_HYMN_SHEET_FOLDER_ITEM_ID`
 - `GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID` when the weekly report source is enabled
+- `NOTION_TOKEN`
+- `NOTION_SERVICE_DATABASE_ID`
 
 Manual run after deployment:
 
@@ -126,7 +131,7 @@ az containerapp job execution list `
   --output table
 ```
 
-The sync output is JSON and includes `sources`, `synced`, `skipped`, `upserted`, `itemSkipped`, and `tombstoned`. If a source is removed from OneDrive, the next full crawl tombstones missing catalog items so normal lookups stop returning deleted files.
+The sync output is JSON and includes `sources`, `synced`, `skipped`, `upserted`, `itemSkipped`, `tombstoned`, `scheduleUpserted`, `scheduleSkipped`, and `scheduleTombstoned`. If a source is removed from OneDrive, the next full crawl tombstones missing catalog items so normal lookups stop returning deleted files. If a Notion schedule page disappears from the source query, the next sync tombstones that schedule row so `query_schedule` stops returning it from the read model.
 
 ## Rollback
 

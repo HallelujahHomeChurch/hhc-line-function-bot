@@ -290,6 +290,13 @@ required topic/title/date, the resolver must preserve the missing slot and let
 the shared slot clarification path ask instead of letting the LLM invent a
 query.
 
+Service schedules are intentionally separated from file catalog items. Notion
+media-team schedule sources are registered through the same source config, but
+the scheduled sync job writes them into `schedule_items` as read-model rows with
+`origin=notion`. `query_schedule` checks this read model before falling back to
+live Notion. LINE-created schedules remain write-controlled through the schedule
+memory flow and must not write back to Notion-origin rows.
+
 ## External Dependencies
 
 Function dependencies are intentionally behind ports/clients:
@@ -300,6 +307,7 @@ Function dependencies are intentionally behind ports/clients:
 - Microsoft Graph: `src/clients/graph.ts`
 - Notion: `src/clients/notion.ts`
 - Catalog source/item store abstraction: `src/catalog/*`
+- Schedule read-model store and sync: `src/schedules/*`
 - Postgres access store: `src/access/postgres-access-store.ts`
 - Postgres agent memory store: `src/agent/postgres-memory-store.ts`
 - Redis wiring: `src/redis.ts`

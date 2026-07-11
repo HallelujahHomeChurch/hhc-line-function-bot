@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { createSaveScheduleHandler } from "../functions/schedule-memory.js";
+import { InMemoryScheduleStore } from "../schedules/store.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
@@ -89,6 +90,41 @@ describe("query_schedule", () => {
     expect(result.replyText).toContain("主日");
     expect(result.replyText).toContain("投影：知樂");
     expect(result.replyText).not.toMatch(/Notion|Postgres/u);
+  });
+
+  it("queries synchronized schedule rows from the read model before live Notion", async () => {
+    const schedules = new InMemoryScheduleStore();
+    await schedules.upsertItem({
+      profileName: "helper",
+      sourceKey: "media_team_service_schedule",
+      origin: "notion",
+      externalId: "page-1",
+      serviceDate: "2026-07-12",
+      meeting: "主日",
+      role: "投影",
+      assignee: "知樂"
+    });
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([])
+    };
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore: schedules,
+      notion,
+      databaseId: "database-1",
+      properties: { date: "日期", meeting: "聚會", role: "角色", person: "同工" },
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await query(
+      { query: "主日投影服事", dateIntent: "specific_date", specificDate: "2026-07-12" },
+      context("小哈查主日投影服事")
+    );
+
+    expect(result.replyText).toContain("主日");
+    expect(result.replyText).toContain("投影：知樂");
+    expect(result.replyText).not.toMatch(/Notion|Postgres/u);
+    expect(notion.queryDatabase).not.toHaveBeenCalled();
   });
 
   it("shares saved schedules across direct and group conversations in the helper profile", async () => {

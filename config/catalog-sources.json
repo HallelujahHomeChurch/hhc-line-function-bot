@@ -43,6 +43,19 @@
   },
   {
     "profileName": "helper",
+    "sourceKey": "media_team_service_schedule",
+    "adapterType": "notion",
+    "domain": "schedule",
+    "defaultItemKind": "media_service_schedule",
+    "rootLocation": {
+      "databaseIdEnv": "NOTION_SERVICE_DATABASE_ID"
+    },
+    "enabled": true,
+    "syncPolicy": { "mode": "scheduled", "intervalMinutes": 15 },
+    "capabilities": { "read": ["query_schedule"], "write": [] }
+  },
+  {
+    "profileName": "helper",
     "sourceKey": "weekly_report_audio",
     "adapterType": "onedrive",
     "domain": "audio",

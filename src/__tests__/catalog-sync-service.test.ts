@@ -44,7 +44,10 @@ describe("catalog sync service", () => {
       skipped: 1,
       upserted: 1,
       itemSkipped: 0,
-      tombstoned: 0
+      tombstoned: 0,
+      scheduleUpserted: 0,
+      scheduleSkipped: 0,
+      scheduleTombstoned: 0
     });
     await expect(
       catalog.searchItems({

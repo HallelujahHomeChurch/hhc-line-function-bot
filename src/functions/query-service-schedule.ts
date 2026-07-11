@@ -25,14 +25,14 @@ export interface QueryServiceScheduleOptions {
   requestIdFactory?: () => string;
 }
 
-interface ServiceRow {
+export interface ServiceRow {
   date: string;
   meeting: string;
   role: string;
   person: string;
 }
 
-interface DerivedFilters {
+export interface DerivedFilters {
   date?: string;
   meeting?: string;
   role?: string;
@@ -194,7 +194,7 @@ function buildNotionQuery(filters: DerivedFilters, dateProperty: string): JsonRe
   };
 }
 
-function deriveFilters(
+export function deriveFilters(
   args: QueryServiceScheduleArguments,
   now: Date,
   timeZone: string
@@ -387,7 +387,7 @@ function addDaysToDateKey(dateKey: string, days: number): string {
   return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
 }
 
-function formatServiceScheduleReply(
+export function formatServiceScheduleReply(
   rows: ServiceRow[],
   args: QueryServiceScheduleArguments,
   filters: DerivedFilters
@@ -703,7 +703,7 @@ function propertyToText(property: unknown): string {
   }
 }
 
-function configuredPropertyToText(
+export function configuredPropertyToText(
   properties: Record<string, unknown>,
   configuredKey: string
 ): string {

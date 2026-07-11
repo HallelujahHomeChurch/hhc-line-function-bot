@@ -6,6 +6,7 @@ import { InMemoryAgentMemoryStore, type AgentMemoryStore } from "../agent/memory
 import { MemoryCacheStore, type CacheStore } from "../cache/cache-store.js";
 import { InMemoryCatalogStore, type CatalogStore } from "../catalog/store.js";
 import { createLlmStatusAdminHandler } from "../llm-diagnostics.js";
+import { InMemoryScheduleStore, type ScheduleStore } from "../schedules/store.js";
 import { InMemorySessionStore, type SessionStore } from "../state/session-store.js";
 import type {
   AppConfig,
@@ -26,6 +27,7 @@ export interface RegistryClients {
   cache?: CacheStore;
   memoryStore?: AgentMemoryStore;
   catalog?: CatalogStore;
+  scheduleStore?: ScheduleStore;
   wikipedia?: WikipediaClient;
   wikipediaSummarizer?: WikipediaSummarizer;
   now?: () => Date;
@@ -52,6 +54,7 @@ export function createFunctionRegistries(
   const cache = clients.cache ?? new MemoryCacheStore();
   const memoryStore = clients.memoryStore ?? new InMemoryAgentMemoryStore({ now: clients.now });
   const catalog = clients.catalog ?? new InMemoryCatalogStore();
+  const scheduleStore = clients.scheduleStore ?? new InMemoryScheduleStore();
 
   const moduleContext = {
     config,
@@ -68,6 +71,7 @@ export function createFunctionRegistries(
       cache,
       memoryStore,
       catalog,
+      scheduleStore,
       now: clients.now,
       requestIdFactory: clients.requestIdFactory
     }

@@ -63,7 +63,12 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: PROFILE_CONFIG_PATH");
     expect(job).toContain("value: /app/config/profiles.json");
     expect(job).toContain("name: DATABASE_URL");
+    expect(job).toContain("name: LINE_HELPER_CHANNEL_SECRET");
+    expect(job).toContain("name: LINE_HELPER_CHANNEL_ACCESS_TOKEN");
+    expect(job).toContain("name: LINE_HELPER_ADMIN_USER_ID");
     expect(job).toContain("name: GRAPH_CLIENT_SECRET");
+    expect(job).toContain("name: NOTION_TOKEN");
+    expect(job).toContain("name: NOTION_SERVICE_DATABASE_ID");
     expect(job).not.toContain("ingress:");
     expect(pipeline).toContain("- aca.catalog-sync-job.yaml");
     expect(readme).toContain("aca.catalog-sync-job.yaml");
