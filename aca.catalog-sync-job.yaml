@@ -30,8 +30,6 @@ properties:
     containers:
       - name: catalog-sync
         image: alive.azurecr.io/alive/hhc-line-function-bot:latest
-        command:
-          - node
         args:
           - dist/tools/sync-catalog.js
         env:
