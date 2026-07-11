@@ -1,3 +1,4 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import { loadConfigFromEnv } from "../config.js";
 
 function baseEnv(): NodeJS.ProcessEnv {
   return {
-    BOT_PROFILES_JSON: JSON.stringify([
+    ...profilesEnv([
       {
         name: "main",
         webhookPath: "/api/line/webhook/main",
@@ -18,6 +19,13 @@ function baseEnv(): NodeJS.ProcessEnv {
       }
     ])
   };
+}
+
+function profilesEnv(profiles: unknown): NodeJS.ProcessEnv {
+  const directory = mkdtempSync(join(tmpdir(), "hhc-line-function-bot-profile-sync-"));
+  const path = join(directory, "profiles.json");
+  writeFileSync(path, JSON.stringify(profiles), "utf8");
+  return { PROFILE_CONFIG_PATH: path };
 }
 
 const layeredPrompting = {
@@ -99,9 +107,12 @@ describe("config", () => {
     );
   });
 
-  it("rejects legacy profile JSON environment values in production", () => {
-    expect(() => loadConfigFromEnv({ ...baseEnv(), NODE_ENV: "production" })).toThrow(
-      "Production profile config must use PROFILE_CONFIG_PATH"
+  it("rejects legacy profile JSON environment values in every environment", () => {
+    expect(() =>
+      loadConfigFromEnv({ ...baseEnv(), BOT_PROFILES_JSON: "[]", NODE_ENV: "production" })
+    ).toThrow("Profile config must use PROFILE_CONFIG_PATH");
+    expect(() => loadConfigFromEnv({ ...baseEnv(), BOT_PROFILES_BASE64_JSON: "W10=" })).toThrow(
+      "Profile config must use PROFILE_CONFIG_PATH"
     );
   });
 
@@ -148,20 +159,20 @@ describe("config", () => {
   it("rejects profile config that is not a JSON array", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify({
+        ...profilesEnv({
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token"
         })
       })
-    ).toThrow("BOT_PROFILES_JSON or BOT_PROFILES_BASE64_JSON must be a JSON array");
+    ).toThrow("PROFILE_CONFIG_PATH must contain a JSON array");
   });
 
   it("rejects non-canonical profile names", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "Helper",
             webhookPath: "/api/line/webhook/Helper",
@@ -176,7 +187,7 @@ describe("config", () => {
   it("rejects webhook paths that do not match the profile name", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/line/helper/webhook",
@@ -331,7 +342,7 @@ describe("config", () => {
 
   it("loads profile admin settings from adminUserId only", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "main",
           webhookPath: "/api/line/webhook/main",
@@ -353,7 +364,7 @@ describe("config", () => {
 
   it("resolves profile credentials and bootstrap admin from environment references", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -380,7 +391,7 @@ describe("config", () => {
   it("rejects missing environment references for profile credentials", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -395,7 +406,7 @@ describe("config", () => {
 
   it("loads a single bootstrap admin user id", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -416,7 +427,7 @@ describe("config", () => {
   it("rejects legacy adminUserIds profile settings", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -432,7 +443,7 @@ describe("config", () => {
   it("rejects legacy static user and group allowlists", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -446,7 +457,7 @@ describe("config", () => {
 
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -461,7 +472,7 @@ describe("config", () => {
 
   it("loads profile access policy and registration settings", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -497,7 +508,7 @@ describe("config", () => {
   it("rejects registration without PostgreSQL", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -513,7 +524,7 @@ describe("config", () => {
   it("rejects registration without Redis", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -530,7 +541,7 @@ describe("config", () => {
   it("rejects legacy inviteCodeRequired profile settings", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -563,7 +574,7 @@ describe("config", () => {
   it("loads DeepSeek as a pluggable LLM provider", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -617,7 +628,7 @@ describe("config", () => {
 
   it("loads helper provider policy for remote API providers", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -637,7 +648,7 @@ describe("config", () => {
 
   it("loads lane provider policy for cost-aware routing", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -669,7 +680,7 @@ describe("config", () => {
   it("rejects lane provider policy outside the profile allowed provider list", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -688,7 +699,7 @@ describe("config", () => {
   it("rejects unsupported provider names in profile policy", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "main",
             webhookPath: "/api/line/webhook/main",
@@ -705,7 +716,7 @@ describe("config", () => {
   it("rejects fallback providers outside the profile provider policy", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",
@@ -731,7 +742,7 @@ describe("config", () => {
 
   it("loads profile LLM small talk settings", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -787,7 +798,7 @@ describe("config", () => {
 
   it("normalizes legacy profile personaPrompt into layered prompting", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -813,7 +824,7 @@ describe("config", () => {
 
   it("defaults the group conversation window to 60 seconds", () => {
     const config = loadConfigFromEnv({
-      BOT_PROFILES_JSON: JSON.stringify([
+      ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
@@ -860,7 +871,7 @@ describe("config", () => {
   it("rejects duplicate webhook paths", () => {
     expect(() =>
       loadConfigFromEnv({
-        BOT_PROFILES_JSON: JSON.stringify([
+        ...profilesEnv([
           {
             name: "helper",
             webhookPath: "/api/line/webhook/helper",

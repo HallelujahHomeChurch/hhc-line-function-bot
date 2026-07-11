@@ -69,7 +69,7 @@ GET /readyz
 
 Production profiles are configured by the checked-in [`config/profiles.json`](config/profiles.json) file. The image loads it through `PROFILE_CONFIG_PATH=/app/config/profiles.json`; its root is always a JSON array, even when only one profile is active.
 
-`BOT_PROFILES_JSON` is a local/test override only. Production rejects both it and `BOT_PROFILES_BASE64_JSON`, so profile personality and function policy cannot drift through an ACA secret edit.
+`PROFILE_CONFIG_PATH` is the only supported profile source. Legacy `BOT_PROFILES_JSON` and `BOT_PROFILES_BASE64_JSON` are rejected in every environment, so profile personality and function policy cannot drift through an env var or ACA secret edit.
 
 Each profile controls:
 
@@ -385,7 +385,7 @@ Do not commit real `.env` files. In Azure Container Apps, store only real creden
 - `GRAPH_CLIENT_SECRET`
 - `VIRUS_SCAN_API_KEY` if the configured scanner endpoint requires one
 
-`config/profiles.json` is intentionally non-sensitive and is packaged in the image. Do not create or update `BOT_PROFILES_BASE64_JSON` in production.
+`config/profiles.json` is intentionally non-sensitive and is packaged in the image. Do not set `BOT_PROFILES_JSON` or `BOT_PROFILES_BASE64_JSON`; the runtime rejects both.
 
 ## Governance
 

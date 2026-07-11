@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 
 import { z } from "zod";
@@ -112,7 +111,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   const profilesJson = readProfilesJson(env);
   const parsedProfiles = JSON.parse(profilesJson) as unknown;
   if (!Array.isArray(parsedProfiles)) {
-    throw new Error("BOT_PROFILES_JSON or BOT_PROFILES_BASE64_JSON must be a JSON array");
+    throw new Error("PROFILE_CONFIG_PATH must contain a JSON array");
   }
   assertNoLegacyProfileFields(parsedProfiles);
   const profiles = z.array(profileSchema).min(1).parse(parsedProfiles);
@@ -584,26 +583,14 @@ function readProfilesJson(env: NodeJS.ProcessEnv): string {
   const hasLegacyProfileConfig = Boolean(
     env.BOT_PROFILES_JSON?.trim() || env.BOT_PROFILES_BASE64_JSON?.trim()
   );
-  if (env.NODE_ENV === "production") {
-    if (hasLegacyProfileConfig) {
-      throw new Error("Production profile config must use PROFILE_CONFIG_PATH");
-    }
-    const configPath = env.PROFILE_CONFIG_PATH?.trim();
-    if (!configPath) {
-      throw new Error("PROFILE_CONFIG_PATH is required in production");
-    }
-    return readFileSync(configPath, "utf8");
+  if (hasLegacyProfileConfig) {
+    throw new Error("Profile config must use PROFILE_CONFIG_PATH");
   }
-  if (env.PROFILE_CONFIG_PATH?.trim()) {
-    return readFileSync(env.PROFILE_CONFIG_PATH, "utf8");
+  const configPath = env.PROFILE_CONFIG_PATH?.trim();
+  if (!configPath) {
+    throw new Error("PROFILE_CONFIG_PATH is required");
   }
-  if (env.BOT_PROFILES_JSON?.trim()) {
-    return env.BOT_PROFILES_JSON;
-  }
-  if (env.BOT_PROFILES_BASE64_JSON?.trim()) {
-    return Buffer.from(env.BOT_PROFILES_BASE64_JSON, "base64").toString("utf8");
-  }
-  throw new Error("BOT_PROFILES_JSON or BOT_PROFILES_BASE64_JSON is required");
+  return readFileSync(configPath, "utf8");
 }
 
 function readInt(value: string | undefined, fallback: number): number {
