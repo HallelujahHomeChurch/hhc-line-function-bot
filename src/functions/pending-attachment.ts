@@ -26,6 +26,7 @@ export async function storePendingAttachment(
     id: options.requestId,
     type: "pending_attachment",
     action: "save_resource",
+    stage: "awaiting_purpose",
     profileName: options.context.profile.name,
     requesterUserId: options.context.event.source.userId,
     source: options.context.event.source,

@@ -1,4 +1,5 @@
 import { createGraphDriveClient } from "../clients/graph.js";
+import { createLineSdkContentClient } from "../clients/line.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createWikipediaClient, type WikipediaClient } from "../wikipedia/client.js";
 import type { WikipediaSummarizer } from "../wikipedia/lookup.js";
@@ -13,9 +14,11 @@ import type {
   AdminHandlerRegistry,
   FunctionRegistry,
   GraphDriveClient,
+  LineContentClient,
   NotionDatabaseClient,
   PostbackHandlerRegistry,
-  TextMessageHandlerRegistry
+  TextMessageHandlerRegistry,
+  VirusScanner
 } from "../types.js";
 import { FUNCTION_MODULES } from "./modules.js";
 import { createPendingFunctionTextMessageHandler } from "./pending-function.js";
@@ -28,6 +31,8 @@ export interface RegistryClients {
   memoryStore?: AgentMemoryStore;
   catalog?: CatalogStore;
   scheduleStore?: ScheduleStore;
+  lineContent?: LineContentClient;
+  virusScanner?: VirusScanner;
   wikipedia?: WikipediaClient;
   wikipediaSummarizer?: WikipediaSummarizer;
   now?: () => Date;
@@ -55,6 +60,7 @@ export function createFunctionRegistries(
   const memoryStore = clients.memoryStore ?? new InMemoryAgentMemoryStore({ now: clients.now });
   const catalog = clients.catalog ?? new InMemoryCatalogStore();
   const scheduleStore = clients.scheduleStore ?? new InMemoryScheduleStore();
+  const lineContent = clients.lineContent ?? createLineSdkContentClient();
 
   const moduleContext = {
     config,
@@ -72,6 +78,8 @@ export function createFunctionRegistries(
       memoryStore,
       catalog,
       scheduleStore,
+      lineContent,
+      virusScanner: clients.virusScanner,
       now: clients.now,
       requestIdFactory: clients.requestIdFactory
     }

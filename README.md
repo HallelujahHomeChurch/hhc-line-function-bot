@@ -212,6 +212,8 @@ Catalog source config is deployment-owned in v1. Set `CATALOG_SOURCES_PATH` to a
 
 Binary files are not stored in PostgreSQL by this abstraction. Catalog items store metadata and a storage reference. Temporary Graph sharing links are generated only when replying to a lookup result.
 
+The `xiaoha_database` source is a manual catalog source used for LINE attachment saves. It writes accepted files to OneDrive subfolders (`文件`, `圖片`, `其他`) and immediately upserts metadata into `catalog_items`; the scheduled sync job skips it. Items saved to this source receive a 90-day `expiresAt`. Formal synced sources such as slides, sheet music, service schedules, and future weekly report audio do not receive this TTL.
+
 Run a catalog sync locally with:
 
 ```powershell
@@ -247,7 +249,7 @@ The memory layer adds controlled memory without making the bot an unrestricted c
 - Queries such as `下次世緯家園服事是什麼時候？` and `下一次中平家族什麼時候舉牌？` search these shared entries. Identity-based `我下一次服事是什麼時候？` remains out of scope until LINE identity is bound to the church login system.
 - Structured schedule memory is text-only in this version. The bot should ask for pasted text instead of trying to store or parse schedule images.
 - Text memories currently expire after 30 days.
-- LINE image/file attachment saving is not implemented in this version. Ask the bot to remember a title plus URL instead.
+- LINE image/file attachment saving is supported only through the controlled `save_resource` flow. The requester must have effective `save_resource` permission, explain the purpose, pass file validation and virus scanning, then confirm before the bot uploads to OneDrive and upserts catalog metadata.
 
 Useful memory commands:
 
@@ -328,6 +330,11 @@ Graph access uses app-only Microsoft 365 auth. Configure the main drive id and f
 
 - `GRAPH_DRIVE_ID`
 - `GRAPH_PPT_FOLDER_ITEM_ID`
+- `GRAPH_POP_SHEET_FOLDER_ITEM_ID`
+- `GRAPH_HYMN_SHEET_FOLDER_ITEM_ID`
+- `GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID`
+- `GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID`
+- `GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID`
 - `GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID` or `GRAPH_SHEET_MUSIC_FOLDER_PATH`
 - `SHEET_MUSIC_ALLOWED_EXTENSIONS`
 - `SHEET_MUSIC_DEFAULT_RECURSIVE`
@@ -349,7 +356,18 @@ The production catalog sync job also registers the media team service schedule a
 
 ## LINE Attachment Save Gate
 
-Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile later allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. It first requires effective `save_resource` permission, stores a requester/source-scoped pending attachment session, and asks the user to explain the intended category or purpose. Until that purpose and later confirmation/security checks are completed, the attachment is not persisted.
+Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. It first requires effective `save_resource` permission, stores a requester/source-scoped pending attachment session, and asks the user to explain the intended category or purpose.
+
+After the requester replies with a supported purpose, the bot downloads the LINE content, checks size, MIME/magic bytes, extension, safe filename, hash, target source write capability, and virus scan status. If the scanner is missing, times out, or returns anything other than `clean`, the save fails closed. A clean file is previewed and still requires the user to reply `保存` before upload. Only after confirmation does the bot upload to the configured OneDrive folder and write catalog metadata.
+
+Supported attachment targets in this flow:
+
+- `投影片`: writes to the `ppt_slides` OneDrive root and indexes `ppt_slide`.
+- `流行歌譜`: writes to the `pop_sheet_music` OneDrive root and indexes `pop_sheet`.
+- `詩歌歌譜`: writes to the `hymn_sheet_music` OneDrive root and indexes `hymn_sheet`.
+- `小哈資料庫` / `教會資料`: writes to `xiaoha_database` subfolders and indexes `church_document`, `church_image`, or `church_other` with 90-day retention.
+
+Set `VIRUS_SCAN_ENDPOINT` to enable attachment publishing. The endpoint receives a JSON payload with file metadata plus `dataBase64` and must reply with `{"status":"clean"}` or `{"status":"infected"}`. If `VIRUS_SCAN_ENDPOINT` is unset, attachment publishing is intentionally unavailable.
 
 ## Runtime Secrets
 
@@ -361,6 +379,7 @@ Do not commit real `.env` files. In Azure Container Apps, store only real creden
 - `DATABASE_URL` and `REDIS_URL`
 - `NOTION_TOKEN`
 - `GRAPH_CLIENT_SECRET`
+- `VIRUS_SCAN_API_KEY` if the configured scanner endpoint requires one
 
 `config/profiles.json` is intentionally non-sensitive and is packaged in the image. Do not create or update `BOT_PROFILES_BASE64_JSON` in production.
 

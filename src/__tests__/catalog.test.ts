@@ -87,6 +87,28 @@ describe("catalog store", () => {
     expect(results.map((item) => item.id)).toEqual([active.id]);
   });
 
+  it("filters expired catalog items from normal search", async () => {
+    const store = new InMemoryCatalogStore();
+    const helper = await store.upsertSource(helperSource);
+    await store.upsertItem({
+      ...audioItem(helper.id, "expired weekly report"),
+      expiresAt: "2000-01-01T00:00:00.000Z"
+    });
+    const active = await store.upsertItem({
+      ...audioItem(helper.id, "future weekly report"),
+      expiresAt: "2999-01-01T00:00:00.000Z"
+    });
+
+    const results = await store.searchItems({
+      profileName: "helper",
+      query: "weekly report",
+      itemKinds: ["weekly_report_audio"],
+      allowedSourceKeys: ["weekly_report_audio"]
+    });
+
+    expect(results.map((item) => item.id)).toEqual([active.id]);
+  });
+
   it("normalizes catalog text for fuzzy Chinese and filename lookup", () => {
     expect(normalizeCatalogText("  週報音檔-2026/07.MP3  ")).toBe("週報音檔202607mp3");
   });

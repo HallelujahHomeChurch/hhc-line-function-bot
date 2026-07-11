@@ -301,13 +301,23 @@ LINE attachment handling is gated before storage. If a profile explicitly allows
 `image` or `file` messages and the requester has effective `save_resource`
 permission, the webhook stores only a short-lived requester/source-scoped
 pending attachment session and asks for the intended purpose. It does not
-download, scan, upload, or publish the binary at this stage.
+download, scan, upload, or publish the binary at this entrance stage.
+
+The later pending-attachment text handler is the only binary publish path. It
+accepts deterministic purposes such as slides, pop sheet music, hymn sheet
+music, or Xiaoha database/church resources; verifies the target source has write
+capability; downloads LINE content; checks size, MIME/magic bytes, extension,
+safe filename, hash, and virus scan status; then asks for explicit confirmation.
+Only a confirmed clean file is uploaded to OneDrive and upserted into
+`catalog_items`. The `xiaoha_database` manual source is skipped by catalog sync
+and receives a 90-day catalog `expiresAt`; formal synced sources do not.
 
 ## External Dependencies
 
 Function dependencies are intentionally behind ports/clients:
 
 - LINE: `src/clients/line.ts`
+- Virus scanner: `src/clients/virus-scan.ts`
 - Ollama: `src/clients/ollama.ts`
 - DeepSeek provider: `src/clients/deepseek.ts`
 - Microsoft Graph: `src/clients/graph.ts`

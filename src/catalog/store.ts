@@ -41,6 +41,7 @@ export interface CatalogItemInput {
   sha256?: string;
   storageRef: AgentResourceStorage;
   externalUpdatedAt?: string;
+  expiresAt?: string;
   deletedAt?: string;
 }
 
@@ -129,6 +130,7 @@ export class InMemoryCatalogStore implements CatalogStore {
     const allowedSourceKeys = new Set(input.allowedSourceKeys ?? []);
     const records = Array.from(this.items.values())
       .filter((item) => !item.deletedAt)
+      .filter((item) => !item.expiresAt || new Date(item.expiresAt).getTime() > Date.now())
       .map((item) => this.withSource(item))
       .filter((item) => item.source.profileName === input.profileName)
       .filter((item) => item.source.enabled)

@@ -36,11 +36,16 @@ const migrations = [
     storage_ref jsonb not null,
     storage_identity text not null,
     external_updated_at timestamptz,
+    expires_at timestamptz,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     deleted_at timestamptz,
     unique (source_id, storage_identity)
   )
+  `,
+  `
+  alter table catalog_items
+  add column if not exists expires_at timestamptz
   `,
   `
   create index if not exists catalog_items_lookup_idx

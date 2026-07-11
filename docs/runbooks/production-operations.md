@@ -110,6 +110,9 @@ Required job settings:
 - `GRAPH_PPT_FOLDER_ITEM_ID`
 - `GRAPH_POP_SHEET_FOLDER_ITEM_ID`
 - `GRAPH_HYMN_SHEET_FOLDER_ITEM_ID`
+- `GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID`
+- `GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID`
+- `GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID`
 - `GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID` when the weekly report source is enabled
 - `NOTION_TOKEN`
 - `NOTION_SERVICE_DATABASE_ID`
@@ -171,4 +174,13 @@ The bot does not perform arbitrary web browsing or maintain an administrator web
 
 ## Attachment Save Gate
 
-Do not add `image` or `file` to a production profile's `allowedMessageTypes` until the remaining file security pipeline is deployed. The current gate only creates a short-lived pending attachment session and asks the requester for purpose. It intentionally does not download the LINE content, scan it, upload it to OneDrive, or upsert a catalog item.
+Do not add `image` or `file` to a production profile's `allowedMessageTypes` until all attachment prerequisites are configured:
+
+- `save_resource` is granted only to the intended helper users/groups.
+- The target catalog sources have write capabilities and real OneDrive folder IDs.
+- `VIRUS_SCAN_ENDPOINT` points to a reachable scanner service; optional `VIRUS_SCAN_API_KEY` is stored as a secret if needed.
+- Redis is configured so pending attachment sessions are not lost across restarts or replicas.
+
+The webhook entrance still only creates a short-lived pending attachment session and asks for purpose. The later pending-attachment handler downloads the LINE content only after the requester provides a supported purpose, then validates size, MIME/magic bytes, extension, safe filename, hash, and virus scan. It previews the resolved name/type and requires the requester to reply `保存` before uploading to OneDrive and upserting catalog metadata.
+
+If the scanner is missing, times out, returns a non-2xx response, or returns any status other than `clean`, publishing fails closed. The bot should not bypass this for production.

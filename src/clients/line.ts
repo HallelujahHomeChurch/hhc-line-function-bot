@@ -1,7 +1,10 @@
-import { messagingApi } from "@line/bot-sdk";
+import type { Readable } from "node:stream";
+
+import { Client as LineClient, messagingApi } from "@line/bot-sdk";
 
 import type {
   BotProfileConfig,
+  LineContentClient,
   LineIdentityClient,
   LineReplyClient,
   LineReplyOptions
@@ -55,7 +58,35 @@ export function createLineSdkIdentityClient(profile: BotProfileConfig): LineIden
   };
 }
 
+export function createLineSdkContentClient(): LineContentClient {
+  const clients = new Map<string, LineClient>();
+  return {
+    async getMessageContent(messageId: string, profile?: BotProfileConfig) {
+      if (!profile) {
+        throw new Error("line_profile_required_for_content");
+      }
+      let client = clients.get(profile.name);
+      if (!client) {
+        client = new LineClient({ channelAccessToken: profile.channelAccessToken });
+        clients.set(profile.name, client);
+      }
+      const stream = await client.getMessageContent(messageId);
+      return {
+        data: await readableToUint8Array(stream)
+      };
+    }
+  };
+}
+
 function nonBlank(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+async function readableToUint8Array(stream: Readable): Promise<Uint8Array> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return new Uint8Array(Buffer.concat(chunks));
 }

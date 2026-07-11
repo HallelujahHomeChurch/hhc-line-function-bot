@@ -46,6 +46,7 @@ type CatalogItemRow = {
   sha256: string | null;
   storage_ref: AgentResourceStorage;
   external_updated_at: Date | string | null;
+  expires_at: Date | string | null;
   deleted_at: Date | string | null;
   source_id_join: string;
   profile_name: string;
@@ -103,8 +104,8 @@ export class PostgresCatalogStore implements CatalogStore {
       insert into catalog_items
         (id, source_id, item_kind, domain, title, normalized_title, path, mime_type,
          extension, size_bytes, sha256, storage_ref, storage_identity,
-         external_updated_at, deleted_at, updated_at)
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, now())
+         external_updated_at, expires_at, deleted_at, updated_at)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, now())
       on conflict (source_id, storage_identity) do update
       set item_kind = excluded.item_kind,
           domain = excluded.domain,
@@ -117,6 +118,7 @@ export class PostgresCatalogStore implements CatalogStore {
           sha256 = excluded.sha256,
           storage_ref = excluded.storage_ref,
           external_updated_at = excluded.external_updated_at,
+          expires_at = excluded.expires_at,
           deleted_at = excluded.deleted_at,
           updated_at = now()
       returning id
@@ -136,6 +138,7 @@ export class PostgresCatalogStore implements CatalogStore {
         JSON.stringify(input.storageRef),
         catalogStorageIdentity(input.storageRef),
         input.externalUpdatedAt ?? null,
+        input.expiresAt ?? null,
         input.deletedAt ?? null
       ]
     );
@@ -167,7 +170,8 @@ export class PostgresCatalogStore implements CatalogStore {
     const conditions = [
       "catalog_sources.profile_name = $1",
       "catalog_sources.enabled = true",
-      "catalog_items.deleted_at is null"
+      "catalog_items.deleted_at is null",
+      "(catalog_items.expires_at is null or catalog_items.expires_at > now())"
     ];
 
     if (input.itemKinds?.length) {
@@ -277,6 +281,7 @@ function mapItem(row: CatalogItemRow): CatalogItemRecord {
     externalUpdatedAt: row.external_updated_at
       ? new Date(row.external_updated_at).toISOString()
       : undefined,
+    expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : undefined,
     deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : undefined,
     source: {
       id: row.source_id_join,

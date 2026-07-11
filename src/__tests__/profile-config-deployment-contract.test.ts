@@ -23,9 +23,15 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).toContain("value: /app/config/catalog-sources.json");
     expect(manifest).toContain("name: GRAPH_POP_SHEET_FOLDER_ITEM_ID");
     expect(manifest).toContain("name: GRAPH_HYMN_SHEET_FOLDER_ITEM_ID");
+    expect(manifest).toContain("name: GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID");
+    expect(manifest).toContain("name: GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID");
+    expect(manifest).toContain("name: GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID");
     expect(manifest).toContain("name: GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID");
     expect(catalogSources).toContain('"driveIdEnv": "GRAPH_DRIVE_ID"');
     expect(catalogSources).toContain('"folderItemIdEnv": "GRAPH_POP_SHEET_FOLDER_ITEM_ID"');
+    expect(catalogSources).toContain(
+      '"documentFolderItemIdEnv": "GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID"'
+    );
     expect(manifest).not.toContain("BOT_PROFILES_BASE64_JSON");
     expect(manifest).not.toContain("bot-profiles-base64-json");
     expect(pipeline).toContain("- config/**");
@@ -59,6 +65,9 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("value: /app/config/catalog-sources.json");
     expect(job).toContain("name: GRAPH_POP_SHEET_FOLDER_ITEM_ID");
     expect(job).toContain("name: GRAPH_HYMN_SHEET_FOLDER_ITEM_ID");
+    expect(job).toContain("name: GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID");
+    expect(job).toContain("name: GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID");
+    expect(job).toContain("name: GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID");
     expect(job).toContain("name: GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID");
     expect(job).toContain("name: PROFILE_CONFIG_PATH");
     expect(job).toContain("value: /app/config/profiles.json");

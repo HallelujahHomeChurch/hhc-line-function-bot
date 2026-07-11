@@ -186,6 +186,12 @@ export interface WikipediaConfig {
   timeoutMs: number;
 }
 
+export interface VirusScanConfig {
+  endpoint: string;
+  apiKey?: string;
+  timeoutMs: number;
+}
+
 export interface CatalogSourceConfig {
   profileName: string;
   sourceKey: string;
@@ -221,6 +227,7 @@ export interface AppConfig {
   graph?: GraphConfig;
   notion?: NotionConfig;
   wikipedia?: WikipediaConfig;
+  virusScan?: VirusScanConfig;
   catalog?: CatalogConfig;
   redis?: RedisConfig;
   database?: DatabaseConfig;
@@ -616,6 +623,38 @@ export interface GraphDriveClient {
   listFolderFilesRecursive?(driveId: string, folderItemId: string): Promise<DriveItem[]>;
   getItemByPath?(driveId: string, path: string): Promise<DriveItem | undefined>;
   createSharingLink(driveId: string, itemId: string, expirationDateTime: string): Promise<string>;
+  uploadFile?(
+    driveId: string,
+    parentItemId: string,
+    fileName: string,
+    data: Uint8Array,
+    contentType: string
+  ): Promise<DriveItem>;
+}
+
+export interface LineContent {
+  data: Uint8Array;
+  contentType?: string;
+}
+
+export interface LineContentClient {
+  getMessageContent(messageId: string, profile?: BotProfileConfig): Promise<LineContent>;
+}
+
+export interface VirusScanInput {
+  data: Uint8Array;
+  fileName: string;
+  contentType: string;
+  sha256: string;
+}
+
+export interface VirusScanResult {
+  status: "clean" | "infected" | "unavailable";
+  detail?: string;
+}
+
+export interface VirusScanner {
+  scan(input: VirusScanInput): Promise<VirusScanResult>;
 }
 
 export interface NotionPage {

@@ -281,6 +281,23 @@ describe("config", () => {
     );
   });
 
+  it("loads optional virus scanner configuration only when an endpoint is set", () => {
+    expect(loadConfigFromEnv(baseEnv()).virusScan).toBeUndefined();
+
+    const config = loadConfigFromEnv({
+      ...baseEnv(),
+      VIRUS_SCAN_ENDPOINT: "https://scanner.internal/scan",
+      VIRUS_SCAN_API_KEY: "scan-key",
+      VIRUS_SCAN_TIMEOUT_MS: "5000"
+    });
+
+    expect(config.virusScan).toEqual({
+      endpoint: "https://scanner.internal/scan",
+      apiKey: "scan-key",
+      timeoutMs: 5000
+    });
+  });
+
   it("does not allow environment variables to widen PPT file types", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),

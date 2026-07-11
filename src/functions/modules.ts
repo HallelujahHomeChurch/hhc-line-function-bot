@@ -8,10 +8,12 @@ import type {
   FunctionRegistry,
   GraphDriveClient,
   JsonRecord,
+  LineContentClient,
   NotionDatabaseClient,
   PostbackHandlerRegistry,
   TextMessageHandlerRegistry,
-  AdminHandlerRegistry
+  AdminHandlerRegistry,
+  VirusScanner
 } from "../types.js";
 import { getFunctionDefinition, type FunctionDefinition } from "./definitions.js";
 import {
@@ -30,6 +32,7 @@ import { createQueryScheduleHandler } from "./query-schedule.js";
 import { createWikipediaLookupHandler, type WikipediaSummarizer } from "../wikipedia/lookup.js";
 import type { WikipediaClient } from "../wikipedia/client.js";
 import { createRetrieveMemoryHandler, createSaveMemoryHandler } from "./agent-memory-functions.js";
+import { createPendingAttachmentTextMessageHandler } from "./attachment-save.js";
 import { createFindResourceHandler } from "./find-resource.js";
 import type { CatalogStore } from "../catalog/store.js";
 import type { ScheduleStore } from "../schedules/store.js";
@@ -50,6 +53,8 @@ export interface FunctionModuleContext {
     memoryStore?: AgentMemoryStore;
     catalog?: CatalogStore;
     scheduleStore?: ScheduleStore;
+    lineContent?: LineContentClient;
+    virusScanner?: VirusScanner;
     wikipedia?: WikipediaClient;
     wikipediaSummarizer?: WikipediaSummarizer;
     now?: () => Date;
@@ -1022,11 +1027,11 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         }
       }
     ],
-    register: ({ clients }) => {
+    register: ({ config, clients }) => {
       if (!clients.memoryStore) {
         return {};
       }
-      return {
+      const registrations: FunctionModuleRegistrations = {
         functions: {
           save_resource: createSaveResourceHandler({
             memoryStore: clients.memoryStore,
@@ -1036,6 +1041,20 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           })
         }
       };
+      if (clients.catalog && clients.graph && clients.lineContent) {
+        registrations.textMessages = {
+          pending_attachment_answer: createPendingAttachmentTextMessageHandler({
+            sessionStore: clients.sessionStore,
+            catalog: clients.catalog,
+            lineContent: clients.lineContent,
+            graph: clients.graph,
+            scanner: clients.virusScanner,
+            sources: config.catalog?.sources ?? [],
+            now: clients.now
+          })
+        };
+      }
+      return registrations;
     }
   },
   {

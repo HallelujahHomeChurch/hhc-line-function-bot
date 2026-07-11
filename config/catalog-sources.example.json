@@ -56,6 +56,22 @@
   },
   {
     "profileName": "helper",
+    "sourceKey": "xiaoha_database",
+    "adapterType": "manual",
+    "domain": "general",
+    "defaultItemKind": "church_document",
+    "rootLocation": {
+      "driveId": "PLACEHOLDER_GRAPH_DRIVE_ID",
+      "documentFolderItemId": "PLACEHOLDER_XIAOHA_DOCUMENT_FOLDER_ITEM_ID",
+      "imageFolderItemId": "PLACEHOLDER_XIAOHA_IMAGE_FOLDER_ITEM_ID",
+      "otherFolderItemId": "PLACEHOLDER_XIAOHA_OTHER_FOLDER_ITEM_ID"
+    },
+    "enabled": true,
+    "syncPolicy": { "mode": "manual" },
+    "capabilities": { "read": ["helper"], "write": ["helper:church_database:write"] }
+  },
+  {
+    "profileName": "helper",
     "sourceKey": "weekly_report_audio",
     "adapterType": "onedrive",
     "domain": "audio",

@@ -13,6 +13,7 @@ import { createCacheStore } from "./cache/create-cache-store.js";
 import { createCatalogStore } from "./catalog/create-catalog-store.js";
 import { createGraphDriveClient } from "./clients/graph.js";
 import { createNotionDatabaseClient } from "./clients/notion.js";
+import { createHttpVirusScanner } from "./clients/virus-scan.js";
 import { loadConfigFromEnv } from "./config.js";
 import { createDependencyDiagnostics } from "./diagnostics/dependencies.js";
 import { createPostgresRuntime } from "./db/postgres.js";
@@ -123,6 +124,7 @@ const memoryPurgeTimer = setInterval(
 memoryPurgeTimer.unref();
 const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
 const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
+const virusScanner = config.virusScan ? createHttpVirusScanner(config.virusScan) : undefined;
 const registrationInviteCodeStore = redis
   ? new RedisRegistrationInviteCodeStore({ client: redis.client, keyPrefix: redis.keyPrefix })
   : undefined;
@@ -159,6 +161,7 @@ const registries = createFunctionRegistries(config, {
   catalog,
   scheduleStore,
   memoryStore,
+  virusScanner,
   wikipediaSummarizer: createWikipediaSummarizer({
     primary: wikipediaSummaryPrimary,
     fallback: wikipediaSummaryFallback

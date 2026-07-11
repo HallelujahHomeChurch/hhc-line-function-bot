@@ -217,6 +217,13 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       userAgent: env.WIKIMEDIA_USER_AGENT || "HHCLineBot/1.0 (https://alive.org.tw/contact)",
       timeoutMs: readInt(env.WIKIPEDIA_TIMEOUT_MS, 8000)
     },
+    virusScan: env.VIRUS_SCAN_ENDPOINT?.trim()
+      ? {
+          endpoint: env.VIRUS_SCAN_ENDPOINT.trim(),
+          apiKey: env.VIRUS_SCAN_API_KEY?.trim() || undefined,
+          timeoutMs: readInt(env.VIRUS_SCAN_TIMEOUT_MS, 8000)
+        }
+      : undefined,
     ...(catalogSources.length ? { catalog: { sources: catalogSources } } : {}),
     redis: env.REDIS_URL?.trim()
       ? {

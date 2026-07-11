@@ -124,6 +124,24 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
       }
 
       return response.link.webUrl;
+    },
+
+    async uploadFile(
+      driveId: string,
+      parentItemId: string,
+      fileName: string,
+      data: Uint8Array,
+      contentType: string
+    ): Promise<DriveItem> {
+      const encodedName = encodeURIComponent(fileName);
+      const item = (await client
+        .api(`/drives/${driveId}/items/${parentItemId}:/${encodedName}:/content`)
+        .header("Content-Type", contentType)
+        .put(Buffer.from(data))) as GraphItem;
+      if (!item.id || !item.name) {
+        throw new Error("graph_upload_missing_item");
+      }
+      return graphItemToDriveItem(item, driveId);
     }
   };
 }
