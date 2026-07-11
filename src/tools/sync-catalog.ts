@@ -19,12 +19,20 @@ const schedules = await createScheduleStore({ db: postgres?.pool });
 try {
   const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
   const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
+  const sourceKeys = (process.env.CATALOG_SYNC_SOURCE_KEYS ?? "")
+    .split(",")
+    .map((key) => key.trim())
+    .filter(Boolean);
   const result = await syncCatalogSources({
     catalog,
     graph,
     notion,
     notionProperties: config.notion?.properties,
-    schedules
+    schedules,
+    sourceKeys: sourceKeys.length ? sourceKeys : undefined,
+    logger: (event) => {
+      console.log(JSON.stringify({ at: new Date().toISOString(), ...event }));
+    }
   });
   console.log(JSON.stringify({ ok: true, result }));
 } finally {

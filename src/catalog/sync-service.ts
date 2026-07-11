@@ -13,6 +13,7 @@ export interface SyncCatalogSourcesOptions {
   profileName?: string;
   sourceKeys?: string[];
   now?: () => Date;
+  logger?: (event: Record<string, unknown>) => void;
 }
 
 export interface SyncCatalogSourcesResult {
@@ -34,6 +35,12 @@ export async function syncCatalogSources(
     profileName: options.profileName,
     sourceKeys: options.sourceKeys
   });
+  options.logger?.({
+    event: "catalog_sync_start",
+    sources: sources.length,
+    profileName: options.profileName,
+    sourceKeys: options.sourceKeys
+  });
   const result: SyncCatalogSourcesResult = {
     sources: sources.length,
     synced: 0,
@@ -47,49 +54,96 @@ export async function syncCatalogSources(
   };
 
   for (const source of sources) {
+    const startedAt = Date.now();
+    const baseLog = {
+      sourceKey: source.sourceKey,
+      adapterType: source.adapterType,
+      domain: source.domain,
+      itemKind: source.defaultItemKind
+    };
+    options.logger?.({ event: "catalog_source_sync_start", ...baseLog });
     if (!source.enabled) {
       result.skipped += 1;
+      options.logger?.({
+        event: "catalog_source_sync_skipped",
+        reason: "disabled",
+        elapsedMs: Date.now() - startedAt,
+        ...baseLog
+      });
       continue;
     }
-    if (source.adapterType === "notion" && source.domain === "schedule") {
-      if (!options.notion || !options.schedules || !options.notionProperties) {
-        throw new Error(`catalog_sync_notion_schedule_required:${source.sourceKey}`);
+    try {
+      if (source.adapterType === "notion" && source.domain === "schedule") {
+        if (!options.notion || !options.schedules || !options.notionProperties) {
+          throw new Error(`catalog_sync_notion_schedule_required:${source.sourceKey}`);
+        }
+        const databaseId = source.rootLocation.databaseId;
+        if (!databaseId) {
+          throw new Error(`catalog_sync_notion_database_required:${source.sourceKey}`);
+        }
+        const sync = await syncNotionScheduleSource({
+          schedules: options.schedules,
+          notion: options.notion,
+          source,
+          databaseId,
+          properties: options.notionProperties,
+          now: options.now
+        });
+        result.synced += 1;
+        result.scheduleUpserted += sync.upserted;
+        result.scheduleSkipped += sync.skipped;
+        result.scheduleTombstoned += sync.tombstoned;
+        options.logger?.({
+          event: "catalog_source_sync_done",
+          elapsedMs: Date.now() - startedAt,
+          scheduleUpserted: sync.upserted,
+          scheduleSkipped: sync.skipped,
+          scheduleTombstoned: sync.tombstoned,
+          ...baseLog
+        });
+        continue;
       }
-      const databaseId = source.rootLocation.databaseId;
-      if (!databaseId) {
-        throw new Error(`catalog_sync_notion_database_required:${source.sourceKey}`);
+      if (source.adapterType !== "onedrive") {
+        result.skipped += 1;
+        options.logger?.({
+          event: "catalog_source_sync_skipped",
+          reason: "unsupported_adapter",
+          elapsedMs: Date.now() - startedAt,
+          ...baseLog
+        });
+        continue;
       }
-      const sync = await syncNotionScheduleSource({
-        schedules: options.schedules,
-        notion: options.notion,
-        source,
-        databaseId,
-        properties: options.notionProperties,
-        now: options.now
+      if (!options.graph) {
+        throw new Error(`catalog_sync_graph_required:${source.sourceKey}`);
+      }
+      const sync = await syncOneDriveCatalogSource({
+        catalog: options.catalog,
+        graph: options.graph,
+        source
       });
       result.synced += 1;
-      result.scheduleUpserted += sync.upserted;
-      result.scheduleSkipped += sync.skipped;
-      result.scheduleTombstoned += sync.tombstoned;
-      continue;
+      result.upserted += sync.upserted;
+      result.itemSkipped += sync.skipped;
+      result.tombstoned += sync.tombstoned;
+      options.logger?.({
+        event: "catalog_source_sync_done",
+        elapsedMs: Date.now() - startedAt,
+        upserted: sync.upserted,
+        itemSkipped: sync.skipped,
+        tombstoned: sync.tombstoned,
+        ...baseLog
+      });
+    } catch (error) {
+      options.logger?.({
+        event: "catalog_source_sync_failed",
+        elapsedMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+        ...baseLog
+      });
+      throw error;
     }
-    if (source.adapterType !== "onedrive") {
-      result.skipped += 1;
-      continue;
-    }
-    if (!options.graph) {
-      throw new Error(`catalog_sync_graph_required:${source.sourceKey}`);
-    }
-    const sync = await syncOneDriveCatalogSource({
-      catalog: options.catalog,
-      graph: options.graph,
-      source
-    });
-    result.synced += 1;
-    result.upserted += sync.upserted;
-    result.itemSkipped += sync.skipped;
-    result.tombstoned += sync.tombstoned;
   }
 
+  options.logger?.({ event: "catalog_sync_done", ...result });
   return result;
 }

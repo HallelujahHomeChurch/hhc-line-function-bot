@@ -1,4 +1,4 @@
-name: hhc-line-function-bot-catalog-sync
+name: hhc-line-bot-catalog-sync
 type: Microsoft.App/jobs
 location: PLACEHOLDER_AZURE_REGION
 properties:
@@ -36,7 +36,7 @@ properties:
           - dist/tools/sync-catalog.js
         env:
           - name: SERVICE_NAME
-            value: hhc-line-function-bot-catalog-sync
+            value: hhc-line-bot-catalog-sync
           - name: TIME_ZONE
             value: Asia/Taipei
           - name: PROFILE_CONFIG_PATH
@@ -91,6 +91,14 @@ properties:
             secretRef: notion-token
           - name: NOTION_SERVICE_DATABASE_ID
             value: PLACEHOLDER_NOTION_SERVICE_DATABASE_ID
+          - name: NOTION_DATE_PROPERTY
+            value: PLACEHOLDER_NOTION_DATE_PROPERTY
+          - name: NOTION_MEETING_PROPERTY
+            value: PLACEHOLDER_NOTION_MEETING_PROPERTY
+          - name: NOTION_ROLE_PROPERTY
+            value: PLACEHOLDER_NOTION_ROLE_PROPERTY
+          - name: NOTION_PERSON_PROPERTY
+            value: PLACEHOLDER_NOTION_PERSON_PROPERTY
         resources:
           cpu: 0.5
           memory: 1Gi
