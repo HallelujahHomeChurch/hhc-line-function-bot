@@ -235,7 +235,7 @@ export function deriveFilters(
   }
 
   if (!filters.role) {
-    filters.role = extractRole(query);
+    filters.role = extractKnownScheduleRole(query);
   }
 
   if (!filters.range && !filters.date && /服事/.test(query)) {
@@ -327,7 +327,7 @@ function cleanOptionalText(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
-function extractRole(query: string): string | undefined {
+export function extractKnownScheduleRole(query: string): string | undefined {
   const knownRoles = [
     "司會",
     "主席",
