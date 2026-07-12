@@ -208,6 +208,7 @@ export interface AppConfig {
   healthPath: string;
   readyPath?: string;
   maxBodyBytes: number;
+  attachments: AttachmentConfig;
   profiles: BotProfileConfig[];
   llm: LlmConfig;
   graph?: GraphConfig;
@@ -221,6 +222,11 @@ export interface AppConfig {
   access?: AccessConfig;
   rateLimit?: RateLimitConfig;
   lastErrors?: LastErrorsConfig;
+}
+
+export interface AttachmentConfig {
+  maxBytes: number;
+  lineDownloadTimeoutMs: number;
 }
 
 export interface RedisConfig {
@@ -630,8 +636,17 @@ export interface LineContent {
   contentType?: string;
 }
 
+export interface BinaryReadLimits {
+  maxBytes: number;
+  timeoutMs: number;
+}
+
 export interface LineContentClient {
-  getMessageContent(messageId: string, profile?: BotProfileConfig): Promise<LineContent>;
+  getMessageContent(
+    messageId: string,
+    profile: BotProfileConfig,
+    limits: BinaryReadLimits
+  ): Promise<LineContent>;
 }
 
 export interface VirusScanInput {

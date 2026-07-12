@@ -65,6 +65,23 @@ async function withJsonFile<T>(
 }
 
 describe("config", () => {
+  it("uses bounded attachment defaults", () => {
+    expect(loadConfigFromEnv(baseEnv()).attachments).toEqual({
+      maxBytes: 25 * 1024 * 1024,
+      lineDownloadTimeoutMs: 30_000
+    });
+  });
+
+  it("loads attachment limits from environment variables", () => {
+    expect(
+      loadConfigFromEnv({
+        ...baseEnv(),
+        MAX_ATTACHMENT_BYTES: "1048576",
+        LINE_CONTENT_DOWNLOAD_TIMEOUT_MS: "5000"
+      }).attachments
+    ).toEqual({ maxBytes: 1_048_576, lineDownloadTimeoutMs: 5_000 });
+  });
+
   it("configures an identifiable Wikimedia API client without a secret", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),

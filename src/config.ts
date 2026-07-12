@@ -118,6 +118,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     healthPath: env.HEALTH_PATH || "/healthz",
     readyPath: env.READY_PATH || "/readyz",
     maxBodyBytes: readInt(env.MAX_BODY_BYTES, 262_144),
+    attachments: {
+      maxBytes: readInt(env.MAX_ATTACHMENT_BYTES, 25 * 1024 * 1024),
+      lineDownloadTimeoutMs: readInt(env.LINE_CONTENT_DOWNLOAD_TIMEOUT_MS, 30_000)
+    },
     profiles: normalizedProfiles.map((profile) => ({
       ...profile,
       enabledFunctions: profile.enabledFunctions as FunctionName[]

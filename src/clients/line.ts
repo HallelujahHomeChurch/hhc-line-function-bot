@@ -4,6 +4,7 @@ import { Client as LineClient, messagingApi } from "@line/bot-sdk";
 
 import type {
   BotProfileConfig,
+  BinaryReadLimits,
   LineContentClient,
   LineIdentityClient,
   LineReplyClient,
@@ -61,10 +62,11 @@ export function createLineSdkIdentityClient(profile: BotProfileConfig): LineIden
 export function createLineSdkContentClient(): LineContentClient {
   const clients = new Map<string, LineClient>();
   return {
-    async getMessageContent(messageId: string, profile?: BotProfileConfig) {
-      if (!profile) {
-        throw new Error("line_profile_required_for_content");
-      }
+    async getMessageContent(
+      messageId: string,
+      profile: BotProfileConfig,
+      limits: BinaryReadLimits
+    ) {
       let client = clients.get(profile.name);
       if (!client) {
         client = new LineClient({ channelAccessToken: profile.channelAccessToken });
@@ -72,7 +74,7 @@ export function createLineSdkContentClient(): LineContentClient {
       }
       const stream = await client.getMessageContent(messageId);
       return {
-        data: await readableToUint8Array(stream)
+        data: await readableToUint8Array(stream, limits)
       };
     }
   };
@@ -83,10 +85,52 @@ function nonBlank(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-async function readableToUint8Array(stream: Readable): Promise<Uint8Array> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+export class LineContentReadError extends Error {
+  constructor(
+    public readonly code: "line_content_too_large" | "line_content_timeout" | "line_content_empty"
+  ) {
+    super(code);
+    this.name = "LineContentReadError";
   }
-  return new Uint8Array(Buffer.concat(chunks));
+}
+
+export async function readableToUint8Array(
+  stream: Readable,
+  limits: BinaryReadLimits
+): Promise<Uint8Array> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let timer: NodeJS.Timeout | undefined;
+
+  const read = async (): Promise<Uint8Array> => {
+    for await (const chunk of stream) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buffer.byteLength;
+      if (size > limits.maxBytes) {
+        stream.destroy();
+        throw new LineContentReadError("line_content_too_large");
+      }
+      chunks.push(buffer);
+    }
+    if (size === 0) {
+      throw new LineContentReadError("line_content_empty");
+    }
+    return new Uint8Array(Buffer.concat(chunks, size));
+  };
+
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new LineContentReadError("line_content_timeout");
+      stream.destroy(error);
+      reject(error);
+    }, limits.timeoutMs);
+  });
+
+  try {
+    return await Promise.race([read(), timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }

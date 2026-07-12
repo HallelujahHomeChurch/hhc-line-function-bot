@@ -13,6 +13,7 @@ import type {
 
 const ATTACHMENT_SESSION_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const DEFAULT_LINE_DOWNLOAD_TIMEOUT_MS = 30_000;
 const XIAOHA_DATABASE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 type AttachmentTargetKind =
@@ -33,6 +34,7 @@ export interface PendingAttachmentTextMessageOptions {
   graph: GraphDriveClient;
   scanner?: VirusScanner;
   maxBytes?: number;
+  lineDownloadTimeoutMs?: number;
   now?: () => Date;
 }
 
@@ -273,7 +275,11 @@ async function prepareAttachment(input: {
 > {
   const content = await input.options.lineContent.getMessageContent(
     input.pending.attachment.messageId,
-    input.profile
+    input.profile,
+    {
+      maxBytes: input.maxBytes,
+      timeoutMs: input.options.lineDownloadTimeoutMs ?? DEFAULT_LINE_DOWNLOAD_TIMEOUT_MS
+    }
   );
   const sizeBytes = content.data.byteLength;
   if (sizeBytes === 0) {
