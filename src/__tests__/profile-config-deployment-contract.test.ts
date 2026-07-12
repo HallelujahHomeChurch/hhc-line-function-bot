@@ -41,6 +41,10 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).toContain("name: SEARXNG_BASE_URL");
     expect(manifest).toContain("name: CLAMAV_HOST");
     expect(manifest).toContain("name: CLAMAV_PORT");
+    expect(manifest).toContain("name: MAX_ATTACHMENT_BYTES");
+    expect(manifest).toContain('value: "26214400"');
+    expect(manifest).toContain("name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS");
+    expect(manifest).toContain('value: "30000"');
     expect(manifest).not.toContain("BOT_PROFILES_BASE64_JSON");
     expect(manifest).not.toContain("bot-profiles-base64-json");
     expect(pipeline).toContain("- config/**");
@@ -53,6 +57,8 @@ describe("production profile configuration deployment contract", () => {
     expect(pipeline).not.toContain("az containerapp dapr disable");
     expect(pipeline).toContain("SEARXNG_BASE_URL=http://172.16.65.5:8888");
     expect(pipeline).toContain("CLAMAV_HOST=172.16.65.5");
+    expect(pipeline).toContain("MAX_ATTACHMENT_BYTES=26214400");
+    expect(pipeline).toContain("LINE_CONTENT_DOWNLOAD_TIMEOUT_MS=30000");
     expect(helper?.enabledFunctions).toEqual(
       expect.arrayContaining(["find_resource", "save_resource"])
     );

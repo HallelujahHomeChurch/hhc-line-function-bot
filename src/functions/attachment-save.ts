@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
-
-import type { CatalogItemRecord, CatalogSourceRecord, CatalogStore } from "../catalog/store.js";
+import type { CatalogSourceRecord, CatalogStore } from "../catalog/store.js";
 import type { PendingAttachmentSession, SessionStore } from "../state/session-store.js";
 import type {
   BotProfileConfig,
@@ -10,11 +8,11 @@ import type {
   TextMessageHandler,
   VirusScanner
 } from "../types.js";
+import { createResourceBinaryPublisher } from "./resource-binary-publisher.js";
 
 const ATTACHMENT_SESSION_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const DEFAULT_LINE_DOWNLOAD_TIMEOUT_MS = 30_000;
-const XIAOHA_DATABASE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 type AttachmentTargetKind =
   "ppt_slide" | "pop_sheet" | "hymn_sheet" | "church_document" | "church_image" | "church_other";
@@ -24,7 +22,6 @@ interface AttachmentTarget {
   itemKind: AttachmentTargetKind;
   domain: string;
   title: string;
-  autoKind?: boolean;
 }
 
 export interface PendingAttachmentTextMessageOptions {
@@ -38,21 +35,17 @@ export interface PendingAttachmentTextMessageOptions {
   now?: () => Date;
 }
 
-interface ValidatedAttachment {
-  data: Uint8Array;
-  fileName: string;
-  title: string;
-  mimeType: string;
-  extension: string;
-  sha256: string;
-  sizeBytes: number;
-}
-
 export function createPendingAttachmentTextMessageHandler(
   options: PendingAttachmentTextMessageOptions
 ): TextMessageHandler {
   const now = options.now ?? (() => new Date());
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+  const publisher = createResourceBinaryPublisher({
+    catalog: options.catalog,
+    graph: options.graph,
+    scanner: options.scanner,
+    maxBytes
+  });
 
   return {
     matches: async (_request, context) =>
@@ -97,7 +90,8 @@ export function createPendingAttachmentTextMessageHandler(
           pending,
           maxBytes,
           now: now(),
-          profile: context.profile
+          profile: context.profile,
+          publisher
         });
       }
 
@@ -114,35 +108,15 @@ export function createPendingAttachmentTextMessageHandler(
         return { ok: true, replyText: sourceGate.replyText };
       }
 
-      const prepared = await prepareAttachment({
-        options,
-        pending,
-        target,
-        maxBytes,
-        profile: context.profile
-      });
-      if (!prepared.ok) {
-        await options.sessionStore.delete(pending.id);
-        return { ok: true, replyText: prepared.replyText };
-      }
-
       const updated: PendingAttachmentSession = {
         ...pending,
         stage: "awaiting_confirmation",
         target: {
-          sourceKey: prepared.target.sourceKey,
-          itemKind: prepared.target.itemKind,
-          domain: prepared.target.domain,
-          title: prepared.target.title,
-          fileName: prepared.attachment.fileName,
-          contentType: prepared.attachment.mimeType
-        },
-        preview: {
-          sha256: prepared.attachment.sha256,
-          sizeBytes: prepared.attachment.sizeBytes,
-          mimeType: prepared.attachment.mimeType,
-          extension: prepared.attachment.extension,
-          fileName: prepared.attachment.fileName
+          sourceKey: target.sourceKey,
+          itemKind: target.itemKind,
+          domain: target.domain,
+          title: target.title,
+          declaredFileName: pending.attachment.fileName
         },
         expiresAt: new Date(now().getTime() + ATTACHMENT_SESSION_TTL_MS).toISOString()
       };
@@ -152,11 +126,11 @@ export function createPendingAttachmentTextMessageHandler(
         ok: true,
         replyText: [
           "請確認要保存這個檔案：",
-          `名稱：${prepared.target.title}`,
-          `檔名：${prepared.attachment.fileName}`,
-          `類型：${labelForItemKind(prepared.target.itemKind)}`,
-          `大小：${prepared.attachment.sizeBytes} bytes`,
-          "確認後才會上傳到 OneDrive。"
+          `名稱：${target.title}`,
+          `檔名：${pending.attachment.fileName ?? "未提供"}`,
+          `類型：${labelForItemKind(target.itemKind)}`,
+          `大小：${pending.attachment.fileSize ?? "未知"} bytes`,
+          "確認後會下載、驗證並掃毒，通過後才會上傳到 OneDrive。"
         ].join("\n"),
         quickReplies: confirmationQuickReplies()
       };
@@ -170,10 +144,10 @@ async function publishAttachment(input: {
   maxBytes: number;
   now: Date;
   profile: BotProfileConfig;
+  publisher: ReturnType<typeof createResourceBinaryPublisher>;
 }): Promise<FunctionExecutionResult> {
   const sessionTarget = input.pending.target;
-  const preview = input.pending.preview;
-  if (!sessionTarget || !preview || !isAttachmentTargetKind(sessionTarget.itemKind)) {
+  if (!sessionTarget || !isAttachmentTargetKind(sessionTarget.itemKind)) {
     await input.options.sessionStore.delete(input.pending.id);
     return { ok: true, replyText: "保存流程已失效，請重新上傳檔案。" };
   }
@@ -183,22 +157,6 @@ async function publishAttachment(input: {
     domain: sessionTarget.domain,
     title: sessionTarget.title
   };
-  const prepared = await prepareAttachment({
-    options: input.options,
-    pending: input.pending,
-    target,
-    maxBytes: input.maxBytes,
-    profile: input.profile
-  });
-  if (!prepared.ok) {
-    await input.options.sessionStore.delete(input.pending.id);
-    return { ok: true, replyText: prepared.replyText };
-  }
-  if (prepared.attachment.sha256 !== preview.sha256) {
-    await input.options.sessionStore.delete(input.pending.id);
-    return { ok: true, replyText: "檔案內容已變更，為安全起見請重新上傳。" };
-  }
-
   const sourceGate = await findWritableSource(
     input.options.catalog,
     input.pending.profileName,
@@ -208,127 +166,46 @@ async function publishAttachment(input: {
     await input.options.sessionStore.delete(input.pending.id);
     return { ok: true, replyText: sourceGate.replyText };
   }
-  const source = sourceGate.source;
-  const driveId = source.rootLocation.driveId;
-  const folderItemId = folderItemIdForTarget(source, target);
-  if (!driveId || !folderItemId || !input.options.graph.uploadFile) {
-    await input.options.sessionStore.delete(input.pending.id);
-    return { ok: true, replyText: "目前沒有可用的 OneDrive 上傳服務。" };
-  }
-  const conflict = await findCatalogConflict({
-    catalog: input.options.catalog,
-    profileName: input.pending.profileName,
-    target: prepared.target,
-    sha256: prepared.attachment.sha256
-  });
-  if (conflict?.kind === "same_hash") {
-    await input.options.sessionStore.delete(input.pending.id);
-    return { ok: true, replyText: `已經有相同檔案：${conflict.item.title}` };
-  }
-  if (conflict?.kind === "same_title") {
-    await input.options.sessionStore.delete(input.pending.id);
-    return { ok: true, replyText: "已經有同名檔案，請換一個名稱後重新上傳。" };
-  }
-
-  const item = await input.options.graph.uploadFile(
-    driveId,
-    folderItemId,
-    prepared.attachment.fileName,
-    prepared.attachment.data,
-    prepared.attachment.mimeType
-  );
-  await input.options.catalog.upsertItem({
-    sourceId: source.id,
-    itemKind: prepared.target.itemKind,
-    domain: prepared.target.domain,
-    title: prepared.target.title,
-    path: item.path ?? item.name,
-    mimeType: prepared.attachment.mimeType,
-    extension: prepared.attachment.extension,
-    sizeBytes: prepared.attachment.sizeBytes,
-    sha256: prepared.attachment.sha256,
-    storageRef: {
-      provider: "graph",
-      driveId: item.driveId ?? driveId,
-      itemId: item.id
-    },
-    externalUpdatedAt: input.now.toISOString(),
-    expiresAt: expiresAtForTarget(prepared.target, input.now)
-  });
-  await input.options.sessionStore.delete(input.pending.id);
-  return {
-    ok: true,
-    replyText: `已保存：${prepared.target.title}`,
-    executedAction: "save_resource"
-  };
-}
-
-async function prepareAttachment(input: {
-  options: PendingAttachmentTextMessageOptions;
-  pending: PendingAttachmentSession;
-  target: AttachmentTarget;
-  maxBytes: number;
-  profile: BotProfileConfig;
-}): Promise<
-  | { ok: true; attachment: ValidatedAttachment; target: AttachmentTarget }
-  | { ok: false; replyText: string }
-> {
-  const content = await input.options.lineContent.getMessageContent(
-    input.pending.attachment.messageId,
-    input.profile,
-    {
-      maxBytes: input.maxBytes,
-      timeoutMs: input.options.lineDownloadTimeoutMs ?? DEFAULT_LINE_DOWNLOAD_TIMEOUT_MS
-    }
-  );
-  const sizeBytes = content.data.byteLength;
-  if (sizeBytes === 0) {
-    return { ok: false, replyText: "檔案是空的，無法保存。" };
-  }
-  if (sizeBytes > input.maxBytes) {
-    return { ok: false, replyText: "檔案太大，無法保存。" };
-  }
-
-  const extension = extensionFromFileName(input.pending.attachment.fileName ?? "");
-  const detected = detectContent(content.data, content.contentType, extension);
-  if (!detected) {
-    return { ok: false, replyText: "檔案格式不支援或內容與副檔名不符。" };
-  }
-  const target = resolveTargetForDetectedContent(input.target, detected.extension);
-  if (!allowedExtensions(target.itemKind).includes(detected.extension)) {
-    return { ok: false, replyText: "這個用途不支援此檔案格式。" };
-  }
-
-  const fileName = sanitizeFileName(`${target.title}${detected.extension}`);
-  const sha256 = sha256Hex(content.data);
-  const scan = input.options.scanner
-    ? await input.options.scanner.scan({
+  try {
+    const content = await input.options.lineContent.getMessageContent(
+      input.pending.attachment.messageId,
+      input.profile,
+      {
+        maxBytes: input.maxBytes,
+        timeoutMs: input.options.lineDownloadTimeoutMs ?? DEFAULT_LINE_DOWNLOAD_TIMEOUT_MS
+      }
+    );
+    return await input.publisher.publish({
+      binary: {
         data: content.data,
-        fileName,
-        contentType: detected.mimeType,
-        sha256
-      })
-    : { status: "unavailable" as const };
-  if (scan.status === "infected") {
-    return { ok: false, replyText: "掃毒未通過，為安全起見不保存這個檔案。" };
+        declaredFileName: input.pending.attachment.fileName,
+        declaredContentType: content.contentType,
+        sourceKind: "line"
+      },
+      target: {
+        profileName: input.pending.profileName,
+        sourceKey: target.sourceKey,
+        itemKind: target.itemKind,
+        domain: target.domain,
+        title: target.title
+      },
+      now: input.now
+    });
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : "";
+    if (code === "line_content_too_large") {
+      return { ok: true, replyText: "檔案太大，無法保存。" };
+    }
+    if (code === "line_content_timeout") {
+      return { ok: true, replyText: "下載檔案逾時，請重新上傳後再試。" };
+    }
+    if (code === "line_content_empty") {
+      return { ok: true, replyText: "檔案是空的，無法保存。" };
+    }
+    throw error;
+  } finally {
+    await input.options.sessionStore.delete(input.pending.id);
   }
-  if (scan.status !== "clean") {
-    return { ok: false, replyText: "掃毒服務目前不可用，為安全起見不保存這個檔案。" };
-  }
-
-  return {
-    ok: true,
-    attachment: {
-      data: content.data,
-      fileName,
-      title: target.title,
-      mimeType: detected.mimeType,
-      extension: detected.extension,
-      sha256,
-      sizeBytes
-    },
-    target
-  };
 }
 
 function parseAttachmentTarget(
@@ -366,8 +243,7 @@ function parseAttachmentTarget(
       sourceKey: "xiaoha_database",
       itemKind: "church_document",
       domain: "general",
-      title: inferTitle(normalized, baseTitle),
-      autoKind: true
+      title: inferTitle(normalized, baseTitle)
     };
   }
   return undefined;
@@ -382,53 +258,6 @@ function inferTitle(text: string, fallback: string): string {
     .replace(/\s+/g, " ")
     .trim();
   return title || fallback || "未命名檔案";
-}
-
-function detectContent(
-  data: Uint8Array,
-  declaredContentType: string | undefined,
-  extension: string
-): { mimeType: string; extension: string } | undefined {
-  if (startsWith(data, [0x25, 0x50, 0x44, 0x46, 0x2d])) {
-    return { mimeType: "application/pdf", extension: ".pdf" };
-  }
-  if (startsWith(data, [0xff, 0xd8, 0xff])) {
-    return { mimeType: "image/jpeg", extension: extension === ".jpeg" ? ".jpeg" : ".jpg" };
-  }
-  if (startsWith(data, [0x89, 0x50, 0x4e, 0x47])) {
-    return { mimeType: "image/png", extension: ".png" };
-  }
-  if (startsWith(data, [0xd0, 0xcf, 0x11, 0xe0])) {
-    if ([".ppt", ".doc", ".xls"].includes(extension)) {
-      return { mimeType: mimeTypeForExtension(extension, declaredContentType), extension };
-    }
-    return undefined;
-  }
-  if (startsWith(data, [0x50, 0x4b, 0x03, 0x04])) {
-    if ([".pptx", ".key", ".odp", ".docx", ".xlsx"].includes(extension)) {
-      return { mimeType: mimeTypeForExtension(extension, declaredContentType), extension };
-    }
-  }
-  if ([".txt", ".md"].includes(extension) && isProbablyText(data, declaredContentType)) {
-    return { mimeType: declaredContentType || "text/plain", extension };
-  }
-  return undefined;
-}
-
-function allowedExtensions(itemKind: AttachmentTargetKind): string[] {
-  switch (itemKind) {
-    case "ppt_slide":
-      return [".pptx", ".ppt", ".key", ".odp", ".pdf"];
-    case "pop_sheet":
-    case "hymn_sheet":
-      return [".pdf", ".jpg", ".jpeg", ".png"];
-    case "church_document":
-      return [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".txt", ".md"];
-    case "church_image":
-      return [".jpg", ".jpeg", ".png"];
-    case "church_other":
-      return [".pptx", ".ppt", ".key", ".odp"];
-  }
 }
 
 async function findWritableSource(
@@ -456,86 +285,6 @@ async function findWritableSource(
   return { ok: true, source };
 }
 
-function resolveTargetForDetectedContent(
-  target: AttachmentTarget,
-  extension: string
-): AttachmentTarget {
-  if (!target.autoKind) {
-    return { ...target };
-  }
-  return {
-    ...target,
-    itemKind: genericChurchItemKindForExtension(extension),
-    autoKind: undefined
-  };
-}
-
-function genericChurchItemKindForExtension(extension: string): AttachmentTargetKind {
-  if ([".jpg", ".jpeg", ".png"].includes(extension)) {
-    return "church_image";
-  }
-  if ([".pdf", ".doc", ".docx", ".xls", ".xlsx", ".txt", ".md"].includes(extension)) {
-    return "church_document";
-  }
-  return "church_other";
-}
-
-function folderItemIdForTarget(
-  source: CatalogSourceRecord,
-  target: AttachmentTarget
-): string | undefined {
-  if (source.sourceKey !== "xiaoha_database") {
-    return source.rootLocation.folderItemId;
-  }
-  switch (target.itemKind) {
-    case "church_document":
-      return source.rootLocation.documentFolderItemId ?? source.rootLocation.folderItemId;
-    case "church_image":
-      return source.rootLocation.imageFolderItemId ?? source.rootLocation.folderItemId;
-    case "church_other":
-      return source.rootLocation.otherFolderItemId ?? source.rootLocation.folderItemId;
-    default:
-      return source.rootLocation.folderItemId;
-  }
-}
-
-function expiresAtForTarget(target: AttachmentTarget, now: Date): string | undefined {
-  if (target.sourceKey !== "xiaoha_database") {
-    return undefined;
-  }
-  return new Date(now.getTime() + XIAOHA_DATABASE_RETENTION_MS).toISOString();
-}
-
-async function findCatalogConflict(input: {
-  catalog: CatalogStore;
-  profileName: string;
-  target: AttachmentTarget;
-  sha256: string;
-}): Promise<
-  | { kind: "same_hash"; item: CatalogItemRecord }
-  | { kind: "same_title"; item: CatalogItemRecord }
-  | undefined
-> {
-  const candidates = await input.catalog.searchItems({
-    profileName: input.profileName,
-    query: input.target.title,
-    itemKinds: [input.target.itemKind],
-    allowedSourceKeys: [input.target.sourceKey],
-    limit: 20
-  });
-  const exactTitle = candidates.filter(
-    (item) => item.title.normalize("NFKC") === input.target.title.normalize("NFKC")
-  );
-  const sameHash = exactTitle.find((item) => item.sha256 === input.sha256);
-  if (sameHash) {
-    return { kind: "same_hash", item: sameHash };
-  }
-  if (exactTitle.length > 0) {
-    return { kind: "same_title", item: exactTitle[0] };
-  }
-  return undefined;
-}
-
 function isAttachmentTargetKind(value: string): value is AttachmentTargetKind {
   return (
     value === "ppt_slide" ||
@@ -547,73 +296,8 @@ function isAttachmentTargetKind(value: string): value is AttachmentTargetKind {
   );
 }
 
-function startsWith(data: Uint8Array, bytes: number[]): boolean {
-  return bytes.every((byte, index) => data[index] === byte);
-}
-
-function mimeTypeForExtension(extension: string, declaredContentType: string | undefined): string {
-  if (declaredContentType?.trim()) {
-    return declaredContentType;
-  }
-  switch (extension) {
-    case ".ppt":
-      return "application/vnd.ms-powerpoint";
-    case ".pptx":
-      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    case ".key":
-      return "application/vnd.apple.keynote";
-    case ".odp":
-      return "application/vnd.oasis.opendocument.presentation";
-    case ".doc":
-      return "application/msword";
-    case ".docx":
-      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    case ".xls":
-      return "application/vnd.ms-excel";
-    case ".xlsx":
-      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    case ".md":
-      return "text/markdown";
-    default:
-      return "text/plain";
-  }
-}
-
-function isProbablyText(data: Uint8Array, declaredContentType: string | undefined): boolean {
-  if (declaredContentType?.toLowerCase().startsWith("text/")) {
-    return true;
-  }
-  return data.every(
-    (byte) => byte === 0x09 || byte === 0x0a || byte === 0x0d || (byte >= 0x20 && byte !== 0x7f)
-  );
-}
-
-function extensionFromFileName(fileName: string): string {
-  const match = fileName
-    .trim()
-    .toLowerCase()
-    .match(/(\.[a-z0-9]+)$/u);
-  return match?.[1] ?? "";
-}
-
 function stripExtension(fileName: string): string {
   return fileName.replace(/\.[^.]+$/u, "");
-}
-
-function sanitizeFileName(fileName: string): string {
-  return fileName
-    .normalize("NFKC")
-    .replace(/[<>:"/\\|?*]/gu, "_")
-    .split("")
-    .map((char) => (char.charCodeAt(0) < 32 ? "_" : char))
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
-function sha256Hex(data: Uint8Array): string {
-  return createHash("sha256").update(data).digest("hex");
 }
 
 function isConfirm(text: string): boolean {

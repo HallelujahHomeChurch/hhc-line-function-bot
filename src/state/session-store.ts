@@ -63,15 +63,7 @@ export interface PendingAttachmentSession {
     itemKind: string;
     domain: string;
     title: string;
-    contentType: string;
-    fileName: string;
-  };
-  preview?: {
-    sha256: string;
-    sizeBytes: number;
-    mimeType: string;
-    extension: string;
-    fileName: string;
+    declaredFileName?: string;
   };
   expiresAt: string;
 }

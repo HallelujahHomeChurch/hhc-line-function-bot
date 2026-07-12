@@ -173,6 +173,8 @@ stages:
                   "RATE_LIMIT_WINDOW_MS=60000"
                   "RATE_LIMIT_MAX_REQUESTS=20"
                   "LAST_ERRORS_MAX_ENTRIES=20"
+                  "MAX_ATTACHMENT_BYTES=26214400"
+                  "LINE_CONTENT_DOWNLOAD_TIMEOUT_MS=30000"
                   "SHEET_MUSIC_ALLOWED_EXTENSIONS=pdf,jpg,jpeg"
                   "SEARXNG_BASE_URL=http://172.16.65.5:8888"
                   "SEARXNG_TIMEOUT_MS=8000"

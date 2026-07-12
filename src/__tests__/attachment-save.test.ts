@@ -74,6 +74,8 @@ async function setup(
   sessionStore: InMemorySessionStore;
   catalog: InMemoryCatalogStore;
   graph: GraphDriveClient;
+  lineContent: LineContentClient;
+  scanner: VirusScanner;
   handler: TextMessageHandler;
   pptSource: CatalogSourceRecord;
 }> {
@@ -122,40 +124,42 @@ async function setup(
       write: options.pptWriteCapabilities ?? ["helper:ppt_slide:write"]
     }
   });
-  return { sessionStore, catalog, graph, handler, pptSource };
+  return { sessionStore, catalog, graph, lineContent, scanner, handler, pptSource };
 }
 
 describe("attachment save pipeline", () => {
   it("validates a pending attachment and creates a confirmation preview without uploading", async () => {
-    const { sessionStore, catalog, graph, handler } = await setup();
+    const { sessionStore, catalog, graph, lineContent, scanner, handler } = await setup();
     await seedPendingAttachment(sessionStore);
 
     const result = await handler.handle({ text: "ppt SundayDeck" }, context("ppt SundayDeck"));
 
     expect(result?.quickReplies).toHaveLength(2);
-    expect(result?.replyText).toContain("SundayDeck.pptx");
+    expect(result?.replyText).toContain("OriginalDeck.pptx");
+    expect(lineContent.getMessageContent).not.toHaveBeenCalled();
+    expect(scanner.scan).not.toHaveBeenCalled();
     expect(graph.uploadFile).not.toHaveBeenCalled();
     await expect(
       catalog.searchItems({ profileName: "helper", query: "SundayDeck", itemKinds: ["ppt_slide"] })
     ).resolves.toHaveLength(0);
-    await expect(
-      sessionStore.findPendingAttachment({
-        profileName: "helper",
-        source: { type: "group", groupId: "C1", userId: "U1" },
-        requesterUserId: "U1"
-      })
-    ).resolves.toMatchObject({
-      stage: "awaiting_confirmation",
-      target: { sourceKey: "ppt_slides", itemKind: "ppt_slide", title: "SundayDeck" },
-      preview: { fileName: "SundayDeck.pptx", sizeBytes: pptxBytes.byteLength }
+    const pending = await sessionStore.findPendingAttachment({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      requesterUserId: "U1"
     });
+    expect(pending).toMatchObject({
+      stage: "awaiting_confirmation",
+      target: { sourceKey: "ppt_slides", itemKind: "ppt_slide", title: "SundayDeck" }
+    });
+    expect(pending).not.toHaveProperty("preview");
   });
 
   it("fails closed when virus scanning is unavailable", async () => {
     const { sessionStore, catalog, graph, handler } = await setup({ scannerStatus: "unavailable" });
     await seedPendingAttachment(sessionStore);
 
-    const result = await handler.handle({ text: "ppt SundayDeck" }, context("ppt SundayDeck"));
+    await handler.handle({ text: "ppt SundayDeck" }, context("ppt SundayDeck"));
+    const result = await handler.handle({ text: "保存" }, context("保存"));
 
     expect(result?.ok).toBe(true);
     expect(graph.uploadFile).not.toHaveBeenCalled();
@@ -165,13 +169,15 @@ describe("attachment save pipeline", () => {
   });
 
   it("uploads to OneDrive and upserts catalog only after confirmation", async () => {
-    const { sessionStore, catalog, graph, handler } = await setup();
+    const { sessionStore, catalog, graph, lineContent, scanner, handler } = await setup();
     await seedPendingAttachment(sessionStore);
     await handler.handle({ text: "ppt SundayDeck" }, context("ppt SundayDeck", "req-preview"));
 
     const result = await handler.handle({ text: "yes" }, context("yes", "req-confirm"));
 
     expect(result).toMatchObject({ executedAction: "save_resource" });
+    expect(lineContent.getMessageContent).toHaveBeenCalledTimes(1);
+    expect(scanner.scan).toHaveBeenCalledTimes(1);
     expect(graph.uploadFile).toHaveBeenCalledWith(
       "drive-1",
       "ppt-root",

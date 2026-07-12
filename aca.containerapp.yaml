@@ -53,6 +53,10 @@ properties:
             value: /readyz
           - name: MAX_BODY_BYTES
             value: "262144"
+          - name: MAX_ATTACHMENT_BYTES
+            value: "26214400"
+          - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS
+            value: "30000"
           - name: PROFILE_CONFIG_PATH
             value: /app/config/profiles.json
           - name: LINE_HELPER_CHANNEL_SECRET

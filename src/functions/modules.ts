@@ -1077,7 +1077,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         }
       }
     ],
-    register: ({ clients }) => {
+    register: ({ config, clients }) => {
       if (!clients.memoryStore) {
         return {};
       }
@@ -1099,6 +1099,8 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             lineContent: clients.lineContent,
             graph: clients.graph,
             scanner: clients.virusScanner,
+            maxBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
+            lineDownloadTimeoutMs: config.attachments?.lineDownloadTimeoutMs ?? 30_000,
             now: clients.now
           })
         };

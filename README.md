@@ -366,7 +366,9 @@ Schedule lookup combines LLM/keyword-router arguments with deterministic query r
 
 Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. It first requires effective `save_resource` permission, stores a requester/source-scoped pending attachment session, and asks the user to explain the intended category or purpose.
 
-After the requester replies with a supported purpose, the bot downloads the LINE content, checks size, MIME/magic bytes, extension, safe filename, hash, target source write capability, and virus scan status. If the scanner is missing, times out, or returns anything other than `clean`, the save fails closed. A clean file is previewed and still requires the user to reply `保存` before upload. Only after confirmation does the bot upload to the configured OneDrive folder and write catalog metadata.
+After the requester replies with a supported purpose, the bot checks the target source write capability and creates a metadata-only confirmation preview. It does not download or scan the binary at this stage. Only after the requester replies `保存` does the bot download the LINE content once with `MAX_ATTACHMENT_BYTES` (default 25 MiB) and `LINE_CONTENT_DOWNLOAD_TIMEOUT_MS` (default 30 seconds), then checks actual size, MIME/magic bytes, extension, safe filename, hash, and virus scan status. If the scanner is missing, times out, or returns anything other than `clean`, the save fails closed. A confirmed clean file is uploaded to the configured OneDrive folder and indexed in the catalog through the shared binary publisher.
+
+The attachment binary is fetched outbound from the bot through the LINE Content API; it is not part of the inbound webhook JSON. API Gateway, Dapr, and Fastify webhook body limits therefore remain unchanged.
 
 Supported attachment targets in this flow:
 

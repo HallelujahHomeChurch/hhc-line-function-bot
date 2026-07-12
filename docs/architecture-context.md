@@ -320,14 +320,20 @@ permission, the webhook stores only a short-lived requester/source-scoped
 pending attachment session and asks for the intended purpose. It does not
 download, scan, upload, or publish the binary at this entrance stage.
 
-The later pending-attachment text handler is the only binary publish path. It
-accepts deterministic purposes such as slides, pop sheet music, hymn sheet
-music, or Xiaoha database/church resources; verifies the target source has write
-capability; downloads LINE content; checks size, MIME/magic bytes, extension,
-safe filename, hash, and virus scan status; then asks for explicit confirmation.
-Only a confirmed clean file is uploaded to OneDrive and upserted into
-`catalog_items`. The `xiaoha_database` manual source is skipped by catalog sync
-and receives a 90-day catalog `expiresAt`; formal synced sources do not.
+The later pending-attachment text handler accepts deterministic purposes such as
+slides, pop sheet music, hymn sheet music, or Xiaoha database/church resources.
+Purpose selection verifies the target source has write capability and stores a
+metadata-only confirmation target. It does not download or scan content. On
+explicit confirmation, the handler performs one bounded LINE Content API
+download and hands the bytes to the shared binary publisher for actual-size,
+MIME/magic-byte, extension, safe-filename, hash, virus-scan, conflict, upload,
+and catalog checks. Scanner results other than `clean` fail closed. The
+`xiaoha_database` manual source is skipped by catalog sync and receives a 90-day
+catalog `expiresAt`; formal synced sources do not.
+
+LINE binary bytes travel in the bot's outbound Content API response, not through
+the inbound webhook body. Gateway, Dapr, and Fastify webhook body limits are not
+attachment-size controls and remain unchanged.
 
 ## External Dependencies
 

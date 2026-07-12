@@ -472,6 +472,7 @@ async function handleWebhook(
         requestId,
         requesterDisplayName,
         sessionStore,
+        maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
         now: new Date()
       });
       if (attachmentResult) {
@@ -708,6 +709,7 @@ async function handleAttachmentMessage(input: {
   requestId: string;
   requesterDisplayName?: string;
   sessionStore?: SessionStore;
+  maxAttachmentBytes: number;
   now: Date;
 }): Promise<FunctionExecutionResult | undefined> {
   if (!isSupportedAttachment(input.event.message)) {
@@ -718,6 +720,12 @@ async function handleAttachmentMessage(input: {
   }
   if (!input.sessionStore) {
     return { ok: true, replyText: "目前無法保存檔案，請稍後再試。" };
+  }
+  if (
+    input.event.message.fileSize !== undefined &&
+    input.event.message.fileSize > input.maxAttachmentBytes
+  ) {
+    return { ok: true, replyText: "檔案太大，無法保存。" };
   }
 
   const stored = await storePendingAttachment({

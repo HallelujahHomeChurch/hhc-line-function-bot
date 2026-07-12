@@ -3011,6 +3011,45 @@ describe("LINE entrance", () => {
     expect(router.route).not.toHaveBeenCalled();
   });
 
+  it("rejects a declared attachment above the configured maximum before creating a session", async () => {
+    const config = testConfig();
+    config.attachments = { maxBytes: 4, lineDownloadTimeoutMs: 30_000 };
+    config.profiles[0] = {
+      ...config.profiles[0],
+      allowedMessageTypes: ["text", "file"],
+      enabledFunctions: ["save_resource"]
+    };
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const sessionStore = new InMemorySessionStore();
+    const app = createTestApp(config, {
+      router: { route: vi.fn() },
+      sessionStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uadmin" },
+      message: { type: "file", id: "file-large", fileName: "large.pdf", fileSize: 5 }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(replyText).toHaveBeenCalledWith("reply-token", "檔案太大，無法保存。", undefined);
+    await expect(
+      sessionStore.findPendingAttachment({
+        profileName: "main",
+        source: { type: "user", userId: "Uadmin" },
+        requesterUserId: "Uadmin"
+      })
+    ).resolves.toBeUndefined();
+  });
+
   it("allows a non-admin attachment when save_resource is granted through a role", async () => {
     const config = testConfig();
     config.profiles[0] = {
