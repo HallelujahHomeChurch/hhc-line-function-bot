@@ -52,6 +52,7 @@ variables:
   imageTag: "$(Build.SourceBranchName)-$(Build.BuildId)"
   resourceGroup: "alive"
   containerAppName: "hhc-line-function-bot"
+  catalogSyncJobName: "hhc-line-bot-catalog-sync"
 
 stages:
   - stage: Validate
@@ -183,6 +184,10 @@ stages:
                   "CLAMAV_HOST=172.16.65.5"
                   "CLAMAV_PORT=3310"
                   "CLAMAV_TIMEOUT_MS=15000"
+                  "OLLAMA_EMBEDDING_MODEL=bge-m3"
+                  "EMBEDDING_BATCH_SIZE=16"
+                  "EMBEDDING_TIMEOUT_MS=30000"
+                  "EMBEDDING_KEEP_ALIVE=1m"
                 )
                 if [[ ${#legacy_profile_envs[@]} -gt 0 ]]; then
                   update_args+=(--remove-env-vars "${legacy_profile_envs[@]}")
@@ -248,6 +253,37 @@ stages:
                   echo "Revision ${target_revision} did not become ready in time"
                   exit 1
                 fi
+
+                subscription_id="$(az account show --query id --output tsv)"
+                ollama_base_url="$(az rest \
+                  --method post \
+                  --uri "https://management.azure.com/subscriptions/${subscription_id}/resourceGroups/$(resourceGroup)/providers/Microsoft.App/containerApps/$(containerAppName)/listSecrets?api-version=2024-03-01" \
+                  --query "value[?name=='ollama-base-url'].value | [0]" \
+                  --output tsv)"
+                if [[ -z "${ollama_base_url}" ]]; then
+                  echo "Missing ollama-base-url app secret"
+                  exit 1
+                fi
+                az containerapp job secret set \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(catalogSyncJobName)" \
+                  --secrets "ollama-base-url=${ollama_base_url}" \
+                  --only-show-errors \
+                  --output none
+                unset ollama_base_url
+                az containerapp job update \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(catalogSyncJobName)" \
+                  --container-name catalog-sync \
+                  --image "${image_ref}" \
+                  --set-env-vars \
+                    "OLLAMA_BASE_URL=secretref:ollama-base-url" \
+                    "OLLAMA_EMBEDDING_MODEL=bge-m3" \
+                    "EMBEDDING_BATCH_SIZE=16" \
+                    "EMBEDDING_TIMEOUT_MS=30000" \
+                    "EMBEDDING_KEEP_ALIVE=1m" \
+                  --only-show-errors \
+                  --output none
 
                 legacy_profile_secret="$(az containerapp secret list \
                   --resource-group "$(resourceGroup)" \

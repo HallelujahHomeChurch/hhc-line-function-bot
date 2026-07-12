@@ -63,6 +63,10 @@ describe("production profile configuration deployment contract", () => {
     expect(pipeline).toContain("LINE_CONTENT_DOWNLOAD_TIMEOUT_MS=30000");
     expect(pipeline).toContain("EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS=15000");
     expect(pipeline).toContain("EXTERNAL_RESOURCE_MAX_REDIRECTS=3");
+    expect(pipeline).toContain("OLLAMA_EMBEDDING_MODEL=bge-m3");
+    expect(pipeline).toContain("EMBEDDING_BATCH_SIZE=16");
+    expect(pipeline).toContain("EMBEDDING_TIMEOUT_MS=30000");
+    expect(pipeline).toContain("EMBEDDING_KEEP_ALIVE=1m");
     expect(helper?.enabledFunctions).toEqual(
       expect.arrayContaining(["find_resource", "save_resource"])
     );
@@ -110,6 +114,13 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: GRAPH_CLIENT_SECRET");
     expect(job).toContain("name: NOTION_TOKEN");
     expect(job).toContain("name: NOTION_SERVICE_DATABASE_ID");
+    expect(job).toContain("name: OLLAMA_BASE_URL");
+    expect(job).toContain("secretRef: ollama-base-url");
+    expect(job).toContain("name: OLLAMA_EMBEDDING_MODEL");
+    expect(job).toContain("value: bge-m3");
+    expect(job).toContain("name: EMBEDDING_BATCH_SIZE");
+    expect(job).toContain("name: EMBEDDING_TIMEOUT_MS");
+    expect(job).toContain("name: EMBEDDING_KEEP_ALIVE");
     expect(job).not.toContain("ingress:");
     expect(pipeline).toContain("- aca.catalog-sync-job.yaml");
     expect(readme).toContain("aca.catalog-sync-job.yaml");
