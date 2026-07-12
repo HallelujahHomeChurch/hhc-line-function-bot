@@ -80,8 +80,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       ...refinement.structuredArguments,
       query: refinement.residualQuery
     });
-    const memorySpecific =
-      Boolean(refinedArgs.scheduleType) || isMemorySpecificRequest(args.query);
+    const memorySpecific = Boolean(refinedArgs.scheduleType) || isMemorySpecificRequest(args.query);
     const results = [];
 
     if (memorySpecific || (!serviceHandler && !options.scheduleStore)) {

@@ -47,7 +47,13 @@ export function createKeywordFallbackRouter(): KeywordFallbackRouter {
         return queryDomainIntentToRoute(domainIntent);
       }
 
-      const wikipediaIntent = extractWikipediaIntent(text);
+      const hasEnabledFunctionKeyword = rules.some(
+        (rule) =>
+          rule.name !== "query_wikipedia" &&
+          input.enabledFunctions.includes(rule.name) &&
+          rule.keywordFallback.keywords.some((keyword) => includesKeyword(text, keyword))
+      );
+      const wikipediaIntent = hasEnabledFunctionKeyword ? undefined : extractWikipediaIntent(text);
       if (wikipediaIntent) {
         if (!input.enabledFunctions.includes("query_wikipedia")) {
           return { type: "deny", reason: "function_disabled", provider: "keyword" };

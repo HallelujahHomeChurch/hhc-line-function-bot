@@ -202,11 +202,7 @@ function consumeMatchingDateTerms(
   }
 }
 
-function consumeIfPresent(
-  query: string,
-  value: string | undefined,
-  consumedTerms: string[]
-): void {
+function consumeIfPresent(query: string, value: string | undefined, consumedTerms: string[]): void {
   if (value && query.includes(value)) {
     consumedTerms.push(value);
   }

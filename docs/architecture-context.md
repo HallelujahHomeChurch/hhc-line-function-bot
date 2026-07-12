@@ -306,6 +306,14 @@ the scheduled sync job writes them into `schedule_items` as read-model rows with
 live Notion. LINE-created schedules remain write-controlled through the schedule
 memory flow and must not write back to Notion-origin rows.
 
+`query_schedule` is also the first adopter of the reusable query-refinement
+contract. Router-provided arguments remain useful LLM evidence, while the
+schedule adapter deterministically fills recognizable date, meeting, role,
+schedule-type, and source-category values. Terms consumed by those structured
+values are removed before the remaining text reaches in-memory or PostgreSQL
+search. Future query functions should add their own domain adapter; the generic
+router must not accumulate function-specific residual-query rules.
+
 LINE attachment handling is gated before storage. If a profile explicitly allows
 `image` or `file` messages and the requester has effective `save_resource`
 permission, the webhook stores only a short-lived requester/source-scoped

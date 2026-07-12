@@ -86,10 +86,7 @@ describe("query_schedule", () => {
       context("保存青年出隊服事表")
     );
 
-    const result = await query(
-      { query: "下一場青年出隊服事表" },
-      context("下一場青年出隊服事表")
-    );
+    const result = await query({ query: "下一場青年出隊服事表" }, context("下一場青年出隊服事表"));
 
     expect(result.replyText).toContain("青年出隊");
     expect(result.replyText).toContain("Ray");

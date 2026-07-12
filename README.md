@@ -360,6 +360,8 @@ For the current HHC media service schedule database, use these property mappings
 
 The production catalog sync job also registers the media team service schedule as a Notion `schedule` source and writes rows into the PostgreSQL `schedule_items` read model. `query_schedule` checks that read model before any live Notion fallback, so users only ask for a service schedule; they never need to choose Notion or PostgreSQL. LINE-created schedules remain separate write-controlled schedule records and do not write back to Notion.
 
+Schedule lookup combines LLM/keyword-router arguments with deterministic query refinement. Recognized date, meeting, role, schedule-type, and media-team terms become structured filters and are removed before residual text search. An empty residual therefore adds no full-text condition. This shared refinement contract can be adopted by future query functions, but each domain must provide its own adapter instead of adding function-specific parsing to the router.
+
 ## LINE Attachment Save Gate
 
 Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. It first requires effective `save_resource` permission, stores a requester/source-scoped pending attachment session, and asks the user to explain the intended category or purpose.

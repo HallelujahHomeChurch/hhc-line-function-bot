@@ -198,6 +198,42 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         }
       },
       {
+        kind: "positive",
+        text: "小哈 給我下一場影視團隊的服事表",
+        expected: {
+          type: "execute",
+          action: "query_schedule",
+          arguments: {
+            query: "給我下一場影視團隊的服事表",
+            dateIntent: "next_meeting"
+          }
+        }
+      },
+      {
+        kind: "positive",
+        text: "小哈 下一場服事表的音控是誰",
+        expected: {
+          type: "execute",
+          action: "query_schedule",
+          arguments: {
+            query: "下一場服事表的音控是誰",
+            dateIntent: "next_meeting"
+          }
+        }
+      },
+      {
+        kind: "positive",
+        text: "小哈 下一場青年出隊服事表",
+        expected: {
+          type: "execute",
+          action: "query_schedule",
+          arguments: {
+            query: "下一場青年出隊服事表",
+            dateIntent: "next_meeting"
+          }
+        }
+      },
+      {
         kind: "missing_slot",
         text: "小哈 查服事表",
         expected: {
@@ -233,6 +269,15 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           type: "execute",
           action: "find_ppt_slides",
           arguments: { query: "主日報告", matchMode: "fuzzy" }
+        }
+      },
+      {
+        kind: "cross_function",
+        text: "小哈 查流行歌譜 奇異恩典",
+        expected: {
+          type: "execute",
+          action: "find_sheet_music",
+          arguments: { query: "奇異恩典", fileType: "pdf", matchMode: "fuzzy" }
         }
       }
     ],
