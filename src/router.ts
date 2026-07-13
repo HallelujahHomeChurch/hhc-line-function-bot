@@ -1,7 +1,10 @@
 import { z } from "zod";
 
 import { parseFunctionArguments } from "./function-arguments.js";
-import { normalizeFunctionArguments } from "./functions/argument-normalization.js";
+import {
+  hasExplicitWriteEvidence,
+  normalizeFunctionArguments
+} from "./functions/argument-normalization.js";
 import { getFunctionDefinition, getFunctionDefinitions } from "./functions/definitions.js";
 import { queryDomainIntentToRoute, resolveQueryDomainIntent } from "./query-domain-resolver.js";
 import { FUNCTION_NAMES, isFunctionName, isSystemActionName } from "./types.js";
@@ -199,7 +202,7 @@ function applyRoutePolicy(
   if (!definition || definition.sideEffectLevel === "read") {
     return route;
   }
-  if (!hasWriteEvidence(input.text, route.arguments)) {
+  if (!hasExplicitWriteEvidence(input.text, route.arguments)) {
     return { type: "deny", reason: "write_evidence_missing", provider: "router" };
   }
   return route;
@@ -226,52 +229,6 @@ function recoverControlledRoute(
         : undefined,
     fallbackReason: rejected.type === "deny" ? rejected.reason : "route_policy_rejected"
   };
-}
-
-function hasWriteEvidence(text: string, args: JsonRecord): boolean {
-  const normalized = text.normalize("NFKC");
-  if (!/(?:記住|保存|儲存|新增|修改|改|刪除|移除)/u.test(normalized)) {
-    return false;
-  }
-  return writeEvidenceStrings(args).every((value) => stringHasEvidence(normalized, value));
-}
-
-const nonEvidenceArgumentKeys = new Set([
-  "operation",
-  "scheduleType",
-  "resourceType",
-  "visibility",
-  "matchMode",
-  "fileType",
-  "entryId",
-  "memoryId",
-  "confirm",
-  "cancel",
-  "query"
-]);
-
-function writeEvidenceStrings(value: unknown, key?: string): string[] {
-  if (key && nonEvidenceArgumentKeys.has(key)) {
-    return [];
-  }
-  if (typeof value === "string") {
-    return value.trim() ? [value.trim()] : [];
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return [];
-  }
-  return Object.entries(value).flatMap(([childKey, child]) =>
-    writeEvidenceStrings(child, childKey)
-  );
-}
-
-function stringHasEvidence(text: string, value: string): boolean {
-  const normalizedValue = value.normalize("NFKC");
-  if (text.includes(normalizedValue)) {
-    return true;
-  }
-  const date = normalizedValue.match(/^\d{4}-(\d{2})-(\d{2})$/u);
-  return date ? text.includes(`${Number(date[1])}/${Number(date[2])}`) : false;
 }
 
 function isIntroRequest(text: string): boolean {
