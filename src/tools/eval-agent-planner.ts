@@ -75,19 +75,20 @@ interface ExpectedFinal {
   capability?: FunctionName;
   reasonCode?: ValidatedAgentPlan["reasonCode"];
   absentArgumentKeys?: string[];
+  arguments?: Record<string, unknown>;
 }
 
 export interface AgentPlannerEvalCase {
   name: string;
   text: string;
   enabledFunctions: FunctionName[];
-  proposal: AgentPlanProposalInput;
   expectedCandidates: FunctionName[];
   expectedProposal: ExpectedProposal;
   expectedFinal: ExpectedFinal;
   activeTask?: ActiveTaskContext;
   knowledgeSources?: KnowledgeSourceMetadata[];
   retrievalEvidence?: FunctionName[];
+  offlineOnly?: boolean;
 }
 
 function proposed(
@@ -114,27 +115,26 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     name: "acceptance-1-focused-schedule-role",
     text: "幫我查下一場聚會服事的導播",
     enabledFunctions: ["query_schedule"],
-    proposal: proposed("execute", "query_schedule", {
-      query: "幫我查下一場聚會服事的導播",
-      dateIntent: "next_meeting",
-      role: "導播"
-    }),
     expectedCandidates: ["query_schedule"],
     expectedProposal: { disposition: "execute", capability: "query_schedule" },
-    expectedFinal: { disposition: "execute", capability: "query_schedule" }
+    expectedFinal: {
+      disposition: "execute",
+      capability: "query_schedule",
+      arguments: { dateIntent: "next_meeting", role: "導播" }
+    }
   },
   {
     name: "acceptance-2-bare-role-follow-up",
     text: "前攝影",
     enabledFunctions: ["query_schedule"],
     activeTask: scheduleTask,
-    proposal: proposed("continue", "query_schedule", { query: "前攝影", role: "前攝影" }),
     expectedCandidates: ["query_schedule"],
     expectedProposal: { disposition: "continue", capability: "query_schedule" },
     expectedFinal: {
       disposition: "execute",
       capability: "query_schedule",
-      reasonCode: "active_task_refinement"
+      reasonCode: "active_task_refinement",
+      arguments: { role: "前攝影" }
     }
   },
   {
@@ -142,7 +142,6 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     text: "攝影是誰",
     enabledFunctions: ["query_schedule"],
     activeTask: scheduleTask,
-    proposal: proposed("refine", "query_schedule", { query: "攝影是誰", role: "攝影" }),
     expectedCandidates: ["query_schedule"],
     expectedProposal: { disposition: "refine", capability: "query_schedule" },
     expectedFinal: {
@@ -156,17 +155,13 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     text: "下一場服事表的前攝影是誰",
     enabledFunctions: ["query_schedule"],
     activeTask: scheduleTask,
-    proposal: proposed("execute", "query_schedule", {
-      query: "下一場服事表的前攝影是誰",
-      dateIntent: "next_meeting",
-      role: "前攝影"
-    }),
     expectedCandidates: ["query_schedule"],
     expectedProposal: { disposition: "execute", capability: "query_schedule" },
     expectedFinal: {
       disposition: "execute",
       capability: "query_schedule",
-      reasonCode: "explicit_intent"
+      reasonCode: "explicit_intent",
+      arguments: { dateIntent: "next_meeting", role: "前攝影" }
     }
   },
   {
@@ -174,7 +169,6 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     text: "第一天去哪裡",
     enabledFunctions: ["query_knowledge"],
     knowledgeSources: [retreatMetadata],
-    proposal: proposed("execute", "query_knowledge", { query: "第一天去哪裡" }),
     expectedCandidates: ["query_knowledge"],
     expectedProposal: { disposition: "execute", capability: "query_knowledge" },
     expectedFinal: { disposition: "execute", capability: "query_knowledge" }
@@ -184,7 +178,6 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     text: "那幾點集合",
     enabledFunctions: ["query_knowledge"],
     activeTask: knowledgeTask,
-    proposal: proposed("continue", "query_knowledge", { query: "那幾點集合" }),
     expectedCandidates: ["query_knowledge"],
     expectedProposal: { disposition: "continue", capability: "query_knowledge" },
     expectedFinal: {
@@ -198,17 +191,13 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     text: "那主日音控呢",
     enabledFunctions: ["query_knowledge", "query_schedule"],
     activeTask: knowledgeTask,
-    proposal: proposed("switch", "query_schedule", {
-      query: "那主日音控呢",
-      meeting: "主日",
-      role: "音控"
-    }),
     expectedCandidates: ["query_schedule"],
     expectedProposal: { disposition: "switch", capability: "query_schedule" },
     expectedFinal: {
       disposition: "execute",
       capability: "query_schedule",
-      reasonCode: "explicit_capability_switch"
+      reasonCode: "explicit_capability_switch",
+      arguments: { meeting: "主日", role: "音控" }
     }
   },
   {
@@ -216,7 +205,6 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     text: "最近好累",
     enabledFunctions: ["query_knowledge", "query_schedule"],
     activeTask: knowledgeTask,
-    proposal: noPlan(),
     expectedCandidates: [],
     expectedProposal: { status: "no_plan" },
     expectedFinal: { disposition: "chat", reasonCode: "no_capability_evidence" }
@@ -225,7 +213,6 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     name: "acceptance-9-requester-isolation-no-inherited-task",
     text: "前攝影",
     enabledFunctions: ["query_schedule"],
-    proposal: noPlan(),
     expectedCandidates: [],
     expectedProposal: { status: "no_plan" },
     expectedFinal: { disposition: "chat", reasonCode: "no_capability_evidence" }
@@ -235,7 +222,6 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     text: "第一天去哪裡",
     enabledFunctions: ["query_knowledge"],
     activeTask: expiredKnowledgeTask,
-    proposal: proposed("continue", "query_knowledge", { query: "第一天去哪裡" }),
     expectedCandidates: ["query_knowledge"],
     expectedProposal: { disposition: "continue", capability: "query_knowledge" },
     expectedFinal: {
@@ -248,25 +234,19 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     name: "acceptance-11-model-cannot-inject-date",
     text: "查主日服事的音控",
     enabledFunctions: ["query_schedule"],
-    proposal: proposed("execute", "query_schedule", {
-      query: "查主日服事的音控",
-      meeting: "主日",
-      role: "音控",
-      specificDate: "2026-07-21"
-    }),
     expectedCandidates: ["query_schedule"],
     expectedProposal: { disposition: "execute", capability: "query_schedule" },
     expectedFinal: {
       disposition: "execute",
       capability: "query_schedule",
-      absentArgumentKeys: ["specificDate"]
+      absentArgumentKeys: ["specificDate"],
+      arguments: { meeting: "主日", role: "音控" }
     }
   },
   {
     name: "negative-no-capability",
     text: "你好",
     enabledFunctions: ["query_schedule", "query_knowledge"],
-    proposal: noPlan(),
     expectedCandidates: [],
     expectedProposal: { status: "no_plan" },
     expectedFinal: { disposition: "chat" }
@@ -275,17 +255,15 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     name: "disabled-capability",
     text: "查主日服事",
     enabledFunctions: [],
-    proposal: noPlan(),
     expectedCandidates: [],
     expectedProposal: { status: "no_plan" },
-    expectedFinal: { disposition: "chat" }
+    expectedFinal: { disposition: "deny", reasonCode: "function_disabled" }
   },
   {
     name: "ambiguous-active-entity",
     text: "攝影是誰",
     enabledFunctions: ["query_schedule"],
     activeTask: scheduleTask,
-    proposal: proposed("refine", "query_schedule", { query: "攝影是誰", role: "攝影" }),
     expectedCandidates: ["query_schedule"],
     expectedProposal: { disposition: "refine", capability: "query_schedule" },
     expectedFinal: { disposition: "clarify", reasonCode: "ambiguous_entity" }
@@ -295,16 +273,82 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     text: "那主日音控呢",
     enabledFunctions: ["query_knowledge", "query_schedule"],
     activeTask: knowledgeTask,
-    proposal: proposed("switch", "query_schedule", {
-      query: "那主日音控呢",
-      meeting: "主日",
-      role: "音控"
-    }),
     expectedCandidates: ["query_schedule"],
     expectedProposal: { disposition: "switch", capability: "query_schedule" },
-    expectedFinal: { disposition: "execute", capability: "query_schedule" }
+    expectedFinal: {
+      disposition: "execute",
+      capability: "query_schedule",
+      arguments: { meeting: "主日", role: "音控" }
+    }
+  },
+  {
+    name: "negative-overreaching-proposal",
+    text: "你好",
+    enabledFunctions: ["query_schedule"],
+    expectedCandidates: [],
+    expectedProposal: { disposition: "execute", capability: "query_schedule" },
+    expectedFinal: { disposition: "deny", reasonCode: "candidate_not_allowed" },
+    offlineOnly: true
   }
 ];
+
+const OFFLINE_PLANNER_FIXTURES: Readonly<Record<string, AgentPlanProposalInput>> = {
+  "acceptance-1-focused-schedule-role": proposed("execute", "query_schedule", {
+    query: "幫我查下一場聚會服事的導播",
+    role: "導播",
+    specificDate: "2026-07-21"
+  }),
+  "acceptance-2-bare-role-follow-up": proposed("continue", "query_schedule", {
+    query: "前攝影",
+    role: "前攝影"
+  }),
+  "acceptance-3-ambiguous-role-follow-up": proposed("refine", "query_schedule", {
+    query: "攝影是誰",
+    role: "攝影"
+  }),
+  "acceptance-4-explicit-now-query-does-not-advance": proposed("execute", "query_schedule", {
+    query: "下一場服事表的前攝影是誰",
+    dateIntent: "next_meeting",
+    role: "前攝影"
+  }),
+  "acceptance-5-dynamic-knowledge-title": proposed("execute", "query_knowledge", {
+    query: "第一天去哪裡"
+  }),
+  "acceptance-6-elliptical-knowledge-follow-up": proposed("continue", "query_knowledge", {
+    query: "那幾點集合"
+  }),
+  "acceptance-7-explicit-cross-function-switch": proposed("switch", "query_schedule", {
+    query: "那主日音控呢",
+    meeting: "晨更",
+    role: "導播"
+  }),
+  "acceptance-8-small-talk-with-active-task": noPlan(),
+  "acceptance-9-requester-isolation-no-inherited-task": noPlan(),
+  "acceptance-10-expired-task-unavailable": proposed("continue", "query_knowledge", {
+    query: "第一天去哪裡"
+  }),
+  "acceptance-11-model-cannot-inject-date": proposed("execute", "query_schedule", {
+    query: "查主日服事的音控",
+    meeting: "主日",
+    role: "音控",
+    specificDate: "2026-07-21"
+  }),
+  "negative-no-capability": noPlan(),
+  "disabled-capability": noPlan(),
+  "ambiguous-active-entity": proposed("refine", "query_schedule", {
+    query: "攝影是誰",
+    role: "攝影"
+  }),
+  "cross-function-switch": proposed("switch", "query_schedule", {
+    query: "那主日音控呢",
+    meeting: "主日",
+    role: "音控"
+  }),
+  "negative-overreaching-proposal": proposed("execute", "query_schedule", {
+    query: "你好",
+    role: "音控"
+  })
+};
 
 export interface AgentPlannerEvalReport {
   total: number;
@@ -315,18 +359,23 @@ export interface AgentPlannerEvalReport {
 }
 
 export async function runOfflineAgentPlannerEval(): Promise<AgentPlannerEvalReport> {
-  return evaluateAgentPlannerCases(async (entry) => entry.proposal);
+  return evaluateAgentPlannerCases(async (entry) => {
+    const proposal = OFFLINE_PLANNER_FIXTURES[entry.name];
+    if (!proposal) throw new Error(`missing_offline_fixture:${entry.name}`);
+    return proposal;
+  });
 }
 
 export async function evaluateAgentPlannerCases(
   propose: (
     entry: AgentPlannerEvalCase,
     candidates: ReturnType<typeof buildCapabilityCandidates>
-  ) => Promise<AgentPlanProposalInput>
+  ) => Promise<AgentPlanProposalInput>,
+  cases: readonly AgentPlannerEvalCase[] = AGENT_PLANNER_EVAL_CASES
 ): Promise<AgentPlannerEvalReport> {
   const proposalFailures: string[] = [];
   const validatedFailures: string[] = [];
-  for (const entry of AGENT_PLANNER_EVAL_CASES) {
+  for (const entry of cases) {
     const candidates = buildCapabilityCandidates({
       text: entry.text,
       enabledFunctions: entry.enabledFunctions,
@@ -366,9 +415,9 @@ export async function evaluateAgentPlannerCases(
     }
   }
   return {
-    total: AGENT_PLANNER_EVAL_CASES.length,
-    proposalPassed: AGENT_PLANNER_EVAL_CASES.length - proposalFailures.length,
-    validatedPassed: AGENT_PLANNER_EVAL_CASES.length - validatedFailures.length,
+    total: cases.length,
+    proposalPassed: cases.length - proposalFailures.length,
+    validatedPassed: cases.length - validatedFailures.length,
     proposalFailures,
     validatedFailures
   };
@@ -390,7 +439,12 @@ function matchesFinal(plan: ValidatedAgentPlan, expected: ExpectedFinal): boolea
   }
   if (expected.reasonCode && plan.reasonCode !== expected.reasonCode) return false;
   if (expected.absentArgumentKeys && plan.disposition === "execute") {
-    return expected.absentArgumentKeys.every((key) => !(key in plan.arguments));
+    if (!expected.absentArgumentKeys.every((key) => !(key in plan.arguments))) return false;
+  }
+  if (expected.arguments && plan.disposition === "execute") {
+    return Object.entries(expected.arguments).every(
+      ([key, value]) => plan.arguments[key] === value
+    );
   }
   return true;
 }

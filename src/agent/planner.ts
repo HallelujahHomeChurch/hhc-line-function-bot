@@ -37,6 +37,7 @@ const LIMITS = {
 
 const candidateReasonSchema = z.enum([
   "explicit_intent",
+  "argument_evidence",
   "active_task_entity",
   "knowledge_metadata",
   "retrieval_evidence",

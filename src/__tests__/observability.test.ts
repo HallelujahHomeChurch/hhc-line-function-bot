@@ -74,14 +74,13 @@ describe("observability sanitization", () => {
 
     expect(sanitized).toEqual({
       kind: "route",
-      requestId: "req-1",
-      profileName: "helper",
+      requestId: "present",
+      profileName: "configured",
       sourceType: "user",
       provider: "ollama",
       lane: "function_routing",
       outcome: "execute",
       action: "find_ppt_slides",
-      confidence: 0.91,
       durationMs: 12
     });
     expect(JSON.stringify(sanitized)).not.toContain("奇異恩典");
@@ -89,6 +88,48 @@ describe("observability sanitization", () => {
     expect(JSON.stringify(sanitized)).not.toContain("reply-token");
     expect(JSON.stringify(sanitized)).not.toContain("U123");
     expect(JSON.stringify(sanitized)).not.toContain("token=secret");
+  });
+
+  it("fails closed for arbitrary strings in non-controlled telemetry", () => {
+    const sanitized = sanitizeActionTelemetryEvent({
+      kind: "function_error",
+      requestId: "request-secret-id",
+      profileName: "private-profile-id",
+      sourceType: "group",
+      phase: "function",
+      provider: "unknown-provider-secret",
+      lane: "private-lane",
+      outcome: "private-outcome",
+      action: "王小明",
+      reason: "bare-secret-evidence",
+      fallbackProvider: "private-provider",
+      fallbackReason: "主日服事表.xlsx",
+      handler: "private-handler",
+      command: "invite_code=SECRET123",
+      errorName: "private-error-name",
+      engagement: "private-engagement",
+      smallTalkCategory: "private-category",
+      dedup: "drive-item-secret",
+      queryHash: "private-query-id",
+      authorized: true,
+      ok: false,
+      durationMs: 999_999
+    });
+
+    expect(sanitized).toEqual({
+      kind: "function_error",
+      requestId: "present",
+      profileName: "configured",
+      sourceType: "group",
+      phase: "function",
+      errorName: "Error",
+      authorized: true,
+      ok: false,
+      durationMs: 60_000
+    });
+    expect(JSON.stringify(sanitized)).not.toMatch(
+      /request-secret|private-|王小明|bare-secret|主日服事表|SECRET123|drive-item/u
+    );
   });
 
   it("redacts sensitive strings in error messages", () => {
@@ -139,7 +180,15 @@ describe("observability sanitization", () => {
 
     const [record] = await store.list();
 
-    expect(record?.message).toBe("secret=[redacted] [url]");
+    expect(record).toEqual({
+      requestId: "present",
+      occurredAt: "2026-07-07T00:00:00.000Z",
+      profileName: "configured",
+      sourceType: "user",
+      phase: "router",
+      errorName: "Error",
+      message: "redacted"
+    });
   });
 
   it("sanitizes console route observer output", async () => {

@@ -951,7 +951,6 @@ function startShadowObservation(
             : undefined,
         reasonCode: plan.reasonCode
       } satisfies ControlledShadowObservation;
-      await observer?.(observation);
       if (steps)
         await options.traceStore?.record({
           requestId: input.requestId,
@@ -960,6 +959,11 @@ function startShadowObservation(
           sourceType: input.event.source.type,
           steps: [...steps, controlledTraceStep(observation)]
         });
+      if (observer) {
+        void Promise.resolve()
+          .then(() => observer(observation))
+          .catch(() => undefined);
+      }
     })
     .catch(() => undefined);
 }

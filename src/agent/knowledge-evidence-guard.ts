@@ -31,8 +31,17 @@ export function hasWriteIntent(text: string): boolean {
 export function isConservativeKnowledgeEvidenceText(text: string): boolean {
   const addressedText = stripBotAddress(text);
   if (hasWriteIntent(addressedText)) return false;
-  if (classifySmallTalkCategory(addressedText)) return false;
+  if (isInterpersonalOrSmallTalkText(addressedText)) return false;
   return Array.from(normalizeIntentText(addressedText)).length >= 2;
+}
+
+export function isInterpersonalOrSmallTalkText(text: string): boolean {
+  const addressedText = stripBotAddress(text);
+  if (classifySmallTalkCategory(addressedText)) return true;
+  const normalized = normalizeIntentText(addressedText);
+  return /^(?:那|所以|請問|想問)?(?:你|妳|您)(?:是誰|叫什麼|名字是什麼|是什麼|會什麼|能做什麼|可以做什麼)$/u.test(
+    normalized
+  );
 }
 
 function stripBotAddress(text: string): string {

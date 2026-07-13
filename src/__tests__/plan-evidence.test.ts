@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { hasCurrentTextEvidence } from "../agent/plan-evidence.js";
+import {
+  hasCurrentTextEvidence,
+  hasEllipticalActiveTaskReference
+} from "../agent/plan-evidence.js";
 
 describe("plan evidence scalar grounding", () => {
   it("matches numeric evidence as an exact token instead of a substring", () => {
@@ -30,5 +33,10 @@ describe("plan evidence scalar grounding", () => {
     expect(hasCurrentTextEvidence("不要確認", true)).toBe(false);
     expect(hasCurrentTextEvidence("不要確認", false)).toBe(true);
     expect(hasCurrentTextEvidence("確認保存", true)).toBe(true);
+  });
+
+  it("distinguishes informational ellipsis from interpersonal chat", () => {
+    expect(hasEllipticalActiveTaskReference("那幾點集合？")).toBe(true);
+    expect(hasEllipticalActiveTaskReference("那你是誰？")).toBe(false);
   });
 });

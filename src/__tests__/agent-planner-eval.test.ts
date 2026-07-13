@@ -17,9 +17,21 @@ describe("controlled agent planner eval corpus", () => {
         "negative-no-capability",
         "disabled-capability",
         "ambiguous-active-entity",
-        "cross-function-switch"
+        "cross-function-switch",
+        "negative-overreaching-proposal"
       ])
     );
+    expect(AGENT_PLANNER_EVAL_CASES.every((entry) => !("proposal" in entry))).toBe(true);
+    expect(
+      AGENT_PLANNER_EVAL_CASES.find(({ name }) => name === "disabled-capability")?.expectedFinal
+    ).toMatchObject({ disposition: "deny", reasonCode: "function_disabled" });
+    expect(
+      AGENT_PLANNER_EVAL_CASES.find(({ name }) => name === "acceptance-11-model-cannot-inject-date")
+        ?.expectedFinal
+    ).toMatchObject({
+      arguments: { meeting: "主日", role: "音控" },
+      absentArgumentKeys: ["specificDate"]
+    });
   });
 
   it("passes deterministic stub proposals through the real validator", async () => {

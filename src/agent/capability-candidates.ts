@@ -6,6 +6,8 @@ import {
   type FunctionDefinition
 } from "../functions/definitions.js";
 import type { FunctionName } from "../types.js";
+import { parseFunctionArguments } from "../function-arguments.js";
+import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
 import {
   resolveKnowledgeRoutingMetadata,
   type KnowledgeRoutingMetadata
@@ -19,6 +21,7 @@ export interface KnowledgeSourceMetadata extends Omit<KnowledgeRoutingMetadata, 
 
 export type CapabilityCandidateReason =
   | "explicit_intent"
+  | "argument_evidence"
   | "active_task_entity"
   | "knowledge_metadata"
   | "retrieval_evidence"
@@ -56,6 +59,7 @@ interface RankedCandidate extends CapabilityCandidate {
 
 const REASON_SCORE: Record<CapabilityCandidateReason, number> = {
   explicit_intent: 400,
+  argument_evidence: 400,
   active_task_entity: 300,
   knowledge_metadata: 200,
   retrieval_evidence: 150,
@@ -120,6 +124,9 @@ function strongestReason(
 ): CapabilityCandidateReason | undefined {
   const contract = definition.agentCapability!;
   if (matchesAnyExact(input.text, contract.intents)) return "explicit_intent";
+  if (!hasWriteIntent(input.text) && hasDeclarativeArgumentEvidence(definition, input.text)) {
+    return "argument_evidence";
+  }
   const knowledgeDefinition = definition.requires.includes("knowledge");
   const knowledgeEvidenceAllowed =
     !knowledgeDefinition || isConservativeKnowledgeEvidenceText(input.text);
@@ -146,6 +153,29 @@ function strongestReason(
     return "capability_hint";
   }
   return undefined;
+}
+
+export function hasDeclarativeArgumentEvidence(
+  definition: FunctionDefinition,
+  text: string
+): boolean {
+  const rule = definition.agentCapability?.argumentEvidence;
+  if (!rule) return false;
+  const normalized = normalizeFunctionArguments(
+    definition.name,
+    { [rule.queryArgument]: text },
+    { text, inferStructuredEvidence: true }
+  );
+  const parsed = parseFunctionArguments(definition.name, normalized);
+  if (!parsed || !rule.allOf.every((field) => hasArgumentValue(parsed[field]))) return false;
+  return !rule.anyOf?.length || rule.anyOf.some((field) => hasArgumentValue(parsed[field]));
+}
+
+function hasArgumentValue(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean") return true;
+  return Array.isArray(value) && value.length > 0;
 }
 
 function matchesActiveTaskEntity(
@@ -324,6 +354,17 @@ function cloneContract(contract: AgentCapabilityContract): AgentCapabilityContra
     candidateHints: [...contract.candidateHints],
     operations: [...contract.operations],
     ...(contract.entityTypes ? { entityTypes: [...contract.entityTypes] } : {}),
+    ...(contract.argumentEvidence
+      ? {
+          argumentEvidence: {
+            queryArgument: contract.argumentEvidence.queryArgument,
+            allOf: [...contract.argumentEvidence.allOf],
+            ...(contract.argumentEvidence.anyOf
+              ? { anyOf: [...contract.argumentEvidence.anyOf] }
+              : {})
+          }
+        }
+      : {}),
     ...(contract.refinableFields ? { refinableFields: [...contract.refinableFields] } : {}),
     ...(contract.retrievalEvidence
       ? { retrievalEvidence: { provider: contract.retrievalEvidence.provider } }

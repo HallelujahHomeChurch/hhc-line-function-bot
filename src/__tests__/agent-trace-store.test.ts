@@ -12,6 +12,67 @@ const sensitiveValues = [
 ];
 
 describe("controlled agent trace sanitization", () => {
+  it("fails closed for metadata and every legacy trace phase", async () => {
+    const store = new InMemoryAgentTraceStore(10);
+
+    await store.record({
+      requestId: "request-secret-id",
+      occurredAt: "2026-07-14T00:00:00.000Z",
+      profileName: "private-profile-id",
+      sourceType: "group",
+      steps: [
+        {
+          phase: "route",
+          outcome: "execute",
+          action: "find_ppt_slides",
+          provider: "ollama",
+          lane: "function_routing",
+          reason: "bare-secret-evidence",
+          query: "present",
+          ok: true,
+          errorName: "主日服事表.xlsx",
+          dedup: "drive-item-secret",
+          durationMs: 999_999
+        },
+        {
+          phase: "function_error",
+          outcome: "function",
+          action: "王小明",
+          provider: "unknown-provider-secret",
+          reason: "invite_code=SECRET123",
+          errorName: "private-error-name"
+        }
+      ]
+    });
+
+    const traces = await store.list();
+    expect(traces).toEqual([
+      {
+        requestId: "present",
+        occurredAt: "2026-07-14T00:00:00.000Z",
+        profileName: "configured",
+        sourceType: "group",
+        steps: [
+          {
+            phase: "route",
+            outcome: "execute",
+            action: "find_ppt_slides",
+            provider: "ollama",
+            lane: "function_routing",
+            query: "present",
+            ok: true,
+            errorName: "Error",
+            durationMs: 60_000
+          },
+          { phase: "function_error", outcome: "function", errorName: "Error" }
+        ]
+      }
+    ]);
+    expect(JSON.stringify(traces)).not.toMatch(
+      /request-secret-id|private-profile-id|bare-secret|主日服事表|drive-item|王小明|unknown-provider|SECRET123|private-error/u
+    );
+  });
+
   it("keeps only bounded diagnostics for controlled-agent phases", async () => {
     const store = new InMemoryAgentTraceStore(10);
 
@@ -67,9 +128,9 @@ describe("controlled agent trace sanitization", () => {
 
     await expect(store.list()).resolves.toEqual([
       {
-        requestId: "req-1",
+        requestId: "present",
         occurredAt: "2026-07-14T00:00:00.000Z",
-        profileName: "helper",
+        profileName: "configured",
         sourceType: "group",
         steps: [
           {

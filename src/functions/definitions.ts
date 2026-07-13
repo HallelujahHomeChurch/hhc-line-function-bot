@@ -66,12 +66,19 @@ export interface FunctionMemoryPolicy {
 export interface AgentCapabilityContract {
   intents: string[];
   candidateHints: string[];
+  argumentEvidence?: AgentArgumentEvidenceContract;
   retrievalEvidence?: { provider: string };
   entityTypes?: string[];
   refinableFields?: string[];
   operations: Array<"continue" | "refine" | "advance" | "select">;
   ambiguity?: "clarify";
   activeEvidence?: AgentActiveEvidenceContract;
+}
+
+export interface AgentArgumentEvidenceContract {
+  queryArgument: string;
+  allOf: string[];
+  anyOf?: string[];
 }
 
 export interface AgentActiveEvidenceRule {
@@ -215,18 +222,13 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     scope: "group_capable",
     sideEffectLevel: "read",
     agentCapability: {
-      intents: [
-        "查服事",
-        "查服事表",
-        "找服事",
-        "下一場服事",
-        "本週服事",
-        "主日服事",
-        "主日音控",
-        "主日導播",
-        "主日攝影"
-      ],
+      intents: ["查服事", "查服事表", "找服事", "下一場服事", "本週服事", "主日服事"],
       candidateHints: ["服事", "服事表", "服事安排", "聚會服事"],
+      argumentEvidence: {
+        queryArgument: "query",
+        allOf: ["role"],
+        anyOf: ["meeting", "date", "specificDate", "dateIntent"]
+      },
       entityTypes: ["date", "meeting", "role", "scheduleType"],
       refinableFields: ["date", "specificDate", "dateIntent", "meeting", "role", "scheduleType"],
       operations: ["continue", "refine", "advance", "select"],

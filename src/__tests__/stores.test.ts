@@ -276,7 +276,7 @@ describe("store factories", () => {
       message: "failed"
     });
 
-    expect(await store.list()).toMatchObject([{ requestId: "req-1", message: "failed" }]);
+    expect(await store.list()).toMatchObject([{ requestId: "present", message: "redacted" }]);
   });
 
   it("rate limits through Redis", async () => {

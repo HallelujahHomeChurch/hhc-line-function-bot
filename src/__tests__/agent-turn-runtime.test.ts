@@ -533,7 +533,7 @@ describe("AgentTurnRuntime", () => {
       expect(await traceStore.list()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            requestId: "req-shadow-trace",
+            requestId: "present",
             steps: expect.arrayContaining([
               expect.objectContaining({ phase: "active_task", lifecycleOutcome: "missing" }),
               expect.objectContaining({
@@ -551,6 +551,68 @@ describe("AgentTurnRuntime", () => {
       )
     );
     expect(JSON.stringify(await traceStore.list())).not.toContain("查主日服事");
+  });
+
+  it("persists detached shadow diagnostics before an external observer can hang", async () => {
+    const traceStore = new InMemoryAgentTraceStore(10);
+    const controlledShadowObserver = vi.fn(() => new Promise<void>(() => undefined));
+    const runtime = createRuntime({
+      traceStore,
+      controlledShadowObserver,
+      controlledAgentRouter: {
+        resolve: vi.fn().mockImplementation(async (_input, observe) => {
+          observe?.({
+            phase: "capability_candidates",
+            candidates: ["query_schedule"],
+            candidateCount: 1
+          });
+          return {
+            disposition: "execute",
+            capability: "query_schedule",
+            arguments: { query: "查主日服事" },
+            reasonCode: "explicit_intent"
+          };
+        })
+      },
+      router: {
+        route: vi.fn().mockResolvedValue({
+          type: "deny",
+          reason: "not_matched",
+          provider: "ollama"
+        })
+      }
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        controlledAgent: {
+          enabled: false,
+          shadow: true,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("查主日服事"),
+      requestId: "req-shadow-hanging-observer"
+    });
+
+    expect(result?.replyText).toBe("目前不支援這個請求。");
+    await vi.waitFor(async () =>
+      expect(await traceStore.list()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                phase: "capability_candidates",
+                candidates: ["query_schedule"]
+              }),
+              expect.objectContaining({ phase: "controlled_route", outcome: "execute" })
+            ])
+          })
+        ])
+      )
+    );
+    expect(controlledShadowObserver).toHaveBeenCalledOnce();
   });
 
   it("does not wait for a never-resolving shadow dependency", async () => {
@@ -1368,7 +1430,7 @@ describe("AgentTurnRuntime", () => {
     });
     await expect(traceStore.list()).resolves.toMatchObject([
       {
-        requestId: "req-pending-success",
+        requestId: "present",
         steps: expect.arrayContaining([
           expect.objectContaining({ phase: "result_envelope", resultStatus: "success" }),
           expect.objectContaining({ phase: "active_task", lifecycleOutcome: "write" })
@@ -2092,7 +2154,7 @@ describe("AgentTurnRuntime", () => {
     expect(route).not.toHaveBeenCalled();
     await expect(traceStore.list()).resolves.toMatchObject([
       {
-        requestId: "req-1",
+        requestId: "present",
         steps: expect.arrayContaining([
           expect.objectContaining({ phase: "pre_route_memory", outcome: "handled" })
         ])
@@ -2512,7 +2574,7 @@ describe("AgentTurnRuntime", () => {
     expect(result?.replyText).toBe("今天先輕鬆一下。");
     await expect(traceStore.list()).resolves.toMatchObject([
       {
-        requestId: "req-4",
+        requestId: "present",
         steps: expect.arrayContaining([
           expect.objectContaining({
             phase: "route",

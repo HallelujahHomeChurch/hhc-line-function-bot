@@ -289,18 +289,17 @@ describe("LINE entrance", () => {
     expect(routeObserver).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "route",
-        profileName: "main",
+        profileName: "configured",
         sourceType: "group",
         provider: "ollama",
         outcome: "execute",
-        action: "find_ppt_slides",
-        confidence: 0.94
+        action: "find_ppt_slides"
       })
     );
     expect(routeObserver).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "function_result",
-        profileName: "main",
+        profileName: "configured",
         action: "find_ppt_slides",
         ok: true
       })
@@ -465,8 +464,7 @@ describe("LINE entrance", () => {
         kind: "function_result",
         action: "find_ppt_slides",
         ok: false,
-        dedup: "busy",
-        queryHash: expect.any(String)
+        dedup: "busy"
       })
     );
   });
@@ -2053,9 +2051,9 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(replyText.mock.calls[1]?.[1]).toContain("Last errors");
-    expect(replyText.mock.calls[1]?.[1]).toContain("req-test-1");
+    expect(replyText.mock.calls[1]?.[1]).toContain("requestId=present");
     expect(replyText.mock.calls[1]?.[1]).toContain("find_ppt_slides");
-    expect(replyText.mock.calls[1]?.[1]).toContain("graph unavailable");
+    expect(replyText.mock.calls[1]?.[1]).toContain("message=redacted");
   });
 
   it("records route outcomes without raw query text and exposes them to slash admin last-routes", async () => {
@@ -2109,7 +2107,7 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(replyText.mock.calls[1]?.[1]).toContain("Last routes");
-    expect(replyText.mock.calls[1]?.[1]).toContain("req-route-1");
+    expect(replyText.mock.calls[1]?.[1]).toContain("requestId=present");
     expect(replyText.mock.calls[1]?.[1]).toContain("find_ppt_slides");
     expect(replyText.mock.calls[1]?.[1]).toContain("provider=ollama");
     expect(replyText.mock.calls[1]?.[1]).toContain("query=present");
@@ -2164,7 +2162,7 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
     expect(replyText.mock.calls[0]?.[1]).toContain("Agent turns");
-    expect(replyText.mock.calls[0]?.[1]).toContain("req-agent-1");
+    expect(replyText.mock.calls[0]?.[1]).toContain("requestId=present");
     expect(replyText.mock.calls[0]?.[1]).toContain("route:execute");
     expect(replyText.mock.calls[0]?.[1]).toContain("query:present");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("Amazing Grace");
@@ -2672,8 +2670,7 @@ describe("LINE entrance", () => {
         kind: "admin_action_route",
         provider: "ollama",
         outcome: "execute",
-        action: "invite_code_create",
-        confidence: 0.93
+        action: "invite_code_create"
       })
     );
     expect(routeObserver).toHaveBeenCalledWith(

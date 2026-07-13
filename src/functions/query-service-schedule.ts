@@ -421,7 +421,15 @@ export function extractKnownScheduleRole(query: string): string | undefined {
     "兒童",
     "講員"
   ];
-  return knownRoles.find((role) => query.includes(role));
+  return knownRoles.find((role) => {
+    let start = query.indexOf(role);
+    while (start >= 0) {
+      const suffix = query.slice(start + role.length, start + role.length + 1);
+      if (!(role === "投影" && suffix === "片")) return true;
+      start = query.indexOf(role, start + role.length);
+    }
+    return false;
+  });
 }
 
 function matchesOptional(value: string, expected?: string): boolean {

@@ -2,6 +2,7 @@ import type { AgentActiveEvidenceRule, AgentCapabilityContract } from "../functi
 import type { JsonRecord } from "../types.js";
 import type { ActiveTaskContext } from "./active-task.js";
 import type { AgentEntity } from "./result-envelope.js";
+import { isInterpersonalOrSmallTalkText } from "./knowledge-evidence-guard.js";
 
 export interface GroundPlanRecordInput {
   record: Record<string, unknown>;
@@ -97,6 +98,7 @@ export function hasActiveEntityTextEvidence(
 }
 
 export function hasEllipticalActiveTaskReference(text: string): boolean {
+  if (isInterpersonalOrSmallTalkText(text)) return false;
   const normalized = normalizeComparable(text);
   return (
     /^(?:那|這|其中|剛剛|剛才)/u.test(normalized) &&
@@ -151,8 +153,32 @@ function groundValue(
     if (matchesAnyTaskEntity(input.text, input.activeTask)) return { ambiguous: false };
   }
 
-  if (hasCurrentTextEvidence(input.text, value)) return { value, ambiguous: false };
+  if (
+    hasNormalizedArgumentEvidence(key, input.text, value) ||
+    hasCurrentTextEvidence(input.text, value)
+  ) {
+    return { value, ambiguous: false };
+  }
   return { ambiguous: false };
+}
+
+function hasNormalizedArgumentEvidence(
+  key: string,
+  text: string,
+  value: string | number | boolean
+): boolean {
+  if (key !== "ordinal" || typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    return false;
+  }
+  const normalized = text.normalize("NFKC");
+  const digit = normalized.match(/第\s*(\d+)\s*(?:個|項|站|天|步|地點)/u)?.[1];
+  if (digit) return Number(digit) - 1 === value;
+  const chinese: Array<[RegExp, number]> = [
+    [/第?一(?:個|項|站|天|步|地點)/u, 0],
+    [/第?二(?:個|項|站|天|步|地點)/u, 1],
+    [/第?三(?:個|項|站|天|步|地點)/u, 2]
+  ];
+  return chinese.some(([pattern, ordinal]) => ordinal === value && pattern.test(normalized));
 }
 
 function matchingRuleEntities(

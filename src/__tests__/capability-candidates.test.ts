@@ -69,6 +69,50 @@ describe("deterministic capability candidates", () => {
     ]);
   });
 
+  it("keeps interpersonal questions out of active-task continuation", () => {
+    expect(
+      buildCapabilityCandidates({
+        text: "那你是誰？",
+        enabledFunctions: ["query_knowledge"],
+        activeTask: knowledgeTask,
+        source: "group",
+        knowledgeSources: [],
+        maxCandidates: 3
+      })
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["那主日主持呢", "meeting", "role"],
+    ["明天前攝影是誰", "dateIntent", "role"]
+  ])(
+    "uses declarative argument evidence for future schedule roles: %s",
+    (text, firstField, secondField) => {
+      const [candidate] = buildCapabilityCandidates({
+        text,
+        enabledFunctions: ["query_schedule", "query_knowledge"],
+        activeTask: knowledgeTask,
+        source: "group",
+        knowledgeSources: [],
+        maxCandidates: 3
+      });
+
+      expect(candidate).toEqual(
+        expect.objectContaining({ capability: "query_schedule", reason: "argument_evidence" })
+      );
+      expect(candidate.contract.argumentEvidence).toEqual(
+        expect.objectContaining({ allOf: ["role"], anyOf: expect.arrayContaining([firstField]) })
+      );
+      expect(candidate.contract.argumentEvidence?.allOf).toContain(secondField);
+    }
+  );
+
+  it("does not encode schedule role combinations as explicit intent phrases", () => {
+    const intents = getFunctionDefinition("query_schedule")!.agentCapability!.intents;
+
+    expect(intents).not.toEqual(expect.arrayContaining(["主日音控", "主日導播", "主日攝影"]));
+  });
+
   it("uses bounded dynamic knowledge metadata without returning matched text", () => {
     const candidates = buildCapabilityCandidates({
       text: "第一天去哪裡",
@@ -314,6 +358,18 @@ describe("deterministic capability candidates", () => {
         maxCandidates: 3
       }).map(({ capability }) => capability)
     ).toEqual(["find_sheet_music"]);
+  });
+
+  it("does not treat the role token inside 投影片 as schedule argument evidence", () => {
+    expect(
+      buildCapabilityCandidates({
+        text: "查投影片 主日報告",
+        enabledFunctions: ["find_ppt_slides", "query_schedule"],
+        source: "group",
+        knowledgeSources: [],
+        maxCandidates: 3
+      }).map(({ capability }) => capability)
+    ).toEqual(["find_ppt_slides"]);
   });
 
   it("applies the definition's source policy before producing candidates", () => {

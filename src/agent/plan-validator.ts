@@ -4,6 +4,7 @@ import {
   normalizeFunctionArguments
 } from "../functions/argument-normalization.js";
 import {
+  FUNCTION_DEFINITIONS,
   getFunctionDefinition,
   type FunctionAllowedSource,
   type FunctionDefinition
@@ -11,7 +12,10 @@ import {
 import type { AgentPlanDisposition, FunctionName, JsonRecord } from "../types.js";
 import { isFunctionName } from "../types.js";
 import type { ActiveTaskContext } from "./active-task.js";
-import type { CapabilityCandidateReason } from "./capability-candidates.js";
+import {
+  hasDeclarativeArgumentEvidence,
+  type CapabilityCandidateReason
+} from "./capability-candidates.js";
 import { groundPlanRecord, hasActiveEntityTextEvidence, liveActiveTask } from "./plan-evidence.js";
 import { findMissingRequiredSlot } from "./slot-clarification.js";
 
@@ -191,7 +195,10 @@ export function validateAgentPlan(input: ValidateAgentPlanInput): ValidatedAgent
   const validatedArguments = parseAndNormalizeArguments(
     capability,
     groundedArguments.value,
-    input.text
+    input.text,
+    authoritativeDefinition,
+    activeAuthority ? liveTask : undefined,
+    activeAuthority
   );
   if (!validatedArguments) {
     return { disposition: "clarify", capability, reasonCode: "invalid_arguments" };
@@ -220,6 +227,10 @@ export function validateAgentPlan(input: ValidateAgentPlanInput): ValidatedAgent
 
 function validateNoPlan(input: ValidateAgentPlanInput): ValidatedAgentPlan {
   const explicitCandidates = revalidatedExplicitCandidates(input);
+  const disabledExplicitCandidates = revalidatedDisabledExplicitCandidates(input);
+  if (explicitCandidates.length === 0 && disabledExplicitCandidates.length > 0) {
+    return { disposition: "deny", reasonCode: "function_disabled" };
+  }
   if (explicitCandidates.length !== 1) {
     return input.candidates.length === 0
       ? { disposition: "chat", reasonCode: "no_capability_evidence" }
@@ -231,7 +242,12 @@ function validateNoPlan(input: ValidateAgentPlanInput): ValidatedAgentPlan {
   const rawArguments = definition.requiredSlots.some(({ argument }) => argument === "query")
     ? { query: input.text }
     : {};
-  const validatedArguments = parseAndNormalizeArguments(capability, rawArguments, input.text);
+  const validatedArguments = parseAndNormalizeArguments(
+    capability,
+    rawArguments,
+    input.text,
+    definition
+  );
   if (!validatedArguments || findMissingRequiredSlot(capability, validatedArguments)) {
     return { disposition: "clarify", capability, reasonCode: "missing_required_slot" };
   }
@@ -294,14 +310,26 @@ function requiredActiveOperation(
 function parseAndNormalizeArguments(
   capability: FunctionName,
   argumentsValue: JsonRecord,
-  text: string
+  text: string,
+  definition: FunctionDefinition,
+  activeTask?: ActiveTaskContext,
+  activeAuthority = false
 ): JsonRecord | undefined {
   const parsed = parseFunctionArguments(capability, argumentsValue);
   if (!parsed) return undefined;
-  return parseFunctionArguments(
+  const normalized = parseFunctionArguments(
     capability,
-    normalizeFunctionArguments(capability, parsed, { text })
+    normalizeFunctionArguments(capability, parsed, { text, inferStructuredEvidence: true })
   );
+  if (!normalized) return undefined;
+  const grounded = groundPlanRecord({
+    record: normalized,
+    text,
+    rules: definition.agentCapability?.activeEvidence?.arguments,
+    activeTask,
+    activeAuthority
+  });
+  return grounded.ambiguous ? undefined : parseFunctionArguments(capability, grounded.value);
 }
 
 function revalidatedExplicitCandidates(input: ValidateAgentPlanInput): FunctionName[] {
@@ -315,9 +343,24 @@ function revalidatedExplicitCandidates(input: ValidateAgentPlanInput): FunctionN
       definition.sideEffectLevel === "read" &&
       definition.agentCapability &&
       sourceAllowed(definition, input.sourceType) &&
-      definition.agentCapability.intents.some((intent) => textContains(input.text, intent))
+      (definition.agentCapability.intents.some((intent) => textContains(input.text, intent)) ||
+        hasDeclarativeArgumentEvidence(definition, input.text))
     );
   });
+}
+
+function revalidatedDisabledExplicitCandidates(input: ValidateAgentPlanInput): FunctionName[] {
+  const enabled = new Set(input.enabledFunctions);
+  return FUNCTION_DEFINITIONS.filter(
+    (definition) =>
+      !enabled.has(definition.name) &&
+      !definition.deprecated &&
+      definition.sideEffectLevel === "read" &&
+      Boolean(definition.agentCapability) &&
+      sourceAllowed(definition, input.sourceType) &&
+      (definition.agentCapability?.intents.some((intent) => textContains(input.text, intent)) ||
+        hasDeclarativeArgumentEvidence(definition, input.text))
+  ).map(({ name }) => name);
 }
 
 function hasAnyActiveEvidence(

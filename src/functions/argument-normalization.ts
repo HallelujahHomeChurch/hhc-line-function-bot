@@ -9,6 +9,7 @@ export interface FunctionArgumentNormalizationInput {
   continuationArguments?: JsonRecord;
   now?: Date;
   timeZone?: string;
+  inferStructuredEvidence?: boolean;
 }
 
 const wakeWordPattern = /^小哈[\s,，、:：。!！?？]*/i;
@@ -201,7 +202,34 @@ function normalizeServiceScheduleArguments(
   const query = stringArg(args, "query");
   const currentQuery = query || input.text.trim();
   if (!input.continuationArguments) {
-    const next = { ...args };
+    if (!input.inferStructuredEvidence) {
+      const next: JsonRecord = { ...args };
+      if (!stringArg(next, "dateIntent")) {
+        const dateIntent = relativeScheduleDateIntent(input.text);
+        if (dateIntent) next.dateIntent = dateIntent;
+      }
+      if (query === "主日") return { ...next, query: "主日服事" };
+      return query ? next : { ...next, query: currentQuery };
+    }
+    const refinement = refineScheduleQuery(
+      { query: currentQuery },
+      input.now ?? new Date(),
+      input.timeZone ?? "Asia/Taipei"
+    );
+    const role = extractScheduleRoleFocus({
+      query: currentQuery,
+      hasContinuation: false,
+      now: input.now,
+      timeZone: input.timeZone
+    });
+    const structured = Object.fromEntries(
+      Object.entries(refinement.structuredArguments).filter(([, value]) => value !== undefined)
+    );
+    const next: JsonRecord = {
+      ...structured,
+      ...args,
+      ...(role && !stringArg(args, "role") ? { role } : {})
+    };
     if (!stringArg(next, "dateIntent")) {
       const dateIntent = relativeScheduleDateIntent(input.text);
       if (dateIntent) next.dateIntent = dateIntent;
