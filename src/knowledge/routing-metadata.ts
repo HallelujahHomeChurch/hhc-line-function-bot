@@ -174,7 +174,7 @@ function matchesConservativeTerm(rawText: string, normalizedText: string, term: 
     const textTokens = latinTokens(rawText);
     const termTokens = latinTokens(term);
     if (termTokens.length > 1) return containsContiguousTokens(textTokens, termTokens);
-    return textTokens.some((token) => token === normalizedTerm || token.includes(normalizedTerm));
+    return textTokens.some((token) => token === normalizedTerm);
   }
   return normalizedText.includes(normalizedTerm);
 }

@@ -347,4 +347,126 @@ describe("knowledge source admin actions", () => {
       expect.objectContaining({ content: "新版內容" })
     ]);
   });
+
+  it("does not let a stale admin sync failure overwrite a newer ready publication", async () => {
+    const store = new InMemoryKnowledgeStore();
+    const accessStore = new InMemoryAccessStore();
+    let source = await store.upsertSource({
+      profileName: "helper",
+      sourceKey: "sop",
+      displayName: "聚會 SOP",
+      adapterType: "notion",
+      externalRootId: "root",
+      rootUrl: "https://example.test/root",
+      enabled: true
+    });
+    source = await store.publishSourceSnapshot({
+      sourceId: source.id,
+      expectedStagingRevision: source.stagingRevision,
+      syncedAt: "2026-07-12T00:00:00Z",
+      syncStatus: "ready",
+      routingDisplayName: "聚會 SOP",
+      aliases: [],
+      topics: [],
+      sampleQueries: [],
+      documents: [],
+      embeddings: []
+    });
+    const registry = createAdminActionRegistry({
+      accessStore,
+      registrationInviteCodeStore: new InMemoryRegistrationInviteCodeStore(),
+      registrationInviteCodeTtlMinutes: 60,
+      knowledgeStore: store,
+      notionKnowledge: {
+        fetchRoot: vi.fn(async () => {
+          await store.publishSourceSnapshot({
+            sourceId: source.id,
+            expectedStagingRevision: source.stagingRevision,
+            syncedAt: "2026-07-13T00:00:00Z",
+            syncStatus: "ready",
+            routingDisplayName: "聚會 SOP",
+            aliases: [],
+            topics: [],
+            sampleQueries: [],
+            documents: [],
+            embeddings: []
+          });
+          return [];
+        })
+      }
+    });
+
+    await registry.execute({
+      action: "knowledge_source_sync",
+      profile,
+      event,
+      arguments: { sourceKey: "sop" }
+    });
+
+    await expect(
+      store.listSources({ profileName: "helper", includeDisabled: true })
+    ).resolves.toEqual([
+      expect.objectContaining({ syncStatus: "ready", syncErrorCode: undefined })
+    ]);
+    expect(accessStore.audit).toEqual([
+      expect.objectContaining({
+        action: "knowledge.source.sync",
+        metadata: { outcome: "stale", errorCode: "staging_changed" }
+      })
+    ]);
+  });
+
+  it("does not let a stale admin add failure overwrite a newer ready publication", async () => {
+    const store = new InMemoryKnowledgeStore();
+    const accessStore = new InMemoryAccessStore();
+    const registry = createAdminActionRegistry({
+      accessStore,
+      registrationInviteCodeStore: new InMemoryRegistrationInviteCodeStore(),
+      registrationInviteCodeTtlMinutes: 60,
+      knowledgeStore: store,
+      notionKnowledge: {
+        fetchRoot: vi.fn(async () => {
+          const [source] = await store.listSources({
+            profileName: "helper",
+            includeDisabled: true
+          });
+          await store.publishSourceSnapshot({
+            sourceId: source!.id,
+            expectedStagingRevision: source!.stagingRevision,
+            syncedAt: "2026-07-13T00:00:00Z",
+            syncStatus: "ready",
+            routingDisplayName: source!.stagedDisplayName,
+            aliases: [],
+            topics: [],
+            sampleQueries: [],
+            documents: [],
+            embeddings: []
+          });
+          return [];
+        })
+      }
+    });
+
+    await registry.execute({
+      action: "knowledge_source_add",
+      profile,
+      event,
+      arguments: {
+        url: "https://www.notion.so/SOP-0123456789abcdef0123456789abcdef",
+        displayName: "聚會 SOP"
+      }
+    });
+
+    await expect(
+      store.listSources({ profileName: "helper", includeDisabled: true })
+    ).resolves.toEqual([
+      expect.objectContaining({ syncStatus: "ready", syncErrorCode: undefined })
+    ]);
+    expect(accessStore.audit).toEqual([
+      expect.objectContaining({
+        action: "knowledge.source.add",
+        metadata: { outcome: "stale", errorCode: "staging_changed" }
+      })
+    ]);
+  });
 });

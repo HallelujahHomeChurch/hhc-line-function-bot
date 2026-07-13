@@ -151,6 +151,92 @@ describe("ControlledAgentRouter", () => {
     );
   });
 
+  it("uses a declarative bounded retrieval provider without leaking its evidence to planning", async () => {
+    const probe = vi.fn().mockResolvedValue({
+      matched: true,
+      count: 1,
+      opaqueIds: ["source-secret-id"]
+    });
+    const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+      status: "no_plan",
+      reasonCode: "providers_unavailable",
+      attempts: []
+    });
+    const router = createControlledAgentRouter({
+      planner: { propose },
+      retrievalEvidenceProviders: { knowledge: { probe } },
+      now: () => now
+    });
+
+    await router.resolve({
+      profileName: "helper",
+      text: "急救箱位置",
+      enabledFunctions: ["query_knowledge"],
+      sourceType: "group",
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    });
+
+    expect(probe).toHaveBeenCalledWith({
+      profileName: "helper",
+      text: "急救箱位置",
+      maxSources: 20
+    });
+    expect(propose).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidates: [
+          expect.objectContaining({
+            capability: "query_knowledge",
+            reason: "retrieval_evidence"
+          })
+        ]
+      })
+    );
+    expect(JSON.stringify(propose.mock.calls)).not.toMatch(/source-secret-id/u);
+  });
+
+  it("does not probe retrieval providers for small talk or disabled capabilities", async () => {
+    const probe = vi.fn().mockResolvedValue({ matched: true });
+    const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+      status: "no_plan",
+      reasonCode: "no_candidates",
+      attempts: []
+    });
+    const router = createControlledAgentRouter({
+      planner: { propose },
+      retrievalEvidenceProviders: { knowledge: { probe } },
+      now: () => now
+    });
+
+    await router.resolve({
+      profileName: "helper",
+      text: "你好",
+      enabledFunctions: ["query_knowledge"],
+      sourceType: "group",
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    });
+    await router.resolve({
+      profileName: "helper",
+      text: "急救箱位置",
+      enabledFunctions: ["query_schedule"],
+      sourceType: "group",
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    });
+    await router.resolve({
+      profileName: "helper",
+      text: "幫我儲存急救箱位置",
+      enabledFunctions: ["query_knowledge"],
+      sourceType: "group",
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    });
+
+    expect(probe).not.toHaveBeenCalled();
+    expect(propose.mock.calls.every((call) => call[0].candidates.length === 0)).toBe(true);
+  });
+
   it("fails closed before planning for an unsupported source", async () => {
     const propose = vi.fn<AgentPlanner["propose"]>();
 

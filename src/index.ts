@@ -33,6 +33,7 @@ import { createInFlightStore } from "./in-flight/create-in-flight-store.js";
 import { createKeywordFallbackRouter } from "./keyword-router.js";
 import { createKnowledgeStore } from "./knowledge/create-store.js";
 import { listKnowledgeRoutingMetadata } from "./knowledge/routing-metadata.js";
+import { createKnowledgeRetrievalEvidenceProvider } from "./knowledge/retrieval-evidence.js";
 import { createProfileAwareProvider } from "./llm/provider-runtime.js";
 import { createLastErrorStore } from "./observability/create-last-error-store.js";
 import { createConsoleRouteObserver } from "./observability/route-observer.js";
@@ -174,6 +175,9 @@ const controlledAgentRouter = createControlledAgentRouter({
     async list(profileName, limit) {
       return listKnowledgeRoutingMetadata(knowledgeStore, profileName, limit);
     }
+  },
+  retrievalEvidenceProviders: {
+    knowledge: createKnowledgeRetrievalEvidenceProvider(knowledgeStore)
   }
 });
 await knowledgeStore.purgeExpired(new Date());

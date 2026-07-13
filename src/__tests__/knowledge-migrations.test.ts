@@ -34,4 +34,39 @@ describe("knowledge migrations", () => {
     expect(sql).toMatch(/alter table knowledge_chunks alter column section_key set not null/iu);
     expect(sql).not.toMatch(/create\s+extension/iu);
   });
+
+  it("does not overwrite a staged permanent expiry when migrations rerun", async () => {
+    const state: {
+      expiresAt: string;
+      stagedExpiresAt?: string | null;
+      stagingInitialized?: boolean;
+    } = {
+      expiresAt: "2027-01-01T00:00:00Z"
+    };
+    const query = vi.fn(async (statement: string) => {
+      if (/add column if not exists staging_initialized/iu.test(statement)) {
+        state.stagingInitialized ??= false;
+      }
+      if (/staged_expires_at\s*=\s*coalesce\(staged_expires_at,\s*expires_at\)/iu.test(statement)) {
+        state.stagedExpiresAt ??= state.expiresAt;
+      }
+      if (
+        /staged_expires_at\s*=\s*expires_at/iu.test(statement) &&
+        /where\s+staging_initialized\s*=\s*false/iu.test(statement) &&
+        state.stagingInitialized === false
+      ) {
+        state.stagedExpiresAt = state.expiresAt;
+        state.stagingInitialized = true;
+      }
+      return { rows: [] };
+    });
+
+    await runKnowledgeMigrations({ query });
+    state.stagedExpiresAt = null;
+    await runKnowledgeMigrations({ query });
+
+    expect(state.stagedExpiresAt).toBeNull();
+    const sql = query.mock.calls.map(([statement]) => statement).join("\n");
+    expect(sql).toContain("staging_initialized");
+  });
 });

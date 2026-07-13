@@ -39,6 +39,7 @@ const candidateReasonSchema = z.enum([
   "explicit_intent",
   "active_task_entity",
   "knowledge_metadata",
+  "retrieval_evidence",
   "capability_hint"
 ]);
 const RESERVED_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);

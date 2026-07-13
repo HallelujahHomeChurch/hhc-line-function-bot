@@ -6,13 +6,17 @@ import { knowledgeSectionKey } from "./section-key.js";
 import type {
   KnowledgeChunkInput,
   KnowledgeDocumentRecord,
+  KnowledgeSearchInput,
   KnowledgeSearchResult,
   KnowledgeSnapshotDocumentInput,
   KnowledgeSourceInput,
   KnowledgeSourceRecord,
   KnowledgeStore,
+  KnowledgeSyncFailureOutcome,
+  KnowledgeTopPerSourceInput,
   PublishKnowledgeSourceSnapshotInput
 } from "./store.js";
+import { assertKnowledgeSourceScope } from "./store.js";
 
 export interface PgKnowledgeExecutor {
   query(
@@ -86,6 +90,29 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
       const source = safeMapSource(row);
       return source ? [source] : [];
     });
+  }
+
+  async markSourceSyncFailed(input: {
+    profileName: string;
+    sourceKey: string;
+    expectedStagingRevision: string;
+    syncErrorCode: string;
+  }): Promise<KnowledgeSyncFailureOutcome> {
+    const result = await this.db.query(
+      `with target as (
+         select 1 from knowledge_sources where profile_name=$1 and source_key=$2
+       ), mark_source_failure as (
+         update knowledge_sources set sync_status='failed', sync_error_code=$4, updated_at=now()
+         where profile_name=$1 and source_key=$2 and staging_revision=$3::uuid returning 1
+       ) select case
+           when exists(select 1 from mark_source_failure) then 'updated'
+           when exists(select 1 from target) then 'stale'
+           else 'not_found'
+         end outcome`,
+      [input.profileName, input.sourceKey, input.expectedStagingRevision, input.syncErrorCode]
+    );
+    const outcome = result.rows[0]?.outcome;
+    return outcome === "updated" || outcome === "stale" ? outcome : "not_found";
   }
 
   async updateSource(input: {
@@ -226,7 +253,8 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
            disabled_at=case when staged_enabled then null else coalesce(disabled_at,$3::timestamptz) end,
            purge_after=case when staged_enabled then null else purge_after end,
            routing_display_name=$4, aliases=$5, topics=$6, sample_queries=$7,
-           sync_status=$8, sync_error_code=null, last_synced_at=$3, updated_at=now()
+           sync_status=$8, sync_error_code=null, last_synced_at=$3,
+           staging_revision=gen_random_uuid(), updated_at=now()
          where id=$1 and staging_revision=$2::uuid returning *`,
         [
           input.sourceId,
@@ -400,20 +428,7 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     return result.rows.length > 0;
   }
 
-  async search(input: {
-    profileName: string;
-    query: string;
-    queryEmbedding?: number[];
-    embeddingProvider?: string;
-    embeddingModel?: string;
-    sourceId?: string;
-    sourceIds?: string[];
-    sourceKey?: string;
-    documentId?: string;
-    sectionKey?: string;
-    ordinal?: number;
-    limit?: number;
-  }): Promise<KnowledgeSearchResult[]> {
+  async search(input: KnowledgeSearchInput): Promise<KnowledgeSearchResult[]> {
     const vector = input.queryEmbedding ? vectorLiteral(input.queryEmbedding) : null;
     const result = await this.db.query(
       `with candidates as (
@@ -452,6 +467,53 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
         input.embeddingModel ?? null,
         input.sectionKey ?? null,
         input.sourceIds ?? null
+      ]
+    );
+    return result.rows.flatMap((row) => {
+      try {
+        return [mapSearchResult(row)];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  async searchTopPerSource(input: KnowledgeTopPerSourceInput): Promise<KnowledgeSearchResult[]> {
+    assertKnowledgeSourceScope(input.sourceIds);
+    const vector = input.queryEmbedding ? vectorLiteral(input.queryEmbedding) : null;
+    const result = await this.db.query(
+      `with candidates as (
+        select c.*, d.external_id, d.title, d.url, s.id source_id, s.profile_name,
+          s.source_key, s.display_name, s.routing_display_name,
+          s.admin_aliases, s.admin_topics, s.admin_sample_queries,
+          s.aliases, s.topics, s.sample_queries,
+          s.adapter_type, s.external_root_id, s.root_url,
+          s.enabled, s.expires_at, s.disabled_at, s.purge_after, s.last_synced_at,
+          s.sync_status, s.sync_error_code,
+          case when c.content ilike '%' || $2 || '%' or d.title ilike '%' || $2 || '%' then 2.0
+               else ts_rank_cd(c.search_vector, plainto_tsquery('simple',$2)) end lexical_score,
+          case when $3::vector is null then 0.0 else coalesce(1-(e.embedding <=> $3::vector),0.0) end vector_score
+        from knowledge_chunks c join knowledge_documents d on d.id=c.document_id
+        join knowledge_sources s on s.id=d.source_id
+        left join knowledge_embeddings e on e.chunk_id=c.id and e.dimensions=1024
+          and ($4::text is null or e.provider=$4) and ($5::text is null or e.model=$5)
+        where s.profile_name=$1 and s.enabled=true and s.last_synced_at is not null
+          and s.routing_display_name is not null and (s.expires_at is null or s.expires_at>now())
+          and d.deleted_at is null and c.active=true and s.id=any($6::uuid[])
+      ), scored as (
+        select *, lexical_score+vector_score score from candidates
+        where lexical_score+vector_score > 0
+      ), ranked as (
+        select *, row_number() over (partition by source_id order by score desc, ordinal asc) source_rank
+        from scored
+      ) select * from ranked where source_rank=1 order by score desc, source_key asc`,
+      [
+        input.profileName,
+        input.query,
+        vector,
+        input.embeddingProvider ?? null,
+        input.embeddingModel ?? null,
+        input.sourceIds
       ]
     );
     return result.rows.flatMap((row) => {

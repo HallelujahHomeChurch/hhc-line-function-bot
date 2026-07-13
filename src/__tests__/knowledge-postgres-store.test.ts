@@ -168,4 +168,82 @@ describe("PostgresKnowledgeStore routing parity", () => {
     expect(clientQuery.mock.calls.map(([sql]) => sql)).not.toContain("commit");
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it("ranks one top result per source in one bounded PostgreSQL query", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const store = new PostgresKnowledgeStore({ query });
+    const sourceIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222"
+    ];
+
+    await store.searchTopPerSource({ profileName: "helper", query: "共同暗號", sourceIds });
+
+    expect(query).toHaveBeenCalledOnce();
+    const [sql, values] = query.mock.calls[0]!;
+    expect(String(sql)).toMatch(/row_number\(\)\s+over\s*\(\s*partition\s+by\s+source_id/iu);
+    expect(String(sql)).toMatch(/source_rank\s*=\s*1/iu);
+    expect(values).toContain(sourceIds);
+    await expect(
+      store.searchTopPerSource({
+        profileName: "helper",
+        query: "共同暗號",
+        sourceIds: Array.from(
+          { length: 21 },
+          (_, index) => `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`
+        )
+      })
+    ).rejects.toThrow("knowledge_source_scope_limit");
+  });
+
+  it("rotates revision on publish and conditionally rejects stale failure health", async () => {
+    const oldRevision = "33333333-3333-4333-8333-333333333333";
+    const newRevision = "44444444-4444-4444-8444-444444444444";
+    const clientQuery = vi.fn(async (sql: string) => {
+      if (/select \* from knowledge_sources/iu.test(sql)) {
+        return { rows: [sourceRow({ staging_revision: oldRevision })] };
+      }
+      if (/update knowledge_sources set/iu.test(sql)) {
+        return { rows: [sourceRow({ staging_revision: newRevision })] };
+      }
+      return { rows: [] };
+    });
+    const query = vi.fn(async (sql: string) => {
+      if (/mark_source_failure/iu.test(sql)) return { rows: [{ outcome: "stale" }] };
+      return { rows: [] };
+    });
+    const store = new PostgresKnowledgeStore({
+      query,
+      connect: vi.fn().mockResolvedValue({ query: clientQuery, release: vi.fn() })
+    });
+
+    const published = await store.publishSourceSnapshot({
+      sourceId: "11111111-1111-4111-8111-111111111111",
+      expectedStagingRevision: oldRevision,
+      syncedAt: "2026-07-13T00:00:00Z",
+      syncStatus: "ready",
+      routingDisplayName: "青年出隊",
+      aliases: [],
+      topics: [],
+      sampleQueries: [],
+      documents: [],
+      embeddings: []
+    });
+    const publicationSql = clientQuery.mock.calls.map(([sql]) => String(sql)).join("\n");
+    expect(publicationSql).toMatch(/staging_revision\s*=\s*gen_random_uuid\(\)/iu);
+    expect(published.stagingRevision).toBe(newRevision);
+
+    await expect(
+      store.markSourceSyncFailed({
+        profileName: "helper",
+        sourceKey: "retreat",
+        expectedStagingRevision: oldRevision,
+        syncErrorCode: "source_unavailable"
+      })
+    ).resolves.toBe("stale");
+    const [failureSql, failureValues] = query.mock.calls.at(-1)!;
+    expect(String(failureSql)).toMatch(/mark_source_failure/iu);
+    expect(String(failureSql)).toMatch(/staging_revision\s*=\s*\$3::uuid/iu);
+    expect(failureValues).toContain(oldRevision);
+  });
 });

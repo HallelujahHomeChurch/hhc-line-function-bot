@@ -12,6 +12,68 @@ import type { BotProfileConfig } from "../types.js";
 const profile = { name: "helper", enabledFunctions: ["query_knowledge"] } as BotProfileConfig;
 
 describe("query_knowledge", () => {
+  it("clarifies an equal cross-source maximum hidden beyond the answer-context limit", async () => {
+    const store = new InMemoryKnowledgeStore();
+    const sessionStore = new InMemorySessionStore();
+    for (const sourceKey of ["alpha", "beta"]) {
+      const source = await store.upsertSource({
+        profileName: "helper",
+        sourceKey,
+        displayName: `${sourceKey} manual`,
+        adapterType: "notion",
+        externalRootId: `${sourceKey}-root`,
+        rootUrl: `https://example.test/${sourceKey}`,
+        enabled: true
+      });
+      await store.replaceDocument({
+        sourceId: source.id,
+        externalId: `${sourceKey}-doc`,
+        title: `${sourceKey} document`,
+        url: `https://example.test/${sourceKey}-doc`,
+        nodes: [],
+        chunks:
+          sourceKey === "alpha"
+            ? Array.from({ length: 8 }, (_, ordinal) => ({
+                headingPath: [],
+                ordinal,
+                content: "共同暗號",
+                contentHash: `alpha-${ordinal}`
+              }))
+            : [
+                {
+                  headingPath: [],
+                  ordinal: 8,
+                  content: "共同暗號",
+                  contentHash: "beta"
+                }
+              ]
+      });
+      await store.updateSource({
+        profileName: "helper",
+        sourceKey,
+        syncStatus: "ready",
+        lastSyncedAt: "2026-07-13T00:00:00Z"
+      });
+    }
+    const handler = createQueryKnowledgeHandler({ store, sessionStore });
+
+    const result = await handler(
+      { query: "共同暗號" },
+      {
+        profile,
+        event: {
+          type: "message",
+          replyToken: "r",
+          source: { type: "user", userId: "u" },
+          message: { type: "text", text: "共同暗號" }
+        }
+      }
+    );
+
+    expect(result.agentResult).toMatchObject({ status: "ambiguous" });
+    expect(result.quickReplies).toHaveLength(2);
+  });
+
   it("rejects unsynced sources consistently for search and anchors", async () => {
     const store = new InMemoryKnowledgeStore();
     const source = await store.upsertSource({
@@ -412,6 +474,7 @@ describe("query_knowledge", () => {
       sources.push(source);
     }
     const search = vi.spyOn(store, "search");
+    const searchTopPerSource = vi.spyOn(store, "searchTopPerSource");
     const result = await createQueryKnowledgeHandler({ store })(
       { query: "關閉音控設備" },
       {
@@ -428,8 +491,11 @@ describe("query_knowledge", () => {
     expect(result.continuation?.resultReferences).toEqual(
       expect.objectContaining({ sourceId: sources[0]!.id })
     );
-    expect(search).toHaveBeenCalledWith(
+    expect(searchTopPerSource).toHaveBeenCalledWith(
       expect.objectContaining({ sourceIds: sources.map(({ id }) => id) })
+    );
+    expect(search).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: sources[0]!.id, sourceIds: undefined })
     );
   });
 

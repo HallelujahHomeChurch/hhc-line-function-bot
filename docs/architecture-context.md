@@ -215,17 +215,27 @@ stores only vectors and version metadata. Bounded routing summaries come only
 from the promoted last-known-good snapshot: staged administrator fields plus
 document titles and headings from the latest successful sync. Failed syncs
 preserve the previous live content, core/lifecycle fields, and routing snapshot, and never-successfully-synced rows remain visible
-to admins but ineligible for routing, anchors, and retrieval. The controlled
-planner never receives chunks, URLs, or answer content. Successful results persist
+to admins but ineligible for routing, anchors, and retrieval. Read functions can
+declare a retrieval-evidence provider; the knowledge provider makes one read-only,
+profile-scoped probe over at most 20 promoted sources and returns only bounded
+candidate evidence. Small talk, write intent, disabled functions, and provider
+failure produce no candidate. The controlled planner never receives source ids or
+names, titles, chunks, URLs, or answer content. Successful results persist
 opaque source/document/hashed-section ids with generic labels and ordinals;
 follow-ups fall back section to document to source, never profile-wide, unless the
 same capped metadata provider proves one unique source switch. Initial body-only
-queries search only that capped eligible source set: unique top-source evidence is
+queries search only that capped eligible source set. Memory keeps one maximum per
+source in one scan and PostgreSQL uses one windowed query; source maxima are compared
+before the eight-chunk answer context is selected. Unique top-source evidence is
 answered, while a tied cross-source top score creates an existing generic,
 requester-scoped selection session that maps numeric/postback choices to opaque
 source ids. PostgreSQL publishes source documents, tombstones, chunks, embeddings,
-promoted metadata, lifecycle/core fields, and sync health in one transaction; the
-memory store exposes the same one-operation snapshot contract.
+promoted metadata, lifecycle/core fields, sync health, and a rotated staging
+revision in one transaction; the memory store exposes the same one-operation
+snapshot contract. Failure health updates require the invocation's expected
+revision, so stale admin or scheduled syncs cannot overwrite a newer ready snapshot.
+The staging initialization marker runs the legacy live-to-staged copy once and
+preserves a later staged permanent (`NULL`) expiry across restarts.
 
 Do not use it for unrestricted chat logging. Normal group chatter must not be
 saved. Temporary Graph sharing links must not be saved; store drive/item ids and

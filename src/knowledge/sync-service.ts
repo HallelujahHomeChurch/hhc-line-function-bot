@@ -11,6 +11,19 @@ export interface KnowledgeSyncResult {
   status: "ready" | "embedding_pending";
 }
 
+export async function markKnowledgeSyncFailure(input: {
+  source: KnowledgeSourceRecord;
+  store: KnowledgeStore;
+  syncErrorCode: string;
+}) {
+  return input.store.markSourceSyncFailed({
+    profileName: input.source.profileName,
+    sourceKey: input.source.sourceKey,
+    expectedStagingRevision: input.source.stagingRevision,
+    syncErrorCode: input.syncErrorCode
+  });
+}
+
 export async function syncKnowledgeSource(input: {
   source: KnowledgeSourceRecord;
   store: KnowledgeStore;

@@ -94,8 +94,7 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
     if (sourceResolution.status === "ambiguous") {
       return createKnowledgeAmbiguity(options, sourceResolution.sources, args, context);
     }
-    const targetSource =
-      sourceResolution.status === "resolved" ? sourceResolution.source : undefined;
+    let targetSource = sourceResolution.status === "resolved" ? sourceResolution.source : undefined;
     if (
       !anchor &&
       args.documentId &&
@@ -118,6 +117,28 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
       }
     }
 
+    if (sourceResolution.status === "search_all") {
+      let topResults: KnowledgeSearchResult[];
+      try {
+        topResults = await options.store.searchTopPerSource({
+          profileName: context.profile.name,
+          query: args.query,
+          queryEmbedding,
+          embeddingProvider: options.embedding?.provider,
+          embeddingModel: options.embedding?.model,
+          sourceIds: sourceResolution.sources.map(({ id }) => id)
+        });
+      } catch {
+        return knowledgeUnavailableResult();
+      }
+      if (topResults.length === 0) return knowledgeNotFoundResult();
+      const evidenceSources = highestEvidenceSources(topResults, sourceResolution.sources);
+      if (evidenceSources.length > 1) {
+        return createKnowledgeAmbiguity(options, evidenceSources, args, context);
+      }
+      targetSource = evidenceSources[0];
+    }
+
     const anchored = Boolean(
       anchor &&
       targetSource?.id === anchor.sourceId &&
@@ -138,10 +159,6 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
       query: args.query,
       queryEmbedding,
       sourceId: targetSource?.id,
-      sourceIds:
-        sourceResolution.status === "search_all"
-          ? sourceResolution.sources.map(({ id }) => id)
-          : undefined,
       scopes,
       limit: Math.min(args.limit ?? 8, 8)
     });
@@ -149,14 +166,7 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
 
     if (results.length === 0) return knowledgeNotFoundResult();
 
-    let groundedResults = results;
-    if (sourceResolution.status === "search_all") {
-      const evidenceSources = highestEvidenceSources(results, sourceResolution.sources);
-      if (evidenceSources.length > 1) {
-        return createKnowledgeAmbiguity(options, evidenceSources, args, context);
-      }
-      groundedResults = results.filter(({ source }) => source.id === evidenceSources[0]?.id);
-    }
+    const groundedResults = results;
 
     const answer = await groundedAnswer(
       options.textGenerator,

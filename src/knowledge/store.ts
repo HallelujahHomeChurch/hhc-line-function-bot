@@ -87,6 +87,32 @@ export interface KnowledgeSearchResult extends KnowledgeChunkRecord {
   source: KnowledgeSourceRecord;
 }
 
+export interface KnowledgeSearchInput {
+  profileName: string;
+  query: string;
+  queryEmbedding?: number[];
+  embeddingProvider?: string;
+  embeddingModel?: string;
+  sourceId?: string;
+  sourceIds?: string[];
+  sourceKey?: string;
+  documentId?: string;
+  sectionKey?: string;
+  ordinal?: number;
+  limit?: number;
+}
+
+export interface KnowledgeTopPerSourceInput {
+  profileName: string;
+  query: string;
+  queryEmbedding?: number[];
+  embeddingProvider?: string;
+  embeddingModel?: string;
+  sourceIds: string[];
+}
+
+export type KnowledgeSyncFailureOutcome = "updated" | "stale" | "not_found";
+
 export interface KnowledgeSnapshotDocumentInput {
   externalId: string;
   title: string;
@@ -124,6 +150,12 @@ export interface KnowledgeStore {
     profileName: string;
     includeDisabled?: boolean;
   }): Promise<KnowledgeSourceRecord[]>;
+  markSourceSyncFailed(input: {
+    profileName: string;
+    sourceKey: string;
+    expectedStagingRevision: string;
+    syncErrorCode: string;
+  }): Promise<KnowledgeSyncFailureOutcome>;
   updateSource(input: {
     profileName: string;
     sourceKey: string;
@@ -171,20 +203,8 @@ export interface KnowledgeStore {
     documentId: string;
     sectionKey?: string;
   }): Promise<boolean>;
-  search(input: {
-    profileName: string;
-    query: string;
-    queryEmbedding?: number[];
-    embeddingProvider?: string;
-    embeddingModel?: string;
-    sourceId?: string;
-    sourceIds?: string[];
-    sourceKey?: string;
-    documentId?: string;
-    sectionKey?: string;
-    ordinal?: number;
-    limit?: number;
-  }): Promise<KnowledgeSearchResult[]>;
+  search(input: KnowledgeSearchInput): Promise<KnowledgeSearchResult[]>;
+  searchTopPerSource(input: KnowledgeTopPerSourceInput): Promise<KnowledgeSearchResult[]>;
   purgeExpired(now: Date): Promise<number>;
 }
 
@@ -246,6 +266,25 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
       .filter((source) => source.profileName === input.profileName)
       .filter((source) => input.includeDisabled || this.sourceActive(source))
       .sort((a, b) => a.sourceKey.localeCompare(b.sourceKey));
+  }
+
+  async markSourceSyncFailed(input: {
+    profileName: string;
+    sourceKey: string;
+    expectedStagingRevision: string;
+    syncErrorCode: string;
+  }): Promise<KnowledgeSyncFailureOutcome> {
+    const source = Array.from(this.sources.values()).find(
+      (item) => item.profileName === input.profileName && item.sourceKey === input.sourceKey
+    );
+    if (!source) return "not_found";
+    if (source.stagingRevision !== input.expectedStagingRevision) return "stale";
+    this.sources.set(source.id, {
+      ...source,
+      syncStatus: "failed",
+      syncErrorCode: input.syncErrorCode
+    });
+    return "updated";
   }
 
   async updateSource(input: {
@@ -403,6 +442,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
 
     const promotedSource: KnowledgeSourceRecord = {
       ...source,
+      stagingRevision: randomUUID(),
       displayName: source.stagedDisplayName,
       adapterType: source.stagedAdapterType,
       externalRootId: source.stagedExternalRootId,
@@ -514,20 +554,23 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
       });
   }
 
-  async search(input: {
-    profileName: string;
-    query: string;
-    queryEmbedding?: number[];
-    embeddingProvider?: string;
-    embeddingModel?: string;
-    sourceId?: string;
-    sourceIds?: string[];
-    sourceKey?: string;
-    documentId?: string;
-    sectionKey?: string;
-    ordinal?: number;
-    limit?: number;
-  }): Promise<KnowledgeSearchResult[]> {
+  async search(input: KnowledgeSearchInput): Promise<KnowledgeSearchResult[]> {
+    return this.searchCandidates(input).slice(0, input.limit ?? 8);
+  }
+
+  async searchTopPerSource(input: KnowledgeTopPerSourceInput): Promise<KnowledgeSearchResult[]> {
+    assertKnowledgeSourceScope(input.sourceIds);
+    const topBySource = new Map<string, KnowledgeSearchResult>();
+    for (const result of this.searchCandidates(input)) {
+      if (!topBySource.has(result.source.id)) topBySource.set(result.source.id, result);
+    }
+    return Array.from(topBySource.values()).sort(
+      (left, right) =>
+        right.score - left.score || left.source.sourceKey.localeCompare(right.source.sourceKey)
+    );
+  }
+
+  private searchCandidates(input: KnowledgeSearchInput): KnowledgeSearchResult[] {
     const normalizedQuery = normalize(input.query);
     const candidates: KnowledgeSearchResult[] = [];
     for (const document of this.documents.values()) {
@@ -576,9 +619,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
         });
       }
     }
-    return candidates
-      .sort((a, b) => b.score - a.score || a.ordinal - b.ordinal)
-      .slice(0, input.limit ?? 8);
+    return candidates.sort((a, b) => b.score - a.score || a.ordinal - b.ordinal);
   }
 
   async hasAnchor(input: {
@@ -655,6 +696,10 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
         (!model || item.model === model)
     );
   }
+}
+
+export function assertKnowledgeSourceScope(sourceIds: readonly string[]): void {
+  if (sourceIds.length > 20) throw new Error("knowledge_source_scope_limit");
 }
 
 function normalize(value: string): string {

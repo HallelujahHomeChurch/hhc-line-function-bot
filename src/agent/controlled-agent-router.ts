@@ -3,6 +3,7 @@ import type { AgentPlannerResult, FunctionName } from "../types.js";
 import type { ActiveTaskContext } from "./active-task.js";
 import {
   buildCapabilityCandidates,
+  retrievalEvidenceRequests,
   type KnowledgeSourceMetadata
 } from "./capability-candidates.js";
 import type { AgentPlanner } from "./planner.js";
@@ -10,6 +11,14 @@ import { validateAgentPlan, type ValidatedAgentPlan } from "./plan-validator.js"
 
 export interface DynamicKnowledgeMetadataProvider {
   list(profileName: string, limit: number): Promise<readonly KnowledgeSourceMetadata[]>;
+}
+
+export interface RetrievalEvidenceProvider {
+  probe(input: {
+    profileName: string;
+    text: string;
+    maxSources: number;
+  }): Promise<{ matched: boolean; count?: number; opaqueIds?: readonly string[] }>;
 }
 
 export interface ControlledAgentRouterInput {
@@ -29,6 +38,7 @@ export interface ControlledAgentRouter {
 export function createControlledAgentRouter(options: {
   planner: AgentPlanner;
   knowledgeMetadata?: DynamicKnowledgeMetadataProvider;
+  retrievalEvidenceProviders?: Readonly<Record<string, RetrievalEvidenceProvider>>;
   now?: () => Date;
 }): ControlledAgentRouter {
   const now = options.now ?? (() => new Date());
@@ -44,11 +54,17 @@ export function createControlledAgentRouter(options: {
         options.knowledgeMetadata,
         input.profileName
       );
+      const retrievalEvidence = await readRetrievalEvidence(
+        options.retrievalEvidenceProviders,
+        input,
+        source
+      );
       const candidates = buildCapabilityCandidates({
         text: input.text,
         enabledFunctions: input.enabledFunctions,
         activeTask: input.activeTask,
         knowledgeSources,
+        retrievalEvidence,
         maxCandidates: input.maxCandidates,
         source
       });
@@ -71,6 +87,41 @@ export function createControlledAgentRouter(options: {
       });
     }
   };
+}
+
+async function readRetrievalEvidence(
+  providers: Readonly<Record<string, RetrievalEvidenceProvider>> | undefined,
+  input: ControlledAgentRouterInput,
+  source: FunctionAllowedSource
+): Promise<FunctionName[]> {
+  if (!providers) return [];
+  const requests = retrievalEvidenceRequests({
+    text: input.text,
+    enabledFunctions: input.enabledFunctions,
+    source
+  });
+  const byProvider = new Map<string, FunctionName[]>();
+  for (const request of requests) {
+    const capabilities = byProvider.get(request.provider) ?? [];
+    capabilities.push(request.capability);
+    byProvider.set(request.provider, capabilities);
+  }
+  const matched = new Set<FunctionName>();
+  for (const [providerName, capabilities] of byProvider) {
+    const provider = providers[providerName];
+    if (!provider) continue;
+    try {
+      const evidence = await provider.probe({
+        profileName: input.profileName,
+        text: input.text,
+        maxSources: KNOWLEDGE_METADATA_LIMIT
+      });
+      if (evidence.matched) for (const capability of capabilities) matched.add(capability);
+    } catch {
+      // Retrieval evidence is advisory and fails closed.
+    }
+  }
+  return Array.from(matched);
 }
 
 const KNOWLEDGE_METADATA_LIMIT = 20;

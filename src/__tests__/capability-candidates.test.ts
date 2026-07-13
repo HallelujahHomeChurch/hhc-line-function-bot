@@ -85,6 +85,22 @@ describe("deterministic capability candidates", () => {
     expect(JSON.stringify(candidates)).not.toContain("retreat");
   });
 
+  it("uses generic retrieval evidence without returning opaque evidence details", () => {
+    const candidates = buildCapabilityCandidates({
+      text: "急救箱位置",
+      enabledFunctions: ["query_knowledge"],
+      source: "group",
+      knowledgeSources: [],
+      retrievalEvidence: ["query_knowledge"],
+      maxCandidates: 3
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({ capability: "query_knowledge", reason: "retrieval_evidence" })
+    ]);
+    expect(JSON.stringify(candidates)).not.toMatch(/source-|document-|急救箱位置/u);
+  });
+
   it("ranks explicit current-message evidence above another capability's active task", () => {
     expect(
       buildCapabilityCandidates({

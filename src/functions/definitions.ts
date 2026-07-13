@@ -58,6 +58,7 @@ export interface FunctionMemoryPolicy {
 export interface AgentCapabilityContract {
   intents: string[];
   candidateHints: string[];
+  retrievalEvidence?: { provider: string };
   entityTypes?: string[];
   refinableFields?: string[];
   operations?: Array<"continue" | "refine" | "advance" | "select">;
@@ -258,6 +259,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查知識", "知識查詢", "找知識"],
       candidateHints: ["知識", "sop", "計畫", "流程"],
+      retrievalEvidence: { provider: "knowledge" },
       entityTypes: ["source", "document", "section", "ordinal"],
       refinableFields: ["sourceKey", "sourceId", "documentId", "sectionKey", "ordinal"],
       operations: ["continue", "refine", "select"],

@@ -1,14 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createAgentRuntime } from "../agent/agent-runtime.js";
-import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
+import {
+  createControlledAgentRouter,
+  type ControlledAgentRouter
+} from "../agent/controlled-agent-router.js";
 import { InMemoryConversationWindowStore, type ContextManager } from "../agent/context-manager.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
-import { createQueryKnowledgeTextMessageHandler } from "../functions/query-knowledge.js";
+import {
+  createQueryKnowledgeHandler,
+  createQueryKnowledgeTextMessageHandler
+} from "../functions/query-knowledge.js";
+import { createKnowledgeRetrievalEvidenceProvider } from "../knowledge/retrieval-evidence.js";
 import { InMemoryKnowledgeStore } from "../knowledge/store.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
 import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
@@ -320,6 +327,104 @@ describe("AgentTurnRuntime", () => {
       maxCandidates: 3,
       minPlannerConfidence: 0.65
     });
+  });
+
+  it("routes a body-only knowledge match end to end without exposing evidence to the planner", async () => {
+    const store = new InMemoryKnowledgeStore();
+    const source = await store.upsertSource({
+      profileName: "helper",
+      sourceKey: "internal-manual",
+      displayName: "內部手冊",
+      adapterType: "notion",
+      externalRootId: "root",
+      rootUrl: "https://example.test/root",
+      enabled: true
+    });
+    await store.replaceDocument({
+      sourceId: source.id,
+      externalId: "doc",
+      title: "一般資料",
+      url: "https://example.test/doc",
+      nodes: [],
+      chunks: [
+        {
+          headingPath: [],
+          ordinal: 0,
+          content: "急救箱位置在辦公室櫃子。",
+          contentHash: "body-only"
+        }
+      ]
+    });
+    await store.updateSource({
+      profileName: "helper",
+      sourceKey: source.sourceKey,
+      syncStatus: "ready",
+      lastSyncedAt: "2026-07-13T00:00:00Z"
+    });
+    const evidenceProvider = createKnowledgeRetrievalEvidenceProvider(store);
+    const probe = vi.spyOn(evidenceProvider, "probe");
+    const propose = vi.fn().mockResolvedValue({
+      status: "proposed",
+      version: 1,
+      disposition: "execute",
+      capability: "query_knowledge",
+      arguments: { query: "急救箱位置" },
+      confidence: 0.95,
+      provider: "deepseek",
+      attempts: []
+    });
+    const runtime = createRuntime({
+      controlledAgentRouter: createControlledAgentRouter({
+        planner: { propose },
+        retrievalEvidenceProviders: { knowledge: evidenceProvider }
+      }),
+      functionRegistry: { query_knowledge: createQueryKnowledgeHandler({ store }) }
+    });
+    const controlledProfile = profile(["query_knowledge"], {
+      controlledAgent: {
+        enabled: true,
+        shadow: false,
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      }
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: controlledProfile,
+      event: textEvent("急救箱位置"),
+      requestId: "req-body-only-knowledge"
+    });
+    await runtime.handleTextTurn({
+      profile: controlledProfile,
+      event: textEvent("你好"),
+      requestId: "req-body-only-small-talk"
+    });
+    await runtime.handleTextTurn({
+      profile: profile([], { ...controlledProfile, enabledFunctions: [] }),
+      event: textEvent("急救箱位置"),
+      requestId: "req-body-only-disabled"
+    });
+
+    expect(result?.replyText).toContain("急救箱位置在辦公室櫃子");
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledWith({
+      profileName: "helper",
+      text: "急救箱位置",
+      maxSources: 20
+    });
+    expect(propose.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        candidates: [
+          expect.objectContaining({
+            capability: "query_knowledge",
+            reason: "retrieval_evidence"
+          })
+        ]
+      })
+    );
+    expect(JSON.stringify(propose.mock.calls[0])).not.toMatch(
+      /急救箱位置在辦公室櫃子|一般資料|內部手冊|example\.test|internal-manual|body-only/u
+    );
   });
 
   it("runs shadow routing without changing legacy execution or controlled state", async () => {

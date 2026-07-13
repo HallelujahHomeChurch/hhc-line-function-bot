@@ -16,7 +16,11 @@ export interface KnowledgeSourceMetadata extends Omit<KnowledgeRoutingMetadata, 
 }
 
 export type CapabilityCandidateReason =
-  "explicit_intent" | "active_task_entity" | "knowledge_metadata" | "capability_hint";
+  | "explicit_intent"
+  | "active_task_entity"
+  | "knowledge_metadata"
+  | "retrieval_evidence"
+  | "capability_hint";
 
 export interface CapabilityCandidate {
   capability: FunctionName;
@@ -30,6 +34,7 @@ export interface BuildCapabilityCandidatesInput {
   enabledFunctions: readonly FunctionName[];
   activeTask?: ActiveTaskContext;
   knowledgeSources: readonly KnowledgeSourceMetadata[];
+  retrievalEvidence?: readonly FunctionName[];
   maxCandidates: number;
   source: FunctionAllowedSource;
 }
@@ -51,6 +56,7 @@ const REASON_SCORE: Record<CapabilityCandidateReason, number> = {
   explicit_intent: 400,
   active_task_entity: 300,
   knowledge_metadata: 200,
+  retrieval_evidence: 150,
   capability_hint: 100
 };
 
@@ -123,6 +129,9 @@ function strongestReason(
     matchesKnowledgeMetadata(input.text, input.knowledgeSources)
   ) {
     return "knowledge_metadata";
+  }
+  if (!hasWriteIntent(input.text) && input.retrievalEvidence?.includes(definition.name)) {
+    return "retrieval_evidence";
   }
   if (matchesAnyHint(input.text, contract.candidateHints)) return "capability_hint";
   return undefined;
@@ -271,13 +280,51 @@ function editDistanceAtMostOne(left: string[], right: string[]): boolean {
   return edits + Number(leftIndex < left.length || rightIndex < right.length) <= 1;
 }
 
-function hasWriteIntent(text: string): boolean {
+export function hasWriteIntent(text: string): boolean {
   const normalized = normalize(text).replace(/^小哈/u, "");
   const writeAction = "記住|保存|儲存|存下|新增|修改|更新|刪除|移除|上傳|建立";
   return (
     new RegExp(`^(?:請|我要|要)?(?:幫我|替我)?(?:${writeAction})`, "u").test(normalized) ||
     new RegExp(`(?:幫我|替我)(?:${writeAction})`, "u").test(normalized)
   );
+}
+
+export function retrievalEvidenceRequests(input: {
+  text: string;
+  enabledFunctions: readonly FunctionName[];
+  source: FunctionAllowedSource;
+}): Array<{ capability: FunctionName; provider: string }> {
+  if (!isConservativeRetrievalEvidenceText(input.text)) return [];
+  const enabled = new Set(input.enabledFunctions);
+  return FUNCTION_DEFINITIONS.flatMap((definition) => {
+    if (!isEligibleDefinition(definition, enabled, input.source)) return [];
+    const provider = definition.agentCapability?.retrievalEvidence?.provider.trim();
+    return provider ? [{ capability: definition.name, provider }] : [];
+  });
+}
+
+export function isConservativeRetrievalEvidenceText(text: string): boolean {
+  if (hasWriteIntent(text)) return false;
+  const normalized = normalize(text).replace(/^小哈/u, "");
+  if (Array.from(normalized).length < 2) return false;
+  return !new Set([
+    "你好",
+    "哈囉",
+    "嗨",
+    "早安",
+    "午安",
+    "晚安",
+    "謝謝",
+    "感謝",
+    "再見",
+    "掰掰",
+    "hello",
+    "hi",
+    "hey",
+    "thanks",
+    "thankyou",
+    "bye"
+  ]).has(normalized);
 }
 
 function normalize(value: string): string {
@@ -298,6 +345,9 @@ function cloneContract(contract: AgentCapabilityContract): AgentCapabilityContra
     ...(contract.entityTypes ? { entityTypes: [...contract.entityTypes] } : {}),
     ...(contract.refinableFields ? { refinableFields: [...contract.refinableFields] } : {}),
     ...(contract.operations ? { operations: [...contract.operations] } : {}),
+    ...(contract.retrievalEvidence
+      ? { retrievalEvidence: { provider: contract.retrievalEvidence.provider } }
+      : {}),
     ...(contract.ambiguity ? { ambiguity: contract.ambiguity } : {}),
     ...(contract.activeEvidence
       ? {

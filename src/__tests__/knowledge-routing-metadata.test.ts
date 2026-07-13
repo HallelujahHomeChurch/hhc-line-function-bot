@@ -322,4 +322,25 @@ describe("knowledge routing metadata", () => {
     expect(matchingKnowledgeRoutingMetadata("use alpha-course-source here", sources)).toEqual([]);
     expect(matchingKnowledgeRoutingMetadata("alpha-course-source", sources)).toEqual([sources[0]]);
   });
+
+  it("requires exact equality for a single Latin metadata token", () => {
+    const sources = [
+      {
+        sourceKey: "care-source",
+        displayName: "Care Handbook",
+        aliases: ["care"],
+        topics: ["art", "pastoral-care"],
+        sampleQueries: []
+      }
+    ];
+
+    expect(matchingKnowledgeRoutingMetadata("Why are they scared?", sources)).toEqual([]);
+    expect(matchingKnowledgeRoutingMetadata("The party starts now", sources)).toEqual([]);
+    expect(matchingKnowledgeRoutingMetadata("Read the care handbook", sources)).toEqual([
+      sources[0]
+    ]);
+    expect(matchingKnowledgeRoutingMetadata("pastoral care process", sources)).toEqual([
+      sources[0]
+    ]);
+  });
 });

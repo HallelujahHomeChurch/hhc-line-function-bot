@@ -292,4 +292,108 @@ describe("knowledge store", () => {
       expect.objectContaining({ source: expect.objectContaining({ sourceKey: "beta" }) })
     ]);
   });
+
+  it("keeps one top result per bounded eligible source before context limiting", async () => {
+    const store = new InMemoryKnowledgeStore();
+    const sourceIds: string[] = [];
+    for (const sourceKey of ["alpha", "beta"]) {
+      const source = await store.upsertSource({
+        profileName: "helper",
+        sourceKey,
+        displayName: `${sourceKey} manual`,
+        adapterType: "notion",
+        externalRootId: `${sourceKey}-root`,
+        rootUrl: `https://example.test/${sourceKey}`,
+        enabled: true
+      });
+      await store.replaceDocument({
+        sourceId: source.id,
+        externalId: `${sourceKey}-doc`,
+        title: `${sourceKey} document`,
+        url: `https://example.test/${sourceKey}-doc`,
+        nodes: [],
+        chunks:
+          sourceKey === "alpha"
+            ? Array.from({ length: 8 }, (_, ordinal) => ({
+                headingPath: [],
+                ordinal,
+                content: "共同暗號",
+                contentHash: `alpha-${ordinal}`
+              }))
+            : [
+                {
+                  headingPath: [],
+                  ordinal: 8,
+                  content: "共同暗號",
+                  contentHash: "beta"
+                }
+              ]
+      });
+      await store.updateSource({
+        profileName: "helper",
+        sourceKey,
+        syncStatus: "ready",
+        lastSyncedAt: "2026-07-13T00:00:00Z"
+      });
+      sourceIds.push(source.id);
+    }
+
+    await expect(
+      store.search({ profileName: "helper", query: "共同暗號", sourceIds, limit: 8 })
+    ).resolves.toSatisfy((results) => results.every(({ source }) => source.sourceKey === "alpha"));
+    await expect(
+      store.searchTopPerSource({ profileName: "helper", query: "共同暗號", sourceIds })
+    ).resolves.toEqual([
+      expect.objectContaining({ source: expect.objectContaining({ sourceKey: "alpha" }) }),
+      expect.objectContaining({ source: expect.objectContaining({ sourceKey: "beta" }) })
+    ]);
+    await expect(
+      store.searchTopPerSource({
+        profileName: "helper",
+        query: "共同暗號",
+        sourceIds: Array.from({ length: 21 }, (_, index) => `source-${index}`)
+      })
+    ).rejects.toThrow("knowledge_source_scope_limit");
+  });
+
+  it("rotates the staging revision and ignores failure from the published revision", async () => {
+    const store = new InMemoryKnowledgeStore();
+    const source = await store.upsertSource({
+      profileName: "helper",
+      sourceKey: "sop",
+      displayName: "SOP",
+      adapterType: "notion",
+      externalRootId: "root",
+      rootUrl: "https://example.test/root",
+      enabled: true
+    });
+
+    const published = await store.publishSourceSnapshot({
+      sourceId: source.id,
+      expectedStagingRevision: source.stagingRevision,
+      syncedAt: "2026-07-13T00:00:00Z",
+      syncStatus: "ready",
+      routingDisplayName: "SOP",
+      aliases: [],
+      topics: [],
+      sampleQueries: [],
+      documents: [],
+      embeddings: []
+    });
+
+    expect(published.stagingRevision).not.toBe(source.stagingRevision);
+    await expect(
+      store.markSourceSyncFailed({
+        profileName: "helper",
+        sourceKey: "sop",
+        expectedStagingRevision: source.stagingRevision,
+        syncErrorCode: "source_unavailable"
+      })
+    ).resolves.toBe("stale");
+    await expect(
+      store.listSources({ profileName: "helper", includeDisabled: true })
+    ).resolves.toEqual([
+      expect.objectContaining({ syncStatus: "ready", syncErrorCode: undefined })
+    ]);
+  });
 });

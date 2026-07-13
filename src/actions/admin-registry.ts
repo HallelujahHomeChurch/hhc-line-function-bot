@@ -18,8 +18,8 @@ import {
 import { evaluateActionPolicy } from "./policy.js";
 import type { EmbeddingClient } from "../clients/ollama-embedding.js";
 import { parseNotionRootId, type NotionKnowledgeClient } from "../clients/notion-knowledge.js";
-import type { KnowledgeStore } from "../knowledge/store.js";
-import { syncKnowledgeSource } from "../knowledge/sync-service.js";
+import type { KnowledgeSourceRecord, KnowledgeStore } from "../knowledge/store.js";
+import { markKnowledgeSyncFailure, syncKnowledgeSource } from "../knowledge/sync-service.js";
 
 export interface AdminActionRegistryOptions {
   accessStore: AccessStore;
@@ -391,9 +391,10 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
     if (expiresAt && !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/u.test(expiresAt))
       return { ok: true, replyText: "到期日請使用 YYYY-MM-DD。" };
     const sourceKey = sourceKeyFor(displayName, externalRootId);
+    let source: KnowledgeSourceRecord | undefined;
     let synced: Awaited<ReturnType<typeof syncKnowledgeSource>>;
     try {
-      const source = await dependencies.store.upsertSource({
+      source = await dependencies.store.upsertSource({
         profileName: input.profile.name,
         sourceKey,
         displayName,
@@ -418,16 +419,23 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
         batchSize: this.options.knowledgeEmbeddingBatchSize
       });
     } catch {
-      await dependencies.store.updateSource({
-        profileName: input.profile.name,
+      const outcome = source
+        ? await markKnowledgeSyncFailure({
+            source,
+            store: dependencies.store,
+            syncErrorCode: "source_unavailable"
+          })
+        : "not_found";
+      const stale = outcome === "stale";
+      await this.auditKnowledge(
+        input,
+        "knowledge.source.add",
         sourceKey,
-        syncStatus: "failed",
-        syncErrorCode: "source_unavailable"
-      });
-      await this.auditKnowledge(input, "knowledge.source.add", sourceKey, {
-        outcome: "failed",
-        errorCode: "source_unavailable"
-      });
+        stale
+          ? { outcome: "stale", errorCode: "staging_changed" }
+          : { outcome: "failed", errorCode: "source_unavailable" }
+      );
+      if (stale) return { ok: true, replyText: "較新的知識來源版本已完成同步。" };
       return { ok: true, replyText: "無法讀取該頁面，請確認已分享給系統使用的整合服務。" };
     }
     await this.auditKnowledge(input, "knowledge.source.add", sourceKey, { outcome: "success" });
@@ -489,16 +497,21 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
         batchSize: this.options.knowledgeEmbeddingBatchSize
       });
     } catch {
-      await dependencies.store.updateSource({
-        profileName: input.profile.name,
-        sourceKey,
-        syncStatus: "failed",
+      const outcome = await markKnowledgeSyncFailure({
+        source,
+        store: dependencies.store,
         syncErrorCode: "source_unavailable"
       });
-      await this.auditKnowledge(input, "knowledge.source.sync", sourceKey, {
-        outcome: "failed",
-        errorCode: "source_unavailable"
-      });
+      const stale = outcome === "stale";
+      await this.auditKnowledge(
+        input,
+        "knowledge.source.sync",
+        sourceKey,
+        stale
+          ? { outcome: "stale", errorCode: "staging_changed" }
+          : { outcome: "failed", errorCode: "source_unavailable" }
+      );
+      if (stale) return { ok: true, replyText: "較新的知識來源版本已完成同步。" };
       return { ok: true, replyText: "同步失敗，舊版有效內容仍會保留。" };
     }
     await this.auditKnowledge(input, "knowledge.source.sync", sourceKey, { outcome: "success" });

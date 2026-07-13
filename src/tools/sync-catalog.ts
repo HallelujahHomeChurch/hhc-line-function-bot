@@ -9,7 +9,7 @@ import { loadConfigFromEnv } from "../config.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createScheduleStore } from "../schedules/create-schedule-store.js";
 import { createKnowledgeStore } from "../knowledge/create-store.js";
-import { syncKnowledgeSource } from "../knowledge/sync-service.js";
+import { syncScheduledKnowledgeSources } from "../knowledge/scheduled-sync.js";
 
 const config = loadConfigFromEnv(process.env);
 const postgres = await createPostgresRuntime(config.database);
@@ -43,6 +43,7 @@ try {
     sources: 0,
     synced: 0,
     failed: 0,
+    stale: 0,
     documents: 0,
     chunks: 0,
     embedded: 0
@@ -71,30 +72,16 @@ try {
     )
       .flat()
       .filter((source) => requested.size === 0 || requested.has(source.sourceKey));
-    knowledgeResult.sources = sources.length;
-    for (const source of sources) {
-      try {
-        const synced = await syncKnowledgeSource({
-          source,
-          store: knowledge,
-          notion: notionKnowledge,
-          embedding,
-          batchSize: config.knowledge.embedding.batchSize
-        });
-        knowledgeResult.synced += 1;
-        knowledgeResult.documents += synced.documents;
-        knowledgeResult.chunks += synced.chunks;
-        knowledgeResult.embedded += synced.embedded;
-      } catch {
-        knowledgeResult.failed += 1;
-        await knowledge.updateSource({
-          profileName: source.profileName,
-          sourceKey: source.sourceKey,
-          syncStatus: "failed",
-          syncErrorCode: "scheduled_sync_failed"
-        });
-      }
-    }
+    Object.assign(
+      knowledgeResult,
+      await syncScheduledKnowledgeSources({
+        sources,
+        store: knowledge,
+        notion: notionKnowledge,
+        embedding,
+        batchSize: config.knowledge.embedding.batchSize
+      })
+    );
   }
   await knowledge.purgeExpired(new Date());
   console.log(JSON.stringify({ ok: true, result, knowledge: knowledgeResult }));
