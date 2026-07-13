@@ -171,25 +171,30 @@ describe("deterministic capability candidates", () => {
     }
   );
 
-  it.each(["幫我把第一日儲存起來", "幫我把第一日存下來", "請將第一日新增到知識"])(
-    "does not turn rearranged write intent into a knowledge read candidate: %s",
-    (text) => {
-      expect(
-        buildCapabilityCandidates({
-          text,
-          enabledFunctions: ["query_knowledge"],
-          activeTask: {
-            ...knowledgeTask,
-            entities: [{ type: "section", key: "day-one", label: "第一日" }]
-          },
-          source: "group",
-          knowledgeSources: [{ ...retreatKnowledge, topics: ["第一日"] }],
-          retrievalEvidence: ["query_knowledge"],
-          maxCandidates: 3
-        })
-      ).toEqual([]);
-    }
-  );
+  it.each([
+    "幫我把第一日儲存起來",
+    "幫我把第一日存下來",
+    "請將第一日新增到知識",
+    "請你幫我儲存第一日",
+    "麻煩幫我刪除第一日",
+    "可以幫我新增嗎",
+    "能不能替我更新第一日安排"
+  ])("does not turn rearranged write intent into a knowledge read candidate: %s", (text) => {
+    expect(
+      buildCapabilityCandidates({
+        text,
+        enabledFunctions: ["query_knowledge"],
+        activeTask: {
+          ...knowledgeTask,
+          entities: [{ type: "section", key: "day-one", label: "第一日" }]
+        },
+        source: "group",
+        knowledgeSources: [{ ...retreatKnowledge, topics: ["第一日"] }],
+        retrievalEvidence: ["query_knowledge"],
+        maxCandidates: 3
+      })
+    ).toEqual([]);
+  });
 
   it("keeps explicit knowledge intent and ordinary knowledge questions eligible", () => {
     expect(
@@ -207,6 +212,15 @@ describe("deterministic capability candidates", () => {
         enabledFunctions: ["query_knowledge"],
         source: "group",
         knowledgeSources: [{ ...retreatKnowledge, topics: ["第一日"] }],
+        maxCandidates: 3
+      })[0]
+    ).toMatchObject({ capability: "query_knowledge", reason: "knowledge_metadata" });
+    expect(
+      buildCapabilityCandidates({
+        text: "請問如何新增成員",
+        enabledFunctions: ["query_knowledge"],
+        source: "group",
+        knowledgeSources: [{ ...retreatKnowledge, topics: ["新增成員"] }],
         maxCandidates: 3
       })[0]
     ).toMatchObject({ capability: "query_knowledge", reason: "knowledge_metadata" });

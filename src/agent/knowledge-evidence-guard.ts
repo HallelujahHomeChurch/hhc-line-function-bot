@@ -1,16 +1,29 @@
 import { classifySmallTalkCategory } from "../engagement.js";
 
 const WRITE_ACTION = "記住|保存|儲存|存下|新增|修改|更新|刪除|移除|上傳|建立";
-const WRITE_ACTION_PATTERN = new RegExp(`(?:${WRITE_ACTION})`, "u");
+const MAX_IMPERATIVE_CONTENT_CHARACTERS = 80;
+const BOUNDED_IMPERATIVE_CONTENT = `.{0,${MAX_IMPERATIVE_CONTENT_CHARACTERS}}`;
+const POLITE_HELPER = "(?:(?:請|麻煩|可以|可不可以|能不能|能否)(?:你|您)?)?(?:幫我|替我)";
+const HELPER_WRITE_PATTERN = new RegExp(
+  `^${POLITE_HELPER}(?:把|將)?${BOUNDED_IMPERATIVE_CONTENT}(?:${WRITE_ACTION})`,
+  "u"
+);
+const OBJECT_WRITE_PATTERN = new RegExp(
+  `^(?:請)?(?:把|將)${BOUNDED_IMPERATIVE_CONTENT}(?:${WRITE_ACTION})`,
+  "u"
+);
+const DESIRE_WRITE_PATTERN = new RegExp(
+  `^(?:我要|要)(?:把|將)?${BOUNDED_IMPERATIVE_CONTENT}(?:${WRITE_ACTION})`,
+  "u"
+);
 const DIRECT_WRITE_PATTERN = new RegExp(`^(?:請)?(?:${WRITE_ACTION})`, "u");
 
 export function hasWriteIntent(text: string): boolean {
   const normalized = normalizeIntentText(text);
-  if (!WRITE_ACTION_PATTERN.test(normalized)) return false;
   return (
-    /^(?:請)?(?:幫我|替我)/u.test(normalized) ||
-    /^(?:請)?(?:把|將)/u.test(normalized) ||
-    /^(?:我要|要)(?:把|將)?/u.test(normalized) ||
+    HELPER_WRITE_PATTERN.test(normalized) ||
+    OBJECT_WRITE_PATTERN.test(normalized) ||
+    DESIRE_WRITE_PATTERN.test(normalized) ||
     DIRECT_WRITE_PATTERN.test(normalized)
   );
 }
