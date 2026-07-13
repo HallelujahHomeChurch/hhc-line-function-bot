@@ -205,16 +205,6 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         });
         if (result) {
           if (result.executedAction) {
-            if (controlledRoutingMode(input.profile) === "enabled") {
-              await applyActiveTaskTransition({
-                store: options.conversationWindowStore,
-                scope: activeTaskScope(options.conversationWindowStore, input),
-                capability: result.executedAction,
-                result,
-                now: now(),
-                ttlMs: activeTaskTtlMs(input.profile)
-              });
-            }
             await recordFunctionWriteAudit(
               options.accessStore,
               context,
@@ -227,6 +217,17 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             result.agentResource?.resourceType,
             context.profile.enabledFunctions
           );
+          const transitionFunctionName = result.executedAction ?? textHandlerFunctionName;
+          if (transitionFunctionName && controlledRoutingMode(input.profile) === "enabled") {
+            await applyActiveTaskTransition({
+              store: options.conversationWindowStore,
+              scope: activeTaskScope(options.conversationWindowStore, input),
+              capability: transitionFunctionName,
+              result,
+              now: now(),
+              ttlMs: activeTaskTtlMs(input.profile)
+            });
+          }
           if (textHandlerFunctionName) {
             await options.agentRuntime?.afterFunctionResult({
               context,
@@ -279,6 +280,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
       const continuation =
         controlledMode === "enabled" ? undefined : await readFunctionContinuation(options, input);
       let activeTask: ActiveTaskContext | undefined;
+      let controlledContinuationAuthorized = false;
       let route: RouteResult;
 
       if (controlledMode === "enabled") {
@@ -298,6 +300,8 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         if (plan.disposition === "clarify") {
           return finish(input, steps, controlledClarificationResult(plan, context));
         }
+        controlledContinuationAuthorized =
+          plan.disposition === "execute" && plan.reasonCode === "active_task_refinement";
         route = controlledPlanToRoute(plan, input);
       } else {
         if (controlledMode === "shadow") {
@@ -521,7 +525,9 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           ...context,
           continuation:
             controlledMode === "enabled"
-              ? activeTaskContinuation(route.action, activeTask)
+              ? controlledContinuationAuthorized
+                ? activeTaskContinuation(route.action, activeTask)
+                : undefined
               : continuation?.functionName === route.action
                 ? continuation
                 : undefined

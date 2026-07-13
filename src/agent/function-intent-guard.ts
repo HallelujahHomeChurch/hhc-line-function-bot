@@ -52,7 +52,8 @@ function detectContinuationIntent(
   if (route.type === "execute") return undefined;
   if (route.type === "respond" && route.action !== "small_talk") return undefined;
   const definition = FUNCTION_DEFINITIONS.find(
-    ({ name, continuation: policy }) => name === continuation.functionName && Boolean(policy)
+    ({ name, continuation: policy, legacyRecovery }) =>
+      name === continuation.functionName && Boolean(policy) && legacyRecovery?.continuation === true
   );
   if (!definition) return undefined;
   const arguments_ = normalizeFunctionArguments(
@@ -90,22 +91,27 @@ function detectExplicitReadIntent(
   enabledFunctions: FunctionName[]
 ): { action: FunctionName; arguments: JsonRecord } | undefined {
   const enabled = new Set(enabledFunctions);
-  const matches = FUNCTION_DEFINITIONS.filter(
-    (definition) =>
-      enabled.has(definition.name) &&
-      definition.sideEffectLevel === "read" &&
-      [
-        ...(definition.agentCapability?.intents ?? []),
-        ...(definition.agentCapability?.candidateHints ?? []),
-        ...(definition.keywordFallback?.keywords ?? [])
-      ].some((term) => normalizeText(term) && normalizeText(text).includes(normalizeText(term)))
+  const normalizedText = normalizeText(text);
+  const match = FUNCTION_DEFINITIONS.find(
+    ({ name, legacyRecovery }) =>
+      enabled.has(name) &&
+      legacyRecovery?.systemRoute !== undefined &&
+      containsAny(normalizedText, legacyRecovery.systemRoute.requiredAny) &&
+      containsAny(normalizedText, legacyRecovery.systemRoute.evidenceAny)
   );
-  if (matches.length !== 1) return undefined;
-  const action = matches[0]!.name;
+  if (!match) return undefined;
+  const action = match.name;
   return {
     action,
     arguments: normalizeFunctionArguments(action, { query: text.trim() }, { text })
   };
+}
+
+function containsAny(normalizedText: string, terms: string[]): boolean {
+  return terms.some((term) => {
+    const normalizedTerm = normalizeText(term);
+    return Boolean(normalizedTerm) && normalizedText.includes(normalizedTerm);
+  });
 }
 
 function normalizeText(value: string): string {

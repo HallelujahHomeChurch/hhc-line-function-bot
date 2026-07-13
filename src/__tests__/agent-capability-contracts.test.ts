@@ -83,7 +83,7 @@ describe("controlled read capability contracts", () => {
     ).toEqual([]);
   });
 
-  it("uses definition metadata for legacy system-route recovery across read domains", () => {
+  it("keeps broad read hints on the original small-talk route", () => {
     expect(
       guardSystemRouteWithFunctionIntent(
         {
@@ -92,14 +92,77 @@ describe("controlled read capability contracts", () => {
           arguments: {},
           provider: "ollama"
         },
-        "查維基百科 馬丁路德",
-        ["query_wikipedia"]
+        "流程",
+        ["query_knowledge"]
       )
-    ).toMatchObject({
-      type: "execute",
-      action: "query_wikipedia",
-      arguments: { query: "查維基百科 馬丁路德" }
+    ).toEqual({
+      type: "respond",
+      action: "introduce_bot",
+      arguments: {},
+      provider: "ollama"
     });
+
+    expect(
+      guardSystemRouteWithFunctionIntent(
+        {
+          type: "respond",
+          action: "small_talk",
+          arguments: {},
+          provider: "deepseek"
+        },
+        "文件",
+        ["find_resource"]
+      )
+    ).toEqual({
+      type: "respond",
+      action: "small_talk",
+      arguments: {},
+      provider: "deepseek"
+    });
+  });
+
+  it.each(["下一場服事表", "本週聚會服事"])(
+    "preserves the declarative legacy schedule recovery for %s",
+    (text) => {
+      expect(
+        guardSystemRouteWithFunctionIntent(
+          {
+            type: "respond",
+            action: "small_talk",
+            arguments: {},
+            provider: "ollama"
+          },
+          text,
+          ["query_schedule"]
+        )
+      ).toMatchObject({
+        type: "execute",
+        action: "query_schedule",
+        arguments: { query: text }
+      });
+    }
+  );
+
+  it("declares every emitted result entity type in its capability contract", () => {
+    const emittedTypes = new Map<FunctionName, string[]>([
+      ["find_ppt_slides", ["resource"]],
+      ["find_sheet_music", ["resource"]],
+      ["find_resource", ["resource"]],
+      ["query_wikipedia", ["topic"]],
+      ["retrieve_memory", ["memory"]]
+    ]);
+
+    for (const [name, types] of emittedTypes) {
+      expect(getFunctionDefinition(name)?.agentCapability?.entityTypes, name).toEqual(
+        expect.arrayContaining(types)
+      );
+    }
+
+    for (const name of ["find_ppt_slides", "find_sheet_music", "find_resource"] as FunctionName[]) {
+      expect(getFunctionDefinition(name)?.agentCapability?.entityTypes, name).not.toContain(
+        "selection"
+      );
+    }
   });
 
   it("keeps top-level continuation plumbing free of function-specific read branches", () => {

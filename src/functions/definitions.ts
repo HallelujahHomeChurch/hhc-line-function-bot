@@ -32,6 +32,14 @@ export interface FunctionGenericRequest {
   clearArguments?: string[];
 }
 
+export interface FunctionLegacyRecoveryPolicy {
+  systemRoute?: {
+    requiredAny: string[];
+    evidenceAny: string[];
+  };
+  continuation?: boolean;
+}
+
 export interface FunctionRequiredSlot {
   name: string;
   argument: string;
@@ -101,6 +109,7 @@ export interface FunctionDefinition {
   deprecated?: boolean;
   keywordFallback?: FunctionKeywordFallback;
   continuation?: FunctionContinuationPolicy;
+  legacyRecovery?: FunctionLegacyRecoveryPolicy;
 }
 
 export interface FunctionContinuationPolicy {
@@ -109,6 +118,34 @@ export interface FunctionContinuationPolicy {
 }
 
 const commonStripWords = ["小哈", "請", "幫我", "幫忙", "查詢", "查", "找", "搜尋"];
+const legacyScheduleSystemRouteRecovery = {
+  requiredAny: ["服事", "聚會"],
+  evidenceAny: [
+    "下一場",
+    "下場",
+    "最近一場",
+    "下一次",
+    "下次",
+    "這週",
+    "這周",
+    "本週",
+    "本周",
+    "这周",
+    "这週",
+    "今天",
+    "明天",
+    "後天",
+    "后天",
+    "主日",
+    "晨更",
+    "門訓",
+    "國度禱告",
+    "福音餐會",
+    "仙履奇緣",
+    "服事表",
+    "聚會服事"
+  ]
+};
 
 export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
   {
@@ -122,12 +159,12 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查投影片", "找投影片", "搜尋投影片", "查簡報", "找簡報"],
       candidateHints: ["投影片", "簡報", "ppt", "powerpoint", "slides", "keynote", "odp"],
-      entityTypes: ["selection"],
+      entityTypes: ["resource"],
       refinableFields: ["query", "type", "selection"],
       operations: [],
       ambiguity: "clarify",
       activeEvidence: {
-        arguments: { query: { entityTypes: ["selection"] } }
+        arguments: { query: { entityTypes: ["resource"] } }
       }
     },
     allowedSources: ["user", "group"],
@@ -246,6 +283,10 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     continuation: {
       carryArguments: ["date", "dateIntent", "specificDate", "meeting", "role", "scheduleType"],
       exclusiveGroups: [["date", "dateIntent", "specificDate"]]
+    },
+    legacyRecovery: {
+      systemRoute: legacyScheduleSystemRouteRecovery,
+      continuation: true
     }
   },
   {
@@ -397,6 +438,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     keywordFallback: {
       keywords: ["服事表", "服事"],
       stripWords: [...commonStripWords]
+    },
+    legacyRecovery: {
+      systemRoute: legacyScheduleSystemRouteRecovery
     }
   },
   {
@@ -410,12 +454,12 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查歌譜", "找歌譜", "搜尋歌譜", "查樂譜", "找樂譜"],
       candidateHints: ["歌譜", "樂譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"],
-      entityTypes: ["selection"],
+      entityTypes: ["resource"],
       refinableFields: ["query", "type", "selection"],
       operations: [],
       ambiguity: "clarify",
       activeEvidence: {
-        arguments: { query: { entityTypes: ["selection"] } }
+        arguments: { query: { entityTypes: ["resource"] } }
       }
     },
     allowedSources: ["user", "group"],
@@ -570,12 +614,12 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查教會資料", "找教會資料", "查小哈資料庫", "找小哈資料庫"],
       candidateHints: ["教會資料", "小哈資料庫", "週報音檔"],
-      entityTypes: ["selection"],
+      entityTypes: ["resource"],
       refinableFields: ["query", "type", "selection"],
       operations: [],
       ambiguity: "clarify",
       activeEvidence: {
-        arguments: { query: { entityTypes: ["selection"] } }
+        arguments: { query: { entityTypes: ["resource"] } }
       }
     },
     allowedSources: ["user", "group"],
@@ -788,12 +832,12 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查我記住的", "查我保存的", "查我儲存的", "查記住的資訊"],
       candidateHints: ["記住的資訊", "保存的資訊", "小哈記得"],
-      entityTypes: ["selection"],
+      entityTypes: ["memory"],
       refinableFields: ["query", "selection"],
       operations: [],
       ambiguity: "clarify",
       activeEvidence: {
-        arguments: { query: { entityTypes: ["selection"] } }
+        arguments: { query: { entityTypes: ["memory"] } }
       }
     },
     allowedSources: ["user", "group"],

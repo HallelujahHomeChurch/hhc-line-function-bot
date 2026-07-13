@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAgentRuntime } from "../agent/agent-runtime.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { PostgresAgentMemoryStore, type PgQueryable } from "../agent/postgres-memory-store.js";
+import { createRetrieveMemoryHandler } from "../functions/agent-memory-functions.js";
 import type { BotProfileConfig, FunctionHandlerContext, GraphDriveClient } from "../types.js";
 
 function profile(): BotProfileConfig {
@@ -35,6 +36,40 @@ function context(): FunctionHandlerContext {
 }
 
 describe("agent memory", () => {
+  it("returns opaque structured results when retrieving explicit text memories", async () => {
+    const now = new Date("2026-07-08T00:00:00.000Z");
+    const store = new InMemoryAgentMemoryStore({ now: () => now });
+    const saved = await store.saveTextMemory({
+      profileName: "helper",
+      source: context().event.source,
+      createdBy: "U1",
+      title: "牧者私人提醒",
+      content: "請聯絡王小明處理主日服事"
+    });
+    const handler = createRetrieveMemoryHandler({ memoryStore: store });
+
+    const result = await handler({ query: "主日服事" }, context());
+
+    expect(result.replyText).toContain("王小明");
+    expect(result.agentResult).toEqual({
+      status: "success",
+      replyText: "記憶查詢完成。",
+      entities: [{ type: "memory", key: saved.id, label: "已保存資訊" }],
+      evidence: [{ kind: "saved_memory", reference: { memoryId: saved.id } }],
+      supportedOperations: []
+    });
+    expect(JSON.stringify(result.agentResult)).not.toMatch(/牧者|王小明|主日服事/u);
+  });
+
+  it("returns a structured not-found result when no explicit memory matches", async () => {
+    const store = new InMemoryAgentMemoryStore();
+    const handler = createRetrieveMemoryHandler({ memoryStore: store });
+
+    await expect(handler({ query: "不存在" }, context())).resolves.toMatchObject({
+      agentResult: { status: "not_found", replyText: "我目前找不到符合的記憶。" }
+    });
+  });
+
   it("stores recent resources by source and requester and ignores expired records", async () => {
     const now = new Date("2026-07-08T00:00:00.000Z");
     const store = new InMemoryAgentMemoryStore({ now: () => now });

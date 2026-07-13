@@ -652,6 +652,198 @@ describe("AgentTurnRuntime", () => {
     expect(recordFunctionContext).not.toHaveBeenCalled();
   });
 
+  it.each(["explicit_intent", "deterministic_explicit_intent"] as const)(
+    "does not pass active-task anchors to a fresh %s request for the same capability",
+    async (reasonCode) => {
+      const now = new Date("2026-07-08T00:00:00.000Z");
+      const store = new InMemoryConversationWindowStore({ now: () => now });
+      const scope = { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" };
+      await store.recordActiveTask({
+        scope,
+        ttlMs: 60_000,
+        task: {
+          version: 1,
+          capability: "query_schedule",
+          anchors: { meeting: "晨更", specificDate: "2026-07-14" },
+          entities: [{ type: "meeting", key: "晨更", label: "晨更" }],
+          supportedOperations: ["continue", "refine"],
+          createdAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + 60_000).toISOString()
+        }
+      });
+      const handler = vi.fn<FunctionHandler>().mockResolvedValue({
+        ok: true,
+        replyText: "主日服事",
+        agentResult: {
+          status: "success",
+          replyText: "主日服事",
+          anchors: { meeting: "主日" },
+          supportedOperations: ["continue"]
+        }
+      });
+      const runtime = createRuntime({
+        conversationWindowStore: store,
+        controlledAgentRouter: {
+          resolve: vi.fn().mockResolvedValue({
+            disposition: "execute",
+            capability: "query_schedule",
+            arguments: { query: "查主日服事", meeting: "主日" },
+            reasonCode
+          })
+        },
+        functionRegistry: { query_schedule: handler }
+      });
+
+      await runtime.handleTextTurn({
+        profile: profile(["query_schedule"], {
+          generalAgent: { enabled: true, conversationWindowSeconds: 60 },
+          controlledAgent: {
+            enabled: true,
+            shadow: false,
+            maxCandidates: 3,
+            minPlannerConfidence: 0.65
+          }
+        }),
+        event: textEvent("查主日服事"),
+        requestId: "req-fresh-explicit-schedule"
+      });
+
+      expect(handler).toHaveBeenCalledWith(
+        { query: "查主日服事", meeting: "主日" },
+        expect.objectContaining({ continuation: undefined })
+      );
+    }
+  );
+
+  it.each([
+    ["ppt_slide", "find_ppt_slides"],
+    ["sheet_music", "find_sheet_music"]
+  ] as const)(
+    "applies one-shot active-task transitions to numeric %s selections with requester isolation",
+    async (resourceType, functionName) => {
+      const now = new Date("2026-07-08T00:00:00.000Z");
+      const store = new InMemoryConversationWindowStore({ now: () => now });
+      const scopeU1 = { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" };
+      const scopeU2 = { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U2" };
+      for (const scope of [scopeU1, scopeU2]) {
+        await store.recordActiveTask({
+          scope,
+          ttlMs: 60_000,
+          task: {
+            version: 1,
+            capability: "query_schedule",
+            anchors: { meeting: "主日" },
+            entities: [{ type: "meeting", key: "主日", label: "主日" }],
+            supportedOperations: ["continue"],
+            createdAt: now.toISOString(),
+            expiresAt: new Date(now.getTime() + 60_000).toISOString()
+          }
+        });
+      }
+      const runtime = createRuntime({
+        conversationWindowStore: store,
+        textMessageHandlers: {
+          ppt_numeric_selection: {
+            matches: () => true,
+            handle: vi.fn().mockResolvedValue({
+              ok: true,
+              replyText: "已選擇投影片",
+              agentResource: {
+                resourceType,
+                title: "已選擇投影片",
+                storage: { provider: "graph", driveId: "drive-1", itemId: "item-1" }
+              },
+              agentResult: {
+                status: "success",
+                replyText: "已選擇投影片",
+                entities: [{ type: "resource", key: "item-1", label: "已選擇資源" }],
+                supportedOperations: []
+              }
+            })
+          }
+        }
+      });
+
+      await runtime.handleTextTurn({
+        profile: profile(["query_schedule", functionName], {
+          generalAgent: { enabled: true, conversationWindowSeconds: 60 },
+          controlledAgent: {
+            enabled: true,
+            shadow: false,
+            maxCandidates: 3,
+            minPlannerConfidence: 0.65
+          }
+        }),
+        event: textEvent("1"),
+        requestId: `req-numeric-${resourceType}-clears-task`
+      });
+
+      await expect(store.activeTask(scopeU1)).resolves.toBeUndefined();
+      await expect(store.activeTask(scopeU2)).resolves.toMatchObject({
+        capability: "query_schedule",
+        anchors: { meeting: "主日" }
+      });
+    }
+  );
+
+  it("clears a prior active task after a structured retrieve-memory switch", async () => {
+    const now = new Date("2026-07-08T00:00:00.000Z");
+    const store = new InMemoryConversationWindowStore({ now: () => now });
+    const scope = { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" };
+    await store.recordActiveTask({
+      scope,
+      ttlMs: 60_000,
+      task: {
+        version: 1,
+        capability: "query_schedule",
+        anchors: { meeting: "主日" },
+        entities: [],
+        supportedOperations: ["continue"],
+        createdAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + 60_000).toISOString()
+      }
+    });
+    const runtime = createRuntime({
+      conversationWindowStore: store,
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "execute",
+          capability: "retrieve_memory",
+          arguments: { query: "主日" },
+          reasonCode: "explicit_capability_switch"
+        })
+      },
+      functionRegistry: {
+        retrieve_memory: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "找到記憶",
+          agentResult: {
+            status: "success",
+            replyText: "記憶查詢完成。",
+            entities: [{ type: "memory", key: "memory-1", label: "已保存資訊" }],
+            supportedOperations: []
+          }
+        })
+      }
+    });
+
+    await runtime.handleTextTurn({
+      profile: profile(["query_schedule", "retrieve_memory"], {
+        generalAgent: { enabled: true, conversationWindowSeconds: 60 },
+        controlledAgent: {
+          enabled: true,
+          shadow: false,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("查我記住的主日資訊"),
+      requestId: "req-retrieve-memory-clears-task"
+    });
+
+    await expect(store.activeTask(scope)).resolves.toBeUndefined();
+  });
+
   it.each([
     [
       "execute",

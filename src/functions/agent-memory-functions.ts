@@ -82,11 +82,25 @@ export function createRetrieveMemoryHandler(options: AgentMemoryFunctionOptions)
       limit: 3
     });
     if (memories.length === 0) {
-      return { ok: true, replyText: "我目前找不到符合的記憶。" };
+      return {
+        ok: true,
+        replyText: "我目前找不到符合的記憶。",
+        agentResult: { status: "not_found", replyText: "我目前找不到符合的記憶。" }
+      };
     }
     return {
       ok: true,
-      replyText: ["我找到這些記住的資訊：", ...memories.map(formatTextMemory)].join("\n")
+      replyText: ["我找到這些記住的資訊：", ...memories.map(formatTextMemory)].join("\n"),
+      agentResult: {
+        status: "success",
+        replyText: "記憶查詢完成。",
+        entities: memories.map(({ id }) => ({ type: "memory", key: id, label: "已保存資訊" })),
+        evidence: memories.map(({ id }) => ({
+          kind: "saved_memory",
+          reference: { memoryId: id }
+        })),
+        supportedOperations: []
+      }
     };
   };
 }
