@@ -70,6 +70,19 @@ const profileSchema = z.object({
   providerPolicy: z
     .partialRecord(z.enum(MODEL_PROVIDER_LANE_NAMES), providerLanePolicySchema)
     .optional(),
+  controlledAgent: z
+    .object({
+      enabled: z.boolean().default(false),
+      shadow: z.boolean().default(false),
+      maxCandidates: z.number().int().min(1).max(5).default(3),
+      minPlannerConfidence: z.number().min(0).max(1).default(0.65)
+    })
+    .default({
+      enabled: false,
+      shadow: false,
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    }),
   generalAgent: z
     .object({
       enabled: z.boolean().default(false),

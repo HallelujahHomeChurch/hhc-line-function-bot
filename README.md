@@ -140,13 +140,15 @@ Function toggles are profile-scoped:
 
 ## Routing
 
-Provider selection is lane-based. Function routing, admin routing, and memory routing default to local Ollama so routine JSON classification stays cheap. Smart talk and future higher-value generation lanes such as `general_agent` and `context_compression` default to DeepSeek when the current profile explicitly allows `deepseek`; otherwise they stay on Ollama.
+Provider selection is lane-based. Admin routing and memory routing default to local Ollama so routine JSON classification stays cheap. The helper production profile configures DeepSeek as the primary `function_routing` provider with Ollama fallback. Smart talk and future higher-value generation lanes such as `general_agent` and `context_compression` default to DeepSeek when the current profile explicitly allows `deepseek`; otherwise they stay on Ollama.
 
 The DeepSeek provider calls the OpenAI-compatible `/chat/completions` API with `DEEPSEEK_API_KEY`; it does not require provider login routes, mounted auth state, or PostgreSQL token storage.
 
 Provider access is profile-scoped. Internal helper profiles may explicitly list `deepseek` in `allowedProviders`. Future official `main` profiles can stay on `ollama` or define their own allowed providers.
 
-Each profile can override lane policy with `providerPolicy`. For example, the internal helper profile can keep `function_routing`, `admin_routing`, and `memory_routing` on `ollama`, while using `deepseek -> ollama` for `smart_talk` and `general_agent`.
+Each profile can override lane policy with `providerPolicy`. The internal helper profile uses `deepseek -> ollama` for `function_routing`, `smart_talk`, and `general_agent`, while keeping `admin_routing` and `memory_routing` on Ollama.
+
+The profile `controlledAgent` block gates controlled semantic planning and bounds the candidate count and minimum planner confidence. With `shadow=true`, sanitized planner outcomes are recorded without changing execution. DeepSeek proposals are advisory only: they never bypass deterministic profile policy, function toggles, argument validation, clarification, access control, or registered handler execution.
 
 If a lane's primary provider returns invalid JSON, times out, or is unavailable, the lane can fall back to its configured fallback provider. Function routing can still fall back to conservative keyword routing after model failures. Explicit model deny decisions do not fall back. Remote API small talk is bounded by `LLM_GENERAL_MAX_OUTPUT_TOKENS` rather than the local Ollama 80-character fallback limit.
 

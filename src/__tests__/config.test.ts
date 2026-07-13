@@ -613,6 +613,48 @@ describe("config", () => {
     });
   });
 
+  it("defaults the controlled agent off", () => {
+    const config = loadConfigFromEnv(baseEnv());
+
+    expect(config.profiles[0]!.controlledAgent).toEqual({
+      enabled: false,
+      shadow: false,
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    });
+  });
+
+  it("allows a DeepSeek-primary controlled planner", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          allowedProviders: ["ollama", "deepseek"],
+          providerPolicy: {
+            function_routing: { primary: "deepseek", fallback: "ollama" }
+          },
+          controlledAgent: {
+            enabled: true,
+            shadow: false,
+            maxCandidates: 3,
+            minPlannerConfidence: 0.65
+          }
+        }
+      ],
+      async (path) => {
+        const config = loadConfigFromEnv({ PROFILE_CONFIG_PATH: path });
+
+        expect(config.profiles[0]!.providerPolicy!.function_routing).toEqual({
+          primary: "deepseek",
+          fallback: "ollama"
+        });
+      }
+    );
+  });
+
   it("loads helper provider policy for remote API providers", () => {
     const config = loadConfigFromEnv({
       ...profilesEnv([

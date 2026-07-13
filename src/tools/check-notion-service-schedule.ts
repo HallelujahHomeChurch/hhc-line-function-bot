@@ -212,7 +212,13 @@ function handlerContext(): FunctionHandlerContext {
     acceptMention: true,
     enabledFunctions: ["query_service_schedule"],
     allowedProviders: ["ollama"],
-    allowSubscriptionProviders: false
+    allowSubscriptionProviders: false,
+    controlledAgent: {
+      enabled: false,
+      shadow: false,
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    }
   };
 
   return {

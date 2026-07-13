@@ -111,6 +111,13 @@ export interface GeneralAgentConfig {
   conversationWindowSeconds: number;
 }
 
+export interface ControlledAgentConfig {
+  enabled: boolean;
+  shadow: boolean;
+  maxCandidates: number;
+  minPlannerConfidence: number;
+}
+
 export interface LongRunningJobsConfig {
   enabled: boolean;
   inlineReplyTimeoutMs: number;
@@ -138,6 +145,7 @@ export interface BotProfileConfig {
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
   providerPolicy?: ProviderPolicy;
+  controlledAgent: ControlledAgentConfig;
   generalAgent?: GeneralAgentConfig;
   longRunningJobs?: LongRunningJobsConfig;
 }

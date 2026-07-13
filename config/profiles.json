@@ -41,10 +41,17 @@
       "enabled": true,
       "conversationWindowSeconds": 60
     },
+    "controlledAgent": {
+      "enabled": false,
+      "shadow": true,
+      "maxCandidates": 3,
+      "minPlannerConfidence": 0.65
+    },
     "allowedProviders": ["ollama", "deepseek"],
     "providerPolicy": {
       "function_routing": {
-        "primary": "ollama"
+        "primary": "deepseek",
+        "fallback": "ollama"
       },
       "admin_routing": {
         "primary": "ollama"
