@@ -11,6 +11,7 @@ import {
 } from "./access/registration-invite-code-store.js";
 import { createAgentMemoryStore } from "./agent/create-agent-memory-store.js";
 import { createAgentRuntime } from "./agent/agent-runtime.js";
+import { createAgentPlanner } from "./agent/planner.js";
 import { createWikipediaSummarizer } from "./wikipedia/summarizer.js";
 import { RedisAgentJobStore } from "./agent/jobs.js";
 import { RedisConversationWindowStore } from "./agent/context-manager.js";
@@ -75,6 +76,12 @@ const functionRoutingFallback = createProfileAwareProvider({
   role: "fallback",
   lane: "function_routing"
 });
+const agentPlanner = createAgentPlanner({
+  primary: functionRoutingPrimary,
+  fallback: functionRoutingFallback
+});
+// Task 8 will place this bounded proposal source behind the controlled-agent flag.
+void agentPlanner;
 const adminRoutingPrimary = createProfileAwareProvider({
   config,
   providers,

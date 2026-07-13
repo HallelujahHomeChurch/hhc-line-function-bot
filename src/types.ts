@@ -59,6 +59,64 @@ export const MODEL_PROVIDER_NAMES = ["ollama", "deepseek"] as const;
 export type ModelProviderName = (typeof MODEL_PROVIDER_NAMES)[number];
 export type RouteProviderName = ModelProviderName | "keyword" | "router";
 
+export const AGENT_PLAN_DISPOSITIONS = [
+  "execute",
+  "continue",
+  "refine",
+  "advance",
+  "select",
+  "switch",
+  "clarify",
+  "chat",
+  "deny"
+] as const;
+
+export type AgentPlanDisposition = (typeof AGENT_PLAN_DISPOSITIONS)[number];
+export type AgentPlanPrimitive = string | number | boolean;
+export type AgentPlanValue = AgentPlanPrimitive | AgentPlanPrimitive[];
+export type AgentPlanRecord = Record<string, AgentPlanValue>;
+
+export interface AgentPlanProposal {
+  version: 1;
+  disposition: AgentPlanDisposition;
+  capability?: FunctionName;
+  arguments: AgentPlanRecord;
+  references?: AgentPlanRecord;
+  confidence: number;
+}
+
+export type AgentPlannerAttemptStatus = "accepted" | "invalid_output" | "timeout" | "unavailable";
+
+export type AgentPlannerAttemptReason =
+  | "valid_proposal"
+  | "invalid_json"
+  | "invalid_schema"
+  | "candidate_not_allowed"
+  | "timeout"
+  | "provider_unavailable";
+
+export interface AgentPlannerAttemptDiagnostic {
+  provider: ModelProviderName;
+  status: AgentPlannerAttemptStatus;
+  reason: AgentPlannerAttemptReason;
+  durationMs: number;
+  candidateCount: number;
+}
+
+export interface ProposedAgentPlan extends AgentPlanProposal {
+  status: "proposed";
+  provider: ModelProviderName;
+  attempts: AgentPlannerAttemptDiagnostic[];
+}
+
+export interface NoAgentPlan {
+  status: "no_plan";
+  reasonCode: "no_candidates" | "providers_unavailable" | "invalid_output";
+  attempts: AgentPlannerAttemptDiagnostic[];
+}
+
+export type AgentPlannerResult = ProposedAgentPlan | NoAgentPlan;
+
 export const MODEL_PROVIDER_LANE_NAMES = [
   "function_routing",
   "admin_routing",
