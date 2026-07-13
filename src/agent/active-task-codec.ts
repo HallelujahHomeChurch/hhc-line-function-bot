@@ -32,11 +32,6 @@ const REFERENCE_KEYS = new Set(
     " "
   )
 );
-const SENSITIVE_URL_KEYS = new Set(
-  "sig signature sv se sp spr st sr skt ske sks skv xamzalgorithm xamzcredential xamzdate xamzexpires xamzsecuritytoken xamzsignature awsaccesskeyid auth authorization download expires expiry share sharing temp temporary".split(
-    " "
-  )
-);
 const SENSITIVE_EXACT_KEYS = new Set(
   "key apikey accesskey privatekey secretkey signingkey encryptionkey authorization bearer sharingurl shareurl".split(
     " "
@@ -274,7 +269,8 @@ function normalizeEvidenceUrl(value: unknown): string | undefined {
     typeof value !== "string" ||
     characterCount(value) === 0 ||
     characterCount(value) > LIMITS.evidenceUrlChars ||
-    hasOpaqueCredential(value)
+    value.includes("?") ||
+    value.includes("#")
   ) {
     return undefined;
   }
@@ -284,38 +280,33 @@ function normalizeEvidenceUrl(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
-  const decodedFragment = safeDecode(url.hash.slice(1));
-  const fragmentParameters = new URLSearchParams(decodedFragment);
+  // Active-task URLs are stable public locators only. Persist provider-specific
+  // evidence through the allowlisted stable ID fields, never signed/share URLs.
   if (
     !["http:", "https:"].includes(url.protocol) ||
     !url.hostname ||
     url.username ||
     url.password ||
-    hasOpaqueCredential(decodedFragment) ||
-    isGeneratedSharingUrl(url) ||
-    [...url.searchParams, ...fragmentParameters].some(([key, item]) => isUnsafeUrlField(key, item))
+    url.search ||
+    url.hash ||
+    isUnsafeLocator(url)
   ) {
     return undefined;
   }
   return value;
 }
 
-function isUnsafeUrlField(key: string, value: string): boolean {
-  const normalizedKey = normalizeKey(key);
+function isUnsafeLocator(url: URL): boolean {
+  const hostname = decodePercentEncoding(url.hostname).toLowerCase();
+  const pathname = decodePercentEncoding(url.pathname).toLowerCase();
+  const pathSegments = pathname.split("/").filter(Boolean);
   return (
-    isSensitiveKey(key) ||
-    SENSITIVE_URL_KEYS.has(normalizedKey) ||
-    SHARING_MARKERS.has(normalizeKey(value)) ||
-    isUnsafePlainText(value)
-  );
-}
-
-function isGeneratedSharingUrl(url: URL): boolean {
-  const hostname = url.hostname.toLowerCase();
-  const pathSegments = safeDecode(url.pathname).toLowerCase().split("/").filter(Boolean);
-  return (
+    hasControlCharacter(hostname) ||
+    hasControlCharacter(pathname) ||
+    /(?:https?|line):\/\//iu.test(hostname) ||
+    /(?:https?|line):\/\//iu.test(pathname) ||
     hostname === "1drv.ms" ||
-    (hostname.endsWith(".sharepoint.com") && url.pathname.startsWith("/:")) ||
+    (hostname.endsWith(".sharepoint.com") && pathname.startsWith("/:")) ||
     pathSegments.some((segment) => SHARING_MARKERS.has(segment))
   );
 }
@@ -384,12 +375,25 @@ function cloneRecord(input: JsonRecord): JsonRecord {
   );
 }
 
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
+function decodePercentEncoding(value: string): string {
+  let decoded = value;
+  for (let round = 0; round < 3; round += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
   }
+  return decoded;
+}
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint === 127;
+  });
 }
 
 function characterCount(value: string): number {

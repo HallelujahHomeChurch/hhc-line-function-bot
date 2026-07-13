@@ -407,13 +407,33 @@ describe("structured result active tasks", () => {
     }
   });
 
+  it.each([
+    ["temporary authorization query", "https://example.org/reference?tempauth=ordinary-value"],
+    [
+      "double-encoded nested share URL",
+      "https://example.org/reference/https%253A%252F%252F1drv.ms%252Fabc"
+    ],
+    ["benign query string", "https://en.wikipedia.org/wiki/Fastify?uselang=zh"],
+    ["empty query marker", "https://example.org/reference?"],
+    ["empty fragment marker", "https://example.org/reference#"]
+  ])("rejects non-stable evidence locator: %s", async (_name, url) => {
+    for (const backend of activeTaskBackends()) {
+      await backend.store.recordActiveTask({
+        scope,
+        task: { ...previousTask, references: { url } },
+        ttlMs: 60_000
+      });
+      await expect(backend.store.activeTask(scope), backend.name).resolves.toBeUndefined();
+    }
+  });
+
   it("accepts benign Chinese anchors and a stable public evidence URL", async () => {
     const task: ActiveTaskContext = {
       ...previousTask,
       anchors: { 日期: "2026-07-14", 聚會: "晨更", 角色: ["前攝影", "音控"] },
       references: {
         pageId: "fastify",
-        url: "https://en.wikipedia.org/wiki/Fastify?uselang=zh#Overview"
+        url: "https://en.wikipedia.org/wiki/Fastify"
       }
     };
     for (const backend of activeTaskBackends()) {
