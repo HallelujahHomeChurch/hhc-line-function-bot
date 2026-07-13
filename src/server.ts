@@ -11,6 +11,7 @@ import {
   type RegistrationInviteCodeStore
 } from "./access/registration-invite-code-store.js";
 import type { AgentRuntime } from "./agent/agent-runtime.js";
+import type { ControlledAgentRouter } from "./agent/controlled-agent-router.js";
 import { createAgentTurnRuntime, type AgentTurnRuntime } from "./agent/turn-runtime.js";
 import { InMemoryAgentJobStore, type AgentJobScope, type AgentJobStore } from "./agent/jobs.js";
 import {
@@ -116,6 +117,7 @@ export interface AppDependencies {
   agentJobStore?: AgentJobStore;
   conversationWindowStore?: ConversationWindowStore;
   textFallbackGenerator?: TextGenerationProvider;
+  controlledAgentRouter?: ControlledAgentRouter;
 }
 
 interface AllowResult {
@@ -274,6 +276,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
       textFallbackGenerator,
       contextManager,
       conversationWindowStore,
+      controlledAgentRouter: deps.controlledAgentRouter,
       timeZone: config.timeZone
     });
 

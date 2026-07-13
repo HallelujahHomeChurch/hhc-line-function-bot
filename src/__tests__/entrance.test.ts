@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
+import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createAgentRuntime } from "../agent/agent-runtime.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
@@ -1162,6 +1163,63 @@ describe("LINE entrance", () => {
         enabledFunctions: ["query_service_schedule", "find_ppt_slides"]
       })
     );
+  });
+
+  it("passes only the effective requester grants and source to enabled controlled routing", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      enabledFunctions: ["query_service_schedule"],
+      controlledAgent: {
+        enabled: true,
+        shadow: false,
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      }
+    };
+    const legacyRoute = vi.fn<FunctionRouterPort["route"]>();
+    const resolve = vi.fn<ControlledAgentRouter["resolve"]>().mockResolvedValue({
+      disposition: "deny",
+      reasonCode: "planner_denied"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const accessStore = defaultAccessStore();
+    await accessStore.addGroupFunctionGrant({
+      profileName: "main",
+      groupId: "Cmain",
+      functionName: "find_ppt_slides",
+      createdBy: "Uadmin"
+    });
+    const app = createTestApp(config, {
+      router: { route: legacyRoute },
+      controlledAgentRouter: { resolve },
+      accessStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查投影片 奇異恩典" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "main",
+        enabledFunctions: ["query_service_schedule", "find_ppt_slides"],
+        sourceType: "group"
+      })
+    );
+    expect(legacyRoute).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledWith("reply-token", "目前不支援這個請求。", undefined);
   });
 
   it("does not apply group function grants to direct users", async () => {

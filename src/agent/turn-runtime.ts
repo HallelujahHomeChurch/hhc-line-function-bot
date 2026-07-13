@@ -8,6 +8,9 @@ import {
 import { guardSystemRouteWithFunctionIntent } from "./function-intent-guard.js";
 import { mergeFunctionContinuationArguments } from "./function-continuation.js";
 import { createSlotClarificationResult } from "./slot-clarification.js";
+import { activeTaskFromResult, type ActiveTaskContext } from "./active-task.js";
+import type { ControlledAgentRouter } from "./controlled-agent-router.js";
+import type { ValidatedAgentPlan } from "./plan-validator.js";
 import { messages } from "../messages.js";
 import { createControlledSmallTalkReply, smallTalkCategoryFromArguments } from "../small-talk.js";
 import { createIntroReply } from "../intro.js";
@@ -17,9 +20,14 @@ import type { LastErrorStore } from "../observability/last-error-store.js";
 import type { LastRouteRecord, LastRouteStore } from "../observability/last-route-store.js";
 import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
 import { getFunctionDefinition } from "../functions/definitions.js";
+import { withRequesterDisplayName } from "../requester-personalization.js";
 import type { SessionStore } from "../state/session-store.js";
 import type { InFlightKey, InFlightStore } from "../in-flight/in-flight-store.js";
-import type { ContextManager, ConversationWindowStore } from "./context-manager.js";
+import type {
+  ContextManager,
+  ConversationWindowScope,
+  ConversationWindowStore
+} from "./context-manager.js";
 import type {
   AdminActionRouterPort,
   BotProfileConfig,
@@ -36,6 +44,7 @@ import type {
   RouteObserver,
   RouteObserverEvent,
   RouteProviderName,
+  RouteResult,
   TextGenerationProvider,
   TextMessageHandlerRegistry
 } from "../types.js";
@@ -64,6 +73,7 @@ export interface AgentTurnRuntimeOptions {
   textFallbackGenerator?: TextGenerationProvider;
   contextManager?: ContextManager;
   conversationWindowStore?: ConversationWindowStore;
+  controlledAgentRouter?: ControlledAgentRouter;
   timeZone?: string;
   now?: () => Date;
 }
@@ -241,36 +251,65 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
       }
 
       const routeStartedAt = Date.now();
-      let route;
-      try {
-        route = await options.router.route({
-          profileName: input.profile.name,
+      const controlledMode = controlledRoutingMode(input.profile);
+      const continuation =
+        controlledMode === "enabled" ? undefined : await readFunctionContinuation(options, input);
+      let activeTask: ActiveTaskContext | undefined;
+      let route: RouteResult;
+
+      if (controlledMode === "enabled") {
+        let plan: ValidatedAgentPlan;
+        try {
+          activeTask = await readActiveTask(options, input, true);
+          plan = await resolveControlledPlan(
+            options.controlledAgentRouter,
+            input,
+            text,
+            activeTask
+          );
+        } catch {
+          plan = { disposition: "clarify", reasonCode: "planner_unavailable" };
+        }
+        steps.push(controlledTraceStep(plan));
+        if (plan.disposition === "clarify") {
+          return finish(input, steps, controlledClarificationResult(plan, context));
+        }
+        route = controlledPlanToRoute(plan, input);
+      } else {
+        const shadowPlan =
+          controlledMode === "shadow" ? resolveShadowPlan(options, input, text) : undefined;
+        try {
+          route = await options.router.route({
+            profileName: input.profile.name,
+            text,
+            enabledFunctions: input.profile.enabledFunctions,
+            source: input.event.source,
+            runtimeContext: runtimeContext?.prompt
+          });
+        } catch (error) {
+          await recordRuntimeError({
+            store: options.lastErrorStore,
+            input,
+            phase: "router",
+            error
+          });
+          steps.push({
+            phase: "function_error",
+            outcome: "router",
+            errorName: error instanceof Error ? error.name : typeof error
+          });
+          return finish(input, steps, { ok: false, replyText: messages.requestFailed });
+        }
+        if (shadowPlan) {
+          steps.push(controlledTraceStep(await shadowPlan));
+        }
+        route = guardSystemRouteWithFunctionIntent(
+          route,
           text,
-          enabledFunctions: input.profile.enabledFunctions,
-          source: input.event.source,
-          runtimeContext: runtimeContext?.prompt
-        });
-      } catch (error) {
-        await recordRuntimeError({
-          store: options.lastErrorStore,
-          input,
-          phase: "router",
-          error
-        });
-        steps.push({
-          phase: "function_error",
-          outcome: "router",
-          errorName: error instanceof Error ? error.name : typeof error
-        });
-        return finish(input, steps, { ok: false, replyText: messages.requestFailed });
+          input.profile.enabledFunctions,
+          continuation
+        );
       }
-      const continuation = await readFunctionContinuation(options, input);
-      route = guardSystemRouteWithFunctionIntent(
-        route,
-        text,
-        input.profile.enabledFunctions,
-        continuation
-      );
 
       const routeDurationMs = elapsedMs(routeStartedAt);
       steps.push({
@@ -344,14 +383,17 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         return finish(input, steps, { ok: true, replyText: messages.unsupported });
       }
 
-      const mergedArguments = mergeFunctionContinuationArguments({
-        action: route.action,
-        currentArguments: route.arguments,
-        currentText: text,
-        now: now(),
-        timeZone: options.timeZone,
-        continuation
-      });
+      const mergedArguments =
+        controlledMode === "enabled"
+          ? route.arguments
+          : mergeFunctionContinuationArguments({
+              action: route.action,
+              currentArguments: route.arguments,
+              currentText: text,
+              now: now(),
+              timeZone: options.timeZone,
+              continuation
+            });
       const normalizedArguments = normalizeFunctionArguments(route.action, mergedArguments, {
         text
       });
@@ -471,6 +513,16 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           result,
           continuation
         );
+        if (controlledMode === "enabled") {
+          await recordActiveTaskAfterResult(
+            options.conversationWindowStore,
+            input,
+            route.action,
+            result,
+            activeTask,
+            now()
+          );
+        }
         const durationMs = elapsedMs(functionStartedAt);
         steps.push({
           phase: "function",
@@ -739,6 +791,178 @@ async function buildRuntimeContext(
     recentTurns,
     functionContinuation
   });
+}
+
+type ControlledRoutingMode = "disabled" | "shadow" | "enabled";
+
+function controlledRoutingMode(profile: BotProfileConfig): ControlledRoutingMode {
+  if (profile.controlledAgent?.enabled) return "enabled";
+  return profile.controlledAgent?.shadow ? "shadow" : "disabled";
+}
+
+async function resolveControlledPlan(
+  router: ControlledAgentRouter | undefined,
+  input: AgentTextTurnInput,
+  text: string,
+  activeTask: ActiveTaskContext | undefined
+): Promise<ValidatedAgentPlan> {
+  if (!router) return { disposition: "clarify", reasonCode: "planner_unavailable" };
+  try {
+    return await router.resolve({
+      profileName: input.profile.name,
+      text,
+      enabledFunctions: input.profile.enabledFunctions,
+      sourceType: input.event.source.type,
+      activeTask,
+      maxCandidates: input.profile.controlledAgent.maxCandidates,
+      minPlannerConfidence: input.profile.controlledAgent.minPlannerConfidence
+    });
+  } catch {
+    return { disposition: "clarify", reasonCode: "planner_unavailable" };
+  }
+}
+
+async function resolveShadowPlan(
+  options: AgentTurnRuntimeOptions,
+  input: AgentTextTurnInput,
+  text: string
+): Promise<ValidatedAgentPlan> {
+  try {
+    const activeTask = await readActiveTask(options, input, false);
+    return await resolveControlledPlan(options.controlledAgentRouter, input, text, activeTask);
+  } catch {
+    return { disposition: "clarify", reasonCode: "planner_unavailable" };
+  }
+}
+
+function controlledTraceStep(plan: ValidatedAgentPlan): AgentTurnTraceStep {
+  return {
+    phase: "controlled_route",
+    outcome: plan.disposition,
+    action:
+      plan.disposition === "execute" || plan.disposition === "clarify"
+        ? plan.capability
+        : undefined,
+    reason: plan.reasonCode
+  };
+}
+
+function controlledPlanToRoute(
+  plan: Exclude<ValidatedAgentPlan, { disposition: "clarify" }>,
+  input: AgentTextTurnInput
+): RouteResult {
+  if (plan.disposition === "chat") {
+    return {
+      type: "respond",
+      action: "small_talk",
+      arguments: {},
+      provider: "router",
+      lane: "function_routing"
+    };
+  }
+  if (plan.disposition === "deny") {
+    return {
+      type: "deny",
+      reason: plan.reasonCode,
+      provider: "router",
+      lane: "function_routing"
+    };
+  }
+
+  const definition = getFunctionDefinition(plan.capability);
+  if (!input.profile.enabledFunctions.includes(plan.capability)) {
+    return {
+      type: "deny",
+      reason: "function_disabled",
+      provider: "router",
+      lane: "function_routing"
+    };
+  }
+  if (!definition?.allowedSources.includes(input.event.source.type as "user" | "group")) {
+    return {
+      type: "deny",
+      reason: "source_not_allowed",
+      provider: "router",
+      lane: "function_routing"
+    };
+  }
+  return {
+    type: "execute",
+    action: plan.capability,
+    arguments: plan.arguments,
+    provider: "router",
+    lane: "function_routing"
+  };
+}
+
+function controlledClarificationResult(
+  plan: Extract<ValidatedAgentPlan, { disposition: "clarify" }>,
+  context: FunctionHandlerContext
+): FunctionExecutionResult {
+  const definition = plan.capability ? getFunctionDefinition(plan.capability) : undefined;
+  const slot = definition?.requiredSlots[0];
+  const replyText =
+    definition?.clarificationPrompt ?? "請再告訴我想查哪個功能，以及要找的名稱、日期或主題。";
+  return {
+    ok: true,
+    replyText: withRequesterDisplayName(context, replyText),
+    quickReplies: slot?.quickReplies?.map((item) => ({
+      label: item.label,
+      action: { type: "message", label: item.label, text: item.text }
+    }))
+  };
+}
+
+async function readActiveTask(
+  options: AgentTurnRuntimeOptions,
+  input: AgentTextTurnInput,
+  clearInvalid: boolean
+): Promise<ActiveTaskContext | undefined> {
+  const scope = activeTaskScope(options.conversationWindowStore, input);
+  if (!scope || !options.conversationWindowStore) return undefined;
+  const task = await options.conversationWindowStore.activeTask(scope);
+  if (!task) return undefined;
+  const definition = getFunctionDefinition(task.capability);
+  const valid = Boolean(
+    input.profile.enabledFunctions.includes(task.capability) &&
+    definition?.allowedSources.includes(input.event.source.type as "user" | "group")
+  );
+  if (valid) return task;
+  if (clearInvalid) await options.conversationWindowStore.clearActiveTask(scope);
+  return undefined;
+}
+
+async function recordActiveTaskAfterResult(
+  store: ConversationWindowStore | undefined,
+  input: AgentTextTurnInput,
+  capability: FunctionName,
+  result: FunctionExecutionResult,
+  previous: ActiveTaskContext | undefined,
+  currentTime: Date
+): Promise<void> {
+  const scope = activeTaskScope(store, input);
+  if (!store || !scope || !result.ok) return;
+  if (result.agentResult && result.agentResult.status !== "success") return;
+
+  const ttlMs = Math.max(1, input.profile.generalAgent?.conversationWindowSeconds ?? 60) * 1000;
+  const next = activeTaskFromResult(capability, result, currentTime, ttlMs);
+  if (next) {
+    await store.recordActiveTask({ scope, task: next, ttlMs });
+    return;
+  }
+  if (previous && previous.capability !== capability && !result.continuation) {
+    await store.clearActiveTask(scope);
+  }
+}
+
+function activeTaskScope(
+  store: ConversationWindowStore | undefined,
+  input: AgentTextTurnInput
+): ConversationWindowScope | undefined {
+  const source = sourceKey(input.event.source);
+  const requesterUserId = input.event.source.userId;
+  if (!store || !source || !requesterUserId) return undefined;
+  return { profileName: input.profile.name, sourceKey: source, requesterUserId };
 }
 
 async function readFunctionContinuation(

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createAgentRuntime } from "../agent/agent-runtime.js";
+import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
@@ -78,6 +79,7 @@ function createRuntime(options: {
   textGenerator?: TextGenerationProvider;
   textFallbackGenerator?: TextGenerationProvider;
   conversationWindowStore?: InMemoryConversationWindowStore;
+  controlledAgentRouter?: ControlledAgentRouter;
 }) {
   const now = () => new Date("2026-07-08T00:00:00.000Z");
   const memoryStore = options.memoryStore ?? new InMemoryAgentMemoryStore({ now });
@@ -107,11 +109,443 @@ function createRuntime(options: {
     textGenerator: options.textGenerator,
     textFallbackGenerator: options.textFallbackGenerator,
     conversationWindowStore: options.conversationWindowStore,
+    controlledAgentRouter: options.controlledAgentRouter,
     now
   });
 }
 
 describe("AgentTurnRuntime", () => {
+  it("keeps the legacy router authoritative while controlled routing is disabled", async () => {
+    const controlledResolve = vi.fn<ControlledAgentRouter["resolve"]>();
+    const legacyRoute = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "query_schedule",
+      arguments: { query: "主日服事" },
+      provider: "ollama"
+    });
+    const handler = vi.fn<FunctionHandler>().mockResolvedValue({ ok: true, replyText: "legacy" });
+    const runtime = createRuntime({
+      router: { route: legacyRoute },
+      controlledAgentRouter: { resolve: controlledResolve },
+      functionRegistry: { query_schedule: handler }
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        controlledAgent: {
+          enabled: false,
+          shadow: false,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("查主日服事"),
+      requestId: "req-controlled-disabled"
+    });
+
+    expect(result?.replyText).toBe("legacy");
+    expect(legacyRoute).toHaveBeenCalledOnce();
+    expect(controlledResolve).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to legacy routing when enabled controlled wiring is unavailable", async () => {
+    const legacyRoute = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "query_schedule",
+      arguments: { query: "主日服事" },
+      provider: "ollama"
+    });
+    const runtime = createRuntime({ router: { route: legacyRoute } });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        controlledAgent: {
+          enabled: true,
+          shadow: false,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("查主日服事"),
+      requestId: "req-controlled-wiring-missing"
+    });
+
+    expect(result?.replyText).toBe("請再告訴我想查哪個功能，以及要找的名稱、日期或主題。");
+    expect(legacyRoute).not.toHaveBeenCalled();
+  });
+
+  it("runs shadow routing without changing legacy execution or controlled state", async () => {
+    const traceStore = new InMemoryAgentTraceStore(10);
+    const controlledResolve = vi.fn<ControlledAgentRouter["resolve"]>().mockResolvedValue({
+      disposition: "execute",
+      capability: "query_knowledge",
+      arguments: { query: "青年出隊" },
+      reasonCode: "explicit_intent"
+    });
+    const legacyRoute = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "query_schedule",
+      arguments: { query: "主日服事" },
+      provider: "ollama"
+    });
+    const legacyHandler = vi
+      .fn<FunctionHandler>()
+      .mockResolvedValue({ ok: true, replyText: "legacy authoritative" });
+    const controlledHandler = vi
+      .fn<FunctionHandler>()
+      .mockResolvedValue({ ok: true, replyText: "must not execute" });
+    const store = new InMemoryConversationWindowStore({
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
+    const runtime = createRuntime({
+      router: { route: legacyRoute },
+      controlledAgentRouter: { resolve: controlledResolve },
+      functionRegistry: { query_schedule: legacyHandler, query_knowledge: controlledHandler },
+      conversationWindowStore: store,
+      traceStore
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["query_schedule", "query_knowledge"], {
+        generalAgent: { enabled: true, conversationWindowSeconds: 60 },
+        controlledAgent: {
+          enabled: false,
+          shadow: true,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("查主日服事"),
+      requestId: "req-controlled-shadow"
+    });
+
+    expect(result?.replyText).toBe("legacy authoritative");
+    expect(legacyHandler).toHaveBeenCalledOnce();
+    expect(controlledHandler).not.toHaveBeenCalled();
+    await expect(
+      store.activeTask({ profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" })
+    ).resolves.toBeUndefined();
+    const traces = await traceStore.list();
+    expect(traces[0]?.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "controlled_route",
+          outcome: "execute",
+          action: "query_knowledge",
+          reason: "explicit_intent"
+        })
+      ])
+    );
+  });
+
+  it("keeps shadow legacy routing authoritative when controlled state reads fail", async () => {
+    const store = new InMemoryConversationWindowStore();
+    vi.spyOn(store, "activeTask").mockRejectedValue(new Error("redis unavailable"));
+    const legacyRoute = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "ollama"
+    });
+    const runtime = createRuntime({
+      router: { route: legacyRoute },
+      controlledAgentRouter: { resolve: vi.fn() },
+      conversationWindowStore: store
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        controlledAgent: {
+          enabled: false,
+          shadow: true,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("查主日服事"),
+      requestId: "req-shadow-store-failure"
+    });
+
+    expect(result?.replyText).toBe("目前不支援這個請求。");
+    expect(legacyRoute).toHaveBeenCalledOnce();
+  });
+
+  it("does not merge legacy continuation fields into a validated controlled plan", async () => {
+    const store = new InMemoryConversationWindowStore({
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
+    await store.recordFunctionContext({
+      scope: { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" },
+      functionName: "query_schedule",
+      arguments: { role: "音控", meeting: "晨更" },
+      ttlMs: 60_000
+    });
+    const handler = vi.fn<FunctionHandler>().mockResolvedValue({ ok: true, replyText: "主日服事" });
+    const runtime = createRuntime({
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "execute",
+          capability: "query_schedule",
+          arguments: { query: "主日服事" },
+          reasonCode: "explicit_intent"
+        })
+      },
+      conversationWindowStore: store,
+      functionRegistry: { query_schedule: handler }
+    });
+
+    await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        controlledAgent: {
+          enabled: true,
+          shadow: false,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("主日服事"),
+      requestId: "req-controlled-no-legacy-merge"
+    });
+
+    expect(handler.mock.calls[0]?.[0]).toEqual({ query: "主日服事" });
+    expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("role");
+    expect(handler.mock.calls[0]?.[1]?.continuation).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "execute",
+      {
+        disposition: "execute",
+        capability: "query_schedule",
+        arguments: { query: "主日服事" },
+        reasonCode: "explicit_intent"
+      },
+      "controlled execution"
+    ],
+    [
+      "clarify",
+      { disposition: "clarify", capability: "query_schedule", reasonCode: "missing_required_slot" },
+      "要查哪一天、哪一場聚會，或哪一類服事？"
+    ],
+    ["deny", { disposition: "deny", reasonCode: "planner_denied" }, "目前不支援這個請求。"],
+    [
+      "chat",
+      { disposition: "chat", reasonCode: "no_capability_evidence" },
+      "不會啦，我比較適合安靜地幫忙查資料。有明確歌名或聚會範圍時，我會比較快幫上忙。"
+    ]
+  ] as const)(
+    "uses the controlled %s disposition without consulting the legacy router",
+    async (_name, plan, replyText) => {
+      const legacyRoute = vi.fn<FunctionRouterPort["route"]>();
+      const handler = vi
+        .fn<FunctionHandler>()
+        .mockResolvedValue({ ok: true, replyText: "controlled execution" });
+      const runtime = createRuntime({
+        router: { route: legacyRoute },
+        controlledAgentRouter: { resolve: vi.fn().mockResolvedValue(plan) },
+        functionRegistry: { query_schedule: handler }
+      });
+
+      const result = await runtime.handleTextTurn({
+        profile: profile(["query_schedule"], {
+          controlledAgent: {
+            enabled: true,
+            shadow: false,
+            maxCandidates: 3,
+            minPlannerConfidence: 0.65
+          }
+        }),
+        event: textEvent(_name === "chat" ? "最近好累" : "查主日服事"),
+        requestId: `req-controlled-${_name}`
+      });
+
+      expect(result?.replyText).toBe(replyText);
+      expect(legacyRoute).not.toHaveBeenCalled();
+      expect(handler).toHaveBeenCalledTimes(_name === "execute" ? 1 : 0);
+    }
+  );
+
+  it("reads active tasks with requester isolation and ignores expired task state", async () => {
+    let current = new Date("2026-07-08T00:00:00.000Z");
+    const store = new InMemoryConversationWindowStore({ now: () => current });
+    await store.recordActiveTask({
+      scope: { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" },
+      ttlMs: 60_000,
+      task: {
+        version: 1,
+        capability: "query_schedule",
+        anchors: { meeting: "晨更" },
+        entities: [{ type: "role", key: "front-camera", label: "前攝影" }],
+        supportedOperations: ["continue"],
+        createdAt: current.toISOString(),
+        expiresAt: new Date(current.getTime() + 60_000).toISOString()
+      }
+    });
+    const resolve = vi.fn<ControlledAgentRouter["resolve"]>().mockResolvedValue({
+      disposition: "clarify",
+      reasonCode: "planner_unavailable"
+    });
+    const runtime = createRuntime({
+      controlledAgentRouter: { resolve },
+      conversationWindowStore: store
+    });
+    const enabledProfile = profile(["query_schedule"], {
+      controlledAgent: {
+        enabled: true,
+        shadow: false,
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      }
+    });
+
+    await runtime.handleTextTurn({
+      profile: enabledProfile,
+      event: { ...textEvent("前攝影"), source: { type: "group", groupId: "C1", userId: "U2" } },
+      requestId: "req-isolated-task"
+    });
+    current = new Date("2026-07-08T00:01:01.000Z");
+    await runtime.handleTextTurn({
+      profile: enabledProfile,
+      event: textEvent("前攝影"),
+      requestId: "req-expired-task"
+    });
+
+    expect(resolve).toHaveBeenNthCalledWith(1, expect.objectContaining({ activeTask: undefined }));
+    expect(resolve).toHaveBeenNthCalledWith(2, expect.objectContaining({ activeTask: undefined }));
+  });
+
+  it("stores successful structured state, preserves it on not-found, and clears it after a different unstructured success", async () => {
+    const store = new InMemoryConversationWindowStore({
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
+    const resolve = vi
+      .fn<ControlledAgentRouter["resolve"]>()
+      .mockResolvedValueOnce({
+        disposition: "execute",
+        capability: "query_schedule",
+        arguments: { query: "主日服事" },
+        reasonCode: "explicit_intent"
+      })
+      .mockResolvedValueOnce({
+        disposition: "execute",
+        capability: "query_schedule",
+        arguments: { query: "下一筆" },
+        reasonCode: "active_task_refinement"
+      })
+      .mockResolvedValueOnce({
+        disposition: "execute",
+        capability: "query_wikipedia",
+        arguments: { query: "Fastify" },
+        reasonCode: "explicit_capability_switch"
+      });
+    const scheduleHandler = vi
+      .fn<FunctionHandler>()
+      .mockResolvedValueOnce({
+        ok: true,
+        replyText: "前攝影：姵穎",
+        agentResult: {
+          status: "success",
+          replyText: "前攝影：姵穎",
+          anchors: { meeting: "主日" },
+          entities: [{ type: "role", key: "front-camera", label: "前攝影" }],
+          supportedOperations: ["continue", "refine"]
+        }
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        replyText: "找不到下一筆",
+        agentResult: { status: "not_found", replyText: "找不到下一筆" }
+      });
+    const runtime = createRuntime({
+      controlledAgentRouter: { resolve },
+      conversationWindowStore: store,
+      functionRegistry: {
+        query_schedule: scheduleHandler,
+        query_wikipedia: vi.fn().mockResolvedValue({ ok: true, replyText: "Fastify" })
+      }
+    });
+    const enabledProfile = profile(["query_schedule", "query_wikipedia"], {
+      generalAgent: { enabled: true, conversationWindowSeconds: 60 },
+      controlledAgent: {
+        enabled: true,
+        shadow: false,
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      }
+    });
+    const scope = { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" };
+
+    await runtime.handleTextTurn({
+      profile: enabledProfile,
+      event: textEvent("查主日服事"),
+      requestId: "req-task-success"
+    });
+    const successfulTask = await store.activeTask(scope);
+    expect(successfulTask).toMatchObject({
+      capability: "query_schedule",
+      anchors: { meeting: "主日" }
+    });
+
+    await runtime.handleTextTurn({
+      profile: enabledProfile,
+      event: textEvent("下一筆"),
+      requestId: "req-task-not-found"
+    });
+    await expect(store.activeTask(scope)).resolves.toEqual(successfulTask);
+
+    await runtime.handleTextTurn({
+      profile: enabledProfile,
+      event: textEvent("查 Fastify"),
+      requestId: "req-task-clear"
+    });
+    await expect(store.activeTask(scope)).resolves.toBeUndefined();
+  });
+
+  it("rechecks enabled-function and source policy before executing a controlled plan", async () => {
+    const handler = vi.fn<FunctionHandler>().mockResolvedValue({ ok: true, replyText: "unsafe" });
+    const runtime = createRuntime({
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "execute",
+          capability: "query_schedule",
+          arguments: { query: "主日服事" },
+          reasonCode: "explicit_intent"
+        })
+      },
+      functionRegistry: { query_schedule: handler }
+    });
+    const controlledProfile = profile([], {
+      controlledAgent: {
+        enabled: true,
+        shadow: false,
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      }
+    });
+
+    const disabled = await runtime.handleTextTurn({
+      profile: controlledProfile,
+      event: textEvent("查主日服事"),
+      requestId: "req-controlled-disabled-capability"
+    });
+    const unsupportedSource = await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        controlledAgent: {
+          enabled: true,
+          shadow: false,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: { ...textEvent("查主日服事"), source: { type: "room", roomId: "R1", userId: "U1" } },
+      requestId: "req-controlled-source-policy"
+    });
+
+    expect(disabled?.replyText).toBe("目前不支援這個請求。");
+    expect(unsupportedSource?.replyText).toBe("目前不支援這個請求。");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("keeps production live Notion roster follow-ups on their originating source", async () => {
     const now = () => new Date("2026-07-13T00:00:00.000Z");
     const schedules = new InMemoryScheduleStore();

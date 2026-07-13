@@ -39,7 +39,8 @@ export function guardSystemRouteWithFunctionIntent(
     action: scheduleIntent.action,
     arguments: scheduleIntent.arguments,
     provider: "keyword",
-    fallbackProvider: route.provider === "keyword" ? undefined : route.provider,
+    fallbackProvider:
+      route.provider === "ollama" || route.provider === "deepseek" ? route.provider : undefined,
     fallbackReason: `system_route_${route.action}`
   };
 }

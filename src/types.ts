@@ -432,7 +432,7 @@ export type RouteResult =
       action: FunctionName;
       arguments: JsonRecord;
       confidence?: number;
-      provider: ModelProviderName | "keyword";
+      provider: RouteProviderName;
       lane?: ModelProviderLane;
       fallbackProvider?: ModelProviderName;
       fallbackReason?: string;
@@ -442,7 +442,7 @@ export type RouteResult =
       action: SystemActionName;
       arguments: JsonRecord;
       confidence?: number;
-      provider: ModelProviderName | "keyword";
+      provider: RouteProviderName;
       lane?: ModelProviderLane;
       fallbackProvider?: ModelProviderName;
       fallbackReason?: string;

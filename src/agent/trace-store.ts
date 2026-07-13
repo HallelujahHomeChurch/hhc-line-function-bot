@@ -7,6 +7,7 @@ export type AgentTurnTracePhase =
   | "text_handler"
   | "admin_action_route"
   | "admin_action_result"
+  | "controlled_route"
   | "route"
   | "small_talk"
   | "slot_clarification"

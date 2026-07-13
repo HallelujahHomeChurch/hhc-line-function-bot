@@ -12,6 +12,7 @@ import {
 import { createAgentMemoryStore } from "./agent/create-agent-memory-store.js";
 import { createAgentRuntime } from "./agent/agent-runtime.js";
 import { createAgentPlanner } from "./agent/planner.js";
+import { createControlledAgentRouter } from "./agent/controlled-agent-router.js";
 import { createWikipediaSummarizer } from "./wikipedia/summarizer.js";
 import { RedisAgentJobStore } from "./agent/jobs.js";
 import { RedisConversationWindowStore } from "./agent/context-manager.js";
@@ -80,8 +81,6 @@ const agentPlanner = createAgentPlanner({
   primary: functionRoutingPrimary,
   fallback: functionRoutingFallback
 });
-// Task 8 will place this bounded proposal source behind the controlled-agent flag.
-void agentPlanner;
 const adminRoutingPrimary = createProfileAwareProvider({
   config,
   providers,
@@ -168,6 +167,21 @@ await seedCatalogSources({
 });
 const scheduleStore = await createScheduleStore({ db: postgres?.pool });
 const knowledgeStore = await createKnowledgeStore({ db: postgres?.pool });
+const controlledAgentRouter = createControlledAgentRouter({
+  planner: agentPlanner,
+  knowledgeMetadata: {
+    async list(profileName, limit) {
+      return (await knowledgeStore.listSources({ profileName, includeDisabled: false }))
+        .slice(0, limit)
+        .map((source) => ({
+          sourceKey: source.sourceKey,
+          displayName: source.displayName,
+          aliases: [],
+          topics: []
+        }));
+    }
+  }
+});
 await knowledgeStore.purgeExpired(new Date());
 const knowledgePurgeTimer = setInterval(
   () => {
@@ -255,6 +269,7 @@ const app = createApp(config, {
   sessionStore,
   agentJobStore,
   conversationWindowStore,
+  controlledAgentRouter,
   textGenerator: smartTalkPrimary,
   textFallbackGenerator: smartTalkFallback,
   agentRuntime: createAgentRuntime({ memoryStore, graph, accessStore }),
