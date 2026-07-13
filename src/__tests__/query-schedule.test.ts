@@ -179,6 +179,136 @@ describe("query_schedule", () => {
     });
   });
 
+  it("normalizes a production-shaped live Notion roster into a structured result", async () => {
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi
+        .fn()
+        .mockResolvedValue([
+          notionSchedulePage(
+            "page-live-roster",
+            "2026-07-14",
+            "7月14日(二) 晨更",
+            "",
+            ["音控: 資恆", "導播: 莘凌", "前攝影: 姵穎,佳美"].join("\n")
+          )
+        ])
+    };
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      notion,
+      databaseId: "database-1",
+      properties: { date: "日期", meeting: "聚會", role: "角色", person: "同工" },
+      now: () => new Date("2026-07-13T00:00:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await query(
+      { query: "下一場影視團隊服事表", dateIntent: "next_meeting" },
+      context("下一場影視團隊服事表")
+    );
+
+    expect(result.replyText).toContain("前攝影：姵穎,佳美");
+    expect(result.continuation).toEqual({
+      arguments: {
+        date: "2026-07-14",
+        meeting: "7月14日(二) 晨更",
+        availableRoles: ["音控", "導播", "前攝影"]
+      },
+      resultReferences: { kind: "notion_schedule" }
+    });
+    expect(result.agentResult).toEqual({
+      status: "success",
+      replyText: result.replyText,
+      anchors: {
+        date: "2026-07-14",
+        meeting: "7月14日(二) 晨更"
+      },
+      entities: expect.arrayContaining([
+        expect.objectContaining({ type: "role", label: "前攝影" }),
+        expect.objectContaining({ type: "role", label: "導播" })
+      ]),
+      supportedOperations: ["continue", "refine", "advance"]
+    });
+  });
+
+  it("resolves an unambiguous partial role through a result entity alias", async () => {
+    const schedules = new InMemoryScheduleStore();
+    await schedules.upsertItem({
+      profileName: "helper",
+      sourceKey: "media_team_service_schedule",
+      origin: "notion",
+      externalId: "page-front-camera",
+      serviceDate: "2026-07-14",
+      meeting: "7月14日(二) 晨更",
+      role: "前攝影",
+      assignee: "姵穎"
+    });
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore: schedules,
+      now: () => new Date("2026-07-13T00:00:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await query(
+      { query: "攝影是誰", date: "2026-07-14", limit: 1 },
+      context("攝影是誰")
+    );
+
+    expect(result.replyText).toContain("前攝影：姵穎");
+    expect(result.agentResult).toMatchObject({
+      status: "success",
+      entities: [
+        {
+          type: "role",
+          key: "前攝影",
+          label: "前攝影",
+          aliases: expect.arrayContaining(["攝影"])
+        }
+      ]
+    });
+  });
+
+  it("returns controlled ambiguity when a partial role matches multiple result entities", async () => {
+    const schedules = new InMemoryScheduleStore();
+    for (const [role, assignee] of [
+      ["前攝影", "姵穎"],
+      ["後攝影", "佳美"]
+    ]) {
+      await schedules.upsertItem({
+        profileName: "helper",
+        sourceKey: "media_team_service_schedule",
+        origin: "notion",
+        externalId: `page-${role}`,
+        serviceDate: "2026-07-14",
+        meeting: "7月14日(二) 晨更",
+        role,
+        assignee
+      });
+    }
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore: schedules,
+      now: () => new Date("2026-07-13T00:00:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await query(
+      { query: "攝影是誰", date: "2026-07-14", limit: 1 },
+      context("攝影是誰")
+    );
+
+    expect(result.agentResult).toMatchObject({
+      status: "ambiguous",
+      clarification: {
+        prompt: expect.stringContaining("攝影"),
+        choices: ["前攝影", "後攝影"]
+      }
+    });
+    expect(result.replyText).not.toContain("姵穎");
+    expect(result.replyText).not.toContain("佳美");
+  });
+
   it("uses an unlisted role focus inside a canonical live Notion schedule", async () => {
     const notion: NotionDatabaseClient = {
       queryDatabase: vi
@@ -350,6 +480,16 @@ describe("query_schedule", () => {
     expect(result.replyText).toContain("7月19日");
     expect(result.replyText).toContain("黃弘家族");
     expect(result.replyText).not.toMatch(/Notion|Postgres|記憶來源/u);
+    expect(result.agentResult).toMatchObject({
+      status: "success",
+      replyText: result.replyText,
+      anchors: {
+        date: expect.stringMatching(/-07-19$/u),
+        meeting: "為耶穌舉牌"
+      },
+      entities: [expect.objectContaining({ type: "role", label: "服事家族" })],
+      supportedOperations: ["continue", "refine", "advance"]
+    });
     expect(result.continuation).toEqual({
       arguments: {
         date: expect.stringMatching(/-07-19$/u),
@@ -532,5 +672,21 @@ describe("query_schedule", () => {
 
     expect(result.replyText).toContain("七月份家族晨更安排");
     expect(result.replyText).not.toContain("世緯家園");
+  });
+
+  it("returns a not-found envelope while preserving schedule recovery replies", async () => {
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore: new InMemoryScheduleStore()
+    });
+
+    const result = await query({ query: "主日服事", date: "2099-01-01" }, context("主日服事"));
+
+    expect(result.agentResult).toEqual({
+      status: "not_found",
+      replyText: result.replyText,
+      quickReplies: result.quickReplies
+    });
+    expect(result.quickReplies?.map((item) => item.label)).toEqual(["下一場", "本週", "主日"]);
   });
 });

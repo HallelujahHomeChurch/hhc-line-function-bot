@@ -21,6 +21,7 @@ import type {
 } from "../types.js";
 import type { SessionStore } from "../state/session-store.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
+import { resolveScheduleResultRows, scheduleResultEnvelope } from "./schedule-result.js";
 
 const SCHEDULE_MEMORY_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -364,12 +365,31 @@ export function createQueryScheduleMemoryHandler(
       args,
       now(),
       scheduleAdvanceDate(args, context.continuation?.arguments)
-    ).slice(0, args.limit ?? 10);
+    );
+    const roleResolution = resolveScheduleResultRows(entries, args.role);
+    entries =
+      roleResolution.status === "ambiguous"
+        ? roleResolution.rows
+        : roleResolution.rows.slice(0, args.limit ?? 10);
 
     if (entries.length === 0) {
-      return { ok: true, replyText: "我找不到符合的服事記憶。" };
+      const replyText = "我找不到符合的服事記憶。";
+      return {
+        ok: true,
+        replyText,
+        agentResult: scheduleResultEnvelope([], { replyText, role: args.role })
+      };
     }
 
+    const replyText = ["我找到這些服事記憶：", ...entries.map(formatScheduleEntry)].join("\n");
+    const agentResult = scheduleResultEnvelope(
+      entries.map((entry) => ({
+        date: entry.serviceDate,
+        meeting: entry.meetingName,
+        role: entry.role
+      })),
+      { replyText, role: args.role }
+    );
     return {
       ok: true,
       continuation: scheduleMemoryContinuation(
@@ -378,7 +398,8 @@ export function createQueryScheduleMemoryHandler(
         args.role,
         continuationRoles(context.continuation?.arguments)
       ),
-      replyText: ["我找到這些服事記憶：", ...entries.map(formatScheduleEntry)].join("\n")
+      replyText: agentResult.replyText,
+      agentResult
     };
   };
 }
@@ -600,12 +621,13 @@ function applyScheduleDateIntent(
 ): AgentScheduleEntryRecord[] {
   const today = toDateKey(now);
   switch (args.dateIntent) {
-    case "next_meeting":
-      return entries
-        .filter(
-          (entry) => entry.serviceDate >= today && (!afterDate || entry.serviceDate > afterDate)
-        )
-        .slice(0, 1);
+    case "next_meeting": {
+      const upcoming = entries.filter(
+        (entry) => entry.serviceDate >= today && (!afterDate || entry.serviceDate > afterDate)
+      );
+      const firstDate = upcoming[0]?.serviceDate;
+      return firstDate ? upcoming.filter((entry) => entry.serviceDate === firstDate) : [];
+    }
     case "upcoming":
       return entries.filter((entry) => entry.serviceDate >= today);
     case "this_week": {

@@ -4,7 +4,12 @@ import {
   type QueryServiceScheduleArguments
 } from "../function-arguments.js";
 import type { AgentMemoryStore } from "../agent/memory-store.js";
-import type { FunctionExecutionResult, FunctionHandler, NotionDatabaseClient } from "../types.js";
+import type {
+  FunctionExecutionResult,
+  FunctionHandler,
+  NotionDatabaseClient,
+  QuickReplyItem
+} from "../types.js";
 import type { SessionStore } from "../state/session-store.js";
 import type { ScheduleStore } from "../schedules/store.js";
 import { createQueryScheduleMemoryHandler } from "./schedule-memory.js";
@@ -21,6 +26,7 @@ import {
   MEDIA_TEAM_SCHEDULE_SOURCE_KEYS,
   refineScheduleQuery
 } from "./schedule-query-refinement.js";
+import { resolveScheduleResultRows, scheduleResultEnvelope } from "./schedule-result.js";
 
 export interface QueryScheduleFunctionOptions {
   memoryStore: AgentMemoryStore;
@@ -130,14 +136,21 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
 
     const found = results.filter((result) => !isNoScheduleResult(result.replyText));
     if (found.length === 0) {
+      const replyText = "查不到符合的服事表。";
+      const quickReplies: QuickReplyItem[] = [
+        { label: "下一場", action: { type: "message", label: "下一場", text: "下一場服事" } },
+        { label: "本週", action: { type: "message", label: "本週", text: "本週服事" } },
+        { label: "主日", action: { type: "message", label: "主日", text: "主日服事" } }
+      ];
       return {
         ok: true,
-        replyText: "查不到符合的服事表。",
-        quickReplies: [
-          { label: "下一場", action: { type: "message", label: "下一場", text: "下一場服事" } },
-          { label: "本週", action: { type: "message", label: "本週", text: "本週服事" } },
-          { label: "主日", action: { type: "message", label: "主日", text: "主日服事" } }
-        ]
+        replyText,
+        quickReplies,
+        agentResult: scheduleResultEnvelope([], {
+          replyText,
+          role: refinedArgs.role,
+          quickReplies
+        })
       };
     }
     if (found.length === 1) {
@@ -202,20 +215,44 @@ async function queryScheduleReadModel(input: {
     range: input.afterDate
       ? { start: nextDateKey(input.afterDate), endExclusive: "9999-12-31" }
       : filters.range,
-    limit: filters.limit ?? 10
+    limit:
+      filters.role || filters.nextMeetingOnly
+        ? Math.max(filters.limit ?? 10, 50)
+        : (filters.limit ?? 10)
   });
-  const limitedRows = filters.nextMeetingOnly
+  const meetingRows = filters.nextMeetingOnly
     ? limitToFirstReadModelGroup(rows, input.now, input.timeZone)
     : rows;
+  const roleResolution = resolveScheduleResultRows(meetingRows, filters.role);
+  const limitedRows =
+    filters.nextMeetingOnly || roleResolution.status === "ambiguous"
+      ? roleResolution.rows
+      : roleResolution.rows.slice(0, filters.limit ?? 10);
   const limited = limitedRows.map(scheduleItemToServiceRow);
 
   if (limited.length === 0) {
-    return { ok: true, replyText: "查不到符合的服事表。" };
+    const replyText = "查不到符合的服事表。";
+    return {
+      ok: true,
+      replyText,
+      agentResult: scheduleResultEnvelope([], { replyText, role: filters.role })
+    };
   }
+  const replyText = formatServiceScheduleReply(limited, serviceArgs, filters);
+  const agentResult = scheduleResultEnvelope(
+    limitedRows.map((row) => ({
+      date: row.serviceDate,
+      meeting: row.meeting,
+      role: row.role,
+      sourceKey: row.sourceKey
+    })),
+    { replyText, role: filters.role, sourceKeys: input.sourceKeys }
+  );
   return {
     ok: true,
     continuation: readModelContinuation(limitedRows, filters.role, input.availableRoles),
-    replyText: formatServiceScheduleReply(limited, serviceArgs, filters)
+    replyText: agentResult.replyText,
+    agentResult
   };
 }
 

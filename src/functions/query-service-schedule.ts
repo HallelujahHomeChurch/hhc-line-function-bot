@@ -13,7 +13,9 @@ import type {
 } from "../types.js";
 import { withRequesterDisplayName } from "../requester-personalization.js";
 import type { SessionStore } from "../state/session-store.js";
+import { normalizeNotionSchedulePage } from "../schedules/notion-adapter.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
+import { resolveScheduleResultRows, scheduleResultEnvelope } from "./schedule-result.js";
 
 export interface QueryServiceScheduleOptions {
   notion: NotionDatabaseClient;
@@ -102,39 +104,68 @@ export function createQueryServiceScheduleHandler(
       buildNotionQuery(derivedFilters, options.properties.date)
     );
 
-    const rows = pages.map((page) => ({
-      date: configuredPropertyToText(page.properties, options.properties.date),
-      meeting: configuredPropertyToText(page.properties, options.properties.meeting),
-      role: configuredPropertyToText(page.properties, options.properties.role),
-      person: configuredPropertyToText(page.properties, options.properties.person)
-    }));
+    const rows = pages.flatMap((page) => {
+      const date = configuredPropertyToText(page.properties, options.properties.date);
+      const serviceDate = extractDateKey(date);
+      if (!serviceDate) return [];
+      const normalized = normalizeNotionSchedulePage({
+        pageId: page.id,
+        serviceDate,
+        meeting: configuredPropertyToText(page.properties, options.properties.meeting),
+        role: configuredPropertyToText(page.properties, options.properties.role),
+        person: configuredPropertyToText(page.properties, options.properties.person)
+      });
+      return normalized.meeting.assignments.map((assignment) => ({
+        date,
+        meeting: normalized.meeting.meeting,
+        role: assignment.role,
+        person: assignment.assignees.join(",")
+      }));
+    });
 
     const filteredRows = rows
       .filter((row) => matchesOptional(row.date, derivedFilters.date))
       .filter((row) => matchesOptional(row.meeting, derivedFilters.meeting))
       .filter((row) => matchesOptional(row.role, derivedFilters.role))
       .filter((row) => matchesDateRange(row.date, derivedFilters.range));
-    const filtered = derivedFilters.nextMeetingOnly
+    const meetingRows = derivedFilters.nextMeetingOnly
       ? limitToFirstUpcomingGroup(filteredRows, now(), timeZone)
-      : filteredRows.slice(0, derivedFilters.limit ?? 10);
+      : filteredRows;
+    const roleResolution = resolveScheduleResultRows(meetingRows, derivedFilters.role);
+    const filtered =
+      derivedFilters.nextMeetingOnly || roleResolution.status === "ambiguous"
+        ? roleResolution.rows
+        : roleResolution.rows.slice(0, derivedFilters.limit ?? 10);
 
     if (filtered.length === 0) {
+      const replyText = "查不到符合的服事表。";
+      const quickReplies = [
+        {
+          label: "查本週服事",
+          action: { type: "message" as const, label: "查本週服事", text: "小哈 查本週服事" }
+        },
+        {
+          label: "查主日服事",
+          action: { type: "message" as const, label: "查主日服事", text: "小哈 查主日服事" }
+        }
+      ];
       return {
         ok: true,
-        replyText: "查不到符合的服事表。",
-        quickReplies: [
-          {
-            label: "查本週服事",
-            action: { type: "message", label: "查本週服事", text: "小哈 查本週服事" }
-          },
-          {
-            label: "查主日服事",
-            action: { type: "message", label: "查主日服事", text: "小哈 查主日服事" }
-          }
-        ]
+        replyText,
+        quickReplies,
+        agentResult: scheduleResultEnvelope([], {
+          replyText,
+          role: derivedFilters.role,
+          quickReplies
+        })
       };
     }
 
+    const replyText = formatServiceScheduleReply(filtered, args, derivedFilters);
+    const agentResult = scheduleResultEnvelope(filtered, {
+      replyText,
+      role: derivedFilters.role
+    });
     return {
       ok: true,
       continuation: liveScheduleContinuation(
@@ -142,7 +173,8 @@ export function createQueryServiceScheduleHandler(
         derivedFilters.role,
         continuationRoles(context.continuation?.arguments)
       ),
-      replyText: formatServiceScheduleReply(filtered, args, derivedFilters)
+      replyText: agentResult.replyText,
+      agentResult
     };
   };
 }
@@ -660,27 +692,7 @@ function formatMonthDay(dateKey: string): string {
 }
 
 function formatRosterLines(row: ServiceRow): string[] {
-  const role = row.role.trim();
-  if (role) {
-    return [`- ${role}：${row.person || "未填人員"}`];
-  }
-
-  const rosterLines = row.person
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (rosterLines.length === 0) {
-    return ["- 服事：未填人員"];
-  }
-
-  return rosterLines.map((line) => {
-    const match = line.match(/^(.+?)\s*[:：]\s*(.+)$/);
-    if (!match) {
-      return `- 服事：${line}`;
-    }
-    return `- ${match[1].trim()}：${match[2].trim()}`;
-  });
+  return [`- ${row.role.trim() || "服事"}：${row.person || "未填人員"}`];
 }
 
 function propertyToText(property: unknown): string {

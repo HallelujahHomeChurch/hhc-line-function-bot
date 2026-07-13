@@ -154,6 +154,17 @@ describe("AgentTurnRuntime", () => {
     });
 
     expect(first?.replyText).toContain("音控：資恆");
+    expect(first?.agentResult).toMatchObject({
+      status: "success",
+      replyText: first.replyText,
+      anchors: {
+        date: "2026-07-14",
+        meeting: "晨更",
+        sourceKeys: ["media_team_service_schedule"]
+      },
+      entities: [expect.objectContaining({ type: "role", label: "音控" })],
+      supportedOperations: ["continue", "refine", "advance"]
+    });
     expect(second?.replyText).toContain("音控：資恆");
     expect(second?.replyText).not.toContain("錯誤同工");
   });
