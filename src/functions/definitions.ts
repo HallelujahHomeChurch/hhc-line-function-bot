@@ -55,6 +55,15 @@ export interface FunctionMemoryPolicy {
   kind: "none" | "resource_metadata" | "explicit_text" | "retrieve_text";
 }
 
+export interface AgentCapabilityContract {
+  intents: string[];
+  candidateHints: string[];
+  entityTypes?: string[];
+  refinableFields?: string[];
+  operations?: Array<"continue" | "refine" | "advance" | "select">;
+  ambiguity?: "clarify";
+}
+
 export interface FunctionDefinition {
   name: FunctionName;
   displayName: string;
@@ -63,6 +72,7 @@ export interface FunctionDefinition {
   requires: Array<"graph" | "notion" | "session" | "cache" | "memory" | "wikipedia" | "knowledge">;
   scope: "profile" | "group_capable";
   sideEffectLevel: FunctionSideEffectLevel;
+  agentCapability?: AgentCapabilityContract;
   allowedSources: FunctionAllowedSource[];
   requiredSlots: FunctionRequiredSlot[];
   resourcePolicy: FunctionResourcePolicy;
@@ -96,6 +106,14 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     requires: ["graph", "session"],
     scope: "group_capable",
     sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查投影片", "找投影片", "搜尋投影片", "查簡報", "找簡報"],
+      candidateHints: ["投影片", "簡報", "ppt", "powerpoint", "slides", "keynote", "odp"],
+      entityTypes: ["selection"],
+      refinableFields: ["query", "type", "selection"],
+      operations: ["continue", "refine", "select"],
+      ambiguity: "clarify"
+    },
     allowedSources: ["user", "group"],
     requiredSlots: [
       {
@@ -143,6 +161,14 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     requires: ["memory"],
     scope: "group_capable",
     sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查服事", "查服事表", "找服事", "下一場服事", "本週服事", "主日服事"],
+      candidateHints: ["服事", "服事表", "服事安排", "聚會服事"],
+      entityTypes: ["date", "meeting", "role", "scheduleType"],
+      refinableFields: ["date", "meeting", "role", "scheduleType"],
+      operations: ["continue", "refine", "advance", "select"],
+      ambiguity: "clarify"
+    },
     allowedSources: ["user", "group"],
     requiredSlots: [
       {
@@ -198,6 +224,14 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     requires: ["knowledge"],
     scope: "group_capable",
     sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查知識", "知識查詢", "找知識"],
+      candidateHints: ["知識", "sop", "計畫", "流程"],
+      entityTypes: ["source", "document", "section", "ordinal"],
+      refinableFields: ["source", "document", "section", "ordinal"],
+      operations: ["continue", "refine", "advance", "select"],
+      ambiguity: "clarify"
+    },
     allowedSources: ["user", "group"],
     requiredSlots: [
       {
@@ -320,6 +354,14 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     requires: ["graph", "cache"],
     scope: "group_capable",
     sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查歌譜", "找歌譜", "搜尋歌譜", "查樂譜", "找樂譜"],
+      candidateHints: ["歌譜", "樂譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"],
+      entityTypes: ["selection"],
+      refinableFields: ["query", "type", "selection"],
+      operations: ["continue", "refine", "select"],
+      ambiguity: "clarify"
+    },
     allowedSources: ["user", "group"],
     requiredSlots: [
       {
@@ -469,6 +511,14 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     requires: ["graph"],
     scope: "group_capable",
     sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查教會資料", "找教會資料", "查小哈資料庫", "找小哈資料庫"],
+      candidateHints: ["教會資料", "小哈資料庫", "週報音檔"],
+      entityTypes: ["selection"],
+      refinableFields: ["query", "type", "selection"],
+      operations: ["continue", "refine", "select"],
+      ambiguity: "clarify"
+    },
     allowedSources: ["user", "group"],
     requiredSlots: [
       {
@@ -543,6 +593,14 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     requires: ["wikipedia"],
     scope: "group_capable",
     sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查維基百科", "找維基百科", "查wiki", "查wikipedia"],
+      candidateHints: ["維基百科", "wiki", "wikipedia"],
+      entityTypes: ["topic"],
+      refinableFields: ["topic"],
+      operations: ["continue", "refine", "select"],
+      ambiguity: "clarify"
+    },
     allowedSources: ["user", "group"],
     requiredSlots: [
       {
@@ -665,6 +723,14 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     requires: ["memory"],
     scope: "profile",
     sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查我記住的", "查我保存的", "查我儲存的", "查記住的資訊"],
+      candidateHints: ["記住的資訊", "保存的資訊", "小哈記得"],
+      entityTypes: ["selection"],
+      refinableFields: ["query", "selection"],
+      operations: ["continue", "refine", "select"],
+      ambiguity: "clarify"
+    },
     allowedSources: ["user", "group"],
     requiredSlots: [
       {

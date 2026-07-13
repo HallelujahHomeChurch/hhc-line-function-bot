@@ -1292,5 +1292,12 @@ function requiredDefinition(name: FunctionName): FunctionDefinition {
   if (!definition) {
     throw new Error(`Missing function definition: ${name}`);
   }
+  if (
+    !definition.deprecated &&
+    definition.sideEffectLevel === "read" &&
+    !definition.agentCapability
+  ) {
+    throw new Error(`Missing agent capability contract: ${name}`);
+  }
   return definition;
 }
