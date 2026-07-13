@@ -34,6 +34,88 @@ function createRouter(planner: AgentPlanner, knowledgeMetadata?: DynamicKnowledg
 }
 
 describe("ControlledAgentRouter", () => {
+  it("emits bounded candidate, planner, and validator diagnostics", async () => {
+    const diagnostics: unknown[] = [];
+    const planner: AgentPlanner = {
+      propose: vi.fn().mockResolvedValue({
+        status: "proposed",
+        version: 1,
+        disposition: "execute",
+        capability: "query_schedule",
+        arguments: { query: "查主日服事" },
+        confidence: 0.96,
+        provider: "deepseek",
+        attempts: []
+      })
+    };
+
+    await createRouter(planner).resolve(
+      {
+        profileName: "helper",
+        text: "查主日服事",
+        enabledFunctions: ["query_schedule"],
+        sourceType: "group",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      },
+      (step) => diagnostics.push(step)
+    );
+
+    expect(diagnostics).toEqual([
+      {
+        phase: "capability_candidates",
+        candidates: ["query_schedule"],
+        candidateCount: 1
+      },
+      {
+        phase: "planner",
+        outcome: "proposed",
+        provider: "deepseek",
+        disposition: "execute",
+        confidenceBucket: "high"
+      },
+      {
+        phase: "plan_validation",
+        outcome: "accepted",
+        action: "query_schedule",
+        disposition: "execute",
+        validatorReason: "explicit_intent"
+      }
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("查主日服事");
+  });
+
+  it("does not let a diagnostic observer change the validated plan", async () => {
+    const planner: AgentPlanner = {
+      propose: vi.fn().mockResolvedValue({
+        status: "proposed",
+        version: 1,
+        disposition: "execute",
+        capability: "query_schedule",
+        arguments: { query: "查主日服事" },
+        confidence: 0.96,
+        provider: "deepseek",
+        attempts: []
+      })
+    };
+
+    await expect(
+      createRouter(planner).resolve(
+        {
+          profileName: "helper",
+          text: "查主日服事",
+          enabledFunctions: ["query_schedule"],
+          sourceType: "group",
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        },
+        () => {
+          throw new Error("diagnostics unavailable");
+        }
+      )
+    ).resolves.toMatchObject({ disposition: "execute", capability: "query_schedule" });
+  });
+
   it("does not let a chat proposal override exact active-task entity evidence", async () => {
     const planner: AgentPlanner = {
       propose: vi.fn().mockResolvedValue({

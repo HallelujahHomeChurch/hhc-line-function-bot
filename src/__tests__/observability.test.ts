@@ -9,6 +9,49 @@ import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
 import { createConsoleRouteObserver } from "../observability/route-observer.js";
 
 describe("observability sanitization", () => {
+  it("keeps bounded controlled-agent telemetry fields and drops sensitive payloads", () => {
+    const sanitized = sanitizeActionTelemetryEvent({
+      kind: "route",
+      phase: "planner",
+      provider: "deepseek",
+      disposition: "continue",
+      confidenceBucket: "high",
+      candidateCount: 2,
+      candidates: ["query_schedule", "query_knowledge"],
+      validatorReason: "active_task_refinement",
+      resultStatus: "success",
+      anchorCount: 2,
+      entityTypes: ["meeting", "role"],
+      lifecycleOutcome: "replace",
+      action: "王小明",
+      reason: "private evidence",
+      text: "王小明",
+      prompt: "private system prompt",
+      evidence: "private evidence",
+      url: "https://example.invalid/private",
+      filename: "主日服事表.xlsx",
+      token: "secret-token"
+    });
+
+    expect(sanitized).toEqual({
+      kind: "route",
+      phase: "planner",
+      provider: "deepseek",
+      disposition: "continue",
+      confidenceBucket: "high",
+      candidateCount: 2,
+      candidates: ["query_schedule", "query_knowledge"],
+      validatorReason: "active_task_refinement",
+      resultStatus: "success",
+      anchorCount: 2,
+      entityTypes: ["meeting", "role"],
+      lifecycleOutcome: "replace"
+    });
+    expect(JSON.stringify(sanitized)).not.toMatch(
+      /王小明|private system prompt|private evidence|example\.invalid|主日服事表|secret-token/u
+    );
+  });
+
   it("drops raw text, invite codes, tokens, ids, and urls from telemetry events", () => {
     const sanitized = sanitizeActionTelemetryEvent({
       kind: "route",

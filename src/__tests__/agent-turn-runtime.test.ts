@@ -487,6 +487,72 @@ describe("AgentTurnRuntime", () => {
     );
   });
 
+  it("records detailed sanitized shadow diagnostics without changing the legacy reply", async () => {
+    const traceStore = new InMemoryAgentTraceStore(10);
+    const controlledAgentRouter = createControlledAgentRouter({
+      planner: {
+        propose: vi.fn().mockResolvedValue({
+          status: "proposed",
+          version: 1,
+          disposition: "execute",
+          capability: "query_schedule",
+          arguments: { query: "查主日服事" },
+          confidence: 0.94,
+          provider: "deepseek",
+          attempts: []
+        })
+      }
+    });
+    const runtime = createRuntime({
+      traceStore,
+      controlledAgentRouter,
+      router: {
+        route: vi.fn().mockResolvedValue({
+          type: "deny",
+          reason: "not_matched",
+          provider: "ollama"
+        })
+      }
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        controlledAgent: {
+          enabled: false,
+          shadow: true,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("查主日服事"),
+      requestId: "req-shadow-trace"
+    });
+
+    expect(result?.replyText).toBe("目前不支援這個請求。");
+    await vi.waitFor(async () =>
+      expect(await traceStore.list()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            requestId: "req-shadow-trace",
+            steps: expect.arrayContaining([
+              expect.objectContaining({ phase: "active_task", lifecycleOutcome: "missing" }),
+              expect.objectContaining({
+                phase: "capability_candidates",
+                candidates: ["query_schedule"]
+              }),
+              expect.objectContaining({ phase: "planner", provider: "deepseek" }),
+              expect.objectContaining({
+                phase: "plan_validation",
+                validatorReason: "explicit_intent"
+              })
+            ])
+          })
+        ])
+      )
+    );
+    expect(JSON.stringify(await traceStore.list())).not.toContain("查主日服事");
+  });
+
   it("does not wait for a never-resolving shadow dependency", async () => {
     const legacyRoute = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
@@ -1233,6 +1299,7 @@ describe("AgentTurnRuntime", () => {
     const now = new Date("2026-07-08T00:00:00.000Z");
     const sessionStore = new InMemorySessionStore({ now: () => now });
     const conversationWindowStore = new InMemoryConversationWindowStore({ now: () => now });
+    const traceStore = new InMemoryAgentTraceStore(10);
     const scheduleHandler = vi
       .fn<FunctionHandler>()
       .mockResolvedValueOnce({
@@ -1268,6 +1335,7 @@ describe("AgentTurnRuntime", () => {
     const runtime = createRuntime({
       sessionStore,
       conversationWindowStore,
+      traceStore,
       textMessageHandlers: { pending_function_answer: pendingHandler }
     });
     const enabledProfile = profile(["query_schedule", "query_wikipedia"], {
@@ -1298,6 +1366,15 @@ describe("AgentTurnRuntime", () => {
       event: textEvent("主日服事"),
       requestId: "req-pending-success"
     });
+    await expect(traceStore.list()).resolves.toMatchObject([
+      {
+        requestId: "req-pending-success",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ phase: "result_envelope", resultStatus: "success" }),
+          expect.objectContaining({ phase: "active_task", lifecycleOutcome: "write" })
+        ])
+      }
+    ]);
     const successfulTask = await conversationWindowStore.activeTask(scope);
     expect(successfulTask).toMatchObject({
       capability: "query_schedule",
@@ -2306,6 +2383,103 @@ describe("AgentTurnRuntime", () => {
     expect(serialized).toContain('"query":"present"');
     expect(serialized).toContain('"action":"find_ppt_slides"');
     expect(serialized).not.toContain("secret song title");
+  });
+
+  it("records every controlled-agent boundary without content values", async () => {
+    const traceStore = new InMemoryAgentTraceStore(10);
+    const conversationWindowStore = new InMemoryConversationWindowStore({
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
+    const controlledAgentRouter = createControlledAgentRouter({
+      planner: {
+        propose: vi.fn().mockResolvedValue({
+          status: "proposed",
+          version: 1,
+          disposition: "execute",
+          capability: "query_schedule",
+          arguments: { query: "查主日服事" },
+          confidence: 0.96,
+          provider: "deepseek",
+          attempts: []
+        })
+      }
+    });
+    const handler = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "王小明負責音控 https://example.invalid/share?token=secret",
+      agentResult: {
+        status: "success",
+        anchors: { meeting: "主日", privateFile: "主日服事表.xlsx" },
+        entities: [
+          { type: "meeting", key: "sunday", label: "主日" },
+          { type: "role", key: "sound", label: "音控", aliases: ["王小明"] }
+        ],
+        supportedOperations: ["continue", "refine"],
+        replyText: "王小明負責音控"
+      }
+    });
+    const runtime = createRuntime({
+      controlledAgentRouter,
+      conversationWindowStore,
+      functionRegistry: { query_schedule: handler },
+      traceStore
+    });
+
+    await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        generalAgent: { enabled: true, conversationWindowSeconds: 60 },
+        controlledAgent: {
+          enabled: true,
+          shadow: false,
+          maxCandidates: 3,
+          minPlannerConfidence: 0.65
+        }
+      }),
+      event: textEvent("查主日服事"),
+      requestId: "req-controlled-trace"
+    });
+
+    await expect(traceStore.list()).resolves.toMatchObject([
+      {
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            phase: "active_task",
+            outcome: "missing",
+            lifecycleOutcome: "missing"
+          }),
+          expect.objectContaining({
+            phase: "capability_candidates",
+            candidates: ["query_schedule"],
+            candidateCount: 1
+          }),
+          expect.objectContaining({
+            phase: "planner",
+            provider: "deepseek",
+            disposition: "execute",
+            confidenceBucket: "high"
+          }),
+          expect.objectContaining({
+            phase: "plan_validation",
+            disposition: "execute",
+            validatorReason: "explicit_intent"
+          }),
+          expect.objectContaining({
+            phase: "result_envelope",
+            resultStatus: "success",
+            anchorCount: 2,
+            entityTypes: ["meeting", "role"]
+          }),
+          expect.objectContaining({
+            phase: "active_task",
+            action: "query_schedule",
+            lifecycleOutcome: "write"
+          })
+        ])
+      }
+    ]);
+    expect(JSON.stringify(await traceStore.list())).not.toMatch(
+      /王小明|example\.invalid|主日服事表|token=secret/u
+    );
   });
 
   it("records the provider used for generated small talk", async () => {

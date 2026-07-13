@@ -215,7 +215,17 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     scope: "group_capable",
     sideEffectLevel: "read",
     agentCapability: {
-      intents: ["查服事", "查服事表", "找服事", "下一場服事", "本週服事", "主日服事"],
+      intents: [
+        "查服事",
+        "查服事表",
+        "找服事",
+        "下一場服事",
+        "本週服事",
+        "主日服事",
+        "主日音控",
+        "主日導播",
+        "主日攝影"
+      ],
       candidateHints: ["服事", "服事表", "服事安排", "聚會服事"],
       entityTypes: ["date", "meeting", "role", "scheduleType"],
       refinableFields: ["date", "specificDate", "dateIntent", "meeting", "role", "scheduleType"],

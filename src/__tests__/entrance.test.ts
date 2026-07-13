@@ -1216,7 +1216,8 @@ describe("LINE entrance", () => {
         profileName: "main",
         enabledFunctions: ["query_service_schedule", "find_ppt_slides"],
         sourceType: "group"
-      })
+      }),
+      expect.any(Function)
     );
     expect(legacyRoute).not.toHaveBeenCalled();
     expect(replyText).toHaveBeenCalledWith("reply-token", "目前不支援這個請求。", undefined);

@@ -219,13 +219,30 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           );
           const transitionFunctionName = result.executedAction ?? textHandlerFunctionName;
           if (transitionFunctionName && controlledRoutingMode(input.profile) === "enabled") {
-            await applyActiveTaskTransition({
+            const previousTask = await readActiveTask(options, input, true);
+            if (options.traceStore) {
+              steps.push({
+                phase: "active_task",
+                outcome: previousTask ? "present" : "missing",
+                action: previousTask?.capability,
+                lifecycleOutcome: previousTask ? "read" : "missing"
+              });
+            }
+            const lifecycleOutcome = await applyActiveTaskTransition({
               store: options.conversationWindowStore,
               scope: activeTaskScope(options.conversationWindowStore, input),
               capability: transitionFunctionName,
               result,
               now: now(),
-              ttlMs: activeTaskTtlMs(input.profile)
+              ttlMs: activeTaskTtlMs(input.profile),
+              previousTask
+            });
+            steps.push(resultEnvelopeTraceStep(result));
+            steps.push({
+              phase: "active_task",
+              outcome: "transition",
+              action: transitionFunctionName,
+              lifecycleOutcome
             });
           }
           if (textHandlerFunctionName) {
@@ -287,11 +304,20 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         let plan: ValidatedAgentPlan;
         try {
           activeTask = await readActiveTask(options, input, true);
+          if (options.traceStore) {
+            steps.push({
+              phase: "active_task",
+              outcome: activeTask ? "present" : "missing",
+              action: activeTask?.capability,
+              lifecycleOutcome: activeTask ? "read" : "missing"
+            });
+          }
           plan = await resolveControlledPlan(
             options.controlledAgentRouter,
             input,
             text,
-            activeTask
+            activeTask,
+            options.traceStore ? steps : undefined
           );
         } catch {
           plan = { disposition: "clarify", reasonCode: "planner_unavailable" };
@@ -305,13 +331,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         route = controlledPlanToRoute(plan, input);
       } else {
         if (controlledMode === "shadow") {
-          startShadowObservation(
-            options,
-            input,
-            text,
-            options.controlledShadowObserver ??
-              ((observation) => recordTrace(input, [controlledTraceStep(observation)]))
-          );
+          startShadowObservation(options, input, text, options.controlledShadowObserver);
         }
         try {
           route = await options.router.route({
@@ -533,13 +553,21 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
                 : undefined
         });
         if (controlledMode === "enabled") {
-          await applyActiveTaskTransition({
+          const lifecycleOutcome = await applyActiveTaskTransition({
             store: options.conversationWindowStore,
             scope: activeTaskScope(options.conversationWindowStore, input),
             capability: route.action,
             result,
             now: now(),
-            ttlMs: activeTaskTtlMs(input.profile)
+            ttlMs: activeTaskTtlMs(input.profile),
+            previousTask: activeTask
+          });
+          steps.push(resultEnvelopeTraceStep(result));
+          steps.push({
+            phase: "active_task",
+            outcome: "transition",
+            action: route.action,
+            lifecycleOutcome
           });
         }
         await recordFunctionWriteAudit(
@@ -845,11 +873,12 @@ async function resolveControlledPlan(
   router: ControlledAgentRouter | undefined,
   input: AgentTextTurnInput,
   text: string,
-  activeTask: ActiveTaskContext | undefined
+  activeTask: ActiveTaskContext | undefined,
+  steps?: AgentTurnTraceStep[]
 ): Promise<ValidatedAgentPlan> {
   if (!router) return { disposition: "clarify", reasonCode: "planner_unavailable" };
   try {
-    return await router.resolve({
+    const routerInput = {
       profileName: input.profile.name,
       text,
       enabledFunctions: input.profile.enabledFunctions,
@@ -857,20 +886,48 @@ async function resolveControlledPlan(
       activeTask,
       maxCandidates: input.profile.controlledAgent.maxCandidates,
       minPlannerConfidence: input.profile.controlledAgent.minPlannerConfidence
-    });
+    };
+    return steps
+      ? await router.resolve(routerInput, (step) => steps.push(step))
+      : await router.resolve(routerInput);
   } catch {
     return { disposition: "clarify", reasonCode: "planner_unavailable" };
   }
 }
 
+function resultEnvelopeTraceStep(result: FunctionExecutionResult): AgentTurnTraceStep {
+  const envelope = result.agentResult;
+  return {
+    phase: "result_envelope",
+    resultStatus: envelope?.status ?? "unavailable",
+    anchorCount: Object.keys(envelope?.anchors ?? {}).length,
+    entityTypes: [...new Set((envelope?.entities ?? []).map(({ type }) => type))]
+  };
+}
+
 async function resolveShadowPlan(
   options: AgentTurnRuntimeOptions,
   input: AgentTextTurnInput,
-  text: string
+  text: string,
+  steps?: AgentTurnTraceStep[]
 ): Promise<ValidatedAgentPlan> {
   try {
     const activeTask = await readActiveTask(options, input, false);
-    return await resolveControlledPlan(options.controlledAgentRouter, input, text, activeTask);
+    if (steps) {
+      steps.push({
+        phase: "active_task",
+        outcome: activeTask ? "present" : "missing",
+        action: activeTask?.capability,
+        lifecycleOutcome: activeTask ? "read" : "missing"
+      });
+    }
+    return await resolveControlledPlan(
+      options.controlledAgentRouter,
+      input,
+      text,
+      activeTask,
+      steps
+    );
   } catch {
     return { disposition: "clarify", reasonCode: "planner_unavailable" };
   }
@@ -880,20 +937,30 @@ function startShadowObservation(
   options: AgentTurnRuntimeOptions,
   input: AgentTextTurnInput,
   text: string,
-  observer: ControlledShadowObserver
+  observer: ControlledShadowObserver | undefined
 ): void {
+  const steps: AgentTurnTraceStep[] | undefined = options.traceStore ? [] : undefined;
   void Promise.resolve()
-    .then(() => resolveShadowPlan(options, input, text))
-    .then((plan) =>
-      observer({
+    .then(() => resolveShadowPlan(options, input, text, steps))
+    .then(async (plan) => {
+      const observation = {
         disposition: plan.disposition,
         capability:
           plan.disposition === "execute" || plan.disposition === "clarify"
             ? plan.capability
             : undefined,
         reasonCode: plan.reasonCode
-      })
-    )
+      } satisfies ControlledShadowObservation;
+      await observer?.(observation);
+      if (steps)
+        await options.traceStore?.record({
+          requestId: input.requestId,
+          occurredAt: (options.now ?? (() => new Date()))().toISOString(),
+          profileName: input.profile.name,
+          sourceType: input.event.source.type,
+          steps: [...steps, controlledTraceStep(observation)]
+        });
+    })
     .catch(() => undefined);
 }
 

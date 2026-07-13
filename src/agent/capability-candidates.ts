@@ -11,6 +11,7 @@ import {
   type KnowledgeRoutingMetadata
 } from "../knowledge/routing-metadata.js";
 import { hasWriteIntent, isConservativeKnowledgeEvidenceText } from "./knowledge-evidence-guard.js";
+import { hasEllipticalActiveTaskReference } from "./plan-evidence.js";
 
 export interface KnowledgeSourceMetadata extends Omit<KnowledgeRoutingMetadata, "sampleQueries"> {
   sampleQueries?: string[];
@@ -160,10 +161,12 @@ function matchesActiveTaskEntity(
     return false;
   }
   const entityTypes = new Set(contract.entityTypes ?? []);
-  return activeTask.entities.some(
-    (entity) =>
-      entityTypes.has(entity.type) &&
-      matchesAnyExact(text, [entity.key, entity.label, ...(entity.aliases ?? [])])
+  return (
+    activeTask.entities.some(
+      (entity) =>
+        entityTypes.has(entity.type) &&
+        matchesAnyExact(text, [entity.key, entity.label, ...(entity.aliases ?? [])])
+    ) || hasEllipticalActiveTaskReference(text)
   );
 }
 

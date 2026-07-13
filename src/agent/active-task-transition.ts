@@ -1,7 +1,10 @@
 import { getFunctionDefinition } from "../functions/definitions.js";
 import type { FunctionExecutionResult, FunctionName } from "../types.js";
 import { activeTaskFromResult } from "./active-task.js";
+import type { ActiveTaskContext } from "./active-task.js";
 import type { ConversationWindowScope, ConversationWindowStore } from "./context-manager.js";
+
+export type ActiveTaskTransitionOutcome = "write" | "replace" | "preserve" | "clear";
 
 export async function applyActiveTaskTransition(input: {
   store?: ConversationWindowStore;
@@ -10,14 +13,15 @@ export async function applyActiveTaskTransition(input: {
   result: FunctionExecutionResult;
   now: Date;
   ttlMs: number;
-}): Promise<void> {
+  previousTask?: ActiveTaskContext;
+}): Promise<ActiveTaskTransitionOutcome> {
   if (
     !input.store ||
     !input.scope?.requesterUserId ||
     !input.result.ok ||
     input.result.agentResult?.status !== "success"
   ) {
-    return;
+    return "preserve";
   }
 
   const contractOperations = getFunctionDefinition(input.capability)?.agentCapability?.operations;
@@ -31,7 +35,8 @@ export async function applyActiveTaskTransition(input: {
     : undefined;
   if (next) {
     await input.store.recordActiveTask({ scope: input.scope, task: next, ttlMs });
-    return;
+    return input.previousTask ? "replace" : "write";
   }
   await input.store.clearActiveTask(input.scope);
+  return input.previousTask ? "clear" : "preserve";
 }

@@ -89,8 +89,20 @@ export function hasActiveEntityTextEvidence(
       ({ entityTypes }) => entityTypes ?? []
     )
   );
-  return activeTask.entities.some(
-    (entity) => declaredTypes.has(entity.type) && entityHasTextEvidence(text, entity)
+  return (
+    activeTask.entities.some(
+      (entity) => declaredTypes.has(entity.type) && entityHasTextEvidence(text, entity)
+    ) || hasEllipticalActiveTaskReference(text)
+  );
+}
+
+export function hasEllipticalActiveTaskReference(text: string): boolean {
+  const normalized = normalizeComparable(text);
+  return (
+    /^(?:那|這|其中|剛剛|剛才)/u.test(normalized) &&
+    /(?:誰|哪裡|哪邊|哪個|何時|幾點|幾時|什麼時候|什麼|怎麼|如何|多久|多少|時間|地點|集合)/u.test(
+      normalized
+    )
   );
 }
 
@@ -149,8 +161,20 @@ function matchingRuleEntities(
   activeTask: ActiveTaskContext
 ): AgentEntity[] {
   const allowedTypes = new Set(rule.entityTypes ?? []);
-  return activeTask.entities.filter(
-    (entity) => allowedTypes.has(entity.type) && entityHasTextEvidence(text, entity)
+  const matches = activeTask.entities
+    .filter((entity) => allowedTypes.has(entity.type))
+    .map((entity) => ({ entity, score: entityEvidenceScore(text, entity) }))
+    .filter(({ score }) => score > 0);
+  const strongest = Math.max(0, ...matches.map(({ score }) => score));
+  return matches.filter(({ score }) => score === strongest).map(({ entity }) => entity);
+}
+
+function entityEvidenceScore(text: string, entity: AgentEntity): number {
+  return Math.max(
+    0,
+    ...[entity.key, entity.label, ...(entity.aliases ?? [])].map((term) =>
+      hasCurrentTextEvidence(text, term) ? Array.from(normalizeComparable(term)).length : 0
+    )
   );
 }
 

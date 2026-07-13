@@ -194,6 +194,8 @@ The shared query-domain resolver runs before keyword fallback and guards model o
 
 Router behavior is guarded by a deterministic offline eval corpus in each function module. Run `pnpm eval:router` for CI-safe keyword fallback checks. Run `pnpm eval:router:ollama` manually when validating a live Ollama model.
 
+The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) `function_routing` policy, requires DeepSeek as primary, allows its configured Ollama fallback, and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
+
 ## Time Zone
 
 Set `TIME_ZONE` for all calendar date range decisions, including `今天`, `明天`, `後天`, and upcoming service schedule queries. The default is `Asia/Taipei`.
@@ -237,6 +239,8 @@ The webhook service should stay on `node dist/index.js`; do not run recurring sy
 ## Agent Runtime And Memory
 
 The agent turn runtime centralizes natural-language task execution after LINE entrance checks. It handles pre-route resource recall, pending text sessions, admin natural-language actions, routing, missing-slot clarification, in-flight duplicate locks, function execution, and sanitized turn traces.
+
+Admin `/last-agent-turns` diagnostics include controlled phases for active-task state, bounded capability names/count, planner provider/disposition/confidence bucket, validator reason, result-envelope status/anchor count/entity types, and active-task lifecycle outcome. These traces never retain raw messages, people, prompts, filenames, URLs, evidence, tokens, source titles/IDs, or temporary sharing links.
 
 This keeps new functions on a consistent contract: define the capability, normalize arguments, add any required slots, register the handler, and let the runtime apply the shared safety rails.
 

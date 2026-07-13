@@ -1,0 +1,421 @@
+import { pathToFileURL } from "node:url";
+
+import type { ActiveTaskContext } from "../agent/active-task.js";
+import {
+  buildCapabilityCandidates,
+  type KnowledgeSourceMetadata
+} from "../agent/capability-candidates.js";
+import {
+  validateAgentPlan,
+  type AgentPlanProposalInput,
+  type ValidatedAgentPlan
+} from "../agent/plan-validator.js";
+import type { AgentPlanDisposition, FunctionName } from "../types.js";
+
+const NOW = new Date("2026-07-14T00:00:00.000Z");
+
+const scheduleTask: ActiveTaskContext = {
+  version: 1,
+  capability: "query_schedule",
+  anchors: { meeting: "晨更", date: "2026-07-14" },
+  entities: [
+    { type: "meeting", key: "morning-prayer", label: "晨更" },
+    { type: "role", key: "front-camera", label: "前攝影", aliases: ["攝影"] },
+    { type: "role", key: "rear-camera", label: "後攝影", aliases: ["攝影"] },
+    { type: "role", key: "director", label: "導播" },
+    { type: "role", key: "sound", label: "音控" }
+  ],
+  supportedOperations: ["continue", "refine", "advance", "select"],
+  createdAt: "2026-07-13T23:59:00.000Z",
+  expiresAt: "2026-07-14T00:05:00.000Z"
+};
+
+const knowledgeTask: ActiveTaskContext = {
+  version: 1,
+  capability: "query_knowledge",
+  anchors: {
+    sourceId: "source-opaque-1",
+    documentId: "document-opaque-1",
+    sectionKey: "section-opaque-1"
+  },
+  references: { documentId: "document-opaque-1", sectionKey: "section-opaque-1" },
+  entities: [
+    { type: "source", key: "source-opaque-1", label: "知識來源" },
+    { type: "document", key: "document-opaque-1", label: "知識文件" },
+    { type: "section", key: "section-opaque-1", label: "知識段落" },
+    { type: "ordinal", key: "0", label: "第 1 項", aliases: ["第一天"] }
+  ],
+  supportedOperations: ["continue", "refine", "select"],
+  createdAt: "2026-07-13T23:59:00.000Z",
+  expiresAt: "2026-07-14T00:05:00.000Z"
+};
+
+const expiredKnowledgeTask: ActiveTaskContext = {
+  ...knowledgeTask,
+  createdAt: "2026-07-13T23:00:00.000Z",
+  expiresAt: "2026-07-13T23:05:00.000Z"
+};
+
+const retreatMetadata: KnowledgeSourceMetadata = {
+  sourceKey: "source-opaque-1",
+  displayName: "2026 青年出隊",
+  aliases: ["青年出隊"],
+  topics: ["第一天", "集合時間"],
+  sampleQueries: ["第一天去哪裡"]
+};
+
+interface ExpectedProposal {
+  status?: "proposed" | "no_plan";
+  disposition?: AgentPlanDisposition;
+  capability?: FunctionName;
+}
+
+interface ExpectedFinal {
+  disposition: ValidatedAgentPlan["disposition"];
+  capability?: FunctionName;
+  reasonCode?: ValidatedAgentPlan["reasonCode"];
+  absentArgumentKeys?: string[];
+}
+
+export interface AgentPlannerEvalCase {
+  name: string;
+  text: string;
+  enabledFunctions: FunctionName[];
+  proposal: AgentPlanProposalInput;
+  expectedCandidates: FunctionName[];
+  expectedProposal: ExpectedProposal;
+  expectedFinal: ExpectedFinal;
+  activeTask?: ActiveTaskContext;
+  knowledgeSources?: KnowledgeSourceMetadata[];
+  retrievalEvidence?: FunctionName[];
+}
+
+function proposed(
+  disposition: AgentPlanDisposition,
+  capability: FunctionName | undefined,
+  argumentsValue: Record<string, unknown>,
+  confidence = 0.96
+): AgentPlanProposalInput {
+  return {
+    status: "proposed",
+    disposition,
+    ...(capability ? { capability } : {}),
+    arguments: argumentsValue,
+    confidence
+  };
+}
+
+function noPlan(): AgentPlanProposalInput {
+  return { status: "no_plan", reasonCode: "no_candidates" };
+}
+
+export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
+  {
+    name: "acceptance-1-focused-schedule-role",
+    text: "幫我查下一場聚會服事的導播",
+    enabledFunctions: ["query_schedule"],
+    proposal: proposed("execute", "query_schedule", {
+      query: "幫我查下一場聚會服事的導播",
+      dateIntent: "next_meeting",
+      role: "導播"
+    }),
+    expectedCandidates: ["query_schedule"],
+    expectedProposal: { disposition: "execute", capability: "query_schedule" },
+    expectedFinal: { disposition: "execute", capability: "query_schedule" }
+  },
+  {
+    name: "acceptance-2-bare-role-follow-up",
+    text: "前攝影",
+    enabledFunctions: ["query_schedule"],
+    activeTask: scheduleTask,
+    proposal: proposed("continue", "query_schedule", { query: "前攝影", role: "前攝影" }),
+    expectedCandidates: ["query_schedule"],
+    expectedProposal: { disposition: "continue", capability: "query_schedule" },
+    expectedFinal: {
+      disposition: "execute",
+      capability: "query_schedule",
+      reasonCode: "active_task_refinement"
+    }
+  },
+  {
+    name: "acceptance-3-ambiguous-role-follow-up",
+    text: "攝影是誰",
+    enabledFunctions: ["query_schedule"],
+    activeTask: scheduleTask,
+    proposal: proposed("refine", "query_schedule", { query: "攝影是誰", role: "攝影" }),
+    expectedCandidates: ["query_schedule"],
+    expectedProposal: { disposition: "refine", capability: "query_schedule" },
+    expectedFinal: {
+      disposition: "clarify",
+      capability: "query_schedule",
+      reasonCode: "ambiguous_entity"
+    }
+  },
+  {
+    name: "acceptance-4-explicit-now-query-does-not-advance",
+    text: "下一場服事表的前攝影是誰",
+    enabledFunctions: ["query_schedule"],
+    activeTask: scheduleTask,
+    proposal: proposed("execute", "query_schedule", {
+      query: "下一場服事表的前攝影是誰",
+      dateIntent: "next_meeting",
+      role: "前攝影"
+    }),
+    expectedCandidates: ["query_schedule"],
+    expectedProposal: { disposition: "execute", capability: "query_schedule" },
+    expectedFinal: {
+      disposition: "execute",
+      capability: "query_schedule",
+      reasonCode: "explicit_intent"
+    }
+  },
+  {
+    name: "acceptance-5-dynamic-knowledge-title",
+    text: "第一天去哪裡",
+    enabledFunctions: ["query_knowledge"],
+    knowledgeSources: [retreatMetadata],
+    proposal: proposed("execute", "query_knowledge", { query: "第一天去哪裡" }),
+    expectedCandidates: ["query_knowledge"],
+    expectedProposal: { disposition: "execute", capability: "query_knowledge" },
+    expectedFinal: { disposition: "execute", capability: "query_knowledge" }
+  },
+  {
+    name: "acceptance-6-elliptical-knowledge-follow-up",
+    text: "那幾點集合",
+    enabledFunctions: ["query_knowledge"],
+    activeTask: knowledgeTask,
+    proposal: proposed("continue", "query_knowledge", { query: "那幾點集合" }),
+    expectedCandidates: ["query_knowledge"],
+    expectedProposal: { disposition: "continue", capability: "query_knowledge" },
+    expectedFinal: {
+      disposition: "execute",
+      capability: "query_knowledge",
+      reasonCode: "active_task_refinement"
+    }
+  },
+  {
+    name: "acceptance-7-explicit-cross-function-switch",
+    text: "那主日音控呢",
+    enabledFunctions: ["query_knowledge", "query_schedule"],
+    activeTask: knowledgeTask,
+    proposal: proposed("switch", "query_schedule", {
+      query: "那主日音控呢",
+      meeting: "主日",
+      role: "音控"
+    }),
+    expectedCandidates: ["query_schedule"],
+    expectedProposal: { disposition: "switch", capability: "query_schedule" },
+    expectedFinal: {
+      disposition: "execute",
+      capability: "query_schedule",
+      reasonCode: "explicit_capability_switch"
+    }
+  },
+  {
+    name: "acceptance-8-small-talk-with-active-task",
+    text: "最近好累",
+    enabledFunctions: ["query_knowledge", "query_schedule"],
+    activeTask: knowledgeTask,
+    proposal: noPlan(),
+    expectedCandidates: [],
+    expectedProposal: { status: "no_plan" },
+    expectedFinal: { disposition: "chat", reasonCode: "no_capability_evidence" }
+  },
+  {
+    name: "acceptance-9-requester-isolation-no-inherited-task",
+    text: "前攝影",
+    enabledFunctions: ["query_schedule"],
+    proposal: noPlan(),
+    expectedCandidates: [],
+    expectedProposal: { status: "no_plan" },
+    expectedFinal: { disposition: "chat", reasonCode: "no_capability_evidence" }
+  },
+  {
+    name: "acceptance-10-expired-task-unavailable",
+    text: "第一天去哪裡",
+    enabledFunctions: ["query_knowledge"],
+    activeTask: expiredKnowledgeTask,
+    proposal: proposed("continue", "query_knowledge", { query: "第一天去哪裡" }),
+    expectedCandidates: ["query_knowledge"],
+    expectedProposal: { disposition: "continue", capability: "query_knowledge" },
+    expectedFinal: {
+      disposition: "clarify",
+      capability: "query_knowledge",
+      reasonCode: "active_task_unavailable"
+    }
+  },
+  {
+    name: "acceptance-11-model-cannot-inject-date",
+    text: "查主日服事的音控",
+    enabledFunctions: ["query_schedule"],
+    proposal: proposed("execute", "query_schedule", {
+      query: "查主日服事的音控",
+      meeting: "主日",
+      role: "音控",
+      specificDate: "2026-07-21"
+    }),
+    expectedCandidates: ["query_schedule"],
+    expectedProposal: { disposition: "execute", capability: "query_schedule" },
+    expectedFinal: {
+      disposition: "execute",
+      capability: "query_schedule",
+      absentArgumentKeys: ["specificDate"]
+    }
+  },
+  {
+    name: "negative-no-capability",
+    text: "你好",
+    enabledFunctions: ["query_schedule", "query_knowledge"],
+    proposal: noPlan(),
+    expectedCandidates: [],
+    expectedProposal: { status: "no_plan" },
+    expectedFinal: { disposition: "chat" }
+  },
+  {
+    name: "disabled-capability",
+    text: "查主日服事",
+    enabledFunctions: [],
+    proposal: noPlan(),
+    expectedCandidates: [],
+    expectedProposal: { status: "no_plan" },
+    expectedFinal: { disposition: "chat" }
+  },
+  {
+    name: "ambiguous-active-entity",
+    text: "攝影是誰",
+    enabledFunctions: ["query_schedule"],
+    activeTask: scheduleTask,
+    proposal: proposed("refine", "query_schedule", { query: "攝影是誰", role: "攝影" }),
+    expectedCandidates: ["query_schedule"],
+    expectedProposal: { disposition: "refine", capability: "query_schedule" },
+    expectedFinal: { disposition: "clarify", reasonCode: "ambiguous_entity" }
+  },
+  {
+    name: "cross-function-switch",
+    text: "那主日音控呢",
+    enabledFunctions: ["query_knowledge", "query_schedule"],
+    activeTask: knowledgeTask,
+    proposal: proposed("switch", "query_schedule", {
+      query: "那主日音控呢",
+      meeting: "主日",
+      role: "音控"
+    }),
+    expectedCandidates: ["query_schedule"],
+    expectedProposal: { disposition: "switch", capability: "query_schedule" },
+    expectedFinal: { disposition: "execute", capability: "query_schedule" }
+  }
+];
+
+export interface AgentPlannerEvalReport {
+  total: number;
+  proposalPassed: number;
+  validatedPassed: number;
+  proposalFailures: string[];
+  validatedFailures: string[];
+}
+
+export async function runOfflineAgentPlannerEval(): Promise<AgentPlannerEvalReport> {
+  return evaluateAgentPlannerCases(async (entry) => entry.proposal);
+}
+
+export async function evaluateAgentPlannerCases(
+  propose: (
+    entry: AgentPlannerEvalCase,
+    candidates: ReturnType<typeof buildCapabilityCandidates>
+  ) => Promise<AgentPlanProposalInput>
+): Promise<AgentPlannerEvalReport> {
+  const proposalFailures: string[] = [];
+  const validatedFailures: string[] = [];
+  for (const entry of AGENT_PLANNER_EVAL_CASES) {
+    const candidates = buildCapabilityCandidates({
+      text: entry.text,
+      enabledFunctions: entry.enabledFunctions,
+      activeTask: entry.activeTask,
+      knowledgeSources: entry.knowledgeSources ?? [],
+      retrievalEvidence: entry.retrievalEvidence,
+      maxCandidates: 3,
+      source: "group"
+    });
+    if (
+      !sameValues(
+        candidates.map(({ capability }) => capability),
+        entry.expectedCandidates
+      )
+    ) {
+      validatedFailures.push(
+        `${entry.name}:candidate_set:${candidates.map(({ capability }) => capability).join(",")}`
+      );
+      continue;
+    }
+    const proposal = await propose(entry, candidates);
+    if (!matchesProposal(proposal, entry.expectedProposal)) {
+      proposalFailures.push(`${entry.name}:proposal`);
+    }
+    const finalPlan = validateAgentPlan({
+      text: entry.text,
+      enabledFunctions: entry.enabledFunctions,
+      candidates,
+      proposal,
+      activeTask: entry.activeTask,
+      minConfidence: 0.65,
+      sourceType: "group",
+      now: NOW
+    });
+    if (!matchesFinal(finalPlan, entry.expectedFinal)) {
+      validatedFailures.push(`${entry.name}:validated_plan`);
+    }
+  }
+  return {
+    total: AGENT_PLANNER_EVAL_CASES.length,
+    proposalPassed: AGENT_PLANNER_EVAL_CASES.length - proposalFailures.length,
+    validatedPassed: AGENT_PLANNER_EVAL_CASES.length - validatedFailures.length,
+    proposalFailures,
+    validatedFailures
+  };
+}
+
+function matchesProposal(proposal: AgentPlanProposalInput, expected: ExpectedProposal): boolean {
+  if (expected.status === "no_plan") return proposal.status === "no_plan";
+  if (proposal.status === "no_plan") return false;
+  return (
+    (!expected.disposition || proposal.disposition === expected.disposition) &&
+    (!expected.capability || proposal.capability === expected.capability)
+  );
+}
+
+function matchesFinal(plan: ValidatedAgentPlan, expected: ExpectedFinal): boolean {
+  if (plan.disposition !== expected.disposition) return false;
+  if (expected.capability && !("capability" in plan && plan.capability === expected.capability)) {
+    return false;
+  }
+  if (expected.reasonCode && plan.reasonCode !== expected.reasonCode) return false;
+  if (expected.absentArgumentKeys && plan.disposition === "execute") {
+    return expected.absentArgumentKeys.every((key) => !(key in plan.arguments));
+  }
+  return true;
+}
+
+function sameValues(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+async function main(): Promise<void> {
+  const report = await runOfflineAgentPlannerEval();
+  if (report.proposalFailures.length > 0 || report.validatedFailures.length > 0) {
+    console.error(
+      `Agent planner eval failed: proposal ${report.proposalPassed}/${report.total}, validated ${report.validatedPassed}/${report.total}`
+    );
+    for (const failure of [...report.proposalFailures, ...report.validatedFailures]) {
+      console.error(`- ${failure}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+  console.log(
+    `Agent planner eval passed: proposal ${report.proposalPassed}/${report.total}, validated ${report.validatedPassed}/${report.total}`
+  );
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

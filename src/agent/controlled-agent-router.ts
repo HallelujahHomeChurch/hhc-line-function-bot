@@ -8,6 +8,7 @@ import {
 } from "./capability-candidates.js";
 import type { AgentPlanner } from "./planner.js";
 import { validateAgentPlan, type ValidatedAgentPlan } from "./plan-validator.js";
+import type { AgentTurnTraceStep, AgentValidatorReason } from "./trace-store.js";
 
 export interface DynamicKnowledgeMetadataProvider {
   list(profileName: string, limit: number): Promise<readonly KnowledgeSourceMetadata[]>;
@@ -32,7 +33,10 @@ export interface ControlledAgentRouterInput {
 }
 
 export interface ControlledAgentRouter {
-  resolve(input: ControlledAgentRouterInput): Promise<ValidatedAgentPlan>;
+  resolve(
+    input: ControlledAgentRouterInput,
+    observe?: (step: AgentTurnTraceStep) => void
+  ): Promise<ValidatedAgentPlan>;
 }
 
 export function createControlledAgentRouter(options: {
@@ -44,7 +48,7 @@ export function createControlledAgentRouter(options: {
   const now = options.now ?? (() => new Date());
 
   return {
-    async resolve(input): Promise<ValidatedAgentPlan> {
+    async resolve(input, observe): Promise<ValidatedAgentPlan> {
       const source = allowedSource(input.sourceType);
       if (!source) {
         return { disposition: "deny", reasonCode: "source_not_allowed" };
@@ -68,14 +72,20 @@ export function createControlledAgentRouter(options: {
         maxCandidates: input.maxCandidates,
         source
       });
+      emitDiagnostic(observe, {
+        phase: "capability_candidates",
+        candidates: candidates.map(({ capability }) => capability),
+        candidateCount: candidates.length
+      });
       const proposal = await proposeOrNoPlan(options.planner, {
         profileName: input.profileName,
         text: input.text,
         candidates,
         activeTask: input.activeTask
       });
+      emitDiagnostic(observe, plannerTraceStep(proposal));
 
-      return validateAgentPlan({
+      const plan = validateAgentPlan({
         text: input.text,
         enabledFunctions: input.enabledFunctions,
         candidates,
@@ -85,8 +95,52 @@ export function createControlledAgentRouter(options: {
         sourceType: source,
         now: now()
       });
+      emitDiagnostic(observe, {
+        phase: "plan_validation",
+        outcome: "accepted",
+        action:
+          plan.disposition === "execute" || plan.disposition === "clarify"
+            ? plan.capability
+            : undefined,
+        disposition: plan.disposition,
+        validatorReason: plan.reasonCode as AgentValidatorReason
+      });
+      return plan;
     }
   };
+}
+
+function emitDiagnostic(
+  observe: ((step: AgentTurnTraceStep) => void) | undefined,
+  step: AgentTurnTraceStep
+): void {
+  try {
+    observe?.(step);
+  } catch {
+    // Diagnostics are best-effort and never change routing authority.
+  }
+}
+
+function plannerTraceStep(proposal: AgentPlannerResult): AgentTurnTraceStep {
+  if (proposal.status === "no_plan") {
+    return {
+      phase: "planner",
+      outcome: "no_plan",
+      provider: proposal.attempts.at(-1)?.provider
+    };
+  }
+  return {
+    phase: "planner",
+    outcome: "proposed",
+    provider: proposal.provider,
+    disposition: proposal.disposition,
+    confidenceBucket: confidenceBucket(proposal.confidence)
+  };
+}
+
+function confidenceBucket(confidence: number): "low" | "medium" | "high" {
+  if (confidence < 0.5) return "low";
+  return confidence < 0.8 ? "medium" : "high";
 }
 
 async function readRetrievalEvidence(
