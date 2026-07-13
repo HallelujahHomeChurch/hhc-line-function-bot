@@ -186,8 +186,9 @@ To add or change a user function:
    intents/hints, operations, entity types, refinable fields, ambiguity policy,
    and field-local active-evidence rules. Add a bounded read-only evidence
    provider only when metadata alone cannot establish a candidate.
-4. Add argument schema, normalization, and any source-specific adapter. Keep
-   domain parsing out of the generic planner and turn runtime.
+4. Add argument schema and normalization. Add a source-technology adapter only
+   when integrating a genuinely new storage/API format; keep that adapter behind
+   the existing product capability and out of the generic planner/turn runtime.
 5. Add a module in `src/functions/modules.ts` with router eval cases.
 6. Register the handler in `src/functions/registry.ts`.
 7. Return a structured `agentResult` from read outcomes. A success envelope may
@@ -300,9 +301,14 @@ preserves a later staged permanent (`NULL`) expiry across restarts.
 Schedule sources follow the same adapter boundary. The Notion roster adapter
 and structured text schedule store normalize their input into one schedule-item
 model before query refinement, preserving distinct role assignments instead of
-asking the planner to understand source formatting. Future knowledge domains
-should add an adapter, declarative capability, and structured result—not a new
-top-level travel/SOP branch.
+asking the planner to understand source formatting. Administrator-added
+knowledge is different: every topic or content domain—including a trip, SOP,
+policy, ministry material, or future church knowledge—reuses the existing
+dynamic-source metadata, `query_knowledge`, and its structured result. A new
+storage/API technology may require a source adapter behind that same capability;
+it does not justify a per-domain function. Add a new capability contract only
+for genuinely separate product behavior with a different interaction or data
+contract.
 
 Agent traces are allowlist-sanitized by construction. They contain phase,
 bounded capability names/count, provider/disposition/confidence bucket,
@@ -425,8 +431,10 @@ contract. Router-provided arguments remain useful LLM evidence, while the
 schedule adapter deterministically fills recognizable date, meeting, role,
 schedule-type, and source-category values. Terms consumed by those structured
 values are removed before the remaining text reaches in-memory or PostgreSQL
-search. Future query functions should add their own domain adapter; the generic
-router must not accumulate function-specific residual-query rules.
+search. A genuinely separate future query behavior may add its own refinement
+adapter and capability contract, but arbitrary knowledge topics remain inside
+`query_knowledge`. The generic router must not accumulate function-specific
+residual-query rules.
 
 LINE attachment handling is gated before storage. If a profile explicitly allows
 `image` or `file` messages and the requester has effective `save_resource`
