@@ -159,6 +159,9 @@ describe("function router", () => {
   it("rejects negated and empty write requests before function execution", async () => {
     for (const testCase of [
       { text: "不要保存 7/14 晨更", arguments: { content: "7/14 晨更" } },
+      { text: "不要幫我刪除 7/14 晨更", arguments: { content: "7/14 晨更" } },
+      { text: "不要替我再修改 7/14 晨更", arguments: { content: "7/14 晨更" } },
+      { text: "先別把昨天資料刪除 7/14 晨更", arguments: { content: "7/14 晨更" } },
       { text: "幫我保存", arguments: {} }
     ]) {
       const router = createFunctionRouter({
@@ -176,6 +179,23 @@ describe("function router", () => {
         })
       ).resolves.toMatchObject({ type: "deny", reason: "write_evidence_missing" });
     }
+  });
+
+  it("does not ground a write target from a separate negated clause", async () => {
+    const router = createFunctionRouter({
+      primary: provider(JSON.stringify({ action: "save_memory", arguments: { content: "舊的" } })),
+      keywordFallback: createKeywordFallbackRouter(),
+      keywordFallbackEnabled: true
+    });
+
+    await expect(
+      router.route({
+        profileName: "helper",
+        text: "不要刪除舊的，請刪除新的",
+        enabledFunctions: ["save_memory"],
+        source: { type: "user", userId: "U1" }
+      })
+    ).resolves.toMatchObject({ type: "deny", reason: "write_evidence_missing" });
   });
 
   it("rejects programming help even when the model mistakes it for small talk", async () => {

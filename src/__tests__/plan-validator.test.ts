@@ -268,6 +268,28 @@ describe("deterministic agent plan validation", () => {
     expect(result).not.toHaveProperty("arguments.role");
   });
 
+  it("does not let an explicit role A mention inherit a stored role B anchor", () => {
+    const result = validateAgentPlan(
+      input({
+        text: "前攝影",
+        candidates: [{ capability: "query_schedule", reason: "active_task_entity", score: 300 }],
+        proposal: {
+          disposition: "execute",
+          capability: "query_schedule",
+          arguments: { role: "後攝影" },
+          confidence: 0.95
+        },
+        activeTask: {
+          ...scheduleTask,
+          anchors: { ...scheduleTask.anchors, role: "後攝影" }
+        }
+      })
+    );
+
+    expect(result).toMatchObject({ disposition: "execute", capability: "query_schedule" });
+    expect(result).not.toHaveProperty("arguments.role");
+  });
+
   it("does not let a matched meeting entity ground the role field", () => {
     const result = validateAgentPlan(
       input({
@@ -339,6 +361,50 @@ describe("deterministic agent plan validation", () => {
       reasonCode: "active_task_refinement"
     });
   });
+
+  it("strips a model-invented year when current text contains only month and day", () => {
+    const result = validateAgentPlan(
+      input({
+        text: "查服事 7/14",
+        proposal: {
+          disposition: "execute",
+          capability: "query_schedule",
+          arguments: { query: "7/14", specificDate: "2027-07-14" },
+          confidence: 0.95
+        }
+      })
+    );
+
+    expect(result).toMatchObject({
+      disposition: "execute",
+      capability: "query_schedule",
+      arguments: { query: "7/14" }
+    });
+    expect(result).not.toHaveProperty("arguments.specificDate");
+  });
+
+  it.each(["2027-07-14", "2027/7/14", "2027年7月14日"])(
+    "accepts a full date when the year is explicit in %s",
+    (dateText) => {
+      expect(
+        validateAgentPlan(
+          input({
+            text: `查服事 ${dateText}`,
+            proposal: {
+              disposition: "execute",
+              capability: "query_schedule",
+              arguments: { query: dateText, specificDate: "2027-07-14" },
+              confidence: 0.95
+            }
+          })
+        )
+      ).toMatchObject({
+        disposition: "execute",
+        capability: "query_schedule",
+        arguments: { specificDate: "2027-07-14" }
+      });
+    }
+  );
 
   it("inherits knowledge source and document values only from their declared keys", () => {
     expect(

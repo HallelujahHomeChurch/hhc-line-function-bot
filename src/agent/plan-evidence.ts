@@ -62,8 +62,11 @@ export function hasCurrentTextEvidence(text: string, value: unknown): boolean {
   if (typeof value !== "string" || !value.trim()) return false;
 
   const normalizedValue = value.normalize("NFKC").trim().toLocaleLowerCase("zh-TW");
-  const date = normalizedValue.match(/^\d{4}-(\d{2})-(\d{2})$/u);
-  if (date && numericDatePattern(Number(date[1]), Number(date[2])).test(normalizeText(text))) {
+  const date = normalizedValue.match(/^(\d{4})-(\d{2})-(\d{2})$/u);
+  if (
+    date &&
+    fullDatePattern(Number(date[1]), Number(date[2]), Number(date[3])).test(normalizeText(text))
+  ) {
     return true;
   }
   const relativeTerms = RELATIVE_VALUE_EVIDENCE[normalizedValue] ?? [];
@@ -123,52 +126,32 @@ function groundValue(
 
   const rule = input.rules?.[key];
   if (input.activeAuthority && input.activeTask && rule) {
-    const entityGrounding = groundFromEntity(input.text, value, rule, input.activeTask);
-    if (entityGrounding.ambiguous || entityGrounding.value !== undefined) {
-      return entityGrounding;
+    const entityMatches = matchingRuleEntities(input.text, rule, input.activeTask);
+    if (entityMatches.length > 1) return { ambiguous: true };
+    if (entityMatches.length === 1) {
+      return entityMatchesValue(entityMatches[0], value)
+        ? { value, ambiguous: false }
+        : { ambiguous: false };
     }
     if (groundFromDeclaredStorage(value, rule, input.activeTask)) {
       return { value, ambiguous: false };
     }
-    if (
-      matchesRuleEntity(input.text, rule, input.activeTask) &&
-      hasCurrentTextEvidence(input.text, value)
-    ) {
-      return { value, ambiguous: false };
-    }
-    if (matchesAnyTaskEntity(input.text, input.activeTask)) {
-      return { ambiguous: false };
-    }
+    if (matchesAnyTaskEntity(input.text, input.activeTask)) return { ambiguous: false };
   }
 
   if (hasCurrentTextEvidence(input.text, value)) return { value, ambiguous: false };
-  if (
-    input.activeAuthority &&
-    input.activeTask &&
-    rule &&
-    groundFromDeclaredStorage(value, rule, input.activeTask)
-  ) {
-    return { value, ambiguous: false };
-  }
   return { ambiguous: false };
 }
 
-function groundFromEntity(
+function matchingRuleEntities(
   text: string,
-  value: string | number | boolean,
   rule: AgentActiveEvidenceRule,
   activeTask: ActiveTaskContext
-): { value?: unknown; ambiguous: boolean } {
+): AgentEntity[] {
   const allowedTypes = new Set(rule.entityTypes ?? []);
-  if (allowedTypes.size === 0) return { ambiguous: false };
-  const matches = activeTask.entities.filter(
+  return activeTask.entities.filter(
     (entity) => allowedTypes.has(entity.type) && entityHasTextEvidence(text, entity)
   );
-  if (matches.length > 1) return { ambiguous: true };
-  if (matches.length === 1 && entityContainsValue(matches[0], value)) {
-    return { value, ambiguous: false };
-  }
-  return { ambiguous: false };
 }
 
 function groundFromDeclaredStorage(
@@ -179,17 +162,6 @@ function groundFromDeclaredStorage(
   return (
     (rule.anchorKeys ?? []).some((key) => valuesEqual(activeTask.anchors[key], value)) ||
     (rule.referenceKeys ?? []).some((key) => valuesEqual(activeTask.references?.[key], value))
-  );
-}
-
-function matchesRuleEntity(
-  text: string,
-  rule: AgentActiveEvidenceRule,
-  activeTask: ActiveTaskContext
-): boolean {
-  const allowedTypes = new Set(rule.entityTypes ?? []);
-  return activeTask.entities.some(
-    (entity) => allowedTypes.has(entity.type) && entityHasTextEvidence(text, entity)
   );
 }
 
@@ -207,6 +179,15 @@ function entityContainsValue(entity: AgentEntity, value: unknown): boolean {
   if (typeof value !== "string") return false;
   return [entity.key, entity.label, ...(entity.aliases ?? [])].some(
     (term) => normalizeComparable(term) === normalizeComparable(value)
+  );
+}
+
+function entityMatchesValue(entity: AgentEntity, value: string | number | boolean): boolean {
+  return (
+    entityContainsValue(entity, value) ||
+    [entity.key, entity.label, ...(entity.aliases ?? [])].some((term) =>
+      hasCurrentTextEvidence(term, value)
+    )
   );
 }
 
@@ -247,8 +228,11 @@ function numericTokenPattern(value: string): RegExp {
   return new RegExp(`(?:^|[^0-9])${escapeRegExp(value)}(?:$|[^0-9])`, "u");
 }
 
-function numericDatePattern(month: number, day: number): RegExp {
-  return new RegExp(`(?:^|[^0-9])0?${month}[/-]0?${day}(?:$|[^0-9])`, "u");
+function fullDatePattern(year: number, month: number, day: number): RegExp {
+  return new RegExp(
+    `(?:^|[^0-9])${year}(?:[-/]0?${month}[-/]0?${day}|年0?${month}月0?${day}日)(?:$|[^0-9])`,
+    "u"
+  );
 }
 
 function escapeRegExp(value: string): string {

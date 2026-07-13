@@ -62,20 +62,26 @@ export function hasExplicitWriteEvidence(text: string, args: JsonRecord): boolea
   const normalized = text.normalize("NFKC");
   const evidence = writeEvidenceStrings(args);
   return (
-    hasUnnegatedWriteAction(normalized) &&
     evidence.length > 0 &&
-    evidence.every((value) => stringHasEvidence(normalized, value))
+    normalized
+      .split(writeClauseSeparatorPattern)
+      .some(
+        (clause) =>
+          hasUnnegatedWriteAction(clause) &&
+          evidence.every((value) => stringHasEvidence(clause, value))
+      )
   );
 }
 
 const writeActionPattern = /記住|保存|儲存|新增|修改|改|刪除|移除/gu;
-const negatedActionPrefixPattern = /(?:不要|不用|不必|先不要|先別|別|不)(?:再)?$/u;
+const writeClauseSeparatorPattern = /[,，。.!！?？;；:：\r\n]+/u;
+const writeNegationPattern = /不要|不用|不必|先別|別|不/u;
 
 function hasUnnegatedWriteAction(text: string): boolean {
-  const normalized = text.replace(/[\p{P}\p{S}\s]+/gu, "");
-  for (const match of normalized.matchAll(writeActionPattern)) {
-    const prefix = normalized.slice(Math.max(0, match.index - 5), match.index);
-    if (!negatedActionPrefixPattern.test(prefix)) return true;
+  const normalizedClause = text.replace(/[\p{P}\p{S}\s]+/gu, "");
+  for (const match of normalizedClause.matchAll(writeActionPattern)) {
+    const prefix = normalizedClause.slice(0, match.index);
+    if (!writeNegationPattern.test(prefix)) return true;
   }
   return false;
 }

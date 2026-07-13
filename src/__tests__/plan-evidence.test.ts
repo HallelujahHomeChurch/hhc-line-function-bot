@@ -18,8 +18,10 @@ describe("plan evidence scalar grounding", () => {
     expect(hasCurrentTextEvidence("find score PDF", "score")).toBe(true);
   });
 
-  it("accepts only explicitly present deterministic date normalizations", () => {
-    expect(hasCurrentTextEvidence("查 7/14 服事", "2026-07-14")).toBe(true);
+  it("requires explicit year evidence for a proposed full date", () => {
+    expect(hasCurrentTextEvidence("查 7/14 服事", "2026-07-14")).toBe(false);
+    expect(hasCurrentTextEvidence("查 2026/7/14 服事", "2026-07-14")).toBe(true);
+    expect(hasCurrentTextEvidence("查 2026年7月14日服事", "2026-07-14")).toBe(true);
     expect(hasCurrentTextEvidence("查明天服事", "tomorrow")).toBe(true);
     expect(hasCurrentTextEvidence("查今天服事", "tomorrow")).toBe(false);
   });

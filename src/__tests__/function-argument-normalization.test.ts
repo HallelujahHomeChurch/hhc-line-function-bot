@@ -200,12 +200,21 @@ describe("function argument normalization", () => {
     ).toMatchObject({ content: "" });
   });
 
-  it.each(["不要刪除 7/14 晨更", "不要保存 7/14 晨更", "先別修改 7/14 晨更"])(
-    "does not treat a negated write as positive evidence: %s",
-    (text) => {
-      expect(hasExplicitWriteEvidence(text, { content: "7/14 晨更" })).toBe(false);
-    }
-  );
+  it.each([
+    "不要刪除 7/14 晨更",
+    "不要保存 7/14 晨更",
+    "先別修改 7/14 晨更",
+    "不要幫我刪除 7/14 晨更",
+    "不要替我再修改 7/14 晨更",
+    "先別把昨天資料刪除 7/14 晨更"
+  ])("does not treat a negated write as positive evidence: %s", (text) => {
+    expect(hasExplicitWriteEvidence(text, { content: "7/14 晨更" })).toBe(false);
+  });
+
+  it("allows a later positive clause to authorize its grounded write target", () => {
+    expect(hasExplicitWriteEvidence("不要刪除舊的，請刪除新的", { content: "新的" })).toBe(true);
+    expect(hasExplicitWriteEvidence("不要刪除舊的，請刪除新的", { content: "舊的" })).toBe(false);
+  });
 
   it("does not authorize writes from an empty or entirely non-evidence argument set", () => {
     expect(hasExplicitWriteEvidence("幫我保存", {})).toBe(false);
