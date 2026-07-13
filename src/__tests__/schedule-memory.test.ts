@@ -180,6 +180,61 @@ describe("schedule memory", () => {
     expect(morningPrayer.replyText).not.toContain("黃弘家族");
   });
 
+  it("keeps continuation queries inside the canonical saved schedule", async () => {
+    const now = () => new Date("2026-07-09T00:00:00.000Z");
+    const store = new InMemoryAgentMemoryStore({ now });
+    const july = await store.saveScheduleMemory({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      scheduleType: "morning_prayer_family",
+      periodKey: "2026-07",
+      title: "七月晨更",
+      originalText: "7/17五世緯家園",
+      entries: [
+        {
+          serviceDate: "2026-07-17",
+          meetingName: "晨更",
+          role: "帶領家族",
+          assignee: "世緯家園"
+        }
+      ]
+    });
+    await store.saveScheduleMemory({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      scheduleType: "morning_prayer_family",
+      periodKey: "2026-08",
+      title: "八月晨更",
+      originalText: "8/1新婦家族",
+      entries: [
+        {
+          serviceDate: "2026-08-01",
+          meetingName: "晨更",
+          role: "帶領家族",
+          assignee: "新婦家族"
+        }
+      ]
+    });
+    const query = createQueryScheduleMemoryHandler({ memoryStore: store, now });
+
+    const result = await query(
+      { query: "晨更", scheduleType: "morning_prayer_family", dateIntent: "upcoming" },
+      {
+        ...context("晨更"),
+        continuation: {
+          functionName: "query_schedule",
+          arguments: { scheduleType: "morning_prayer_family" },
+          resultReferences: { kind: "schedule_memory", memoryId: july.id },
+          createdAt: "2026-07-09T00:00:00.000Z",
+          expiresAt: "2026-07-09T00:01:00.000Z"
+        }
+      }
+    );
+
+    expect(result.replyText).toContain("世緯家園");
+    expect(result.replyText).not.toContain("新婦家族");
+  });
+
   it("keeps saved schedules for one year", async () => {
     const store = new InMemoryAgentMemoryStore({
       now: () => new Date("2026-07-10T00:00:00.000Z")

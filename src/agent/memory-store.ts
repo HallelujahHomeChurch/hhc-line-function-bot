@@ -157,6 +157,7 @@ export interface SearchAgentScheduleEntriesInput {
   profileName: string;
   source: LineSource;
   requesterUserId?: string;
+  memoryId?: string;
   scheduleType?: AgentScheduleType;
   date?: string;
   meetingName?: string;
@@ -487,6 +488,7 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
           record.profileName === input.profileName &&
           record.scope.type === "profile" &&
           this.active(record) &&
+          (!input.memoryId || record.memoryId === input.memoryId) &&
           (!input.scheduleType || record.scheduleType === input.scheduleType) &&
           (!input.date || record.serviceDate === input.date) &&
           (!meetingName || normalizeLookupText(record.meetingName).includes(meetingName)) &&

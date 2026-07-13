@@ -350,6 +350,7 @@ export function createQueryScheduleMemoryHandler(
       profileName: context.profile.name,
       source: context.event.source,
       requesterUserId: context.event.source.userId,
+      memoryId: scheduleMemoryId(context.continuation?.resultReferences),
       scheduleType: inferredType,
       date,
       meetingName: args.meeting,
@@ -358,7 +359,12 @@ export function createQueryScheduleMemoryHandler(
       limit: 50
     });
 
-    entries = applyScheduleDateIntent(entries, args, now()).slice(0, args.limit ?? 10);
+    entries = applyScheduleDateIntent(
+      entries,
+      args,
+      now(),
+      scheduleAdvanceDate(args, context.continuation?.arguments)
+    ).slice(0, args.limit ?? 10);
 
     if (entries.length === 0) {
       return { ok: true, replyText: "我找不到符合的服事記憶。" };
@@ -366,9 +372,42 @@ export function createQueryScheduleMemoryHandler(
 
     return {
       ok: true,
+      continuation: scheduleMemoryContinuation(entries, inferredType, args.role),
       replyText: ["我找到這些服事記憶：", ...entries.map(formatScheduleEntry)].join("\n")
     };
   };
+}
+
+function scheduleMemoryId(references: unknown): string | undefined {
+  if (!references || typeof references !== "object") return undefined;
+  const record = references as Record<string, unknown>;
+  return record.kind === "schedule_memory" && typeof record.memoryId === "string"
+    ? record.memoryId
+    : undefined;
+}
+
+function scheduleMemoryContinuation(
+  entries: AgentScheduleEntryRecord[],
+  scheduleType: AgentScheduleType | undefined,
+  role?: string
+): FunctionExecutionResult["continuation"] | undefined {
+  const memoryIds = unique(entries.map((entry) => entry.memoryId));
+  const dates = unique(entries.map((entry) => entry.serviceDate));
+  const meetings = unique(entries.map((entry) => entry.meetingName));
+  if (memoryIds.length !== 1 || dates.length !== 1 || meetings.length !== 1) return undefined;
+  return {
+    arguments: {
+      date: dates[0],
+      meeting: meetings[0],
+      scheduleType: scheduleType ?? entries[0]?.scheduleType,
+      ...(role ? { role } : {})
+    },
+    resultReferences: { kind: "schedule_memory", memoryId: memoryIds[0] }
+  };
+}
+
+function unique(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
 }
 
 function parseScheduleLine(
@@ -529,7 +568,7 @@ function cleanScheduleMemoryQuery(query: string): string {
     .normalize("NFKC")
     .replace(/小哈/g, " ")
     .replace(
-      /幫我|請|查|找|看|給我|一下|記住的|服事表|服事|下一次|下次|下一場|下場|最近一場|什麼時候|哪時候|何時|晨更|仙履奇緣|為耶穌|舉牌|是/g,
+      /幫我|請|查|找|看|給我|一下|記住的|服事表|服事|下一次|下次|下一場|下場|最近一場|什麼時候|哪時候|何時|晨更|仙履奇緣|為耶穌|舉牌|那|呢|是/g,
       " "
     )
     .replace(/(?:\d{1,2}|[一二三四五六七八九十兩]{1,3})\s*[/／月]\s*\d{1,2}/gu, " ")
@@ -540,12 +579,17 @@ function cleanScheduleMemoryQuery(query: string): string {
 function applyScheduleDateIntent(
   entries: AgentScheduleEntryRecord[],
   args: QueryScheduleMemoryArguments,
-  now: Date
+  now: Date,
+  afterDate?: string
 ): AgentScheduleEntryRecord[] {
   const today = toDateKey(now);
   switch (args.dateIntent) {
     case "next_meeting":
-      return entries.filter((entry) => entry.serviceDate >= today).slice(0, 1);
+      return entries
+        .filter(
+          (entry) => entry.serviceDate >= today && (!afterDate || entry.serviceDate > afterDate)
+        )
+        .slice(0, 1);
     case "upcoming":
       return entries.filter((entry) => entry.serviceDate >= today);
     case "this_week": {
@@ -559,6 +603,23 @@ function applyScheduleDateIntent(
     default:
       return entries;
   }
+}
+
+function scheduleAdvanceDate(
+  args: QueryScheduleMemoryArguments,
+  continuationArguments: unknown
+): string | undefined {
+  if (
+    args.dateIntent !== "next_meeting" ||
+    !/(?:下一場|下場|下一次|下次)/u.test(args.query) ||
+    !continuationArguments ||
+    typeof continuationArguments !== "object"
+  ) {
+    return undefined;
+  }
+  const record = continuationArguments as Record<string, unknown>;
+  const date = typeof record.date === "string" ? record.date : record.specificDate;
+  return typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(date) ? date : undefined;
 }
 
 function isConfirmText(value: string | undefined): boolean {

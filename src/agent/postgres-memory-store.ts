@@ -388,6 +388,10 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
   ): Promise<AgentScheduleEntryRecord[]> {
     const values: unknown[] = [input.profileName, "profile", input.profileName];
     const filters: string[] = [];
+    if (input.memoryId) {
+      values.push(input.memoryId);
+      filters.push(`and m.id = $${values.length}::uuid`);
+    }
     if (input.scheduleType) {
       values.push(input.scheduleType);
       filters.push(`and m.schedule_type = $${values.length}`);

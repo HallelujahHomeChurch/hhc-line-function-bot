@@ -64,6 +64,7 @@ export interface AgentTurnRuntimeOptions {
   textFallbackGenerator?: TextGenerationProvider;
   contextManager?: ContextManager;
   conversationWindowStore?: ConversationWindowStore;
+  timeZone?: string;
   now?: () => Date;
 }
 
@@ -341,6 +342,9 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
       const mergedArguments = mergeFunctionContinuationArguments({
         action: route.action,
         currentArguments: route.arguments,
+        currentText: text,
+        now: now(),
+        timeZone: options.timeZone,
         continuation
       });
       const normalizedArguments = normalizeFunctionArguments(route.action, mergedArguments, {
@@ -438,7 +442,10 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
 
       const functionStartedAt = Date.now();
       try {
-        const result = await handler(normalizedArguments, context);
+        const result = await handler(normalizedArguments, {
+          ...context,
+          continuation: continuation?.functionName === route.action ? continuation : undefined
+        });
         await recordFunctionWriteAudit(
           options.accessStore,
           context,
@@ -456,8 +463,8 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           options.conversationWindowStore,
           input,
           route.action,
-          normalizedArguments,
-          result
+          result,
+          continuation
         );
         const durationMs = elapsedMs(functionStartedAt);
         steps.push({
@@ -747,18 +754,25 @@ async function recordFunctionContinuation(
   store: ConversationWindowStore | undefined,
   input: AgentTextTurnInput,
   functionName: FunctionName,
-  args: JsonRecord,
-  result: FunctionExecutionResult
+  result: FunctionExecutionResult,
+  previous: Awaited<ReturnType<ConversationWindowStore["functionContext"]>>
 ): Promise<void> {
   const ttlMs = (input.profile.generalAgent?.conversationWindowSeconds ?? 0) * 1000;
   const source = sourceKey(input.event.source);
   const requesterUserId = input.event.source.userId;
   if (!store || !result.ok || !ttlMs || !source || !requesterUserId) return;
+  const scope = { profileName: input.profile.name, sourceKey: source, requesterUserId };
+  if (!result.continuation) {
+    if (previous && previous.functionName !== functionName) {
+      await store.clearFunctionContext(scope);
+    }
+    return;
+  }
   await store.recordFunctionContext({
-    scope: { profileName: input.profile.name, sourceKey: source, requesterUserId },
+    scope,
     functionName,
-    arguments: { ...args, ...(result.continuation?.arguments ?? {}) },
-    resultReferences: result.continuation?.resultReferences,
+    arguments: result.continuation.arguments ?? {},
+    resultReferences: result.continuation.resultReferences,
     ttlMs
   });
 }

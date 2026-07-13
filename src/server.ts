@@ -273,7 +273,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
       textGenerator,
       textFallbackGenerator,
       contextManager,
-      conversationWindowStore
+      conversationWindowStore,
+      timeZone: config.timeZone
     });
 
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {

@@ -370,7 +370,7 @@ Knowledge synchronization preserves page hierarchy, tables, lists, properties, a
 
 The model is installed on the existing private Ollama host, not in the ACA image or PostgreSQL. Configure `OLLAMA_EMBEDDING_MODEL=bge-m3`, `EMBEDDING_BATCH_SIZE=16`, `EMBEDDING_TIMEOUT_MS=30000`, and `EMBEDDING_KEEP_ALIVE=1m`; `EMBEDDING_OLLAMA_BASE_URL` is optional and otherwise reuses `OLLAMA_BASE_URL`. PostgreSQL must already have the `vector` extension; the app validates it but never installs extensions.
 
-Requester-scoped continuation state records the last function and sanitized structured arguments. This allows follow-ups such as `那攝影呢` or `第二個呢` without adding schedule- or travel-specific router branches. Group state remains isolated by profile, group, and requester.
+Requester-scoped continuation state records the last function plus the canonical arguments and safe references returned by the successful handler. Schedule follow-ups therefore stay on the exact read-model source or saved schedule that produced the prior answer, while explicit dates and roles override prior filters. `那下一場呢` advances after the returned date instead of repeating it. Knowledge follow-ups search the prior document first and fall back to profile-wide knowledge when that document has no match. Continuation uses an independent absolute 60-second expiry, so small talk does not keep stale function state alive. Group state remains isolated by profile, group, and requester.
 
 ## LINE Attachment Save Gate
 

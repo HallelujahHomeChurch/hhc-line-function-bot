@@ -534,11 +534,20 @@ export interface FunctionExecutionResult {
   };
 }
 
+export interface FunctionContinuationState {
+  functionName: FunctionName;
+  arguments: JsonRecord;
+  resultReferences?: JsonRecord;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface FunctionHandlerContext {
   profile: BotProfileConfig;
   event: LineEvent;
   requestId?: string;
   requesterDisplayName?: string;
+  continuation?: FunctionContinuationState;
 }
 
 export type FunctionHandler = (

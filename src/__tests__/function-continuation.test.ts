@@ -31,9 +31,10 @@ describe("function continuation context", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("preserves structured function state while recording user and assistant turns", async () => {
+  it("does not extend function context when conversation turns refresh", async () => {
+    let current = new Date("2026-07-12T00:00:00Z");
     const store = new InMemoryConversationWindowStore({
-      now: () => new Date("2026-07-12T00:00:00Z")
+      now: () => current
     });
     const scope = { profileName: "helper", sourceKey: "user:U1", requesterUserId: "U1" };
     await store.recordFunctionContext({
@@ -43,25 +44,26 @@ describe("function continuation context", () => {
       ttlMs: 60_000
     });
 
-    await store.recordTurn({ scope, role: "user", text: "下一場影視團隊服事表", ttlMs: 60_000 });
+    current = new Date("2026-07-12T00:00:50Z");
+    await store.recordTurn({ scope, role: "user", text: "最近還好嗎", ttlMs: 60_000 });
     await store.recordTurn({ scope, role: "assistant", text: "7月14日服事表", ttlMs: 60_000 });
 
-    await expect(store.functionContext(scope)).resolves.toEqual(
-      expect.objectContaining({
-        functionName: "query_schedule",
-        arguments: expect.objectContaining({ dateIntent: "next_meeting" })
-      })
-    );
+    current = new Date("2026-07-12T00:01:01Z");
+    await expect(store.functionContext(scope)).resolves.toBeUndefined();
+    await expect(store.isActive(scope)).resolves.toBe(true);
   });
 
-  it("preserves structured function state in Redis-backed windows", async () => {
+  it("stores Redis function context under an independent expiring key", async () => {
     const records = new Map<string, string>();
+    const ttlByKey = new Map<string, number>();
     const store = new RedisConversationWindowStore({
       client: {
         get: async (key) => records.get(key) ?? null,
-        setEx: async (key, _seconds, value) => {
+        setEx: async (key, seconds, value) => {
           records.set(key, value);
-        }
+          ttlByKey.set(key, seconds);
+        },
+        del: async (key) => records.delete(key)
       },
       keyPrefix: "test",
       now: () => new Date("2026-07-12T00:00:00Z")
@@ -76,6 +78,13 @@ describe("function continuation context", () => {
 
     await store.recordTurn({ scope, role: "assistant", text: "7月14日服事表", ttlMs: 60_000 });
 
+    expect(Array.from(records.keys())).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(":conversation-window:"),
+        expect.stringContaining(":function-continuation:")
+      ])
+    );
+    expect(Array.from(ttlByKey.values())).toEqual([60, 60]);
     await expect(store.functionContext(scope)).resolves.toEqual(
       expect.objectContaining({
         functionName: "query_schedule",
@@ -114,6 +123,49 @@ describe("function continuation context", () => {
         }
       })
     ).toEqual({ query: "明天的呢", dateIntent: "tomorrow", role: "音控" });
+  });
+
+  it("extracts an explicit date before carrying prior date arguments", () => {
+    expect(
+      mergeFunctionContinuationArguments({
+        action: "query_schedule",
+        currentArguments: { query: "7/20 的呢" },
+        currentText: "7/20 的呢",
+        now: new Date("2026-07-12T00:00:00Z"),
+        timeZone: "Asia/Taipei",
+        continuation: {
+          functionName: "query_schedule",
+          arguments: { date: "2026-07-14", dateIntent: "specific_date", role: "音控" },
+          createdAt: "2026-07-12T00:00:00Z",
+          expiresAt: "2026-07-12T00:01:00Z"
+        }
+      })
+    ).toEqual(
+      expect.objectContaining({
+        query: "7/20 的呢",
+        dateIntent: "specific_date",
+        specificDate: "2026-07-20",
+        role: "音控"
+      })
+    );
+  });
+
+  it("does not carry a stale role when a short follow-up names a new focus", () => {
+    expect(
+      mergeFunctionContinuationArguments({
+        action: "query_schedule",
+        currentArguments: { query: "導播呢" },
+        currentText: "導播呢",
+        now: new Date("2026-07-12T00:00:00Z"),
+        timeZone: "Asia/Taipei",
+        continuation: {
+          functionName: "query_schedule",
+          arguments: { date: "2026-07-14", role: "音控" },
+          createdAt: "2026-07-12T00:00:00Z",
+          expiresAt: "2026-07-12T00:01:00Z"
+        }
+      })
+    ).toEqual({ query: "導播呢", date: "2026-07-14" });
   });
 
   it("never carries arguments across different functions", () => {

@@ -1,4 +1,4 @@
-import type { FunctionName, JsonRecord } from "../types.js";
+import type { FunctionContinuationState, FunctionName, JsonRecord } from "../types.js";
 
 export interface ConversationWindowScope {
   profileName: string;
@@ -31,28 +31,25 @@ export interface ConversationWindowStore {
     ttlMs: number;
   }): Promise<void>;
   functionContext(scope: ConversationWindowScope): Promise<FunctionContinuationContext | undefined>;
+  clearFunctionContext(scope: ConversationWindowScope): Promise<void>;
 }
 
-export interface FunctionContinuationContext {
-  functionName: FunctionName;
-  arguments: JsonRecord;
-  resultReferences?: JsonRecord;
-  createdAt: string;
-}
+export type FunctionContinuationContext = FunctionContinuationState;
 
 interface ConversationWindowRecord {
   expiresAt: string;
   turns: ConversationWindowTurn[];
-  functionContext?: FunctionContinuationContext;
 }
 
 export interface RedisConversationWindowClient {
   get(key: string): Promise<string | null>;
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
+  del(key: string): Promise<unknown>;
 }
 
 export class InMemoryConversationWindowStore implements ConversationWindowStore {
   private readonly records = new Map<string, ConversationWindowRecord>();
+  private readonly functionContexts = new Map<string, FunctionContinuationContext>();
   private readonly now: () => Date;
 
   constructor(options: { now?: () => Date } = {}) {
@@ -82,8 +79,7 @@ export class InMemoryConversationWindowStore implements ConversationWindowStore 
     ].slice(-8);
     this.records.set(conversationScopeKey(input.scope), {
       expiresAt: new Date(now.getTime() + input.ttlMs).toISOString(),
-      turns,
-      functionContext: existing?.functionContext
+      turns
     });
   }
 
@@ -101,26 +97,33 @@ export class InMemoryConversationWindowStore implements ConversationWindowStore 
     resultReferences?: JsonRecord;
     ttlMs: number;
   }): Promise<void> {
-    const existing = this.liveRecord(input.scope);
     const now = this.now();
-    this.records.set(conversationScopeKey(input.scope), {
-      expiresAt: new Date(now.getTime() + input.ttlMs).toISOString(),
-      turns: existing?.turns ?? [],
-      functionContext: {
-        functionName: input.functionName,
-        arguments: sanitizeContinuationRecord(input.arguments),
-        resultReferences: input.resultReferences
-          ? sanitizeContinuationRecord(input.resultReferences)
-          : undefined,
-        createdAt: now.toISOString()
-      }
+    this.functionContexts.set(conversationScopeKey(input.scope), {
+      functionName: input.functionName,
+      arguments: sanitizeContinuationRecord(input.arguments),
+      resultReferences: input.resultReferences
+        ? sanitizeContinuationRecord(input.resultReferences)
+        : undefined,
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + input.ttlMs).toISOString()
     });
   }
 
   async functionContext(
     scope: ConversationWindowScope
   ): Promise<FunctionContinuationContext | undefined> {
-    return this.liveRecord(scope)?.functionContext;
+    const key = conversationScopeKey(scope);
+    const context = this.functionContexts.get(key);
+    if (!context) return undefined;
+    if (new Date(context.expiresAt).getTime() <= this.now().getTime()) {
+      this.functionContexts.delete(key);
+      return undefined;
+    }
+    return context;
+  }
+
+  async clearFunctionContext(scope: ConversationWindowScope): Promise<void> {
+    this.functionContexts.delete(conversationScopeKey(scope));
   }
 
   private liveRecord(scope: ConversationWindowScope): ConversationWindowRecord | undefined {
@@ -171,8 +174,7 @@ export class RedisConversationWindowStore implements ConversationWindowStore {
           text: compactText(input.text),
           createdAt: now.toISOString()
         }
-      ].slice(-8),
-      functionContext: existing?.functionContext
+      ].slice(-8)
     };
     await this.options.client.setEx(
       this.key(input.scope),
@@ -195,31 +197,34 @@ export class RedisConversationWindowStore implements ConversationWindowStore {
     resultReferences?: JsonRecord;
     ttlMs: number;
   }): Promise<void> {
-    const existing = await this.liveRecord(input.scope);
     const now = this.now();
-    const record: ConversationWindowRecord = {
-      expiresAt: new Date(now.getTime() + input.ttlMs).toISOString(),
-      turns: existing?.turns ?? [],
-      functionContext: {
-        functionName: input.functionName,
-        arguments: sanitizeContinuationRecord(input.arguments),
-        resultReferences: input.resultReferences
-          ? sanitizeContinuationRecord(input.resultReferences)
-          : undefined,
-        createdAt: now.toISOString()
-      }
+    const context: FunctionContinuationContext = {
+      functionName: input.functionName,
+      arguments: sanitizeContinuationRecord(input.arguments),
+      resultReferences: input.resultReferences
+        ? sanitizeContinuationRecord(input.resultReferences)
+        : undefined,
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + input.ttlMs).toISOString()
     };
     await this.options.client.setEx(
-      this.key(input.scope),
+      this.functionContextKey(input.scope),
       Math.max(1, Math.ceil(input.ttlMs / 1000)),
-      JSON.stringify(record)
+      JSON.stringify(context)
     );
   }
 
   async functionContext(
     scope: ConversationWindowScope
   ): Promise<FunctionContinuationContext | undefined> {
-    return (await this.liveRecord(scope))?.functionContext;
+    const raw = await this.options.client.get(this.functionContextKey(scope));
+    if (!raw) return undefined;
+    const context = JSON.parse(raw) as FunctionContinuationContext;
+    return new Date(context.expiresAt).getTime() > this.now().getTime() ? context : undefined;
+  }
+
+  async clearFunctionContext(scope: ConversationWindowScope): Promise<void> {
+    await this.options.client.del(this.functionContextKey(scope));
   }
 
   private async liveRecord(
@@ -235,6 +240,10 @@ export class RedisConversationWindowStore implements ConversationWindowStore {
 
   private key(scope: ConversationWindowScope): string {
     return `${this.options.keyPrefix}:conversation-window:${conversationScopeKey(scope)}`;
+  }
+
+  private functionContextKey(scope: ConversationWindowScope): string {
+    return `${this.options.keyPrefix}:function-continuation:${conversationScopeKey(scope)}`;
   }
 }
 

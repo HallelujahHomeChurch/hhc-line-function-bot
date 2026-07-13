@@ -118,4 +118,82 @@ describe("query_knowledge", () => {
     expect(result.ok).toBe(true);
     expect(result.replyText).toContain("聚會結束後請關閉音控設備");
   });
+
+  it("uses the canonical document first and falls back globally for a new topic", async () => {
+    const store = new InMemoryKnowledgeStore();
+    const trip = await store.upsertSource({
+      profileName: "helper",
+      sourceKey: "trip",
+      displayName: "出遊計畫",
+      adapterType: "notion",
+      externalRootId: "trip-root",
+      rootUrl: "https://example.test/trip",
+      enabled: true
+    });
+    const sop = await store.upsertSource({
+      profileName: "helper",
+      sourceKey: "sop",
+      displayName: "聚會 SOP",
+      adapterType: "notion",
+      externalRootId: "sop-root",
+      rootUrl: "https://example.test/sop",
+      enabled: true
+    });
+    const tripDocument = await store.replaceDocument({
+      sourceId: trip.id,
+      externalId: "trip-doc",
+      title: "出遊計畫",
+      url: "https://example.test/trip-doc",
+      nodes: [],
+      chunks: [{ headingPath: [], ordinal: 0, content: "共同事項是攜帶雨具。", contentHash: "t1" }]
+    });
+    await store.replaceDocument({
+      sourceId: sop.id,
+      externalId: "sop-doc",
+      title: "聚會 SOP",
+      url: "https://example.test/sop-doc",
+      nodes: [],
+      chunks: [
+        {
+          headingPath: [],
+          ordinal: 0,
+          content: "共同事項是關閉門窗。消防設備放在後門。",
+          contentHash: "s1"
+        }
+      ]
+    });
+    const handler = createQueryKnowledgeHandler({ store });
+    const continuation = {
+      functionName: "query_knowledge" as const,
+      arguments: {},
+      resultReferences: { sourceKey: "trip", documentId: tripDocument.id },
+      createdAt: "2026-07-12T00:00:00.000Z",
+      expiresAt: "2026-07-12T00:01:00.000Z"
+    };
+    const handlerContext = {
+      profile,
+      continuation,
+      event: {
+        type: "message" as const,
+        source: { type: "user" as const, userId: "u" },
+        message: { type: "text" as const, text: "共同事項" }
+      }
+    };
+
+    const scoped = await handler({ query: "共同事項" }, handlerContext);
+    const fallback = await handler(
+      { query: "消防設備" },
+      {
+        ...handlerContext,
+        event: { ...handlerContext.event, message: { type: "text", text: "消防設備" } }
+      }
+    );
+
+    expect(scoped.replyText).toContain("攜帶雨具");
+    expect(scoped.replyText).not.toContain("sop-doc");
+    expect(fallback.replyText).toContain("消防設備放在後門");
+    expect(fallback.continuation?.resultReferences).toEqual(
+      expect.objectContaining({ sourceKey: "sop" })
+    );
+  });
 });

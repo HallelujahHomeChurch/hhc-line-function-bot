@@ -27,17 +27,31 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
         queryEmbedding = undefined;
       }
     }
-    const results = await options.store.search({
+    const anchor = knowledgeAnchor(context.continuation);
+    const sourceKey = args.sourceKey ?? anchor?.sourceKey;
+    const documentId = args.documentId ?? anchor?.documentId;
+    let results = await options.store.search({
       profileName: context.profile.name,
       query: args.query,
       queryEmbedding,
       embeddingProvider: options.embedding?.provider,
       embeddingModel: options.embedding?.model,
-      sourceKey: args.sourceKey,
-      documentId: args.documentId,
+      sourceKey,
+      documentId,
       ordinal: args.ordinal,
       limit: Math.min(args.limit ?? 8, 8)
     });
+    if (results.length === 0 && anchor && !args.sourceKey && !args.documentId) {
+      results = await options.store.search({
+        profileName: context.profile.name,
+        query: args.query,
+        queryEmbedding,
+        embeddingProvider: options.embedding?.provider,
+        embeddingModel: options.embedding?.model,
+        ordinal: args.ordinal,
+        limit: Math.min(args.limit ?? 8, 8)
+      });
+    }
     if (results.length === 0) {
       return {
         ok: true,
@@ -76,6 +90,18 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
       ].join("\n")
     };
   };
+}
+
+function knowledgeAnchor(
+  continuation: Parameters<FunctionHandler>[1]["continuation"]
+): { sourceKey: string; documentId: string } | undefined {
+  if (continuation?.functionName !== "query_knowledge") return undefined;
+  const references = continuation.resultReferences;
+  const sourceKey = references?.sourceKey;
+  const documentId = references?.documentId;
+  return typeof sourceKey === "string" && typeof documentId === "string"
+    ? { sourceKey, documentId }
+    : undefined;
 }
 
 async function groundedAnswer(

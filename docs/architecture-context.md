@@ -189,8 +189,9 @@ handler:
 - in-flight duplicate protection for long-running lookups
 - requester-scoped conversation windows for natural follow-up messages
   (default 60 seconds; each handled reply refreshes the requester window)
-- structured continuation state containing the last enabled function, sanitized
-  arguments, and safe result references; another group requester cannot inherit it
+- structured continuation state containing handler-confirmed canonical arguments
+  and safe result references; it has an independent absolute expiry, does not extend
+  with ordinary conversation turns, and cannot be inherited by another group requester
 - bounded runtime context building and compression
 - postback-based long-running job result retrieval
 - recent file recall such as "再給我一次"

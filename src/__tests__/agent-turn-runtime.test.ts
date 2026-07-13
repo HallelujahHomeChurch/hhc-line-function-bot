@@ -5,10 +5,12 @@ import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
+import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
 import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import { InMemorySessionStore } from "../state/session-store.js";
+import { InMemoryScheduleStore } from "../schedules/store.js";
 import type {
   BotProfileConfig,
   FunctionHandler,
@@ -91,6 +93,71 @@ function createRuntime(options: {
 }
 
 describe("AgentTurnRuntime", () => {
+  it("executes a real two-turn media schedule follow-up without leaking another source", async () => {
+    const now = () => new Date("2026-07-08T00:00:00.000Z");
+    const schedules = new InMemoryScheduleStore();
+    for (const [sourceKey, assignee] of [
+      ["media_team_service_schedule", "資恆"],
+      ["other_team_schedule", "錯誤同工"]
+    ]) {
+      await schedules.upsertItem({
+        profileName: "helper",
+        sourceKey,
+        origin: "notion",
+        externalId: `${sourceKey}-1`,
+        serviceDate: "2026-07-14",
+        meeting: "晨更",
+        role: "音控",
+        assignee
+      });
+    }
+    const conversationWindowStore = new InMemoryConversationWindowStore({ now });
+    const route = vi
+      .fn<FunctionRouterPort["route"]>()
+      .mockResolvedValueOnce({
+        type: "execute",
+        action: "query_schedule",
+        arguments: { query: "下一場影視團隊服事表", dateIntent: "next_meeting" },
+        provider: "ollama"
+      })
+      .mockResolvedValueOnce({
+        type: "execute",
+        action: "query_schedule",
+        arguments: { query: "音控是誰", role: "音控" },
+        provider: "ollama"
+      });
+    const runtime = createRuntime({
+      router: { route },
+      functionRegistry: {
+        query_schedule: createQueryScheduleHandler({
+          memoryStore: new InMemoryAgentMemoryStore({ now }),
+          scheduleStore: schedules,
+          now,
+          timeZone: "Asia/Taipei"
+        })
+      },
+      conversationWindowStore
+    });
+    const botProfile = profile(["query_schedule"], {
+      generalAgent: { enabled: true, conversationWindowSeconds: 60 }
+    });
+
+    const first = await runtime.handleTextTurn({
+      profile: botProfile,
+      event: textEvent("下一場影視團隊服事表"),
+      requestId: "req-real-schedule-1"
+    });
+    const second = await runtime.handleTextTurn({
+      profile: botProfile,
+      event: textEvent("音控是誰"),
+      requestId: "req-real-schedule-2"
+    });
+
+    expect(first?.replyText).toContain("音控：資恆");
+    expect(second?.replyText).toContain("音控：資恆");
+    expect(second?.replyText).not.toContain("錯誤同工");
+  });
+
   it("carries declared schedule context into a same-function follow-up", async () => {
     const now = () => new Date("2026-07-08T00:00:00.000Z");
     const conversationWindowStore = new InMemoryConversationWindowStore({ now });
@@ -105,6 +172,10 @@ describe("AgentTurnRuntime", () => {
         query: "下一場影視團隊服事表",
         dateIntent: "next_meeting",
         meeting: "影視團隊服事"
+      },
+      resultReferences: {
+        kind: "schedule_read_model",
+        sourceKeys: ["media_team_service_schedule"]
       },
       ttlMs: 60_000
     });
@@ -138,8 +209,103 @@ describe("AgentTurnRuntime", () => {
         meeting: "影視團隊服事",
         role: "音控"
       }),
-      expect.anything()
+      expect.objectContaining({
+        continuation: expect.objectContaining({
+          functionName: "query_schedule",
+          resultReferences: {
+            kind: "schedule_read_model",
+            sourceKeys: ["media_team_service_schedule"]
+          }
+        })
+      })
     );
+  });
+
+  it("keeps the canonical anchor when a follow-up has no result", async () => {
+    const now = () => new Date("2026-07-08T00:00:00.000Z");
+    const conversationWindowStore = new InMemoryConversationWindowStore({ now });
+    const scope = { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" };
+    await conversationWindowStore.recordFunctionContext({
+      scope,
+      functionName: "query_schedule",
+      arguments: { date: "2026-07-14", meeting: "晨更" },
+      resultReferences: {
+        kind: "schedule_read_model",
+        sourceKeys: ["media_team_service_schedule"]
+      },
+      ttlMs: 60_000
+    });
+    const runtime = createRuntime({
+      router: {
+        route: vi.fn().mockResolvedValue({
+          type: "execute",
+          action: "query_schedule",
+          arguments: { query: "不存在的角色" },
+          provider: "ollama"
+        })
+      },
+      functionRegistry: {
+        query_schedule: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "查不到符合的服事表。"
+        })
+      },
+      conversationWindowStore
+    });
+
+    await runtime.handleTextTurn({
+      profile: profile(["query_schedule"], {
+        generalAgent: { enabled: true, conversationWindowSeconds: 60 }
+      }),
+      event: textEvent("不存在的角色"),
+      requestId: "req-no-result-follow-up"
+    });
+
+    await expect(conversationWindowStore.functionContext(scope)).resolves.toEqual(
+      expect.objectContaining({
+        arguments: { date: "2026-07-14", meeting: "晨更" },
+        resultReferences: {
+          kind: "schedule_read_model",
+          sourceKeys: ["media_team_service_schedule"]
+        }
+      })
+    );
+  });
+
+  it("clears the prior anchor after a successful different function", async () => {
+    const now = () => new Date("2026-07-08T00:00:00.000Z");
+    const conversationWindowStore = new InMemoryConversationWindowStore({ now });
+    const scope = { profileName: "helper", sourceKey: "group:C1", requesterUserId: "U1" };
+    await conversationWindowStore.recordFunctionContext({
+      scope,
+      functionName: "query_schedule",
+      arguments: { date: "2026-07-14" },
+      ttlMs: 60_000
+    });
+    const runtime = createRuntime({
+      router: {
+        route: vi.fn().mockResolvedValue({
+          type: "execute",
+          action: "query_wikipedia",
+          arguments: { query: "台灣" },
+          provider: "ollama"
+        })
+      },
+      functionRegistry: {
+        query_wikipedia: vi.fn().mockResolvedValue({ ok: true, replyText: "台灣資料" })
+      },
+      conversationWindowStore
+    });
+
+    await runtime.handleTextTurn({
+      profile: profile(["query_schedule", "query_wikipedia"], {
+        generalAgent: { enabled: true, conversationWindowSeconds: 60 }
+      }),
+      event: textEvent("查台灣"),
+      requestId: "req-switch-function"
+    });
+
+    await expect(conversationWindowStore.functionContext(scope)).resolves.toBeUndefined();
   });
 
   it("clarifies a generic query before invoking the router", async () => {

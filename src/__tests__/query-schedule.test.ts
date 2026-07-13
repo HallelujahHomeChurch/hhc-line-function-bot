@@ -68,7 +68,108 @@ describe("query_schedule", () => {
     );
 
     expect(mediaResult.replyText).toContain("音控：Ray");
+    expect(mediaResult.continuation).toEqual({
+      arguments: {
+        date: "2026-07-18",
+        meeting: "主日"
+      },
+      resultReferences: {
+        kind: "schedule_read_model",
+        sourceKeys: ["media_team_service_schedule"]
+      }
+    });
     expect(roleResult.replyText).toContain("音控：Ray");
+  });
+
+  it("keeps a follow-up scoped to the canonical schedule source", async () => {
+    const schedules = new InMemoryScheduleStore();
+    for (const item of [
+      { sourceKey: "media_team_service_schedule", assignee: "Ray" },
+      { sourceKey: "other_team_schedule", assignee: "Wrong Person" }
+    ]) {
+      await schedules.upsertItem({
+        profileName: "helper",
+        sourceKey: item.sourceKey,
+        origin: "notion",
+        externalId: `${item.sourceKey}-1`,
+        serviceDate: "2026-07-18",
+        meeting: "主日",
+        role: "音控",
+        assignee: item.assignee
+      });
+    }
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore: schedules,
+      now: () => new Date("2026-07-12T00:00:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+    const first = await query(
+      { query: "下一場影視團隊服事表", dateIntent: "next_meeting" },
+      context("下一場影視團隊服事表")
+    );
+    const followUp = await query(
+      { query: "音控是誰", date: "2026-07-18", role: "音控" },
+      {
+        ...context("音控是誰"),
+        continuation: {
+          functionName: "query_schedule",
+          arguments: first.continuation?.arguments ?? {},
+          resultReferences: first.continuation?.resultReferences,
+          createdAt: "2026-07-12T00:00:00.000Z",
+          expiresAt: "2026-07-12T00:01:00.000Z"
+        }
+      }
+    );
+
+    expect(followUp.replyText).toContain("音控：Ray");
+    expect(followUp.replyText).not.toContain("Wrong Person");
+  });
+
+  it("advances to the next schedule group after the canonical result", async () => {
+    const schedules = new InMemoryScheduleStore();
+    for (const [serviceDate, assignee] of [
+      ["2026-07-18", "Ray"],
+      ["2026-07-25", "Next Ray"]
+    ]) {
+      await schedules.upsertItem({
+        profileName: "helper",
+        sourceKey: "media_team_service_schedule",
+        origin: "notion",
+        externalId: `page-${serviceDate}`,
+        serviceDate,
+        meeting: "主日",
+        role: "音控",
+        assignee
+      });
+    }
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore: schedules,
+      now: () => new Date("2026-07-12T00:00:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+    const first = await query(
+      { query: "下一場影視團隊服事表", dateIntent: "next_meeting" },
+      context("下一場影視團隊服事表")
+    );
+    const next = await query(
+      { query: "那下一場呢", dateIntent: "next_meeting" },
+      {
+        ...context("那下一場呢"),
+        continuation: {
+          functionName: "query_schedule",
+          arguments: first.continuation?.arguments ?? {},
+          resultReferences: first.continuation?.resultReferences,
+          createdAt: "2026-07-12T00:00:00.000Z",
+          expiresAt: "2026-07-12T00:01:00.000Z"
+        }
+      }
+    );
+
+    expect(next.replyText).toContain("7月25日");
+    expect(next.replyText).toContain("Next Ray");
+    expect(next.replyText).not.toContain("7月18日");
   });
 
   it("keeps a meaningful residual query for a custom saved schedule title", async () => {
@@ -114,6 +215,17 @@ describe("query_schedule", () => {
     expect(result.replyText).toContain("7月19日");
     expect(result.replyText).toContain("黃弘家族");
     expect(result.replyText).not.toMatch(/Notion|Postgres|記憶來源/u);
+    expect(result.continuation).toEqual({
+      arguments: {
+        date: expect.stringMatching(/-07-19$/u),
+        meeting: "為耶穌舉牌",
+        scheduleType: "street_sign_service"
+      },
+      resultReferences: {
+        kind: "schedule_memory",
+        memoryId: expect.any(String)
+      }
+    });
   });
 
   it("uses the configured schedule source when a saved schedule has no match", async () => {

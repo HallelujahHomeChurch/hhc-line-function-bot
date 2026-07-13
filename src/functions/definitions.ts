@@ -221,7 +221,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       stripWords: [...commonStripWords, "查知識", "知識查詢", "知識", "SOP"]
     },
     continuation: {
-      carryArguments: ["sourceKey", "documentId"]
+      carryArguments: []
     }
   },
   {

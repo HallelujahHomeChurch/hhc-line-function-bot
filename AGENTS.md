@@ -91,7 +91,7 @@ When adding or changing an admin action:
 - `src/function-arguments.ts`: argument extraction and slot handling.
 - `src/functions/*`: function definitions, modules, and implementations.
 - `src/agent/turn-runtime.ts`: shared text-turn pipeline after LINE entrance checks.
-- `src/agent/context-manager.ts`: runtime context budget/compression plus requester-scoped conversation windows.
+- `src/agent/context-manager.ts`: runtime context budget/compression plus requester-scoped conversation windows and independently expiring function continuation state.
 - `src/agent/jobs.ts`: long-running job results scoped by profile/source/requester.
 - `src/agent/slot-clarification.ts`: definition-driven required-slot clarification.
 - `src/agent/trace-store.ts`: sanitized recent agent turn diagnostics for `/last-agent-turns`.
@@ -145,7 +145,7 @@ When adding or changing an admin action:
 - In-memory stores are acceptable for single-replica local/dev behavior.
 - `REDIS_URL` moves sessions, cache, recent errors, rate-limit state, and registration invite codes to Redis.
 - `REDIS_URL` also moves destructive-action confirmation codes to Redis.
-- `REDIS_URL` also moves requester-scoped conversation windows and long-running job results to Redis.
+- `REDIS_URL` also moves requester-scoped conversation windows, independently expiring function continuation state, and long-running job results to Redis.
 - Redis rate limiting must use atomic counters, not read-modify-write JSON buckets.
 - PostgreSQL backs managed access principals and audit events when registration is enabled.
 - PostgreSQL backs agent memory when configured. The app creates access and agent memory tables on startup.
