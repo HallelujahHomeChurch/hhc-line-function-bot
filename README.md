@@ -275,7 +275,7 @@ The memory layer adds controlled memory without making the bot an unrestricted c
 - Queries such as `下次世緯家園服事是什麼時候？` and `下一次中平家族什麼時候舉牌？` search these shared entries. Identity-based `我下一次服事是什麼時候？` remains out of scope until LINE identity is bound to the church login system.
 - Structured schedule memory is text-only in this version. The bot should ask for pasted text instead of trying to store or parse schedule images.
 - Text memories currently expire after 30 days.
-- LINE image/file attachment saving is supported only through the controlled `save_resource` flow. The requester must have effective `save_resource` permission, explain the purpose, pass file validation and virus scanning, then confirm before the bot uploads to OneDrive and upserts catalog metadata.
+- LINE image/file attachment saving is supported only through the controlled `save_resource` flow. The requester must have effective `save_resource` permission, opt in, select one of four purposes, enter a title, review the preview, and confirm before the bot downloads, validates, scans, uploads to OneDrive, and upserts catalog metadata.
 
 Useful memory commands:
 
@@ -396,9 +396,9 @@ Requester-scoped active-task state records the last successful capability plus c
 
 ## LINE Attachment Save Gate
 
-Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. It first requires effective `save_resource` permission, stores a requester/source-scoped pending attachment session, and asks the user to explain the intended category or purpose.
+Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. It first requires effective `save_resource` permission, stores a requester/source-scoped pending attachment session, and asks `要我幫忙保存這個檔案嗎？` with `是` and `否` quick replies.
 
-After the requester replies with a supported purpose, the bot checks the target source write capability and creates a metadata-only confirmation preview. It does not download or scan the binary at this stage. Only after the requester replies `保存` does the bot download the LINE content once with `MAX_ATTACHMENT_BYTES` (default 25 MiB) and `LINE_CONTENT_DOWNLOAD_TIMEOUT_MS` (default 30 seconds), then checks actual size, MIME/magic bytes, extension, safe filename, hash, and virus scan status. If the scanner is missing, times out, or returns anything other than `clean`, the save fails closed. A confirmed clean file is uploaded to the configured OneDrive folder and indexed in the catalog through the shared binary publisher.
+After opt-in, the bot offers exactly four purposes: `投影片`, `流行歌譜`, `詩歌歌譜`, and `小哈資料庫`. It checks the selected target's write capability, asks the requester to enter a title, and then creates a metadata-only preview with `保存` and `取消`. It does not download or scan the binary during these stages. Only after the requester replies `保存` does the bot download the LINE content once with `MAX_ATTACHMENT_BYTES` (default 25 MiB) and `LINE_CONTENT_DOWNLOAD_TIMEOUT_MS` (default 30 seconds), then checks actual size, MIME/magic bytes, extension, safe filename, hash, and virus scan status. If the scanner is missing, times out, or returns anything other than `clean`, the save fails closed. A confirmed clean file is uploaded to the configured OneDrive folder and indexed in the catalog through the shared binary publisher.
 
 The attachment binary is fetched outbound from the bot through the LINE Content API; it is not part of the inbound webhook JSON. API Gateway, Dapr, and Fastify webhook body limits therefore remain unchanged.
 

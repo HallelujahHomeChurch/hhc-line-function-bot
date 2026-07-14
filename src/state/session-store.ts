@@ -49,7 +49,7 @@ export interface PendingAttachmentSession {
   id: string;
   type: "pending_attachment";
   action: "save_resource";
-  stage?: "awaiting_purpose" | "awaiting_confirmation";
+  stage?: "awaiting_opt_in" | "awaiting_purpose" | "awaiting_title" | "awaiting_confirmation";
   profileName: string;
   requesterUserId?: string;
   source: LineSource;
@@ -58,6 +58,11 @@ export interface PendingAttachmentSession {
     messageType: "image" | "file";
     fileName?: string;
     fileSize?: number;
+  };
+  destination?: {
+    sourceKey: string;
+    itemKind: string;
+    domain: string;
   };
   target?: {
     sourceKey: string;

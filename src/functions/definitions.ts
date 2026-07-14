@@ -477,7 +477,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
   {
     name: "save_memory",
     displayName: "記住資訊",
-    shortDescription: "保存使用者明確要求小哈記住的文字資訊。",
+    shortDescription: "保存使用者明確請我記住的文字資訊。",
     examples: ["小哈幫我記住這個月服事表：主日導播是小明"],
     requires: ["memory"],
     scope: "profile",
@@ -511,7 +511,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       label: "記住資訊",
       command: "小哈幫我記住："
     },
-    helpText: "保存你明確交代小哈記住的文字資訊，預設只保留一段時間。"
+    helpText: "保存你明確交代我記住的文字資訊，預設只保留一段時間。"
   },
   {
     name: "save_resource",
@@ -565,7 +565,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
   {
     name: "retrieve_memory",
     displayName: "查記住的資訊",
-    shortDescription: "查詢使用者曾明確請小哈記住的資訊。",
+    shortDescription: "查詢使用者曾明確請我記住的資訊。",
     examples: ["小哈查我記住的服事表"],
     requires: ["memory"],
     scope: "profile",

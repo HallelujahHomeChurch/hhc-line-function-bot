@@ -426,7 +426,7 @@ async function createRememberedReferenceReply(
   if (resource.storage.provider === "external_link") {
     return {
       ok: true,
-      replyText: ["已找到小哈記住的詩歌投影片：", resource.title, resource.storage.url].join("\n"),
+      replyText: ["已找到我記住的詩歌投影片：", resource.title, resource.storage.url].join("\n"),
       agentResource: {
         resourceType: resource.resourceType,
         title: resource.title,

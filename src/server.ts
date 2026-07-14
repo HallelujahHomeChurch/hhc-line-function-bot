@@ -1209,11 +1209,11 @@ function formatPublicHelp(): FunctionExecutionResult {
   return {
     ok: true,
     replyText: [
-      "小哈可以協助你用自然語言查資料，也能依權限記住或更新教會資訊。",
+      "我可以協助你用自然語言查資料，也能依權限記住或更新教會資訊。",
       "直接告訴我名稱、日期、主題或要處理的內容就好。",
       "",
       "可用指令：",
-      "/help - 查看小哈可以協助什麼",
+      "/help - 查看我可以協助什麼",
       "/registry <code> - 使用邀請碼開通",
       "/whoami - 查看目前 LINE user/group 資訊",
       "/memories - 列出目前記住的資訊",

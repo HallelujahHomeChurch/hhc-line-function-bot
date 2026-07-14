@@ -263,6 +263,7 @@ describe("find_ppt_slides", () => {
     const result = await handler({ query: "青年聚會" }, handlerContext());
 
     expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("已找到我記住的");
     expect(result.replyText).toContain("青年聚會投影片");
     expect(result.replyText).toContain("https://example.com/youth-slides");
     expect(graph.listFolderChildren).not.toHaveBeenCalled();

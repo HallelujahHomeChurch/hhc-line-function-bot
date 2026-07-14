@@ -26,7 +26,7 @@ export async function storePendingAttachment(
     id: options.requestId,
     type: "pending_attachment",
     action: "save_resource",
-    stage: "awaiting_purpose",
+    stage: "awaiting_opt_in",
     profileName: options.context.profile.name,
     requesterUserId: options.context.event.source.userId,
     source: options.context.event.source,
@@ -51,23 +51,12 @@ export function pendingAttachmentPrompt(message: LineMessage): {
   return {
     replyText: [
       `收到${label}${fileName ? `：${fileName}` : ""}。`,
-      "請說明這個檔案要存成什麼用途，例如：投影片、流行歌譜、詩歌歌譜或教會資料。",
-      "在你說明用途並確認前，我不會保存或上傳這個檔案。"
+      "要我幫忙保存這個檔案嗎？",
+      "在你確認保存前，我不會下載或上傳這個檔案。"
     ].join("\n"),
     quickReplies: [
-      { label: "投影片", action: { type: "message", label: "投影片", text: "存成投影片" } },
-      {
-        label: "流行歌譜",
-        action: { type: "message", label: "流行歌譜", text: "存成流行歌譜" }
-      },
-      {
-        label: "詩歌歌譜",
-        action: { type: "message", label: "詩歌歌譜", text: "存成詩歌歌譜" }
-      },
-      {
-        label: "教會資料",
-        action: { type: "message", label: "教會資料", text: "存成教會資料" }
-      }
+      { label: "是", action: { type: "message", label: "是", text: "是" } },
+      { label: "否", action: { type: "message", label: "否", text: "否" } }
     ]
   };
 }

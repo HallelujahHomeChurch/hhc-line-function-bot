@@ -4,13 +4,13 @@
 
 Replace the current attachment-purpose prompt with a controlled, requester-scoped wizard. The bot must obtain explicit opt-in, one of four supported purposes, and a user-entered title before showing the existing final save confirmation.
 
-All user-facing bot self-reference in this flow uses first-person wording such as `我`. The bot must not refer to itself as `小哈` in the third person.
+All conversational bot-authored self-reference uses first-person wording such as `我`. The bot must not refer to itself as `小哈` in the third person. Product identity (`我是小哈`), wake words, user examples, registration phrases, and the destination name `小哈資料庫` retain the product name.
 
 ## User Flow
 
 1. An authorized requester uploads a supported LINE image or file.
-2. The bot stores attachment metadata only and asks `要我幫忙保存這個檔案嗎？` with `是，繼續` and `否，取消` quick replies.
-3. `否，取消` deletes the pending session. `是，繼續` advances to purpose selection.
+2. The bot stores attachment metadata only and asks `要我幫忙保存這個檔案嗎？` with `是` and `否` quick replies.
+3. `否` deletes the pending session. `是` advances to purpose selection.
 4. The bot asks `這個檔案要保存成哪一種用途？` with exactly four quick replies:
    - `投影片`
    - `流行歌譜`
@@ -37,12 +37,12 @@ Purpose selection stores a destination without inventing a title. Title input is
 
 ## Target Mapping
 
-| Choice | Source | Item kind | Query function |
-| --- | --- | --- | --- |
-| 投影片 | `ppt_slides` | `ppt_slide` | `find_ppt_slides` |
-| 流行歌譜 | `pop_sheet_music` | `pop_sheet` | `find_sheet_music` |
-| 詩歌歌譜 | `hymn_sheet_music` | `hymn_sheet` | `find_sheet_music` |
-| 小哈資料庫 | `xiaoha_database` | content-derived church item kind | `find_resource` |
+| Choice     | Source             | Item kind                        | Query function     |
+| ---------- | ------------------ | -------------------------------- | ------------------ |
+| 投影片     | `ppt_slides`       | `ppt_slide`                      | `find_ppt_slides`  |
+| 流行歌譜   | `pop_sheet_music`  | `pop_sheet`                      | `find_sheet_music` |
+| 詩歌歌譜   | `hymn_sheet_music` | `hymn_sheet`                     | `find_sheet_music` |
+| 小哈資料庫 | `xiaoha_database`  | content-derived church item kind | `find_resource`    |
 
 ## Safety And Error Handling
 

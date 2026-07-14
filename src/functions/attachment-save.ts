@@ -24,6 +24,8 @@ interface AttachmentTarget {
   title: string;
 }
 
+type AttachmentDestination = Omit<AttachmentTarget, "title">;
+
 export interface PendingAttachmentTextMessageOptions {
   sessionStore: SessionStore;
   catalog: CatalogStore;
@@ -77,7 +79,20 @@ export function createPendingAttachmentTextMessageHandler(
         return { ok: true, replyText: "好，我先不保存這個檔案。" };
       }
 
-      if (pending.stage === "awaiting_confirmation") {
+      const stage = pending.stage ?? "awaiting_purpose";
+      if (stage === "awaiting_opt_in") {
+        if (!isOptIn(answer)) {
+          return {
+            ok: true,
+            replyText: "請選擇「是」或「否」。",
+            quickReplies: optInQuickReplies()
+          };
+        }
+        await options.sessionStore.set(refreshPending(pending, "awaiting_purpose", now()));
+        return purposePrompt();
+      }
+
+      if (stage === "awaiting_confirmation") {
         if (!isConfirm(answer)) {
           return {
             ok: true,
@@ -95,45 +110,54 @@ export function createPendingAttachmentTextMessageHandler(
         });
       }
 
-      const target = parseAttachmentTarget(answer, pending);
-      if (!target) {
-        return {
-          ok: true,
-          replyText: "請先說明用途：投影片、流行歌譜、詩歌歌譜或教會資料。"
+      if (stage === "awaiting_title") {
+        const destination = pending.destination;
+        if (!destination || !isAttachmentTargetKind(destination.itemKind)) {
+          await options.sessionStore.delete(pending.id);
+          return { ok: true, replyText: "保存流程已失效，請重新上傳檔案。" };
+        }
+        if (!answer) {
+          return { ok: true, replyText: "請輸入這份檔案的名稱。" };
+        }
+        const target: AttachmentTarget = {
+          sourceKey: destination.sourceKey,
+          itemKind: destination.itemKind,
+          domain: destination.domain,
+          title: answer
         };
+        const sourceGate = await findWritableSource(options.catalog, pending.profileName, target);
+        if (!sourceGate.ok) {
+          await options.sessionStore.delete(pending.id);
+          return { ok: true, replyText: sourceGate.replyText };
+        }
+        const updated: PendingAttachmentSession = {
+          ...refreshPending(pending, "awaiting_confirmation", now()),
+          target: { ...target, declaredFileName: pending.attachment.fileName }
+        };
+        await options.sessionStore.set(updated);
+        return confirmationPreview(updated, target);
       }
-      const sourceGate = await findWritableSource(options.catalog, pending.profileName, target);
+
+      const destination = parseAttachmentDestination(answer);
+      if (!destination) {
+        return purposePrompt();
+      }
+      const sourceGate = await findWritableSource(
+        options.catalog,
+        pending.profileName,
+        destination
+      );
       if (!sourceGate.ok) {
         await options.sessionStore.delete(pending.id);
         return { ok: true, replyText: sourceGate.replyText };
       }
 
       const updated: PendingAttachmentSession = {
-        ...pending,
-        stage: "awaiting_confirmation",
-        target: {
-          sourceKey: target.sourceKey,
-          itemKind: target.itemKind,
-          domain: target.domain,
-          title: target.title,
-          declaredFileName: pending.attachment.fileName
-        },
-        expiresAt: new Date(now().getTime() + ATTACHMENT_SESSION_TTL_MS).toISOString()
+        ...refreshPending(pending, "awaiting_title", now()),
+        destination
       };
       await options.sessionStore.set(updated);
-
-      return {
-        ok: true,
-        replyText: [
-          "請確認要保存這個檔案：",
-          `名稱：${target.title}`,
-          `檔名：${pending.attachment.fileName ?? "未提供"}`,
-          `類型：${labelForItemKind(target.itemKind)}`,
-          `大小：${pending.attachment.fileSize ?? "未知"} bytes`,
-          "確認後會下載、驗證並掃毒，通過後才會上傳到 OneDrive。"
-        ].join("\n"),
-        quickReplies: confirmationQuickReplies()
-      };
+      return { ok: true, replyText: "請輸入這份檔案的名稱。" };
     }
   };
 }
@@ -208,62 +232,43 @@ async function publishAttachment(input: {
   }
 }
 
-function parseAttachmentTarget(
-  text: string,
-  pending: PendingAttachmentSession
-): AttachmentTarget | undefined {
+function parseAttachmentDestination(text: string): AttachmentDestination | undefined {
   const normalized = text.normalize("NFKC");
-  const baseTitle = stripExtension(pending.attachment.fileName ?? "").trim();
   if (/流行.*歌譜|歌譜.*流行/u.test(normalized)) {
     return {
       sourceKey: "pop_sheet_music",
       itemKind: "pop_sheet",
-      domain: "sheet_music",
-      title: inferTitle(normalized, baseTitle)
+      domain: "sheet_music"
     };
   }
   if (/詩歌.*歌譜|歌譜.*詩歌|敬拜.*歌譜/u.test(normalized)) {
     return {
       sourceKey: "hymn_sheet_music",
       itemKind: "hymn_sheet",
-      domain: "sheet_music",
-      title: inferTitle(normalized, baseTitle)
+      domain: "sheet_music"
     };
   }
   if (/投影片|簡報|ppt/i.test(normalized)) {
     return {
       sourceKey: "ppt_slides",
       itemKind: "ppt_slide",
-      domain: "presentation",
-      title: inferTitle(normalized, baseTitle)
+      domain: "presentation"
     };
   }
   if (/小哈資料庫|教會資料|一般資料|文件|資料|圖片|照片/u.test(normalized)) {
     return {
       sourceKey: "xiaoha_database",
       itemKind: "church_document",
-      domain: "general",
-      title: inferTitle(normalized, baseTitle)
+      domain: "general"
     };
   }
   return undefined;
 }
 
-function inferTitle(text: string, fallback: string): string {
-  const title = text
-    .replace(
-      /小哈資料庫|教會資料|一般資料|資料庫|存成|保存|存到|放到|幫我|小哈|請|到|檔案|用途|是|投影片|簡報|ppt|流行|詩歌|歌譜|文件|資料|圖片|照片/giu,
-      " "
-    )
-    .replace(/\s+/g, " ")
-    .trim();
-  return title || fallback || "未命名檔案";
-}
-
 async function findWritableSource(
   catalog: CatalogStore,
   profileName: string,
-  target: AttachmentTarget
+  target: AttachmentDestination
 ): Promise<{ ok: true; source: CatalogSourceRecord } | { ok: false; replyText: string }> {
   const sources = await catalog.listSources({
     profileName,
@@ -296,16 +301,72 @@ function isAttachmentTargetKind(value: string): value is AttachmentTargetKind {
   );
 }
 
-function stripExtension(fileName: string): string {
-  return fileName.replace(/\.[^.]+$/u, "");
-}
-
 function isConfirm(text: string): boolean {
   return /^(保存|確認|好|yes|y)$/iu.test(text.trim());
 }
 
 function isCancel(text: string): boolean {
-  return /^(取消|不要|先不要|不用)$/u.test(text.trim());
+  return /^(否|取消|不要|先不要|不用)$/u.test(text.trim());
+}
+
+function isOptIn(text: string): boolean {
+  return /^(是|好|要|yes|y)$/iu.test(text.trim());
+}
+
+function refreshPending(
+  pending: PendingAttachmentSession,
+  stage: NonNullable<PendingAttachmentSession["stage"]>,
+  now: Date
+): PendingAttachmentSession {
+  return {
+    ...pending,
+    stage,
+    expiresAt: new Date(now.getTime() + ATTACHMENT_SESSION_TTL_MS).toISOString()
+  };
+}
+
+function optInQuickReplies() {
+  return [
+    { label: "是", action: { type: "message" as const, label: "是", text: "是" } },
+    { label: "否", action: { type: "message" as const, label: "否", text: "否" } }
+  ];
+}
+
+function purposePrompt() {
+  return {
+    ok: true as const,
+    replyText: "這個檔案要保存成哪一種用途？",
+    quickReplies: [
+      { label: "投影片", action: { type: "message" as const, label: "投影片", text: "投影片" } },
+      {
+        label: "流行歌譜",
+        action: { type: "message" as const, label: "流行歌譜", text: "流行歌譜" }
+      },
+      {
+        label: "詩歌歌譜",
+        action: { type: "message" as const, label: "詩歌歌譜", text: "詩歌歌譜" }
+      },
+      {
+        label: "小哈資料庫",
+        action: { type: "message" as const, label: "小哈資料庫", text: "小哈資料庫" }
+      }
+    ]
+  };
+}
+
+function confirmationPreview(pending: PendingAttachmentSession, target: AttachmentTarget) {
+  return {
+    ok: true as const,
+    replyText: [
+      "請確認要保存這個檔案：",
+      `名稱：${target.title}`,
+      `檔名：${pending.attachment.fileName ?? "未提供"}`,
+      `類型：${labelForItemKind(target.itemKind)}`,
+      `大小：${pending.attachment.fileSize ?? "未知"} bytes`,
+      "確認後會下載、驗證並掃毒，通過後才會上傳到 OneDrive。"
+    ].join("\n"),
+    quickReplies: confirmationQuickReplies()
+  };
 }
 
 function confirmationQuickReplies() {

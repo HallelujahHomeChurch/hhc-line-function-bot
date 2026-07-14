@@ -228,6 +228,7 @@ describe("find_sheet_music", () => {
     const result = await handler({ query: "A TIME FOR US" }, handlerContext());
 
     expect(result.ok).toBe(true);
+    expect(result.replyText).toContain("已找到我記住的");
     expect(result.replyText).toContain("A TIME FOR US 手抄譜");
     expect(result.replyText).toContain("https://example.com/a-time-for-us");
     expect(graph.listFolderFilesRecursive).not.toHaveBeenCalled();

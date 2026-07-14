@@ -894,7 +894,7 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText.mock.calls[0]?.[1]).toContain("小哈可以協助");
+    expect(replyText.mock.calls[0]?.[1]).toContain("我可以協助");
     expect(replyText.mock.calls[0]?.[1]).toContain("/registry <code>");
     expect(replyText.mock.calls[0]?.[1]).toContain("/whoami");
     expect(replyText.mock.calls[0]?.[1]).toContain("/help admin");
@@ -3148,8 +3148,13 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(replyText).toHaveBeenCalledWith(
       "reply-token",
-      expect.stringContaining("請說明這個檔案要存成什麼用途"),
-      expect.anything()
+      expect.stringContaining("要我幫忙保存這個檔案嗎？"),
+      expect.objectContaining({
+        quickReplies: expect.arrayContaining([
+          expect.objectContaining({ label: "是" }),
+          expect.objectContaining({ label: "否" })
+        ])
+      })
     );
     await expect(
       sessionStore.findPendingAttachment({
@@ -3159,6 +3164,7 @@ describe("LINE entrance", () => {
       })
     ).resolves.toMatchObject({
       action: "save_resource",
+      stage: "awaiting_opt_in",
       attachment: { messageId: "image-1", messageType: "image" }
     });
     expect(router.route).not.toHaveBeenCalled();
