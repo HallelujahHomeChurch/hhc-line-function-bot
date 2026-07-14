@@ -12,6 +12,8 @@ import type {
 } from "../types.js";
 
 const PENDING_FUNCTION_TTL_MS = 10 * 60 * 1000;
+const PENDING_CONFIRMATION_PATTERN = /^(保存|確認|確定|好|可以|存)$/u;
+const PENDING_CANCELLATION_PATTERN = /^(取消|不要|先不要|不用)$/u;
 
 export interface CreateSlotClarificationOptions {
   sessionStore: SessionStore | undefined;
@@ -89,8 +91,8 @@ export function applyPendingSlotAnswer(
   if (action === "save_schedule" || action === "save_memory" || action === "save_resource") {
     return {
       ...args,
-      confirm: /^(保存|確認|確定|好|可以|存)$/u.test(answer.trim()),
-      cancel: /^(取消|不要|先不要|不用)$/u.test(answer.trim()),
+      confirm: PENDING_CONFIRMATION_PATTERN.test(answer.trim()),
+      cancel: PENDING_CANCELLATION_PATTERN.test(answer.trim()),
       query: answer
     };
   }
@@ -100,6 +102,13 @@ export function applyPendingSlotAnswer(
     query: answer,
     originalQuery: answer
   };
+}
+
+export function isPendingFunctionControlAnswer(answer: string): boolean {
+  const normalized = answer.trim();
+  return (
+    PENDING_CONFIRMATION_PATTERN.test(normalized) || PENDING_CANCELLATION_PATTERN.test(normalized)
+  );
 }
 
 function slotMissing(slot: FunctionRequiredSlot, args: JsonRecord): boolean {

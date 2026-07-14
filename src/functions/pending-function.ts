@@ -2,7 +2,8 @@ import { messages } from "../messages.js";
 import { buildCapabilityCandidates } from "../agent/capability-candidates.js";
 import {
   applyPendingSlotAnswer,
-  createSlotClarificationResult
+  createSlotClarificationResult,
+  isPendingFunctionControlAnswer
 } from "../agent/slot-clarification.js";
 import { canCreateRequesterScopedSession } from "../state/session-safety.js";
 import type { SessionStore } from "../state/session-store.js";
@@ -59,6 +60,7 @@ export function createPendingFunctionTextMessageHandler(
       if (!request.text.trim()) return false;
       const pending = await findPendingFunction(options.sessionStore, context);
       if (!pending) return false;
+      if (isPendingFunctionControlAnswer(request.text)) return true;
       if (explicitFunctionSwitch(request.text, pending.action, context)) {
         await options.sessionStore.delete(pending.id);
         return false;

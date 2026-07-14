@@ -105,8 +105,10 @@ When adding or changing an admin action:
 - `src/agent/*`: controlled agent runtime, resource metadata memory, explicit text memory, aliases, and Postgres/in-memory stores.
 
 The controlled turn state machine owns workflow state; model output does not.
-Its precedence is cancel, explicit function switch, requester-scoped pending
-slot answer, active-task continuation, then a new plan. A validated function
+Its precedence is exact pending confirmation/cancellation, explicit function
+switch with domain evidence, another requester-scoped pending slot answer,
+active-task continuation, then a new plan. A bare confirmation such as `保存`
+belongs to the current pending write and must not switch to generic memory. A validated function
 with missing required slots produces `collect`, never `execute`, even when the
 planner returns chat, clarify, low confidence, or no plan. Keep this behavior
 definition-driven and do not add function-specific collection branches to

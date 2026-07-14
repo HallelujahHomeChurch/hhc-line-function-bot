@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
+import { createQueryScheduleHandler } from "../functions/query-schedule.js";
+import { createSaveScheduleHandler } from "../functions/schedule-memory.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type { FunctionHandler, TextMessageContext } from "../types.js";
 
@@ -94,6 +97,115 @@ describe("pending function answers", () => {
       expect.any(Object),
       expect.objectContaining({ requesterIsAdmin: true })
     );
+  });
+
+  it("keeps a bare confirmation with the current pending write when generic memory is enabled", async () => {
+    const sessionStore = new InMemorySessionStore();
+    await sessionStore.set({
+      id: "pending-schedule-confirmation",
+      type: "pending_function",
+      action: "save_schedule",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "user", userId: "U1" },
+      arguments: {
+        content: scheduleText,
+        scheduleType: "morning_prayer_family",
+        confirm: true
+      },
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const saveSchedule = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "已保存"
+    });
+    const saveMemory = vi.fn<FunctionHandler>();
+    const handler = createPendingFunctionTextMessageHandler({
+      sessionStore,
+      functions: { save_schedule: saveSchedule, save_memory: saveMemory }
+    });
+    const confirmationContext: TextMessageContext = {
+      ...context(),
+      profile: {
+        ...context().profile,
+        enabledFunctions: ["save_schedule", "save_memory"]
+      }
+    };
+
+    await expect(handler.matches({ text: "保存" }, confirmationContext)).resolves.toBe(true);
+    const result = await handler.handle({ text: "保存" }, confirmationContext);
+
+    expect(result?.replyText).toBe("已保存");
+    expect(saveSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({ content: scheduleText, confirm: true, query: "保存" }),
+      expect.any(Object)
+    );
+    expect(saveMemory).not.toHaveBeenCalled();
+  });
+
+  it("persists a collected schedule after confirmation and makes exact and next queries available", async () => {
+    const now = new Date("2026-07-14T12:31:00.000Z");
+    const sessionStore = new InMemorySessionStore({ now: () => now });
+    const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
+    const schedule = ["七/14二中平家族", "七/16四仙履奇緣", "七/17五世緯家園"].join("\n");
+    await sessionStore.set({
+      id: "pending-schedule-content",
+      type: "pending_function",
+      action: "save_schedule",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "user", userId: "U1" },
+      arguments: { content: "" },
+      expiresAt: new Date(now.getTime() + 60_000).toISOString()
+    });
+    const saveSchedule = createSaveScheduleHandler({
+      memoryStore,
+      sessionStore,
+      now: () => now,
+      requestIdFactory: () => "pending-schedule-confirmation"
+    });
+    const handler = createPendingFunctionTextMessageHandler({
+      sessionStore,
+      functions: {
+        save_schedule: saveSchedule,
+        save_memory: vi.fn<FunctionHandler>()
+      }
+    });
+    const fullContext: TextMessageContext = {
+      ...context(),
+      profile: {
+        ...context().profile,
+        enabledFunctions: ["query_schedule", "save_schedule", "save_memory"]
+      }
+    };
+
+    const preview = await handler.handle({ text: schedule }, fullContext);
+    expect(preview?.replyText).toContain("要保存嗎");
+    await expect(handler.matches({ text: "保存" }, fullContext)).resolves.toBe(true);
+    const committed = await handler.handle({ text: "保存" }, fullContext);
+    expect(committed?.replyText).toContain("已保存 3 筆晨更家族服事");
+
+    const query = createQueryScheduleHandler({
+      memoryStore,
+      now: () => now,
+      timeZone: "Asia/Taipei"
+    });
+    const exact = await query(
+      {
+        query: "7/14晨更服事家族是誰",
+        dateIntent: "specific_date",
+        specificDate: "2026-07-14"
+      },
+      fullContext
+    );
+    const next = await query(
+      { query: "下一場晨更服事", dateIntent: "next_meeting", meeting: "晨更" },
+      fullContext
+    );
+
+    expect(exact.replyText).toContain("中平家族");
+    expect(next.replyText).toContain("7月17日");
+    expect(next.replyText).toContain("世緯家園");
   });
 
   it("collects every required slot before calling a multi-slot handler", async () => {

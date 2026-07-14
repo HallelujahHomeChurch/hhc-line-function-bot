@@ -249,7 +249,7 @@ The webhook service should stay on `node dist/index.js`; do not run recurring sy
 
 ## Agent Runtime And Memory
 
-The agent turn runtime centralizes natural-language task execution after LINE entrance checks. It handles pre-route resource recall, pending text sessions, admin natural-language actions, deterministic capability generation, model planning, plan validation, required-slot collection, in-flight duplicate locks, registered function execution, active-task transitions, and sanitized turn traces. Its precedence is cancellation, explicit function switch, pending-slot answer, active-task continuation, then a new plan.
+The agent turn runtime centralizes natural-language task execution after LINE entrance checks. It handles pre-route resource recall, pending text sessions, admin natural-language actions, deterministic capability generation, model planning, plan validation, required-slot collection, in-flight duplicate locks, registered function execution, active-task transitions, and sanitized turn traces. Its precedence is an exact pending confirmation/cancellation answer, an explicit function switch with domain evidence, another pending-slot answer, active-task continuation, then a new plan. A bare `保存` therefore confirms the current write instead of starting generic text memory.
 
 Admin `/last-agent-turns` diagnostics include controlled phases for active-task state, bounded capability names/count, planner provider/disposition/confidence bucket, validator reason, result-envelope status/anchor count/entity types, and active-task lifecycle outcome. These traces never retain raw messages, people, prompts, filenames, URLs, evidence, tokens, source titles/IDs, or temporary sharing links.
 

@@ -56,8 +56,10 @@ For normal LINE webhook messages, read the flow in this order:
    continue without repeating the wake word.
 7. Slash commands stay in `src/server.ts`; normal text turns enter
    `src/agent/turn-runtime.ts`.
-8. Pending text sessions are arbitrated before new planning: cancel, explicit
-   function switch, then the same requester's slot answer. Agent-memory
+8. Pending text sessions are arbitrated before new planning: exact confirmation
+   or cancellation, explicit function switch with domain evidence, then the
+   same requester's other slot answer. A bare confirmation stays with its
+   current pending write. Agent-memory
    follow-ups can also short-circuit the router.
 9. Intro and small-talk system actions can respond without function execution.
 10. In controlled mode, the runtime reads the independently expiring,

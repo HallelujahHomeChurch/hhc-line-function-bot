@@ -20,8 +20,9 @@ handler, and tests—not a new top-level router branch.
 
 ## Turn precedence
 
-1. Cancel an owned pending operation.
-2. Release it when the current message explicitly selects another capability.
+1. Apply an exact confirmation or cancellation to the owned pending operation.
+2. Release it when the current message explicitly selects another capability
+   with domain evidence; a bare confirmation is not a capability switch.
 3. Fill the next required slot for the same requester and source.
 4. Resolve a live requester-scoped active task.
 5. Build and validate a new plan.
