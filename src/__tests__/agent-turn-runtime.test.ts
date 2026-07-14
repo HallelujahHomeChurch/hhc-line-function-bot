@@ -5,16 +5,21 @@ import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import type { AgentPlanner } from "../agent/planner.js";
+import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
+import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
 import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
 import { InMemoryScheduleStore } from "../schedules/store.js";
-import type { BotProfileConfig, LineEvent } from "../types.js";
+import { InMemorySessionStore } from "../state/session-store.js";
+import type { BotProfileConfig, FunctionHandler, LineEvent } from "../types.js";
 
 const now = () => new Date("2026-07-14T08:40:00.000Z");
 
-function profile(): BotProfileConfig {
+function profile(
+  enabledFunctions: BotProfileConfig["enabledFunctions"] = ["query_schedule"]
+): BotProfileConfig {
   return {
     name: "helper",
     webhookPath: "/api/line/webhook/helper",
@@ -26,7 +31,7 @@ function profile(): BotProfileConfig {
     groupRequireWakeWord: true,
     wakeKeywords: ["小哈"],
     acceptMention: true,
-    enabledFunctions: ["query_schedule"],
+    enabledFunctions,
     allowedProviders: ["ollama", "deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
@@ -126,7 +131,7 @@ describe("AgentTurnRuntime controlled path", () => {
 
     expect(first?.replyText, JSON.stringify(await lastErrorStore.list())).toContain("7月17日");
     expect(first?.replyText).not.toContain("已結束同工");
-    expect(second?.replyText).toContain("音控：下一場音控");
+    expect(second?.replyText).toBe("音控：下一場音控");
     expect(second?.replyText).not.toContain("錯誤來源同工");
   });
 
@@ -138,7 +143,7 @@ describe("AgentTurnRuntime controlled path", () => {
       requestId: "one-turn"
     });
 
-    expect(result?.replyText).toContain("音控：下一場音控");
+    expect(result?.replyText).toBe("音控：下一場音控");
     expect(result?.replyText).not.toContain("已結束同工");
     expect(result?.replyText).not.toContain("錯誤來源同工");
   });
@@ -178,5 +183,80 @@ describe("AgentTurnRuntime controlled path", () => {
     });
 
     expect(result?.replyText).toContain("請再告訴我");
+  });
+
+  it("collects missing write content and uses the next requester reply", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const traceStore = new InMemoryAgentTraceStore(10);
+    const saveSchedule = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "服事表預覽"
+    });
+    const writePlanner: AgentPlanner = {
+      propose: vi.fn().mockResolvedValue({
+        status: "proposed",
+        version: 1,
+        disposition: "clarify",
+        capability: "save_schedule",
+        arguments: {},
+        confidence: 0.98,
+        provider: "deepseek",
+        attempts: []
+      })
+    };
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { save_schedule: saveSchedule },
+      textMessageHandlers: {
+        pending_function_answer: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_schedule: saveSchedule }
+        })
+      },
+      sessionStore,
+      traceStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: createControlledAgentRouter({ planner: writePlanner, now }),
+      now
+    });
+
+    const first = await runtime.handleTextTurn({
+      profile: profile(["save_schedule"]),
+      event: event("幫我記服事表"),
+      requestId: "collect-write"
+    });
+
+    expect(first?.replyText).toBe("請貼上要記住的服事表文字內容。");
+    expect(saveSchedule).not.toHaveBeenCalled();
+    await expect(sessionStore.summary()).resolves.toMatchObject({
+      total: 1,
+      byType: { pending_function: 1 }
+    });
+    await expect(traceStore.list()).resolves.toEqual([
+      expect.objectContaining({
+        requestId: "present",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            phase: "controlled_route",
+            outcome: "collect",
+            action: "save_schedule"
+          }),
+          expect.objectContaining({ phase: "slot_clarification", action: "save_schedule" })
+        ])
+      })
+    ]);
+
+    const second = await runtime.handleTextTurn({
+      profile: profile(["save_schedule"]),
+      event: event("七/17五世緯家園"),
+      requestId: "answer-write"
+    });
+
+    expect(second?.replyText).toBe("服事表預覽");
+    expect(saveSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "七/17五世緯家園" }),
+      expect.any(Object)
+    );
   });
 });

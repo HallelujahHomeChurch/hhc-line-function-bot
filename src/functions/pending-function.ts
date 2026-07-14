@@ -1,5 +1,9 @@
 import { messages } from "../messages.js";
-import { applyPendingSlotAnswer } from "../agent/slot-clarification.js";
+import { buildCapabilityCandidates } from "../agent/capability-candidates.js";
+import {
+  applyPendingSlotAnswer,
+  createSlotClarificationResult
+} from "../agent/slot-clarification.js";
 import { canCreateRequesterScopedSession } from "../state/session-safety.js";
 import type { SessionStore } from "../state/session-store.js";
 import type {
@@ -51,9 +55,16 @@ export function createPendingFunctionTextMessageHandler(
   options: PendingFunctionTextMessageOptions
 ): TextMessageHandler {
   return {
-    matches: async (request, context) =>
-      Boolean(request.text.trim()) &&
-      Boolean(await findPendingFunction(options.sessionStore, context)),
+    matches: async (request, context) => {
+      if (!request.text.trim()) return false;
+      const pending = await findPendingFunction(options.sessionStore, context);
+      if (!pending) return false;
+      if (explicitFunctionSwitch(request.text, pending.action, context)) {
+        await options.sessionStore.delete(pending.id);
+        return false;
+      }
+      return true;
+    },
 
     handle: async (request, context) => {
       const pending = await findPendingFunction(options.sessionStore, context);
@@ -73,11 +84,31 @@ export function createPendingFunctionTextMessageHandler(
       }
 
       const answer = request.text.trim();
+      if (/^(?:取消|不要|先不要|不用)$/u.test(answer)) {
+        return { ok: true, replyText: "已取消這次操作。" };
+      }
       const normalizedArguments = normalizeFunctionArguments(
         pending.action,
         applyPendingSlotAnswer(pending.action, pending.arguments, answer),
         { text: answer }
       );
+      const requestId = context.requestId ?? pending.id;
+      const slotCollection = await createSlotClarificationResult({
+        sessionStore: options.sessionStore,
+        action: pending.action,
+        arguments: normalizedArguments,
+        context: {
+          profile: context.profile,
+          event: context.event,
+          requestId,
+          requesterDisplayName: context.requesterDisplayName,
+          requesterIsAdmin: context.requesterIsAdmin
+        },
+        requestId,
+        now: new Date()
+      });
+      if (slotCollection) return slotCollection;
+
       const result = await handler(normalizedArguments, {
         profile: context.profile,
         event: context.event,
@@ -92,6 +123,22 @@ export function createPendingFunctionTextMessageHandler(
       };
     }
   };
+}
+
+function explicitFunctionSwitch(
+  text: string,
+  pendingAction: FunctionName,
+  context: TextMessageContext
+): boolean {
+  const source = context.event.source.type;
+  if (source !== "user" && source !== "group") return false;
+  return buildCapabilityCandidates({
+    text,
+    enabledFunctions: context.profile.enabledFunctions,
+    source,
+    knowledgeSources: [],
+    maxCandidates: 5
+  }).some(({ capability, reason }) => capability !== pendingAction && reason === "explicit_intent");
 }
 
 function findPendingFunction(sessionStore: SessionStore, context: TextMessageContext) {

@@ -724,9 +724,7 @@ describe("query_schedule", () => {
     const result = await handler({ query: "主日司會" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("7月5日");
-    expect(result.replyText).toContain("主日聚會");
-    expect(result.replyText).toContain("- 司會：Ray");
+    expect(result.replyText).toBe("司會：Ray");
   });
 
   it("maps Notion page properties by configured property id metadata", async () => {
@@ -1320,9 +1318,7 @@ describe("query_schedule", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("7月10日");
-    expect(result.replyText).toContain("【晨更】");
-    expect(result.replyText).toContain("- 音控：家睿");
+    expect(result.replyText).toBe("音控：家睿");
     expect(result.replyText).not.toContain("Peggy");
     expect(result.replyText).not.toContain("資恆");
     expect(notion.queryDatabase).toHaveBeenCalledWith(

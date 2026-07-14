@@ -205,4 +205,36 @@ describe("controlled agent trace sanitization", () => {
     expect(formatted).toContain("status:not_found");
     for (const sensitive of sensitiveValues) expect(formatted).not.toContain(sensitive);
   });
+
+  it("keeps a sanitized slot-collection decision without recording user content", async () => {
+    const store = new InMemoryAgentTraceStore(10);
+    await store.record({
+      requestId: "collect-secret-request",
+      occurredAt: "2026-07-14T00:00:00.000Z",
+      profileName: "helper",
+      sourceType: "group",
+      steps: [
+        {
+          phase: "plan_validation",
+          outcome: "collect",
+          disposition: "collect",
+          validatorReason: "missing_required_slot",
+          action: "save_schedule",
+          content: "七/17五世緯家園"
+        },
+        {
+          phase: "slot_clarification",
+          outcome: "collect",
+          action: "save_schedule",
+          prompt: "請貼上服事表"
+        }
+      ] as never
+    });
+
+    const formatted = formatAgentTurnTraces(await store.list());
+    expect(formatted).toContain("disposition:collect");
+    expect(formatted).toContain("validator:missing_required_slot");
+    expect(formatted).toContain("action:save_schedule");
+    expect(formatted).not.toMatch(/世緯家園|請貼上服事表|collect-secret-request/u);
+  });
 });

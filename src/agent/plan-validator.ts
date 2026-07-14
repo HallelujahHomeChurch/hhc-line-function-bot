@@ -1,6 +1,7 @@
 import { parseFunctionArguments } from "../function-arguments.js";
 import {
   hasExplicitWriteEvidence,
+  hasWritePayloadArguments,
   normalizeFunctionArguments
 } from "../functions/argument-normalization.js";
 import {
@@ -65,6 +66,13 @@ export type ValidatedAgentPlan =
         | "deterministic_explicit_intent";
     }
   | {
+      disposition: "collect";
+      capability: FunctionName;
+      arguments: JsonRecord;
+      missingSlot: string;
+      reasonCode: "missing_required_slot";
+    }
+  | {
       disposition: "clarify";
       capability?: FunctionName;
       reasonCode:
@@ -120,9 +128,16 @@ export function validateAgentPlan(input: ValidateAgentPlanInput): ValidatedAgent
   const liveTask = liveActiveTask(input.activeTask, input.now ?? new Date());
   const explicitCandidates = revalidatedExplicitCandidates(input);
   if (proposal.disposition === "chat") {
-    return explicitCandidates.length === 0 && !hasAnyActiveEvidence(input, liveTask)
-      ? { disposition: "chat", reasonCode: "no_capability_evidence" }
-      : { disposition: "clarify", reasonCode: "capability_evidence_unresolved" };
+    if (explicitCandidates.length === 0 && !hasAnyActiveEvidence(input, liveTask)) {
+      return { disposition: "chat", reasonCode: "no_capability_evidence" };
+    }
+    const deterministicPlan = deterministicExplicitIntentPlan(input, explicitCandidates);
+    return (
+      deterministicPlan ?? {
+        disposition: "clarify",
+        reasonCode: "capability_evidence_unresolved"
+      }
+    );
   }
 
   const selected = selectedCandidate(input.candidates, proposal.capability);
@@ -136,6 +151,7 @@ export function validateAgentPlan(input: ValidateAgentPlanInput): ValidatedAgent
   const rawArguments = proposal.arguments ?? {};
   if (
     authoritativeDefinition.sideEffectLevel !== "read" &&
+    hasWritePayloadArguments(rawArguments) &&
     !hasExplicitWriteEvidence(input.text, rawArguments)
   ) {
     return { disposition: "deny", reasonCode: "write_evidence_missing" };
@@ -181,10 +197,6 @@ export function validateAgentPlan(input: ValidateAgentPlanInput): ValidatedAgent
       reasonCode: "capability_evidence_unresolved"
     };
   }
-  if (proposal.confidence < input.minConfidence) {
-    return { disposition: "clarify", capability, reasonCode: "low_confidence" };
-  }
-
   const materializedArguments = activeAuthority
     ? materializeActiveTaskArguments(
         rawArguments,
@@ -213,8 +225,24 @@ export function validateAgentPlan(input: ValidateAgentPlanInput): ValidatedAgent
   if (!validatedArguments) {
     return { disposition: "clarify", capability, reasonCode: "invalid_arguments" };
   }
-  if (findMissingRequiredSlot(capability, validatedArguments)) {
-    return { disposition: "clarify", capability, reasonCode: "missing_required_slot" };
+  const missingSlot = findMissingRequiredSlot(capability, validatedArguments);
+  if (missingSlot) {
+    return {
+      disposition: "collect",
+      capability,
+      arguments: validatedArguments,
+      missingSlot: missingSlot.argument,
+      reasonCode: "missing_required_slot"
+    };
+  }
+  if (proposal.confidence < input.minConfidence) {
+    return { disposition: "clarify", capability, reasonCode: "low_confidence" };
+  }
+  if (
+    authoritativeDefinition.sideEffectLevel !== "read" &&
+    !hasExplicitWriteEvidence(input.text, rawArguments)
+  ) {
+    return { disposition: "deny", reasonCode: "write_evidence_missing" };
   }
 
   const groundedReferences = groundPlanRecord({
@@ -296,7 +324,7 @@ function validateNoPlan(input: ValidateAgentPlanInput): ValidatedAgentPlan {
 function deterministicExplicitIntentPlan(
   input: ValidateAgentPlanInput,
   explicitCandidates = revalidatedExplicitCandidates(input)
-): Extract<ValidatedAgentPlan, { disposition: "execute" }> | undefined {
+): Extract<ValidatedAgentPlan, { disposition: "execute" | "collect" }> | undefined {
   if (explicitCandidates.length !== 1) return undefined;
   const capability = explicitCandidates[0];
   const definition = getFunctionDefinition(capability)!;
@@ -309,9 +337,18 @@ function deterministicExplicitIntentPlan(
     input.text,
     definition
   );
-  if (!validatedArguments || findMissingRequiredSlot(capability, validatedArguments)) {
-    return undefined;
+  if (!validatedArguments) return undefined;
+  const missingSlot = findMissingRequiredSlot(capability, validatedArguments);
+  if (missingSlot) {
+    return {
+      disposition: "collect",
+      capability,
+      arguments: validatedArguments,
+      missingSlot: missingSlot.argument,
+      reasonCode: "missing_required_slot"
+    };
   }
+  if (definition.sideEffectLevel !== "read") return undefined;
   return {
     disposition: "execute",
     capability,
@@ -340,11 +377,33 @@ function deterministicClarificationRecovery(
   const definition = getFunctionDefinition(candidate.capability);
   if (
     !definition ||
-    definition.sideEffectLevel !== "read" ||
     !definition.agentCapability ||
     !input.enabledFunctions.includes(candidate.capability) ||
-    !sourceAllowed(definition, input.sourceType)
+    !sourceAllowed(definition, input.sourceType) ||
+    (definition.sideEffectLevel !== "read" && candidate.reason !== "explicit_intent")
   ) {
+    return undefined;
+  }
+
+  if (definition.sideEffectLevel !== "read") {
+    const normalizedArguments = parseAndNormalizeArguments(
+      candidate.capability,
+      {},
+      input.text,
+      definition
+    );
+    const missingSlot = normalizedArguments
+      ? findMissingRequiredSlot(candidate.capability, normalizedArguments)
+      : undefined;
+    if (normalizedArguments && missingSlot) {
+      return {
+        disposition: "collect",
+        capability: candidate.capability,
+        arguments: normalizedArguments,
+        missingSlot: missingSlot.argument,
+        reasonCode: "missing_required_slot"
+      };
+    }
     return undefined;
   }
 

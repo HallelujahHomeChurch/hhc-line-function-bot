@@ -456,6 +456,9 @@ export function formatServiceScheduleReply(
   args: QueryServiceScheduleArguments,
   filters: DerivedFilters
 ): string {
+  if (filters.role) {
+    return formatFocusedRoleReply(rows, filters.role);
+  }
   const title = scheduleTitle(args, filters);
   const firstDateKey = extractDateKey(rows[0]?.date ?? "");
   const dateLine = firstDateKey ? formatMonthDay(firstDateKey) : rows[0]?.date || "未填日期";
@@ -474,6 +477,29 @@ export function formatServiceScheduleReply(
   });
 
   return lines.join("\n");
+}
+
+function formatFocusedRoleReply(rows: ServiceRow[], requestedRole: string): string {
+  const groups = groupRows(rows);
+  const formatted = groups.map((group) => {
+    const role = group.rows.find((row) => row.role.trim())?.role.trim() || requestedRole;
+    const people = uniqueAssignees(group.rows);
+    const answer = `${role}：${people.length > 0 ? people.join("、") : "未填人員"}`;
+    if (groups.length === 1) return answer;
+    const context = [formatMonthDay(group.dateKey), group.meeting].filter(Boolean).join(" ");
+    return context ? `${context}｜${answer}` : answer;
+  });
+  return formatted.join("\n");
+}
+
+function uniqueAssignees(rows: ServiceRow[]): string[] {
+  const people = rows.flatMap((row) =>
+    (row.person || "")
+      .split(/[,，、]/u)
+      .map((person) => person.trim())
+      .filter(Boolean)
+  );
+  return [...new Set(people)];
 }
 
 function scheduleTitle(args: QueryServiceScheduleArguments, filters: DerivedFilters): string {

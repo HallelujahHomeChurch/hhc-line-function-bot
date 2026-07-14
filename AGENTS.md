@@ -103,6 +103,15 @@ When adding or changing an admin action:
 - `src/agent/slot-clarification.ts`: definition-driven required-slot clarification.
 - `src/agent/trace-store.ts`: sanitized recent agent turn diagnostics for `/last-agent-turns`.
 - `src/agent/*`: controlled agent runtime, resource metadata memory, explicit text memory, aliases, and Postgres/in-memory stores.
+
+The controlled turn state machine owns workflow state; model output does not.
+Its precedence is cancel, explicit function switch, requester-scoped pending
+slot answer, active-task continuation, then a new plan. A validated function
+with missing required slots produces `collect`, never `execute`, even when the
+planner returns chat, clarify, low confidence, or no plan. Keep this behavior
+definition-driven and do not add function-specific collection branches to
+routers.
+
 - `src/clients/*`: external service clients for LINE, Ollama, DeepSeek, Graph, and Notion.
 - `src/access/*`: access principals, Redis-backed registration invite codes, audit events, and stores.
 - `src/state/*`: short-lived user sessions and selection state.

@@ -65,6 +65,74 @@ describe("deterministic agent plan validation", () => {
     });
   });
 
+  it.each([
+    {
+      name: "execute",
+      proposal: {
+        disposition: "execute" as const,
+        capability: "save_schedule" as const,
+        arguments: {},
+        confidence: 0.95
+      }
+    },
+    {
+      name: "clarify",
+      proposal: {
+        disposition: "clarify" as const,
+        capability: "save_schedule" as const,
+        arguments: {},
+        confidence: 0.95
+      }
+    },
+    {
+      name: "no plan",
+      proposal: { status: "no_plan" as const, reasonCode: "providers_unavailable" as const }
+    },
+    {
+      name: "chat",
+      proposal: {
+        disposition: "chat" as const,
+        arguments: {},
+        confidence: 0.95
+      }
+    },
+    {
+      name: "low-confidence execute",
+      proposal: {
+        disposition: "execute" as const,
+        capability: "save_schedule" as const,
+        arguments: {},
+        confidence: 0.2
+      }
+    },
+    {
+      name: "clarify with invented payload",
+      proposal: {
+        disposition: "clarify" as const,
+        capability: "save_schedule" as const,
+        arguments: { content: "模型自行補出的服事表" },
+        confidence: 0.95
+      }
+    }
+  ])("collects a missing write slot independently of a $name proposal", ({ proposal }) => {
+    expect(
+      validateAgentPlan(
+        input({
+          text: "幫我記住服事表",
+          enabledFunctions: ["save_schedule"],
+          candidates: [{ capability: "save_schedule", reason: "explicit_intent", score: 400 }],
+          proposal
+        })
+      )
+    ).toEqual({
+      disposition: "collect",
+      capability: "save_schedule",
+      arguments: { content: "" },
+      missingSlot: "content",
+      reasonCode: "missing_required_slot"
+    });
+  });
+
   it.each(["continue", "refine", "advance"] as const)(
     "accepts a valid requester-scoped active-task %s proposal",
     (disposition) => {
@@ -579,8 +647,10 @@ describe("deterministic agent plan validation", () => {
         })
       )
     ).toEqual({
-      disposition: "clarify",
+      disposition: "collect",
       capability: "query_schedule",
+      arguments: { query: "" },
+      missingSlot: "query",
       reasonCode: "missing_required_slot"
     });
   });

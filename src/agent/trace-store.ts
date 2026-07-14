@@ -36,7 +36,7 @@ export interface AgentTurnTraceStep {
   durationMs?: number;
   candidates?: FunctionName[];
   candidateCount?: number;
-  disposition?: AgentPlanDisposition;
+  disposition?: AgentPlanDisposition | "collect";
   confidenceBucket?: "low" | "medium" | "high";
   validatorReason?: AgentValidatorReason;
   resultStatus?: "success" | "not_found" | "ambiguous" | "unavailable";

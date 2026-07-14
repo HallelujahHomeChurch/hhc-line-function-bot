@@ -78,7 +78,7 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
     case "anchorCount":
       return boundedTelemetryCount(value, 32);
     case "disposition":
-      return allowedString(value, new Set(AGENT_PLAN_DISPOSITIONS));
+      return allowedString(value, AGENT_TRACE_DISPOSITIONS);
     case "confidenceBucket":
       return allowedString(value, CONFIDENCE_BUCKETS);
     case "validatorReason":
@@ -177,6 +177,7 @@ const PROVIDERS = new Set([...MODEL_PROVIDER_NAMES, "keyword", "router"]);
 const LANES = new Set(["function_routing", "admin_routing", "smart_talk", "web_summarization"]);
 const OUTCOMES = new Set([
   "execute",
+  "collect",
   "continue",
   "refine",
   "advance",
@@ -212,6 +213,7 @@ const OUTCOMES = new Set([
   "ambiguous",
   "unavailable"
 ]);
+const AGENT_TRACE_DISPOSITIONS = new Set([...AGENT_PLAN_DISPOSITIONS, "collect"]);
 const REASONS = new Set([
   "active_task_refinement",
   "active_task_unavailable",

@@ -314,6 +314,54 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     }
   },
   {
+    name: "acceptance-12-write-request-collects-after-planner-clarify",
+    text: "幫我記服事表",
+    enabledFunctions: ["save_schedule"],
+    expectedCandidates: ["save_schedule"],
+    expectedProposal: {
+      disposition: "clarify",
+      capability: "save_schedule",
+      arguments: {}
+    },
+    expectedFinal: {
+      disposition: "collect",
+      capability: "save_schedule",
+      reasonCode: "missing_required_slot",
+      arguments: { content: "" }
+    }
+  },
+  {
+    name: "acceptance-13-write-request-collects-after-planner-chat",
+    text: "記服事表",
+    enabledFunctions: ["save_schedule"],
+    expectedCandidates: ["save_schedule"],
+    expectedProposal: { disposition: "chat", arguments: {} },
+    expectedFinal: {
+      disposition: "collect",
+      capability: "save_schedule",
+      reasonCode: "missing_required_slot",
+      arguments: { content: "" }
+    }
+  },
+  {
+    name: "acceptance-14-write-request-switches-away-from-active-read-task",
+    text: "小哈幫我記住服事表",
+    enabledFunctions: ["query_schedule", "save_schedule"],
+    activeTask: scheduleTask,
+    expectedCandidates: ["save_schedule"],
+    expectedProposal: {
+      disposition: "switch",
+      capability: "save_schedule",
+      arguments: {}
+    },
+    expectedFinal: {
+      disposition: "collect",
+      capability: "save_schedule",
+      reasonCode: "missing_required_slot",
+      arguments: { content: "" }
+    }
+  },
+  {
     name: "negative-no-capability",
     text: "你好",
     enabledFunctions: ["query_schedule", "query_knowledge"],
@@ -413,6 +461,17 @@ const OFFLINE_PLANNER_FIXTURES: Readonly<Record<string, AgentPlanProposalInput>>
     role: "音控",
     specificDate: "2026-07-21"
   }),
+  "acceptance-12-write-request-collects-after-planner-clarify": proposed(
+    "clarify",
+    "save_schedule",
+    {}
+  ),
+  "acceptance-13-write-request-collects-after-planner-chat": proposed("chat", undefined, {}),
+  "acceptance-14-write-request-switches-away-from-active-read-task": proposed(
+    "switch",
+    "save_schedule",
+    {}
+  ),
   "negative-no-capability": noPlan(),
   "disabled-capability": noPlan(),
   "ambiguous-active-entity": proposed("refine", "query_schedule", {

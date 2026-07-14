@@ -377,6 +377,50 @@ describe("deterministic capability candidates", () => {
     ).toEqual([]);
   });
 
+  it.each(["幫我記服事表", "記服事表", "小哈幫我記服事表"])(
+    "recognizes a capability-scoped shorthand write request: %s",
+    (text) => {
+      expect(
+        buildCapabilityCandidates({
+          text,
+          enabledFunctions: ["query_schedule", "save_schedule"],
+          source: "group",
+          knowledgeSources: [],
+          maxCandidates: 3
+        })
+      ).toEqual([
+        expect.objectContaining({ capability: "save_schedule", reason: "explicit_intent" })
+      ]);
+    }
+  );
+
+  it("does not treat a question about remembering as a schedule write", () => {
+    expect(
+      buildCapabilityCandidates({
+        text: "你記得剛剛那份服事表嗎",
+        enabledFunctions: ["query_schedule", "save_schedule"],
+        source: "group",
+        knowledgeSources: [],
+        maxCandidates: 3
+      }).some(({ capability }) => capability === "save_schedule")
+    ).toBe(false);
+  });
+
+  it.each(["不要記服事表", "幫我不要記服事表", "先別保存服事表"])(
+    "does not nominate a negated write request: %s",
+    (text) => {
+      expect(
+        buildCapabilityCandidates({
+          text,
+          enabledFunctions: ["query_schedule", "save_schedule"],
+          source: "group",
+          knowledgeSources: [],
+          maxCandidates: 3
+        }).some(({ capability }) => capability === "save_schedule")
+      ).toBe(false);
+    }
+  );
+
   it("routes explicit short-lived text memory writes without inferring them from hints", () => {
     expect(
       buildCapabilityCandidates({

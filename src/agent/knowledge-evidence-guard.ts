@@ -17,17 +17,25 @@ const DESIRE_WRITE_PATTERN = new RegExp(
   "u"
 );
 const DIRECT_WRITE_PATTERN = new RegExp(`^(?:請)?(?:${WRITE_ACTION})`, "u");
+const SHORTHAND_WRITE_PATTERN =
+  /^(?:(?:請|麻煩)?(?:你|您)?(?:幫我|替我)?)(?:把|將)?記(?!得|憶|錄)(?:一下)?/u;
+const NEGATED_WRITE_PATTERN = new RegExp(
+  `(?:不要|不用|不必|先不要|先別|別)${BOUNDED_IMPERATIVE_CONTENT}(?:${WRITE_ACTION}|記(?!得|憶|錄))`,
+  "u"
+);
 const MAX_INTERPERSONAL_QUESTION_CHARACTERS = 48;
 const SECOND_PERSON_IDENTITY_QUESTION =
   /^(?:(?:那|那麼|所以|請問|想問|我想問))?(?:你|妳|您)(?:是(?:誰|哪位|(?:什麼|甚麼|啥)(?:樣)?(?:的)?(?:人|角色|身份|身分)?)|叫(?:什麼|甚麼|啥)(?:名字|姓名)?|(?:的)?(?:名字|姓名)(?:叫|是)?(?:什麼|甚麼|啥)|(?:的)?(?:個性|性格|人設)(?:是(?:什麼|甚麼|啥)(?:樣)?|如何|怎麼樣|怎樣)|(?:會|能|可以)(?:做)?(?:什麼|甚麼|啥))(?:啊|呀|呢|嗎|嘛)?$/u;
 
 export function hasWriteIntent(text: string): boolean {
   const normalized = normalizeIntentText(text);
+  if (NEGATED_WRITE_PATTERN.test(normalized)) return false;
   return (
     HELPER_WRITE_PATTERN.test(normalized) ||
     OBJECT_WRITE_PATTERN.test(normalized) ||
     DESIRE_WRITE_PATTERN.test(normalized) ||
-    DIRECT_WRITE_PATTERN.test(normalized)
+    DIRECT_WRITE_PATTERN.test(normalized) ||
+    SHORTHAND_WRITE_PATTERN.test(normalized)
   );
 }
 

@@ -99,7 +99,9 @@ export function createControlledAgentRouter(options: {
         phase: "plan_validation",
         outcome: "accepted",
         action:
-          plan.disposition === "execute" || plan.disposition === "clarify"
+          plan.disposition === "execute" ||
+          plan.disposition === "collect" ||
+          plan.disposition === "clarify"
             ? plan.capability
             : undefined,
         disposition: plan.disposition,

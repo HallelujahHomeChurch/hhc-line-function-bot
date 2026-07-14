@@ -293,6 +293,37 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         plan = { disposition: "clarify", reasonCode: "planner_unavailable" };
       }
       steps.push(controlledTraceStep(plan));
+      if (plan.disposition === "collect") {
+        const slotCollection = await createSlotClarificationResult({
+          sessionStore: options.sessionStore,
+          action: plan.capability,
+          arguments: plan.arguments,
+          context,
+          requestId: input.requestId,
+          now: now()
+        });
+        if (slotCollection) {
+          steps.push({
+            phase: "slot_clarification",
+            outcome: "handled",
+            action: plan.capability,
+            query: queryMarker(plan.arguments)
+          });
+          return finish(input, steps, slotCollection);
+        }
+        return finish(
+          input,
+          steps,
+          controlledClarificationResult(
+            {
+              disposition: "clarify",
+              capability: plan.capability,
+              reasonCode: "missing_required_slot"
+            },
+            context
+          )
+        );
+      }
       if (plan.disposition === "clarify") {
         return finish(input, steps, controlledClarificationResult(plan, context));
       }
@@ -781,7 +812,9 @@ function controlledTraceStep(plan: ValidatedAgentPlan): AgentTurnTraceStep {
     phase: "controlled_route",
     outcome: plan.disposition,
     action:
-      plan.disposition === "execute" || plan.disposition === "clarify"
+      plan.disposition === "execute" ||
+      plan.disposition === "collect" ||
+      plan.disposition === "clarify"
         ? plan.capability
         : undefined,
     reason: plan.reasonCode
@@ -789,7 +822,7 @@ function controlledTraceStep(plan: ValidatedAgentPlan): AgentTurnTraceStep {
 }
 
 function controlledPlanToRoute(
-  plan: Exclude<ValidatedAgentPlan, { disposition: "clarify" }>,
+  plan: Exclude<ValidatedAgentPlan, { disposition: "clarify" | "collect" }>,
   input: AgentTextTurnInput,
   text: string
 ): RouteResult {

@@ -1219,44 +1219,50 @@ describe("LINE entrance", () => {
     }
   );
 
-  it("applies a save-memory user grant when the requester uses a registered group", async () => {
-    const config = testConfig();
-    config.profiles[0].enabledFunctions = ["retrieve_memory", "save_memory"];
-    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
-      type: "deny",
-      reason: "not_matched",
-      provider: "ollama"
-    });
-    const accessStore = defaultAccessStore();
-    await accessStore.addUserFunctionGrant({
-      profileName: "main",
-      userId: "Uallowed",
-      functionName: "save_memory",
-      createdBy: "Uadmin"
-    });
-    const app = createTestApp(config, {
-      router: { route },
-      accessStore,
-      createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
-    });
-    const body = lineBody({
-      type: "message",
-      replyToken: "route-reply",
-      source: { type: "group", groupId: "Cmain", userId: "Uallowed" },
-      message: { type: "text", text: "小哈幫我記住集合時間" }
-    });
+  it.each([
+    ["save_memory", ["retrieve_memory", "save_memory"]],
+    ["save_schedule", ["query_schedule", "save_schedule"]]
+  ] as const)(
+    "applies a %s user grant when the requester uses a registered group",
+    async (functionName, profileFunctions) => {
+      const config = testConfig();
+      config.profiles[0].enabledFunctions = [...profileFunctions];
+      const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+        type: "deny",
+        reason: "not_matched",
+        provider: "ollama"
+      });
+      const accessStore = defaultAccessStore();
+      await accessStore.addUserFunctionGrant({
+        profileName: "main",
+        userId: "Uallowed",
+        functionName,
+        createdBy: "Uadmin"
+      });
+      const app = createTestApp(config, {
+        router: { route },
+        accessStore,
+        createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
+      });
+      const body = lineBody({
+        type: "message",
+        replyToken: "route-reply",
+        source: { type: "group", groupId: "Cmain", userId: "Uallowed" },
+        message: { type: "text", text: "小哈幫我記住服事表" }
+      });
 
-    await app.inject({
-      method: "POST",
-      url: "/api/line/webhook/main",
-      headers: signedHeaders(body, "main-secret"),
-      payload: body
-    });
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
 
-    expect(route).toHaveBeenCalledWith(
-      expect.objectContaining({ enabledFunctions: ["retrieve_memory", "save_memory"] })
-    );
-  });
+      expect(route).toHaveBeenCalledWith(
+        expect.objectContaining({ enabledFunctions: [...profileFunctions] })
+      );
+    }
+  );
 
   it("passes only the effective requester grants and source to enabled controlled routing", async () => {
     const config = testConfig();

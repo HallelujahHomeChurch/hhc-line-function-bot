@@ -56,8 +56,9 @@ For normal LINE webhook messages, read the flow in this order:
    continue without repeating the wake word.
 7. Slash commands stay in `src/server.ts`; normal text turns enter
    `src/agent/turn-runtime.ts`.
-8. Pending text sessions and agent-memory follow-ups can short-circuit the
-   router.
+8. Pending text sessions are arbitrated before new planning: cancel, explicit
+   function switch, then the same requester's slot answer. Agent-memory
+   follow-ups can also short-circuit the router.
 9. Intro and small-talk system actions can respond without function execution.
 10. In controlled mode, the runtime reads the independently expiring,
     requester-scoped active task and generates at most the configured number of
@@ -67,9 +68,11 @@ For normal LINE webhook messages, read the flow in this order:
 12. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
     rechecks current-message evidence, active-task authority, effective function
     policy, side effects, source, confidence, schema, and required slots.
-13. Definition-driven clarification handles missing or ambiguous values before
-    handlers run. The model cannot invent a function or carry an undeclared
-    value from old context.
+13. Definition-driven validation separates `collect` from `execute`. Missing
+    slots create requester-scoped collection state regardless of whether the
+    model proposed execute, clarify, chat, low confidence, or no plan.
+    Ambiguity remains clarification. The model cannot invent a function, make a
+    write authoritative, or carry an undeclared value from old context.
 14. Agent memory can resolve aliases before expensive file searches.
 15. The turn runtime applies in-flight locks, calls only the registered handler,
     records a sanitized result envelope, and transitions active-task state only
@@ -227,8 +230,8 @@ The generic turn contract is:
 3. Deterministically validate capability choice, source, side effects,
    confidence, current-message evidence, active-task evidence, arguments,
    references, and required slots.
-4. Execute one registered handler or return a controlled chat/clarify/deny
-   outcome.
+4. Enter `collect` for missing slots, execute one registered handler only when
+   complete, or return a controlled chat/clarify/deny outcome.
 5. Consume the handler's structured result envelope and update an active task
    only for a successful result with operations allowed by both the function
    contract and result.

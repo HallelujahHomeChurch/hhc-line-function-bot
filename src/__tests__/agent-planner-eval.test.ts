@@ -11,7 +11,7 @@ describe("controlled agent planner eval corpus", () => {
   it("covers every acceptance boundary plus negative routing cases", async () => {
     const names = AGENT_PLANNER_EVAL_CASES.map(({ name }) => name);
 
-    for (let acceptance = 1; acceptance <= 11; acceptance += 1) {
+    for (let acceptance = 1; acceptance <= 14; acceptance += 1) {
       expect(names.some((name) => name.startsWith(`acceptance-${acceptance}-`))).toBe(true);
     }
     expect(names).toEqual(
@@ -66,7 +66,7 @@ describe("controlled agent planner eval corpus", () => {
     expect(report.total).toBe(AGENT_PLANNER_EVAL_CASES.length);
     expect(report.candidateFailures).toEqual([]);
     expect(report.proposalAttempted).toBe(report.total);
-    expect(report.proposalPassed).toBe(10);
+    expect(report.proposalPassed).toBe(report.total - 6);
     expect(report.proposalFailures).toEqual([
       "acceptance-1-focused-schedule-role:proposal",
       "acceptance-5-dynamic-knowledge-title:proposal",

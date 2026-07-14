@@ -139,7 +139,9 @@ function strongestReason(
 ): CapabilityCandidateReason | undefined {
   const contract = definition.agentCapability!;
   if (definition.sideEffectLevel !== "read") {
-    return hasWriteIntent(input.text) && matchesAnyExact(input.text, contract.intents)
+    return hasWriteIntent(input.text) &&
+      (matchesAnyExact(input.text, contract.intents) ||
+        matchesAnyHint(input.text, contract.candidateHints))
       ? "explicit_intent"
       : undefined;
   }
@@ -170,7 +172,7 @@ function strongestReason(
   if (taskOrRetrievalEvidenceAllowed && input.retrievalEvidence?.includes(definition.name)) {
     return "retrieval_evidence";
   }
-  if (knowledgeEvidenceAllowed && matchesAnyHint(input.text, contract.candidateHints)) {
+  if (taskOrRetrievalEvidenceAllowed && matchesAnyHint(input.text, contract.candidateHints)) {
     return "capability_hint";
   }
   return undefined;

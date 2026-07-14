@@ -139,7 +139,7 @@ describe("query_schedule", () => {
       },
       entities: [expect.objectContaining({ type: "role", label: "音控" })]
     });
-    expect(roleResult.replyText).toContain("音控：Ray");
+    expect(roleResult.replyText).toBe("音控：Ray");
   });
 
   it("keeps a follow-up scoped to the canonical schedule source", async () => {
@@ -177,8 +177,40 @@ describe("query_schedule", () => {
       }
     );
 
-    expect(followUp.replyText).toContain("音控：Ray");
+    expect(followUp.replyText).toBe("音控：Ray");
     expect(followUp.replyText).not.toContain("Wrong Person");
+  });
+
+  it("keeps date and meeting context when a focused role spans multiple meetings", async () => {
+    const schedules = new InMemoryScheduleStore();
+    for (const [date, meeting, assignee] of [
+      ["2026-07-15", "主日", "Ray"],
+      ["2026-07-16", "晨更", "家睿"]
+    ]) {
+      await schedules.upsertItem({
+        profileName: "helper",
+        sourceKey: "media_team_service_schedule",
+        origin: "notion",
+        externalId: `${date}-${meeting}`,
+        serviceDate: date,
+        meeting,
+        role: "音控",
+        assignee
+      });
+    }
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore: schedules,
+      now: () => new Date("2026-07-12T00:00:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await query(
+      { query: "接下來音控是誰", dateIntent: "upcoming", role: "音控" },
+      context("接下來音控是誰")
+    );
+
+    expect(result.replyText).toBe("7月15日 主日｜音控：Ray\n7月16日 晨更｜音控：家睿");
   });
 
   it("creates canonical active-task evidence when live Notion supplies the result", async () => {
@@ -628,8 +660,7 @@ describe("query_schedule", () => {
       context("小哈查主日投影服事")
     );
 
-    expect(result.replyText).toContain("主日");
-    expect(result.replyText).toContain("投影：知樂");
+    expect(result.replyText).toBe("投影：知樂");
     expect(result.replyText).not.toMatch(/Notion|Postgres/u);
     expect(notion.queryDatabase).not.toHaveBeenCalled();
   });

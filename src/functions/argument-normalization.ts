@@ -57,9 +57,23 @@ export function normalizeFunctionArguments(
       return normalizeKnowledgeArguments(args, input);
     case "save_memory":
       return normalizeSaveMemoryArguments(args, input);
+    case "save_resource":
+      return normalizeSaveResourceArguments(args);
     default:
       return args;
   }
+}
+
+function normalizeSaveResourceArguments(args: JsonRecord): JsonRecord {
+  const rawType = stringArg(args, "resourceType")?.normalize("NFKC").toLowerCase();
+  if (!rawType) return args;
+  if (/^(?:投影片|簡報|ppt|pptx|powerpoint|slides?)$/u.test(rawType)) {
+    return { ...args, resourceType: "ppt_slide" };
+  }
+  if (/^(?:歌譜|樂譜|sheet[ _-]?music|score)$/u.test(rawType)) {
+    return { ...args, resourceType: "sheet_music" };
+  }
+  return args;
 }
 
 function normalizeSaveMemoryArguments(
@@ -96,6 +110,10 @@ export function hasExplicitWriteEvidence(text: string, args: JsonRecord): boolea
       stringHasEvidence(normalized, value) &&
       hasUnnegatedWriteAction(normalized.slice(0, normalized.indexOf(value.normalize("NFKC"))))
   );
+}
+
+export function hasWritePayloadArguments(args: JsonRecord): boolean {
+  return writeEvidenceStrings(args).length > 0;
 }
 
 const writeActionPattern = /記住|保存|儲存|新增|修改|改|刪除|移除/gu;
