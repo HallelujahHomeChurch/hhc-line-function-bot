@@ -1,27 +1,10 @@
-name: hhc-line-function-bot
+name: Production Release
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/workflows/hhc-line-function-bot.yml
-      - scripts/deploy-aca.sh
-      - Dockerfile
-      - .dockerignore
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - tsconfig.json
-      - eslint.config.js
-      - vitest.config.ts
-      - src/**
-      - config/**
-      - aca.containerapp.yaml
-      - aca.catalog-sync-job.yaml
   push:
     branches: [main]
     paths:
-      - .github/workflows/hhc-line-function-bot.yml
+      - .github/workflows/release.yml
       - scripts/deploy-aca.sh
       - Dockerfile
       - .dockerignore
@@ -45,45 +28,9 @@ concurrency:
   group: hhc-line-function-bot-production
   cancel-in-progress: false
 
-env:
-  NODE_VERSION: 24.x
-  PNPM_VERSION: 11.7.0
-
 jobs:
-  validate:
-    name: Validate app
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@${{ env.PNPM_VERSION }} --activate
-          pnpm --version
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Check formatting
-        run: pnpm format:check
-      - name: Typecheck
-        run: pnpm typecheck
-      - name: Lint
-        run: pnpm lint
-      - name: Test
-        run: pnpm test
-      - name: Validate production profile config
-        run: pnpm config:validate
-      - name: Controlled agent eval
-        run: pnpm eval:agent
-      - name: Build app
-        run: pnpm build
-
-  deploy:
-    name: Deploy to Azure Container Apps
-    needs: validate
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+  release:
+    name: Build and release
     runs-on: ubuntu-latest
     env:
       ACR_NAME: alive

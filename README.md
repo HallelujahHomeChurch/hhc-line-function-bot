@@ -448,13 +448,13 @@ pnpm smoke:webhook -- --url http://localhost:3000/api/line/webhook/helper --secr
 
 Operational details are in `docs/runbooks/production-operations.md`.
 
-## GitHub Actions deployment
+## GitHub pull request and release flow
 
-`.github/workflows/hhc-line-function-bot.yml` runs install, format check, typecheck, lint, tests, production-profile validation, controlled-agent eval, and app build for pull requests and deploy-triggering pushes to `main`.
+`main` is protected by a no-bypass GitHub ruleset. Every change—including changes made by administrators or automated agents—must use a pull request and pass the required `PR CI` check. No approving review is required, so an agent may enable auto-merge and GitHub will squash the PR after CI succeeds.
 
-The workflow uses path filters so docs-only or agent-instruction-only changes do not trigger builds or deployments. It runs only when app, build, or deployment inputs change, such as `src/**`, package files, TypeScript/test config, Docker files, `.github/workflows/hhc-line-function-bot.yml`, `scripts/deploy-aca.sh`, or `aca.containerapp.yaml`.
+`.github/workflows/ci.yml` runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the deterministic controlled-agent eval, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
 
-On successful deploy-triggering `main` builds, GitHub Actions authenticates to Azure through a branch-scoped OIDC federated credential; no long-lived Azure credential is stored in GitHub. It uses `az acr build` to publish images to ACR:
+`.github/workflows/release.yml` runs only after app, build, or deployment inputs are merged to `main`, or through an explicit manual dispatch. It does not repeat the pnpm validation suite. It authenticates to Azure through a branch-scoped OIDC federated credential, builds the production image with `az acr build`, and publishes these ACR tags:
 
 ```text
 alive.azurecr.io/alive/hhc-line-function-bot:<branch>-<githubRunId>
@@ -463,7 +463,9 @@ alive.azurecr.io/alive/hhc-line-function-bot:latest
 
 `scripts/deploy-aca.sh` updates the bot and catalog-sync job, restores the required Dapr configuration, and waits for the new bot revision to be healthy. Azure Container Apps runtime secrets remain preconfigured in Azure.
 
-`azure-pipelines.yml` is retained as a manual rollback path with CI and PR triggers disabled. Do not enable both automatic deployment systems at the same time.
+Documentation-only merges do not trigger `Production Release`. GitHub Actions is the sole CI/CD system for this repository; the former Azure DevOps pipeline and its YAML definition have been removed.
+
+Agents should create a `codex/*` branch, push it, open a PR, and request auto-merge. They must not push directly to `main`, force push the protected branch, or add a ruleset bypass. A failed `PR CI` run is a validation failure; a failed post-merge `Production Release` run is a distinct production build or deployment failure.
 
 ## Verification
 
