@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -9,13 +9,17 @@ function readProjectFile(path: string): string {
   return readFileSync(resolve(root, path), "utf8");
 }
 
+function projectFileExists(path: string): boolean {
+  return existsSync(resolve(root, path));
+}
+
 describe("production profile configuration deployment contract", () => {
   it("ships file-backed profiles and does not deploy an ACA profile secret", () => {
     const dockerfile = readProjectFile("Dockerfile");
     const manifest = readProjectFile("aca.containerapp.yaml");
-    const workflow = readProjectFile(".github/workflows/hhc-line-function-bot.yml");
+    const ciWorkflow = readProjectFile(".github/workflows/ci.yml");
+    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
-    const azureFallback = readProjectFile("azure-pipelines.yml");
     const profiles = JSON.parse(readProjectFile("config/profiles.json")) as Array<{
       name: string;
       allowedMessageTypes: string[];
@@ -60,8 +64,8 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).toContain("name: EXTERNAL_RESOURCE_MAX_REDIRECTS");
     expect(manifest).not.toContain("BOT_PROFILES_BASE64_JSON");
     expect(manifest).not.toContain("bot-profiles-base64-json");
-    expect(workflow).toContain("- config/**");
-    expect(workflow).toContain("pnpm config:validate");
+    expect(releaseWorkflow).toContain("- config/**");
+    expect(ciWorkflow).toContain("pnpm config:validate");
     expect(deployment).toContain("PROFILE_CONFIG_PATH=/app/config/profiles.json");
     expect(deployment).toContain("--remove-env-vars");
     expect(deployment).toContain("az containerapp dapr enable");
@@ -78,8 +82,6 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain("EMBEDDING_BATCH_SIZE=16");
     expect(deployment).toContain("EMBEDDING_TIMEOUT_MS=30000");
     expect(deployment).toContain("EMBEDDING_KEEP_ALIVE=1m");
-    expect(azureFallback).toContain("trigger: none");
-    expect(azureFallback).toContain("pr: none");
     expect(helper?.enabledFunctions).toEqual(
       expect.arrayContaining(["find_resource", "save_resource", "save_memory", "retrieve_memory"])
     );
@@ -101,9 +103,39 @@ describe("production profile configuration deployment contract", () => {
     expect(readProjectFile(".env.example")).not.toContain("CATALOG_SOURCES_PATH");
   });
 
+  it("validates pull requests before a separate main-only production release", () => {
+    const ciWorkflow = readProjectFile(".github/workflows/ci.yml");
+    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
+
+    expect(ciWorkflow).toContain("name: PR CI");
+    expect(ciWorkflow).toContain("pull_request:");
+    expect(ciWorkflow).not.toContain("push:");
+    expect(ciWorkflow).toContain("contents: read");
+    expect(ciWorkflow).not.toContain("id-token: write");
+    expect(ciWorkflow).toContain("pnpm format:check");
+    expect(ciWorkflow).toContain("pnpm typecheck");
+    expect(ciWorkflow).toContain("pnpm lint");
+    expect(ciWorkflow).toContain("pnpm test");
+    expect(ciWorkflow).toContain("pnpm config:validate");
+    expect(ciWorkflow).toContain("pnpm eval:agent");
+    expect(ciWorkflow).toContain("pnpm build");
+
+    expect(releaseWorkflow).toContain("name: Production Release");
+    expect(releaseWorkflow).toContain("push:");
+    expect(releaseWorkflow).toContain("branches: [main]");
+    expect(releaseWorkflow).not.toContain("pull_request:");
+    expect(releaseWorkflow).toContain("id-token: write");
+    expect(releaseWorkflow).toContain("az acr build");
+    expect(releaseWorkflow).toContain("bash scripts/deploy-aca.sh");
+    expect(releaseWorkflow).not.toContain("pnpm ");
+
+    expect(projectFileExists(".github/workflows/hhc-line-function-bot.yml")).toBe(false);
+    expect(projectFileExists("azure-pipelines.yml")).toBe(false);
+  });
+
   it("defines a scheduled ACA catalog sync job that reuses the app image", () => {
     const job = readProjectFile("aca.catalog-sync-job.yaml");
-    const workflow = readProjectFile(".github/workflows/hhc-line-function-bot.yml");
+    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
     const readme = readProjectFile("README.md");
 
     expect(job).toContain("type: Microsoft.App/jobs");
@@ -141,7 +173,7 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: EMBEDDING_TIMEOUT_MS");
     expect(job).toContain("name: EMBEDDING_KEEP_ALIVE");
     expect(job).not.toContain("ingress:");
-    expect(workflow).toContain("- aca.catalog-sync-job.yaml");
+    expect(releaseWorkflow).toContain("- aca.catalog-sync-job.yaml");
     expect(readme).toContain("aca.catalog-sync-job.yaml");
     expect(readme).toContain("node dist/tools/sync-catalog.js");
   });

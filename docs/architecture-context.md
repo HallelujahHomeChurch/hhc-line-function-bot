@@ -553,8 +553,14 @@ For docs-only changes, `pnpm format:check` is usually enough.
 
 ## Deployment Safety
 
-Pushing app/build/deploy path changes to `main` can deploy through GitHub
-Actions. Docs and agent-instruction-only changes should not trigger the workflow
-by current path filters, but still check
-`.github/workflows/hhc-line-function-bot.yml` if trigger behavior changes.
-The retained `azure-pipelines.yml` has no CI or PR trigger and is manual-only.
+`main` is protected by a no-bypass GitHub ruleset. Every administrator and agent
+change must use a pull request and pass the required `PR CI` check from
+`.github/workflows/ci.yml`. No approving review is required, so an agent may
+enable squash auto-merge after opening the PR. A CI failure blocks merge and
+never enters the production delivery path.
+
+After a deploy-triggering PR merges, `.github/workflows/release.yml` builds the
+immutable ACR image and runs `scripts/deploy-aca.sh`; it does not repeat the
+pnpm validation suite. Documentation-only merges do not trigger production
+release. GitHub Actions is the sole CI/CD system; the obsolete Azure DevOps
+pipeline and YAML definition have been removed.

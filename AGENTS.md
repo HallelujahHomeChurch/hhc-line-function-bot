@@ -223,17 +223,20 @@ Testing map:
 
 ## Deployment Rule
 
-- Important: pushing app/build/deploy path changes to `main` triggers the GitHub Actions workflow and deploys the app.
-- Treat `git push origin main` as a production deployment action when changed paths match `.github/workflows/hhc-line-function-bot.yml` trigger filters.
-- `AGENTS.md`, `README.md`, and `docs/**`-only changes should not trigger the pipeline.
-- Do not push deploy-triggering changes to `main` unless the user explicitly asks to deploy or confirms that deploying is acceptable.
-- If the user asks for code changes but not deployment, commit locally or leave changes staged/unstaged as appropriate, then ask before pushing.
+- `main` is protected by a no-bypass repository ruleset. Administrators and automated agents must use a pull request; never push or force push directly to `main` and never add a bypass actor for routine or emergency work.
+- Work on a `codex/*` branch, open a pull request, and wait for the required `PR CI` check. The required approving-review count is zero, so an agent may enable auto-merge and GitHub will squash the PR after CI succeeds.
+- `.github/workflows/ci.yml` is the pull-request validation boundary. A CI failure blocks merge and is not a production deployment failure.
+- `.github/workflows/release.yml` is the post-merge production boundary. It builds the ACR image and deploys ACA without repeating pnpm validation. App/build/deploy path changes merged to `main` trigger it; `AGENTS.md`, `README.md`, and `docs/**`-only merges do not.
+- Treat merging a deploy-triggering pull request as a production deployment action. Do not enable auto-merge for deploy-triggering changes unless the user asked to deploy or confirmed that deploying is acceptable.
+- If the user asks for code changes but not deployment, leave the verified branch/PR unmerged and report that production release is intentionally pending.
+- GitHub Actions is the sole CI/CD system. Do not restore Azure DevOps or add a second automatic deployment path.
 - Controlled routing is always authoritative. Do not reintroduce runtime switches, shadow routing, or a second router; roll back through a reviewed application deployment while retaining the DeepSeek-primary/Ollama-fallback lane policy.
 
 ## Deployment Context
 
-- CI/CD is defined in `.github/workflows/hhc-line-function-bot.yml`; `scripts/deploy-aca.sh` owns the shared Azure Container Apps deployment sequence. `azure-pipelines.yml` is retained as a manual-only fallback with CI and PR triggers disabled.
+- Pull-request CI is defined in `.github/workflows/ci.yml`. Production image build and deployment are defined in `.github/workflows/release.yml`; `scripts/deploy-aca.sh` owns the shared Azure Container Apps deployment sequence.
 - Images are built for `alive.azurecr.io`.
 - Runtime configuration and secrets belong in Azure Container Apps/Azure secrets, not in the repository.
+- This repository is public. Never commit real `.env` files, credentials, tokens, sensitive LINE or church user data, private operational exports, or secrets in source, tests, fixtures, documentation, commits, pull requests, issues, or Actions output.
 - Production LINE callback traffic enters through the public `api-gateway`, whose Nginx route invokes Dapr app id `hhc-line-function-bot` at `/v1.0/invoke/hhc-line-function-bot/method/api/line/webhook/{profileName}`. The bot Container App must keep Dapr enabled with `appId=hhc-line-function-bot`, `appPort=3000`, and `appProtocol=http`; do not disable Dapr while this gateway route exists.
 - Keep the bot's own ingress internal. After any Dapr or ingress change, POST an unsigned JSON body through the public API Gateway webhook path and verify the response comes from the bot as `400 {"ok":false,"error":"missing_line_signature"}`.
