@@ -223,8 +223,8 @@ Testing map:
 
 ## Deployment Rule
 
-- Important: pushing app/build/deploy path changes to `main` triggers the Azure DevOps pipeline and deploys the app.
-- Treat `git push origin main` as a production deployment action when changed paths match `azure-pipelines.yml` trigger filters.
+- Important: pushing app/build/deploy path changes to `main` triggers the GitHub Actions workflow and deploys the app.
+- Treat `git push origin main` as a production deployment action when changed paths match `.github/workflows/hhc-line-function-bot.yml` trigger filters.
 - `AGENTS.md`, `README.md`, and `docs/**`-only changes should not trigger the pipeline.
 - Do not push deploy-triggering changes to `main` unless the user explicitly asks to deploy or confirms that deploying is acceptable.
 - If the user asks for code changes but not deployment, commit locally or leave changes staged/unstaged as appropriate, then ask before pushing.
@@ -232,7 +232,7 @@ Testing map:
 
 ## Deployment Context
 
-- CI/CD is defined in `azure-pipelines.yml`.
+- CI/CD is defined in `.github/workflows/hhc-line-function-bot.yml`; `scripts/deploy-aca.sh` owns the shared Azure Container Apps deployment sequence.
 - Images are built for `alive.azurecr.io`.
 - Runtime configuration and secrets belong in Azure Container Apps/Azure secrets, not in the repository.
 - Production LINE callback traffic enters through the public `api-gateway`, whose Nginx route invokes Dapr app id `hhc-line-function-bot` at `/v1.0/invoke/hhc-line-function-bot/method/api/line/webhook/{profileName}`. The bot Container App must keep Dapr enabled with `appId=hhc-line-function-bot`, `appPort=3000`, and `appProtocol=http`; do not disable Dapr while this gateway route exists.

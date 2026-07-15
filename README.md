@@ -448,20 +448,20 @@ pnpm smoke:webhook -- --url http://localhost:3000/api/line/webhook/helper --secr
 
 Operational details are in `docs/runbooks/production-operations.md`.
 
-## Azure DevOps Pipeline
+## GitHub Actions deployment
 
-`azure-pipelines.yml` runs install, format check, typecheck, lint, tests, router eval replay, app build, and Docker image build for PRs and pushes to `main`.
+`.github/workflows/hhc-line-function-bot.yml` runs install, format check, typecheck, lint, tests, production-profile validation, controlled-agent eval, and app build for pull requests and deploy-triggering pushes to `main`.
 
-The pipeline uses path filters so docs-only or agent-instruction-only changes do not trigger builds or deployments. It runs only when app, build, or deployment inputs change, such as `src/**`, package files, TypeScript/test config, Docker files, `azure-pipelines.yml`, or `aca.containerapp.yaml`.
+The workflow uses path filters so docs-only or agent-instruction-only changes do not trigger builds or deployments. It runs only when app, build, or deployment inputs change, such as `src/**`, package files, TypeScript/test config, Docker files, `.github/workflows/hhc-line-function-bot.yml`, `scripts/deploy-aca.sh`, or `aca.containerapp.yaml`.
 
-On successful deploy-triggering `main` builds, the pipeline uses Azure Resource Manager service connection `alive-azure-rm` and `az acr build` to publish images to ACR:
+On successful deploy-triggering `main` builds, GitHub Actions authenticates to Azure through a branch-scoped OIDC federated credential; no long-lived Azure credential is stored in GitHub. It uses `az acr build` to publish images to ACR:
 
 ```text
-alive.azurecr.io/alive/hhc-line-function-bot:<branch>-<buildId>
+alive.azurecr.io/alive/hhc-line-function-bot:<branch>-<githubRunId>
 alive.azurecr.io/alive/hhc-line-function-bot:latest
 ```
 
-Azure Container Apps should pull from the ACR image. Runtime secrets are expected to be preconfigured on the Container App.
+`scripts/deploy-aca.sh` updates the bot and catalog-sync job, restores the required Dapr configuration, and waits for the new bot revision to be healthy. Azure Container Apps runtime secrets remain preconfigured in Azure.
 
 ## Verification
 

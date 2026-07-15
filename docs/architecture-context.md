@@ -553,7 +553,7 @@ For docs-only changes, `pnpm format:check` is usually enough.
 
 ## Deployment Safety
 
-Pushing app/build/deploy path changes to `main` can deploy through Azure DevOps.
-Docs and agent-instruction-only changes should not trigger the pipeline by
-current path filters, but still check `azure-pipelines.yml` if trigger behavior
-changes.
+Pushing app/build/deploy path changes to `main` can deploy through GitHub
+Actions. Docs and agent-instruction-only changes should not trigger the workflow
+by current path filters, but still check
+`.github/workflows/hhc-line-function-bot.yml` if trigger behavior changes.
