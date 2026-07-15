@@ -925,7 +925,7 @@ function activeTaskScope(
 }
 
 function activeTaskTtlMs(profile: BotProfileConfig): number {
-  return Math.max(1, profile.generalAgent?.conversationWindowSeconds ?? 60) * 1000;
+  return Math.max(60, profile.agentRuntime?.taskFrameSeconds ?? 600) * 1000;
 }
 
 function activeTaskView(

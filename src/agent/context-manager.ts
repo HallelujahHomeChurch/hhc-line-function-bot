@@ -235,7 +235,7 @@ export class RedisConversationWindowStore implements ConversationWindowStore {
   }
 
   private activeTaskKey(scope: ConversationWindowScope): string {
-    return `${this.options.keyPrefix}:active-task-v1:${conversationScopeKey(scope)}`;
+    return `${this.options.keyPrefix}:task-frame-v2:${conversationScopeKey(scope)}`;
   }
 }
 

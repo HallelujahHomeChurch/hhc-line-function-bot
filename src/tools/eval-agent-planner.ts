@@ -16,7 +16,9 @@ import type { AgentPlanDisposition, FunctionName } from "../types.js";
 const NOW = new Date("2026-07-14T00:00:00.000Z");
 
 const scheduleTask: ActiveTaskContext = {
-  version: 1,
+  version: 2,
+  currentCapability: "query_schedule",
+  allowedCapabilities: ["query_schedule"],
   capability: "query_schedule",
   anchors: { meeting: "晨更", date: "2026-07-14" },
   entities: [
@@ -32,7 +34,9 @@ const scheduleTask: ActiveTaskContext = {
 };
 
 const knowledgeTask: ActiveTaskContext = {
-  version: 1,
+  version: 2,
+  currentCapability: "query_knowledge",
+  allowedCapabilities: ["query_knowledge"],
   capability: "query_knowledge",
   anchors: {
     sourceId: "source-opaque-1",

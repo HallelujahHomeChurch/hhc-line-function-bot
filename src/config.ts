@@ -123,6 +123,11 @@ const profileSchema = z.object({
       maxCandidates: 3,
       minPlannerConfidence: 0.65
     }),
+  agentRuntime: z
+    .object({
+      taskFrameSeconds: z.number().int().min(60).max(3600).default(600)
+    })
+    .default({ taskFrameSeconds: 600 }),
   schedulePolicy: schedulePolicySchema.default({
     meetingWindows: DEFAULT_MEETING_WINDOWS
   }),

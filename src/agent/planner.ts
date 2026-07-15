@@ -399,7 +399,7 @@ function summarizeActiveTask(
   if (!candidate) return undefined;
 
   const summary: {
-    version: 1;
+    version: 2;
     capability: FunctionName;
     supportedOperations?: string[];
     entities?: Array<{ ref: string; type: string }>;

@@ -190,6 +190,10 @@ export interface LongRunningJobsConfig {
   resultTtlMinutes: number;
 }
 
+export interface AgentRuntimeConfig {
+  taskFrameSeconds: number;
+}
+
 export interface BotProfileConfig {
   name: string;
   webhookPath: string;
@@ -212,6 +216,7 @@ export interface BotProfileConfig {
   allowSubscriptionProviders: boolean;
   providerPolicy?: ProviderPolicy;
   controlledAgent: ControlledAgentConfig;
+  agentRuntime?: AgentRuntimeConfig;
   schedulePolicy: SchedulePolicyConfig;
   generalAgent?: GeneralAgentConfig;
   longRunningJobs?: LongRunningJobsConfig;

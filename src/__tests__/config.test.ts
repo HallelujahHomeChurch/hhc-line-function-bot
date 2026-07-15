@@ -906,6 +906,21 @@ describe("config", () => {
     });
   });
 
+  it("defaults task-frame expiry independently to 600 seconds", () => {
+    const config = loadConfigFromEnv({
+      ...profilesEnv([
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token"
+        }
+      ])
+    });
+
+    expect(config.profiles[0].agentRuntime).toEqual({ taskFrameSeconds: 600 });
+  });
+
   it("loads Redis, rate limit, and last error settings", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),

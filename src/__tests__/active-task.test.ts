@@ -10,7 +10,9 @@ import {
 const scope = { profileName: "helper", sourceKey: "group:G1", requesterUserId: "U1" };
 
 const previousTask: ActiveTaskContext = {
-  version: 1,
+  version: 2,
+  currentCapability: "query_schedule",
+  allowedCapabilities: ["query_schedule"],
   capability: "query_schedule",
   anchors: { date: "2026-07-14", meeting: "晨更" },
   entities: [
@@ -22,6 +24,10 @@ const previousTask: ActiveTaskContext = {
     }
   ],
   supportedOperations: ["continue", "refine", "advance"],
+  responseContext: {
+    availableFields: ["date", "meeting", "scheduleType", "role"],
+    defaultProjection: "focused"
+  },
   createdAt: "2026-07-13T00:00:00.000Z",
   expiresAt: "2026-07-13T00:01:00.000Z"
 };
@@ -71,6 +77,33 @@ function activeTaskBackends(): ActiveTaskBackend[] {
 }
 
 describe("structured result active tasks", () => {
+  it("derives a version-2 task frame with an independent ten-minute lifetime", () => {
+    const task = activeTaskFromResult(
+      "query_schedule",
+      {
+        ok: true,
+        replyText: "音控：資恆",
+        agentResult: {
+          status: "success",
+          replyText: "音控：資恆",
+          anchors: { date: "2026-07-16" },
+          entities: [{ type: "role", key: "audio", label: "音控" }],
+          supportedOperations: ["continue", "refine"]
+        }
+      },
+      new Date("2026-07-16T10:00:00.000Z"),
+      600_000
+    );
+
+    expect(task).toMatchObject({
+      version: 2,
+      currentCapability: "query_schedule",
+      allowedCapabilities: ["query_schedule"],
+      createdAt: "2026-07-16T10:00:00.000Z",
+      expiresAt: "2026-07-16T10:10:00.000Z"
+    });
+  });
+
   it("derives an active task only from a successful structured result", () => {
     const task = activeTaskFromResult(
       "query_schedule",
@@ -470,7 +503,7 @@ describe("structured result active tasks", () => {
   it.each([
     ["invalid JSON", "{"],
     ["null", "null"],
-    ["wrong version", JSON.stringify({ ...previousTask, version: 2 })],
+    ["wrong version", JSON.stringify({ ...previousTask, version: 1 })],
     ["unknown capability", JSON.stringify({ ...previousTask, capability: "unknown" })],
     ["invalid timestamp", JSON.stringify({ ...previousTask, createdAt: "not-a-date" })],
     [
@@ -529,7 +562,7 @@ describe("structured result active tasks", () => {
     });
 
     await store.recordActiveTask({ scope, task: previousTask, ttlMs: 60_000 });
-    expect(Array.from(records.keys())).toEqual([expect.stringContaining(":active-task-v1:")]);
+    expect(Array.from(records.keys())).toEqual([expect.stringContaining(":task-frame-v2:")]);
     await expect(store.activeTask(scope)).resolves.toEqual(previousTask);
 
     await store.clearActiveTask(scope);

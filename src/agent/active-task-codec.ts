@@ -22,9 +22,7 @@ const LIMITS = {
 type NormalizeMode = "sanitize" | "strict";
 
 const ACTIVE_TASK_KEYS = new Set(
-  "version capability anchors entities references supportedOperations createdAt expiresAt".split(
-    " "
-  )
+  "version currentCapability allowedCapabilities capability anchors entities references supportedOperations responseContext createdAt expiresAt".split(" ")
 );
 const ENTITY_KEYS = new Set("type key label aliases".split(" "));
 const REFERENCE_KEYS = new Set(
@@ -73,13 +71,22 @@ export function decodeActiveTask(raw: string, now: Date): ActiveTaskContext | un
 export function cloneActiveTask(task: ActiveTaskContext): ActiveTaskContext {
   return {
     ...task,
+    allowedCapabilities: [...task.allowedCapabilities],
     anchors: cloneRecord(task.anchors),
     entities: task.entities.map((entity) => ({
       ...entity,
       ...(entity.aliases ? { aliases: [...entity.aliases] } : {})
     })),
     ...(task.references ? { references: cloneRecord(task.references) } : {}),
-    supportedOperations: [...task.supportedOperations]
+    supportedOperations: [...task.supportedOperations],
+    ...(task.responseContext
+      ? {
+          responseContext: {
+            availableFields: [...task.responseContext.availableFields],
+            defaultProjection: task.responseContext.defaultProjection
+          }
+        }
+      : {})
   };
 }
 
@@ -92,8 +99,9 @@ function normalizeActiveTask(
     return undefined;
   }
   if (
-    input.version !== 1 ||
-    !isFunctionName(input.capability) ||
+    input.version !== 2 ||
+    !isFunctionName(input.currentCapability) ||
+    input.capability !== input.currentCapability ||
     !isCanonicalTimestamp(input.createdAt) ||
     !isCanonicalTimestamp(input.expiresAt) ||
     Date.parse(input.expiresAt) <= Date.parse(input.createdAt) ||
@@ -111,25 +119,54 @@ function normalizeActiveTask(
     LIMITS.operationChars,
     mode
   );
+  const allowedCapabilities = normalizeFunctionNames(input.allowedCapabilities);
+  const responseContext = normalizeResponseContext(input.responseContext, mode);
   if (
     !anchors ||
     !entities ||
     (input.references !== undefined && !references) ||
-    !supportedOperations
+    !supportedOperations ||
+    !allowedCapabilities ||
+    !allowedCapabilities.includes(input.currentCapability) ||
+    (input.responseContext !== undefined && !responseContext)
   ) {
     return undefined;
   }
   const task: ActiveTaskContext = {
-    version: 1,
-    capability: input.capability,
+    version: 2,
+    currentCapability: input.currentCapability,
+    allowedCapabilities,
+    capability: input.currentCapability,
     anchors,
     entities,
     ...(references ? { references } : {}),
     supportedOperations,
+    ...(responseContext ? { responseContext } : {}),
     createdAt: input.createdAt,
     expiresAt: input.expiresAt
   };
   return serializedBytes(task) <= LIMITS.totalBytes ? task : undefined;
+}
+
+function normalizeFunctionNames(input: unknown): FunctionName[] | undefined {
+  if (!Array.isArray(input) || input.length === 0 || input.length > 5) return undefined;
+  const names = input.filter((value): value is FunctionName => isFunctionName(value));
+  return names.length === input.length ? Array.from(new Set(names)) : undefined;
+}
+
+function normalizeResponseContext(
+  input: unknown,
+  mode: NormalizeMode
+): ActiveTaskContext["responseContext"] | undefined {
+  if (input === undefined) return undefined;
+  if (!isRecord(input) || !hasOnlyKeys(input, new Set(["availableFields", "defaultProjection"]))) {
+    return undefined;
+  }
+  const availableFields = normalizeStringArray(input.availableFields, 20, 80, mode);
+  const defaultProjection = input.defaultProjection;
+  return availableFields && (defaultProjection === "focused" || defaultProjection === "full")
+    ? { availableFields, defaultProjection }
+    : undefined;
 }
 
 function normalizeAnchors(input: unknown, mode: NormalizeMode): JsonRecord | undefined {
