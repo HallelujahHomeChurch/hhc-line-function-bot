@@ -9,7 +9,9 @@ import type { ActiveTaskContext } from "../agent/active-task.js";
 import { getFunctionDefinition } from "../functions/definitions.js";
 
 const scheduleTask: ActiveTaskContext = {
-  version: 1,
+  version: 2,
+  currentCapability: "query_schedule",
+  allowedCapabilities: ["query_schedule"],
   capability: "query_schedule",
   anchors: { date: "2026-07-14", meeting: "晨更" },
   entities: [
@@ -26,7 +28,9 @@ const scheduleTask: ActiveTaskContext = {
 };
 
 const knowledgeTask: ActiveTaskContext = {
-  version: 1,
+  version: 2,
+  currentCapability: "query_knowledge",
+  allowedCapabilities: ["query_knowledge"],
   capability: "query_knowledge",
   anchors: { sourceKey: "retreat" },
   entities: [{ type: "section", key: "day-one", label: "第一天" }],
@@ -590,5 +594,18 @@ describe("deterministic capability candidates", () => {
         maxCandidates: 3
       }).map(({ capability }) => capability)
     ).toEqual(["query_knowledge"]);
+  });
+
+  it("rejects task-frame evidence for a capability outside the allowed handoff set", () => {
+    expect(
+      buildCapabilityCandidates({
+        text: "第一天",
+        enabledFunctions: ["query_knowledge"],
+        activeTask: { ...knowledgeTask, allowedCapabilities: ["query_schedule"] },
+        source: "group",
+        knowledgeSources: [],
+        maxCandidates: 3
+      })
+    ).toEqual([]);
   });
 });

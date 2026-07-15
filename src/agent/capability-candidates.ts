@@ -207,7 +207,14 @@ function matchesActiveTaskEntity(
   activeTask: ActiveTaskContext | undefined
 ): boolean {
   const contract = definition.agentCapability;
-  if (!activeTask || !contract || activeTask.capability !== definition.name) return false;
+  if (
+    !activeTask ||
+    !contract ||
+    activeTask.currentCapability !== definition.name ||
+    !activeTask.allowedCapabilities.includes(definition.name)
+  ) {
+    return false;
+  }
   if (
     !contract.operations?.some((operation) => activeTask.supportedOperations.includes(operation))
   ) {
