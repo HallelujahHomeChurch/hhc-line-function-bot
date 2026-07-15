@@ -22,6 +22,7 @@ import { sanitizeActionTelemetryEvent } from "../observability/action-telemetry.
 import type { LastErrorStore } from "../observability/last-error-store.js";
 import type { LastRouteRecord, LastRouteStore } from "../observability/last-route-store.js";
 import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
+import { argumentGroundingCounts } from "./argument-authority.js";
 import { getFunctionDefinition } from "../functions/definitions.js";
 import { withRequesterDisplayName } from "../requester-personalization.js";
 import type { SessionStore } from "../state/session-store.js";
@@ -136,24 +137,6 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         requesterIsAdmin: input.requesterIsAdmin
       };
 
-      const preRoute = await options.agentRuntime?.handleTextBeforeRouting({
-        text,
-        context
-      });
-      if (preRoute) {
-        steps.push({ phase: "pre_route_memory", outcome: "handled", ok: preRoute.ok });
-        await emitRouteEvent(options.routeObserver, {
-          kind: "text_handler",
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          requestId: input.requestId,
-          handler: "agent_runtime",
-          ok: preRoute.ok
-        });
-        return finish(input, steps, preRoute);
-      }
-      steps.push({ phase: "pre_route_memory", outcome: "miss" });
-
       const textMessageHandler = await matchingTextMessageHandler(
         input.event,
         input.profile,
@@ -242,6 +225,24 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         }
         return finish(input, steps, result);
       }
+
+      const preRoute = await options.agentRuntime?.handleTextBeforeRouting({
+        text,
+        context
+      });
+      if (preRoute) {
+        steps.push({ phase: "pre_route_memory", outcome: "handled", ok: preRoute.ok });
+        await emitRouteEvent(options.routeObserver, {
+          kind: "text_handler",
+          profileName: input.profile.name,
+          sourceType: input.event.source.type,
+          requestId: input.requestId,
+          handler: "agent_runtime",
+          ok: preRoute.ok
+        });
+        return finish(input, steps, preRoute);
+      }
+      steps.push({ phase: "pre_route_memory", outcome: "miss" });
 
       if (input.allowRouting === false) {
         return undefined;
@@ -405,6 +406,12 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
 
       const normalizedArguments = normalizeFunctionArguments(route.action, route.arguments, {
         text
+      });
+      steps.push({
+        phase: "argument_grounding",
+        outcome: "validated",
+        action: route.action,
+        ...argumentGroundingCounts(route.arguments, normalizedArguments)
       });
       const handler = options.functionRegistry[route.action];
       if (!handler) {
@@ -1051,6 +1058,8 @@ function functionNameForAgentResource(
       return "find_ppt_slides";
     case "sheet_music":
       return enabledFunctions.includes("find_sheet_music") ? "find_sheet_music" : undefined;
+    case "general_resource":
+      return enabledFunctions.includes("find_resource") ? "find_resource" : undefined;
     default:
       return undefined;
   }

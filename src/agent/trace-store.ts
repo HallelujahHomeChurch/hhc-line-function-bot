@@ -12,6 +12,7 @@ export type AgentTurnTracePhase =
   | "capability_candidates"
   | "planner"
   | "plan_validation"
+  | "argument_grounding"
   | "result_envelope"
   | "controlled_route"
   | "route"
@@ -36,6 +37,8 @@ export interface AgentTurnTraceStep {
   durationMs?: number;
   candidates?: FunctionName[];
   candidateCount?: number;
+  groundedFieldCount?: number;
+  droppedFieldCount?: number;
   disposition?: AgentPlanDisposition | "collect";
   confidenceBucket?: "low" | "medium" | "high";
   validatorReason?: AgentValidatorReason;

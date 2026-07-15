@@ -364,9 +364,13 @@ export function createQueryScheduleMemoryHandler(
       date,
       meetingName: args.meeting,
       role: args.role,
-      query: cleanedQuery,
+      query: args.participant ?? cleanedQuery,
       limit: 50
     });
+
+    if (args.month) {
+      entries = entries.filter((entry) => entry.serviceDate.startsWith(`${args.month}-`));
+    }
 
     entries = applyScheduleDateIntent(
       entries,
@@ -391,7 +395,9 @@ export function createQueryScheduleMemoryHandler(
       };
     }
 
-    const replyText = ["我找到這些服事記憶：", ...entries.map(formatScheduleEntry)].join("\n");
+    const replyText = args.role
+      ? formatFocusedMemoryRoleReply(entries, args.role)
+      : ["我找到這些服事記憶：", ...entries.map(formatScheduleEntry)].join("\n");
     const agentResult = scheduleResultEnvelope(
       entries.map((entry) => ({
         date: entry.serviceDate,
@@ -406,6 +412,24 @@ export function createQueryScheduleMemoryHandler(
       agentResult
     };
   };
+}
+
+function formatFocusedMemoryRoleReply(
+  entries: AgentScheduleEntryRecord[],
+  requestedRole: string
+): string {
+  const role = entries.find((entry) => entry.role?.trim())?.role?.trim() || requestedRole;
+  const assignees = Array.from(
+    new Set(
+      entries.flatMap((entry) =>
+        entry.assignee
+          .split(/[,，、]/u)
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )
+    )
+  );
+  return `${role}：${assignees.join("、") || "未填人員"}`;
 }
 
 function scheduleMemoryId(references: unknown): string | undefined {

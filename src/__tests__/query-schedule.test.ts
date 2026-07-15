@@ -5,6 +5,7 @@ import { activeTaskFromResult } from "../agent/active-task.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { createSaveScheduleHandler } from "../functions/schedule-memory.js";
 import { InMemoryScheduleStore } from "../schedules/store.js";
+import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
@@ -67,6 +68,88 @@ function scheduleTask(result: Awaited<ReturnType<ReturnType<typeof createQuerySc
 }
 
 describe("query_schedule", () => {
+  it("asks for a domain only when both schedule resolvers have matching data", async () => {
+    const now = () => new Date("2026-07-15T00:00:00.000Z");
+    const memoryStore = new InMemoryAgentMemoryStore({ now });
+    await memoryStore.saveScheduleMemory({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      scheduleType: "morning_prayer_family",
+      title: "晨更家族服事表",
+      originalText: "7/21二黃弘家族1",
+      entries: [
+        {
+          serviceDate: "2026-07-21",
+          meetingName: "晨更",
+          role: "服事家族",
+          assignee: "黃弘家族1"
+        }
+      ]
+    });
+    const scheduleStore = new InMemoryScheduleStore();
+    await scheduleStore.upsertItem({
+      profileName: "helper",
+      sourceKey: "media_team_service_schedule",
+      origin: "notion",
+      externalId: "media-0721",
+      serviceDate: "2026-07-21",
+      meeting: "晨更",
+      role: "音控",
+      assignee: "資恆"
+    });
+    const sessionStore = new InMemorySessionStore({ now });
+    const query = createQueryScheduleHandler({
+      memoryStore,
+      scheduleStore,
+      sessionStore,
+      now,
+      requestIdFactory: () => "resolution-1",
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await query({ query: "7/21晨更服事" }, context("7/21晨更服事"));
+
+    expect(result.agentResult).toMatchObject({
+      status: "ambiguous",
+      clarification: { choices: ["影視團隊服事", "晨更家族服事"] }
+    });
+    await expect(
+      sessionStore.findPendingResolution({
+        profileName: "helper",
+        source: { type: "group", groupId: "C1", userId: "U1" },
+        requesterUserId: "U1"
+      })
+    ).resolves.toMatchObject({
+      capability: "query_schedule",
+      groundedArguments: expect.objectContaining({ specificDate: "2026-07-21" })
+    });
+  });
+
+  it("uses role evidence to query only the media schedule resolver", async () => {
+    const scheduleStore = new InMemoryScheduleStore();
+    await scheduleStore.upsertItem({
+      profileName: "helper",
+      sourceKey: "media_team_service_schedule",
+      origin: "notion",
+      externalId: "media-role",
+      serviceDate: "2026-07-21",
+      meeting: "晨更",
+      role: "音控",
+      assignee: "資恆"
+    });
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore,
+      now: () => new Date("2026-07-15T00:00:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await query({ query: "晨更音控是誰" }, context("晨更音控是誰"));
+
+    expect(result.replyText).toContain("音控：資恆");
+    expect(result.agentResult?.anchors).toMatchObject({ domainKey: "media_team_service" });
+  });
+
   it("skips a same-day meeting after its configured end time in the read model", async () => {
     const schedules = new InMemoryScheduleStore();
     for (const [serviceDate, meeting, assignee] of [
@@ -286,6 +369,7 @@ describe("query_schedule", () => {
       anchors: {
         date: "2026-07-14",
         meeting: "7月14日(二) 晨更",
+        domainKey: "media_team_service",
         sourceKeys: ["media_team_service_schedule"]
       },
       entities: expect.arrayContaining([

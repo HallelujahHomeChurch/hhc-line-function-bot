@@ -25,7 +25,9 @@ export function buildCatalogSourceSeeds(
   const env = options.env;
   const sources: CatalogSourceInput[] = [];
   const driveId = env.GRAPH_DRIVE_ID?.trim();
-  const sheetMusicExtensions = readExtensions(env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg");
+  const sheetMusicExtensions = readExtensions(
+    env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg,png"
+  );
 
   addOneDriveSource(sources, {
     profileName: "helper",

@@ -34,6 +34,7 @@ import { createWikipediaLookupHandler, type WikipediaSummarizer } from "../wikip
 import type { WikipediaClient } from "../wikipedia/client.js";
 import { createRetrieveMemoryHandler, createSaveMemoryHandler } from "./agent-memory-functions.js";
 import { createPendingAttachmentTextMessageHandler } from "./attachment-save.js";
+import { createUploadIntentTextMessageHandler } from "./upload-intent.js";
 import { createFindResourceHandler } from "./find-resource.js";
 import type { CatalogStore } from "../catalog/store.js";
 import type { ScheduleStore } from "../schedules/store.js";
@@ -859,6 +860,11 @@ export const FUNCTION_MODULES: FunctionModule[] = [
       };
       if (clients.catalog && clients.graph && clients.lineContent) {
         registrations.textMessages = {
+          upload_intent_activation: createUploadIntentTextMessageHandler({
+            sessionStore: clients.sessionStore,
+            now: clients.now,
+            requestIdFactory: clients.requestIdFactory
+          }),
           pending_attachment_answer: createPendingAttachmentTextMessageHandler({
             sessionStore: clients.sessionStore,
             catalog: clients.catalog,

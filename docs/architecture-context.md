@@ -155,10 +155,10 @@ Routing is deliberately layered:
   with strict sanitization. Its persona, conversation, safety, and format
   rules are profile-owned configuration; code owns only operational limits and
   provider fallback behavior.
-- `src/agent/turn-runtime.ts`: shared text-turn pipeline for memory prechecks,
-  text sessions, admin natural-language actions, controlled routing, slot
-  clarification, in-flight locks, function execution, active-task transitions,
-  and sanitized traces.
+- `src/agent/turn-runtime.ts`: shared text-turn pipeline for pending workflows,
+  memory prechecks, admin natural-language actions, controlled routing,
+  resolver selection, slot clarification, in-flight locks, function execution,
+  active-task transitions, and sanitized traces.
 - `src/agent/capability-candidates.ts`: deterministic, bounded candidates from
   enabled function contracts, active-task evidence, and approved read-only
   evidence providers.
@@ -171,6 +171,9 @@ Routing is deliberately layered:
   results.
 - `src/agent/slot-clarification.ts`: required-slot handling driven by function
   definition metadata.
+- `src/agent/resolution.ts` and `src/functions/pending-resolution.ts`:
+  reusable multi-domain resolution plus requester/source-scoped continuation of
+  the original grounded arguments.
 - `src/clients/deepseek.ts`: DeepSeek chat/text provider.
 - `src/function-arguments.ts` and `src/functions/argument-normalization.ts`:
   slot validation and cleanup.
@@ -429,21 +432,29 @@ the scheduled sync job writes them into `schedule_items` as read-model rows with
 live Notion. LINE-created schedules remain write-controlled through the schedule
 memory flow and must not write back to Notion-origin rows.
 
-`query_schedule` is also the first adopter of the reusable query-refinement
-contract. Router-provided arguments remain useful LLM evidence, while the
-schedule adapter deterministically fills recognizable date, meeting, role,
-schedule-type, and source-category values. Terms consumed by those structured
-values are removed before the remaining text reaches in-memory or PostgreSQL
-search. A genuinely separate future query behavior may add its own refinement
-adapter and capability contract, but arbitrary knowledge topics remain inside
+`query_schedule` is also the first adopter of the reusable query-refinement and
+domain-resolution contracts. Router-provided arguments remain useful LLM
+evidence, while the schedule adapter deterministically fills recognizable date,
+month, meeting, role, participant, schedule-type, and source-category values.
+The media-team and morning-prayer-family resolvers expose product concepts, not
+storage implementation names. Typed evidence selects one domain; when both
+domains actually contain a match and the request is still ambiguous, the bot
+asks which schedule the requester means and resumes the original grounded
+arguments after the choice. Terms consumed by structured values are removed
+before residual text reaches in-memory or PostgreSQL search. A genuinely
+separate future query behavior may add its own refinement adapter, resolver,
+and capability contract, but arbitrary knowledge topics remain inside
 `query_knowledge`. The generic router must not accumulate function-specific
 residual-query rules.
 
 LINE attachment handling is gated before storage. If a profile explicitly allows
 `image` or `file` messages and the requester has effective `save_resource`
-permission, the webhook stores only a short-lived requester/source-scoped
-pending attachment session and asks for the intended purpose. It does not
-download, scan, upload, or publish the binary at this entrance stage.
+permission, direct chat stores only a short-lived requester/source-scoped
+pending attachment session. A group attachment is silent unless the same
+requester first sends a supported upload activation phrase; the resulting
+two-minute, one-shot intent is consumed atomically by that requester's next
+attachment. The webhook does not download, scan, upload, or publish the binary
+at this entrance stage.
 
 The later pending-attachment text handler accepts deterministic purposes such as
 slides, pop sheet music, hymn sheet music, or Xiaoha database/church resources.
@@ -454,7 +465,10 @@ download and hands the bytes to the shared binary publisher for actual-size,
 MIME/magic-byte, extension, safe-filename, hash, virus-scan, conflict, upload,
 and catalog checks. Scanner results other than `clean` fail closed. The
 `xiaoha_database` manual source is skipped by catalog sync and receives a 90-day
-catalog `expiresAt`; formal synced sources do not.
+catalog `expiresAt`; formal synced sources do not. Successful publication
+records opaque drive/item metadata as a recent general resource, so a scoped
+follow-up such as `剛剛那份` can regenerate a temporary link without storing the
+link itself.
 
 LINE binary bytes travel in the bot's outbound Content API response, not through
 the inbound webhook body. Gateway, Dapr, and Fastify webhook body limits are not

@@ -3170,6 +3170,95 @@ describe("LINE entrance", () => {
     expect(router.route).not.toHaveBeenCalled();
   });
 
+  it("silently ignores a group attachment without a requester upload intent", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      allowedMessageTypes: ["text", "image", "file"],
+      enabledFunctions: ["save_resource"]
+    };
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const sessionStore = new InMemorySessionStore();
+    const app = createTestApp(config, {
+      router: { route: vi.fn() },
+      sessionStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+      message: { type: "image", id: "image-unrelated" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(replyText).not.toHaveBeenCalled();
+    await expect(
+      sessionStore.findPendingAttachment({
+        profileName: "main",
+        source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+        requesterUserId: "Uadmin"
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("accepts only the same requester's next group attachment after upload activation", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      allowedMessageTypes: ["text", "image", "file"],
+      enabledFunctions: ["save_resource"]
+    };
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const sessionStore = new InMemorySessionStore();
+    await sessionStore.set({
+      id: "upload-intent-1",
+      type: "upload_intent",
+      profileName: "main",
+      requesterUserId: "Uadmin",
+      source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const app = createTestApp(config, {
+      router: { route: vi.fn() },
+      sessionStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+      message: { type: "file", id: "file-1", fileName: "週報.pdf", fileSize: 2048 }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.json()).toEqual({ ok: true, allowedEvents: 1 });
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.stringContaining("要我幫忙保存這個檔案嗎？"),
+      expect.any(Object)
+    );
+    await expect(
+      sessionStore.findPendingAttachment({
+        profileName: "main",
+        source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+        requesterUserId: "Uadmin"
+      })
+    ).resolves.toMatchObject({ attachment: { messageId: "file-1", fileName: "週報.pdf" } });
+  });
+
   it("rejects a declared attachment above the configured maximum before creating a session", async () => {
     const config = testConfig();
     config.attachments = { maxBytes: 4, lineDownloadTimeoutMs: 30_000 };
@@ -3280,6 +3369,14 @@ describe("LINE entrance", () => {
       grantedBy: "Uadmin"
     });
     const sessionStore = new InMemorySessionStore();
+    await sessionStore.set({
+      id: "upload-intent-existing-test",
+      type: "upload_intent",
+      profileName: "main",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(config, {
       router: { route: vi.fn() },

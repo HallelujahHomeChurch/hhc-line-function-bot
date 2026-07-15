@@ -52,6 +52,47 @@ function personalizedHandlerContext(): FunctionHandlerContext {
 }
 
 describe("find_sheet_music", () => {
+  it("finds a catalog PNG when the user does not constrain the format", async () => {
+    const catalog = new InMemoryCatalogStore();
+    const source = await catalog.upsertSource({
+      profileName: "main",
+      sourceKey: "hymn_sheet_music",
+      adapterType: "onedrive",
+      domain: "sheet_music",
+      defaultItemKind: "hymn_sheet",
+      rootLocation: { driveId: "drive-1", folderItemId: "hymn-root" },
+      enabled: true,
+      syncPolicy: { mode: "scheduled", allowedExtensions: [".pdf", ".jpg", ".jpeg", ".png"] },
+      capabilities: { read: ["main"], write: ["main:hymn_sheet:write"] }
+    });
+    await catalog.upsertItem({
+      sourceId: source.id,
+      itemKind: "hymn_sheet",
+      domain: "sheet_music",
+      title: "奔跑不放棄",
+      path: "奔跑不放棄.png",
+      extension: ".png",
+      mimeType: "image/png",
+      storageRef: { provider: "graph", driveId: "drive-1", itemId: "png-1" }
+    });
+    const graph: GraphDriveClient = {
+      listFolderChildren: vi.fn(),
+      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/png")
+    };
+    const handler = createFindPopSheetMusicHandler({
+      graph,
+      driveId: "drive-1",
+      folderItemId: "hymn-root",
+      allowedExtensions: [".pdf", ".jpg", ".jpeg", ".png"],
+      catalog
+    });
+
+    const result = await handler({ query: "奔跑不放棄" }, handlerContext());
+
+    expect(result.replyText).toContain("https://download.invalid/png");
+    expect(graph.listFolderChildren).not.toHaveBeenCalled();
+  });
+
   it("uses catalog results before crawling the sheet music folder", async () => {
     const catalog = new InMemoryCatalogStore();
     const source = await catalog.upsertSource({

@@ -10,6 +10,7 @@ const numericLimitSchema = z.preprocess((value) => {
 }, z.number().int().min(1).max(10));
 
 const dateKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const monthKeySchema = z.string().regex(/^\d{4}-\d{2}$/);
 export const scheduleTypeSchema = z.enum([
   "morning_prayer_family",
   "street_sign_service",
@@ -75,6 +76,9 @@ export const queryScheduleArgumentsSchema = z
     specificDate: dateKeySchema.optional(),
     meeting: z.string().optional(),
     role: z.string().optional(),
+    month: monthKeySchema.optional(),
+    participant: z.string().optional(),
+    domainKey: z.string().optional(),
     scheduleType: scheduleTypeSchema.optional(),
     limit: numericLimitSchema.optional()
   })
@@ -218,6 +222,9 @@ export const queryScheduleMemoryArgumentsSchema = z
     specificDate: dateKeySchema.optional(),
     meeting: z.string().optional(),
     role: z.string().optional(),
+    month: monthKeySchema.optional(),
+    participant: z.string().optional(),
+    domainKey: z.string().optional(),
     limit: numericLimitSchema.optional()
   })
   .strip();

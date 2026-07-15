@@ -75,6 +75,9 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
         : undefined;
     case "candidateCount":
       return boundedTelemetryCount(value, 5);
+    case "groundedFieldCount":
+    case "droppedFieldCount":
+      return boundedTelemetryCount(value, 32);
     case "anchorCount":
       return boundedTelemetryCount(value, 32);
     case "disposition":
@@ -158,6 +161,7 @@ const PHASES = new Set([
   "capability_candidates",
   "planner",
   "plan_validation",
+  "argument_grounding",
   "result_envelope",
   "controlled_route",
   "route",

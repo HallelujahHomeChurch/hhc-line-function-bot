@@ -106,7 +106,7 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
           profileName: input.context.profile.name,
           source: input.context.event.source,
           requesterUserId: input.context.event.source.userId,
-          resourceTypes: ["ppt_slide", "sheet_music"]
+          resourceTypes: ["ppt_slide", "sheet_music", "general_resource"]
         });
         return recent ? createResourceReply(recent) : undefined;
       }
@@ -294,6 +294,8 @@ function resourceTypesForAction(action: FunctionName): AgentResourceType[] | und
       return ["ppt_slide"];
     case "find_sheet_music":
       return ["sheet_music"];
+    case "find_resource":
+      return ["general_resource"];
     default:
       return undefined;
   }

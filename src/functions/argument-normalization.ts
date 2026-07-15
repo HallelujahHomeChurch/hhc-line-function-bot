@@ -223,12 +223,8 @@ function normalizeSheetMusicArguments(
     next.query = normalizedQuery;
   }
 
-  if (!stringArg(next, "fileType")) {
-    const inferredFileType = inferSheetMusicFileType([query, input.text].join(" "));
-    if (inferredFileType) {
-      next.fileType = inferredFileType;
-    }
-  }
+  const explicitFileType = inferSheetMusicFileType(input.text);
+  next.fileType = explicitFileType ?? "any";
 
   return next;
 }
@@ -238,7 +234,7 @@ function normalizeServiceScheduleArguments(
   input: FunctionArgumentNormalizationInput
 ): JsonRecord {
   const query = stringArg(args, "query");
-  const currentQuery = query || input.text.trim();
+  const currentQuery = input.text.trim() || query;
   if (!input.inferStructuredEvidence) {
     const next: JsonRecord = { ...args };
     if (!stringArg(next, "dateIntent")) {
@@ -262,11 +258,15 @@ function normalizeServiceScheduleArguments(
   const structured = Object.fromEntries(
     Object.entries(refinement.structuredArguments).filter(([, value]) => value !== undefined)
   );
+  const groundedModelQuery =
+    query && input.text.normalize("NFKC").includes(query.normalize("NFKC")) ? query : undefined;
   return {
     ...structured,
     ...(role ? { role } : {}),
     ...args,
-    query: currentQuery === "主日" ? "主日服事" : currentQuery
+    query:
+      groundedModelQuery ??
+      (currentQuery === "主日" ? "主日服事" : refinement.residualQuery || currentQuery)
   };
 }
 

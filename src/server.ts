@@ -44,6 +44,7 @@ import {
   pendingAttachmentPrompt,
   storePendingAttachment
 } from "./functions/pending-attachment.js";
+import { consumeUploadIntent } from "./functions/upload-intent.js";
 import { MemoryInFlightStore, type InFlightStore } from "./in-flight/in-flight-store.js";
 import { createIntroReply } from "./intro.js";
 import { buildPostbackQuickReply } from "./line-reply.js";
@@ -737,6 +738,14 @@ async function handleAttachmentMessage(input: {
   if (!input.sessionStore) {
     return { ok: true, replyText: "目前無法保存檔案，請稍後再試。" };
   }
+  if (input.event.source.type === "group") {
+    const uploadIntent = await consumeUploadIntent(
+      input.sessionStore,
+      input.profile.name,
+      input.event.source
+    );
+    if (!uploadIntent) return undefined;
+  }
   if (
     input.event.message.fileSize !== undefined &&
     input.event.message.fileSize > input.maxAttachmentBytes
@@ -1102,6 +1111,9 @@ async function allowEvent(
       }
       if (!messageTypeAllowed(profile, event)) {
         return { allowed: false, reason: "message_type_not_allowed" };
+      }
+      if (event.message?.type !== "text") {
+        return { allowed: true, reason: "group_attachment_candidate" };
       }
       if (command) {
         return { allowed: true, reason: "group_admin_command_allowed" };

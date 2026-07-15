@@ -355,18 +355,32 @@ function purposePrompt() {
 }
 
 function confirmationPreview(pending: PendingAttachmentSession, target: AttachmentTarget) {
+  const sourceLines =
+    pending.attachment.messageType === "image"
+      ? ["來源：LINE 圖片"]
+      : [
+          ...(pending.attachment.fileName ? [`檔名：${pending.attachment.fileName}`] : []),
+          ...(pending.attachment.fileSize !== undefined
+            ? [`大小：${formatBytes(pending.attachment.fileSize)}`]
+            : [])
+        ];
   return {
     ok: true as const,
     replyText: [
       "請確認要保存這個檔案：",
       `名稱：${target.title}`,
-      `檔名：${pending.attachment.fileName ?? "未提供"}`,
+      ...sourceLines,
       `類型：${labelForItemKind(target.itemKind)}`,
-      `大小：${pending.attachment.fileSize ?? "未知"} bytes`,
       "確認後會下載、驗證並掃毒，通過後才會上傳到 OneDrive。"
     ].join("\n"),
     quickReplies: confirmationQuickReplies()
   };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function confirmationQuickReplies() {

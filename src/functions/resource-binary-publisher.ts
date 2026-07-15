@@ -130,11 +130,53 @@ export function createResourceBinaryPublisher(
       });
       return {
         ok: true,
-        replyText: `已保存：${target.title}`,
-        executedAction: "save_resource"
+        replyText: [
+          "已保存檔案：",
+          `名稱：${target.title}`,
+          `檔名：${item.name || fileName}`,
+          `用途：${purposeLabel(target.itemKind)}`,
+          `大小：${formatBytes(sizeBytes)}`
+        ].join("\n"),
+        executedAction: "save_resource",
+        agentResource: {
+          resourceType: resourceTypeForItemKind(target.itemKind),
+          title: target.title,
+          storage: {
+            provider: "graph",
+            driveId: item.driveId ?? driveId,
+            itemId: item.id
+          }
+        }
       };
     }
   };
+}
+
+function resourceTypeForItemKind(itemKind: ResourcePublishItemKind) {
+  if (itemKind === "ppt_slide") return "ppt_slide" as const;
+  if (itemKind === "pop_sheet" || itemKind === "hymn_sheet") return "sheet_music" as const;
+  return "general_resource" as const;
+}
+
+function purposeLabel(itemKind: ResourcePublishItemKind): string {
+  switch (itemKind) {
+    case "ppt_slide":
+      return "投影片";
+    case "pop_sheet":
+      return "流行歌譜";
+    case "hymn_sheet":
+      return "詩歌歌譜";
+    case "church_image":
+    case "church_document":
+    case "church_other":
+      return "小哈資料庫";
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function detectContent(

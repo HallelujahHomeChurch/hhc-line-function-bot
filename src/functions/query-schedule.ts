@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   queryScheduleArgumentsSchema,
   type QueryScheduleArguments,
@@ -7,6 +9,7 @@ import type { AgentMemoryStore } from "../agent/memory-store.js";
 import type {
   FunctionHandler,
   FunctionHandlerContext,
+  FunctionExecutionResult,
   NotionDatabaseClient,
   QuickReplyItem
 } from "../types.js";
@@ -33,6 +36,8 @@ import {
 } from "./schedule-result.js";
 import { selectFirstUpcomingOccurrence } from "../schedules/occurrence-policy.js";
 import type { MeetingWindowRule } from "../types.js";
+import { resolveScheduleDomain, SCHEDULE_DOMAIN_KEYS } from "./schedule-resolver.js";
+import { storePendingResolution } from "./pending-resolution.js";
 
 export interface QueryScheduleFunctionOptions {
   memoryStore: AgentMemoryStore;
@@ -104,44 +109,95 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       ...(roleFocus ? { role: roleFocus } : {}),
       query: roleFocus ? "" : refinement.residualQuery
     });
-    const memorySpecific = Boolean(refinedArgs.scheduleType) || isMemorySpecificRequest(args.query);
-    const activeTaskSourceKeys = scheduleReadModelSourceKeys(context.activeTask?.anchors);
+    const resolution =
+      refinedArgs.scheduleType && refinedArgs.scheduleType !== "morning_prayer_family"
+        ? ({ status: "not_found" } as const)
+        : resolveScheduleDomain({
+            text: args.query,
+            requestedDomainKey: refinedArgs.domainKey,
+            activeDomainKey: activeTaskDomainKey(context.activeTask?.anchors)
+          });
+    const selectedDomain =
+      resolution.status === "selected" ? resolution.candidate.domainKey : undefined;
+    const ambiguousDomains = resolution.status === "ambiguous";
+    const memorySpecific =
+      selectedDomain === SCHEDULE_DOMAIN_KEYS.family ||
+      Boolean(refinedArgs.scheduleType) ||
+      isMemorySpecificRequest(args.query);
     const afterDate = scheduleAdvanceDate(args, context.activeTask?.anchors);
-    const results = [];
+    const results: Array<{ domainKey: string; result: FunctionExecutionResult }> = [];
+    const familyArgs = queryScheduleArgumentsSchema.parse({
+      ...refinedArgs,
+      scheduleType: "morning_prayer_family",
+      domainKey: SCHEDULE_DOMAIN_KEYS.family
+    });
+    const mediaArgs = queryScheduleArgumentsSchema.parse({
+      ...refinedArgs,
+      scheduleType: undefined,
+      domainKey: SCHEDULE_DOMAIN_KEYS.media
+    });
+    const includeFamily =
+      selectedDomain === SCHEDULE_DOMAIN_KEYS.family ||
+      ambiguousDomains ||
+      (!selectedDomain && refinement.structuredArguments.scheduleCategory !== "media_team");
+    const includeMedia =
+      selectedDomain === SCHEDULE_DOMAIN_KEYS.media ||
+      ambiguousDomains ||
+      (!selectedDomain && !memorySpecific);
 
-    if (memorySpecific || (!serviceHandler && !options.scheduleStore)) {
-      results.push(await memoryHandler(refinedArgs, context));
-    } else {
-      if (refinement.structuredArguments.scheduleCategory !== "media_team") {
-        const memory = await memoryHandler(refinedArgs, context);
-        results.push(memory);
-      }
+    if (includeFamily) {
+      const memoryArgs =
+        selectedDomain === SCHEDULE_DOMAIN_KEYS.family || ambiguousDomains
+          ? familyArgs
+          : refinedArgs;
+      const memoryResult = await memoryHandler(memoryArgs, context);
+      results.push({
+        domainKey:
+          selectedDomain === SCHEDULE_DOMAIN_KEYS.family || ambiguousDomains
+            ? SCHEDULE_DOMAIN_KEYS.family
+            : "saved_schedule",
+        result:
+          selectedDomain === SCHEDULE_DOMAIN_KEYS.family || ambiguousDomains
+            ? withScheduleDomain(memoryResult, SCHEDULE_DOMAIN_KEYS.family)
+            : memoryResult
+      });
+    }
+    if (includeMedia) {
       const readModel = options.scheduleStore
         ? await queryScheduleReadModel({
             scheduleStore: options.scheduleStore,
-            args: refinedArgs,
+            args: mediaArgs,
             profileName: context.profile.name,
             now: now(),
             timeZone,
             afterDate,
             availableRoles: activeTaskRoles(context.activeTask),
-            sourceKeys:
-              refinement.structuredArguments.scheduleCategory === "media_team"
-                ? [...MEDIA_TEAM_SCHEDULE_SOURCE_KEYS]
-                : activeTaskSourceKeys,
+            sourceKeys: [...MEDIA_TEAM_SCHEDULE_SOURCE_KEYS],
             meetingWindows: context.profile.schedulePolicy?.meetingWindows
           })
         : undefined;
       if (readModel && !isNoScheduleResult(readModel.replyText)) {
-        results.push(readModel);
+        results.push({
+          domainKey: SCHEDULE_DOMAIN_KEYS.media,
+          result: withScheduleDomain(readModel, SCHEDULE_DOMAIN_KEYS.media)
+        });
       } else if (serviceHandler) {
-        results.push(await serviceHandler(refinedArgs, context));
+        results.push({
+          domainKey: SCHEDULE_DOMAIN_KEYS.media,
+          result: withScheduleDomain(
+            await serviceHandler(mediaArgs, context),
+            SCHEDULE_DOMAIN_KEYS.media
+          )
+        });
       } else if (readModel) {
-        results.push(readModel);
+        results.push({
+          domainKey: SCHEDULE_DOMAIN_KEYS.media,
+          result: withScheduleDomain(readModel, SCHEDULE_DOMAIN_KEYS.media)
+        });
       }
     }
 
-    const found = results.filter((result) => !isNoScheduleResult(result.replyText));
+    const found = results.filter(({ result }) => !isNoScheduleResult(result.replyText));
     if (found.length === 0) {
       const replyText = "查不到符合的服事表。";
       const quickReplies: QuickReplyItem[] = [
@@ -160,14 +216,40 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
         })
       };
     }
-    if (found.length === 1) {
-      return found[0];
+    if (ambiguousDomains && new Set(found.map(({ domainKey }) => domainKey)).size > 1) {
+      const candidates = resolution.status === "ambiguous" ? resolution.candidates : [];
+      await storePendingResolution({
+        sessionStore: options.sessionStore,
+        requestId: options.requestIdFactory?.() ?? context.requestId ?? randomUUID(),
+        capability: "query_schedule",
+        groundedArguments: refinedArgs,
+        candidates,
+        context,
+        now: now()
+      });
+      const replyText = `你要查哪一類服事：${candidates.map((item) => item.displayName).join("、")}？`;
+      return {
+        ok: true,
+        replyText,
+        quickReplies: candidates.map((item) => ({
+          label: item.displayName,
+          action: { type: "message", label: item.displayName, text: item.displayName }
+        })),
+        agentResult: {
+          status: "ambiguous",
+          replyText,
+          clarification: { prompt: replyText, choices: candidates.map((item) => item.displayName) }
+        }
+      };
     }
-    const replyText = ["我找到這些服事安排：", ...found.map((result) => result.replyText)].join(
+    if (found.length === 1) {
+      return found[0].result;
+    }
+    const replyText = ["我找到這些服事安排：", ...found.map(({ result }) => result.replyText)].join(
       "\n\n"
     );
     const agentResult = aggregateScheduleResultEnvelopes(
-      found.flatMap((result) => (result.agentResult ? [result.agentResult] : [])),
+      found.flatMap(({ result }) => (result.agentResult ? [result.agentResult] : [])),
       { replyText, role: refinedArgs.role }
     );
     return {
@@ -178,21 +260,31 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
   };
 }
 
+function activeTaskDomainKey(anchors: unknown): string | undefined {
+  if (!anchors || typeof anchors !== "object") return undefined;
+  const domainKey = (anchors as Record<string, unknown>).domainKey;
+  return typeof domainKey === "string" ? domainKey : undefined;
+}
+
+function withScheduleDomain(
+  result: FunctionExecutionResult,
+  domainKey: string
+): FunctionExecutionResult {
+  if (!result.agentResult) return result;
+  return {
+    ...result,
+    agentResult: {
+      ...result.agentResult,
+      anchors: { ...result.agentResult.anchors, domainKey }
+    }
+  };
+}
+
 function activeTaskRoles(activeTask: FunctionHandlerContext["activeTask"]): string[] | undefined {
   const roles = activeTask?.entities
     .filter((entity) => entity.type === "role")
     .map((entity) => entity.label);
   return roles?.length ? roles : undefined;
-}
-
-function scheduleReadModelSourceKeys(references: unknown): string[] | undefined {
-  if (!references || typeof references !== "object") return undefined;
-  const record = references as Record<string, unknown>;
-  if (!Array.isArray(record.sourceKeys)) return undefined;
-  const sourceKeys = record.sourceKeys.filter(
-    (value): value is string => typeof value === "string"
-  );
-  return sourceKeys.length > 0 ? sourceKeys : undefined;
 }
 
 function isScheduleListRequest(query: string): boolean {
@@ -229,7 +321,9 @@ async function queryScheduleReadModel(input: {
     role: filters.role,
     range: input.afterDate
       ? { start: nextDateKey(input.afterDate), endExclusive: "9999-12-31" }
-      : filters.range,
+      : input.args.month
+        ? monthRange(input.args.month)
+        : filters.range,
     limit:
       filters.role || filters.nextMeetingOnly
         ? Math.max(filters.limit ?? 10, 50)
@@ -267,6 +361,15 @@ async function queryScheduleReadModel(input: {
     ok: true,
     replyText: agentResult.replyText,
     agentResult
+  };
+}
+
+function monthRange(month: string): { start: string; endExclusive: string } {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const next = new Date(Date.UTC(year, monthNumber, 1));
+  return {
+    start: `${month}-01`,
+    endExclusive: `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-01`
   };
 }
 

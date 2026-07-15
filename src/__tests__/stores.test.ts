@@ -25,6 +25,12 @@ class FakeRedisClient {
     return this.values.get(key) ?? null;
   }
 
+  async getDel(key: string): Promise<string | null> {
+    const value = this.values.get(key) ?? null;
+    this.values.delete(key);
+    return value;
+  }
+
   async set(
     key: string,
     value: string,
@@ -97,6 +103,37 @@ class FakeRedisClient {
 }
 
 describe("store factories", () => {
+  it("atomically consumes a Redis upload intent once", async () => {
+    const store = new RedisSessionStore({
+      client: new FakeRedisClient(),
+      keyPrefix: "test",
+      now: () => new Date("2026-07-15T10:00:00.000Z")
+    });
+    await store.set({
+      id: "intent-1",
+      type: "upload_intent",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "G1", userId: "U1" },
+      expiresAt: "2026-07-15T10:02:00.000Z"
+    });
+
+    const results = await Promise.all([
+      store.takeUploadIntent({
+        profileName: "helper",
+        source: { type: "group", groupId: "G1", userId: "U1" },
+        requesterUserId: "U1"
+      }),
+      store.takeUploadIntent({
+        profileName: "helper",
+        source: { type: "group", groupId: "G1", userId: "U1" },
+        requesterUserId: "U1"
+      })
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
   it("uses memory stores when Redis is not configured", () => {
     expect(createSessionStore({ redis: undefined })).toBeInstanceOf(InMemorySessionStore);
     expect(createCacheStore({ redis: undefined })).toBeInstanceOf(MemoryCacheStore);

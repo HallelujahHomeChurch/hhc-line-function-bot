@@ -301,6 +301,27 @@ describe("attachment save pipeline", () => {
     expect(pending).not.toHaveProperty("preview");
   });
 
+  it("does not show missing filename or unknown size for a LINE image", async () => {
+    const { sessionStore, handler } = await setup();
+    await sessionStore.set({
+      id: "pending-image",
+      type: "pending_attachment",
+      action: "save_resource",
+      stage: "awaiting_purpose",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      attachment: { messageId: "image-1", messageType: "image" },
+      expiresAt: "2026-07-11T10:10:00.000Z"
+    });
+
+    await handler.handle({ text: "小哈資料庫" }, context("小哈資料庫"));
+    const preview = await handler.handle({ text: "活動照片" }, context("活動照片"));
+
+    expect(preview?.replyText).toContain("來源：LINE 圖片");
+    expect(preview?.replyText).not.toMatch(/未提供|未知/u);
+  });
+
   it("fails closed when virus scanning is unavailable", async () => {
     const { sessionStore, catalog, graph, handler } = await setup({ scannerStatus: "unavailable" });
     await seedPendingAttachment(sessionStore);
@@ -325,6 +346,9 @@ describe("attachment save pipeline", () => {
     const result = await handler.handle({ text: "yes" }, context("yes", "req-confirm"));
 
     expect(result).toMatchObject({ executedAction: "save_resource" });
+    expect(result?.replyText).toContain("檔名：SundayDeck.pptx");
+    expect(result?.replyText).toContain("用途：投影片");
+    expect(result?.replyText).toContain("大小：8 bytes");
     expect(lineContent.getMessageContent).toHaveBeenCalledTimes(1);
     expect(scanner.scan).toHaveBeenCalledTimes(1);
     expect(graph.uploadFile).toHaveBeenCalledWith(

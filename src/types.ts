@@ -572,7 +572,7 @@ export interface LineIdentityClient {
   getGroupDisplayName(groupId: string): Promise<string | undefined>;
 }
 
-export type AgentResourceType = "ppt_slide" | "sheet_music";
+export type AgentResourceType = "ppt_slide" | "sheet_music" | "general_resource";
 
 export type AgentResourceStorage =
   | {

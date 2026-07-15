@@ -6,18 +6,21 @@ import type {
   PendingAttachmentSession,
   PendingFunctionLookup,
   PendingFunctionSession,
+  PendingResolutionSession,
   PptSelectionLookup,
   PptSelectionSession,
   SelectionLookup,
   SelectionSession,
   SessionStore,
-  SessionStoreSummary
+  SessionStoreSummary,
+  UploadIntentSession
 } from "./session-store.js";
 import type { LineSource } from "../types.js";
 import { requesterMatchesForSource } from "./session-safety.js";
 
 export interface RedisSessionClient {
   get(key: string): Promise<string | null>;
+  getDel(key: string): Promise<string | null>;
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
   del(key: string | string[]): Promise<number>;
   keys(pattern: string): Promise<string[]>;
@@ -42,6 +45,23 @@ export class RedisSessionStore implements SessionStore {
   }
 
   async set(session: ConversationSession): Promise<void> {
+    if (isInteractiveSession(session)) {
+      const conflicts = (await this.liveSessions()).filter(
+        (existing) =>
+          existing.id !== session.id &&
+          isInteractiveSession(existing) &&
+          existing.profileName === session.profileName &&
+          sourceMatches(existing.source, session.source) &&
+          requesterMatchesForSource(
+            session.source,
+            existing.requesterUserId,
+            session.requesterUserId
+          )
+      );
+      if (conflicts.length > 0) {
+        await this.options.client.del(conflicts.map((existing) => this.key(existing.id)));
+      }
+    }
     const ttlMs = new Date(session.expiresAt).getTime() - this.now().getTime();
     await this.options.client.setEx(
       this.key(session.id),
@@ -108,6 +128,38 @@ export class RedisSessionStore implements SessionStore {
       );
 
     return latestSession(liveSessions);
+  }
+
+  async findPendingResolution(
+    lookup: PptSelectionLookup
+  ): Promise<PendingResolutionSession | undefined> {
+    const sessions = (await this.liveSessions())
+      .filter(
+        (session): session is PendingResolutionSession => session.type === "pending_resolution"
+      )
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
+    return latestSession(sessions);
+  }
+
+  async takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined> {
+    const sessions = (await this.liveSessions())
+      .filter((session): session is UploadIntentSession => session.type === "upload_intent")
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
+    const selected = latestSession(sessions);
+    if (!selected) return undefined;
+    const key = this.key(selected.id);
+    const raw = await this.options.client.getDel(key);
+    if (!raw) return undefined;
+    return this.liveSession(JSON.parse(raw) as UploadIntentSession) as
+      UploadIntentSession | undefined;
   }
 
   async findExternalSearchConsent(
@@ -187,6 +239,12 @@ export class RedisSessionStore implements SessionStore {
   private key(idOrPattern: string): string {
     return `${this.options.keyPrefix}:session:${idOrPattern}`;
   }
+}
+
+function isInteractiveSession(session: ConversationSession): boolean {
+  return ["pending_function", "pending_resolution", "pending_attachment", "upload_intent"].includes(
+    session.type
+  );
 }
 
 function ttlSeconds(ttlMs: number): number {

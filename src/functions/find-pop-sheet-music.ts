@@ -763,7 +763,7 @@ function resolveSearchExtensions(
   configuredExtensions: string[],
   args: FindPopSheetMusicArguments
 ): string[] {
-  switch (args.fileType ?? "pdf") {
+  switch (args.fileType ?? "any") {
     case "pdf":
       return configuredExtensions.filter((extension) => extension === ".pdf");
     case "image":

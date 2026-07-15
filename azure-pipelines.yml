@@ -178,7 +178,7 @@ stages:
                   "LINE_CONTENT_DOWNLOAD_TIMEOUT_MS=30000"
                   "EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS=15000"
                   "EXTERNAL_RESOURCE_MAX_REDIRECTS=3"
-                  "SHEET_MUSIC_ALLOWED_EXTENSIONS=pdf,jpg,jpeg"
+                  "SHEET_MUSIC_ALLOWED_EXTENSIONS=pdf,jpg,jpeg,png"
                   "SEARXNG_BASE_URL=http://172.16.65.5:8888"
                   "SEARXNG_TIMEOUT_MS=8000"
                   "CLAMAV_HOST=172.16.65.5"

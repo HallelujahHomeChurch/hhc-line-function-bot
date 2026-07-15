@@ -33,7 +33,7 @@ describe("catalog source seeds", () => {
     });
     expect(seeds.find((source) => source.sourceKey === "pop_sheet_music")).toMatchObject({
       rootLocation: { driveId: "pop-drive", folderItemId: "pop-root" },
-      syncPolicy: { allowedExtensions: [".pdf", ".jpg", ".jpeg"] }
+      syncPolicy: { allowedExtensions: [".pdf", ".jpg", ".jpeg", ".png"] }
     });
     expect(seeds.find((source) => source.sourceKey === "xiaoha_database")?.rootLocation).toEqual({
       driveId: "drive-1",

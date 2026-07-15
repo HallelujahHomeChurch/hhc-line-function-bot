@@ -234,7 +234,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
             driveId: env.GRAPH_DRIVE_ID,
             pptFolderItemId: env.GRAPH_PPT_FOLDER_ITEM_ID,
             sheetMusicAllowedExtensions: readList(
-              env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg"
+              env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg,png"
             ).map((ext) => (ext.startsWith(".") ? ext : `.${ext}`)),
             allowedExtensions: [".pptx", ".ppt", ".key", ".odp"],
             defaultIncludePdf: false,

@@ -6,6 +6,26 @@ import {
 } from "../functions/argument-normalization.js";
 
 describe("function argument normalization", () => {
+  it("drops a model-only sheet music format and defaults the search to any", () => {
+    expect(
+      normalizeFunctionArguments(
+        "find_sheet_music",
+        { query: "奔跑不放棄", fileType: "pdf" },
+        { text: "幫我找奔跑不放棄歌譜" }
+      )
+    ).toMatchObject({ query: "奔跑不放棄", fileType: "any" });
+  });
+
+  it("keeps an explicitly requested sheet music format", () => {
+    expect(
+      normalizeFunctionArguments(
+        "find_sheet_music",
+        { query: "奔跑不放棄", fileType: "pdf" },
+        { text: "幫我找奔跑不放棄 PDF 歌譜" }
+      )
+    ).toMatchObject({ fileType: "pdf" });
+  });
+
   it("normalizes generic knowledge ordinals without a travel-specific rule", () => {
     expect(
       normalizeFunctionArguments(
@@ -76,7 +96,7 @@ describe("function argument normalization", () => {
       )
     ).toMatchObject({
       query: "A TIME FOR US",
-      fileType: "pdf"
+      fileType: "any"
     });
   });
 

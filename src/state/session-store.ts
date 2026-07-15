@@ -74,6 +74,27 @@ export interface PendingAttachmentSession {
   expiresAt: string;
 }
 
+export interface UploadIntentSession {
+  id: string;
+  type: "upload_intent";
+  profileName: string;
+  requesterUserId: string;
+  source: LineSource;
+  expiresAt: string;
+}
+
+export interface PendingResolutionSession {
+  id: string;
+  type: "pending_resolution";
+  profileName: string;
+  requesterUserId: string;
+  source: LineSource;
+  capability: FunctionName;
+  groundedArguments: JsonRecord;
+  candidates: Array<{ id: string; domainKey: string; displayName: string }>;
+  expiresAt: string;
+}
+
 export interface ExternalSearchConsentSession {
   id: string;
   type: "external_search_consent";
@@ -106,6 +127,8 @@ export type ConversationSession =
   | SelectionSession
   | PendingFunctionSession
   | PendingAttachmentSession
+  | UploadIntentSession
+  | PendingResolutionSession
   | ExternalSearchConsentSession
   | ExternalSheetMusicImportSession;
 export type ConversationSessionType = ConversationSession["type"];
@@ -141,6 +164,8 @@ export interface SessionStore {
   findSelection(lookup: SelectionLookup): Promise<SelectionSession | undefined>;
   findPendingFunction(lookup: PendingFunctionLookup): Promise<PendingFunctionSession | undefined>;
   findPendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
+  findPendingResolution(lookup: PptSelectionLookup): Promise<PendingResolutionSession | undefined>;
+  takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined>;
   findExternalSearchConsent(
     lookup: ExternalSearchConsentLookup
   ): Promise<ExternalSearchConsentSession | undefined>;
@@ -241,6 +266,41 @@ export class InMemorySessionStore implements SessionStore {
     )[0];
   }
 
+  async findPendingResolution(
+    lookup: PptSelectionLookup
+  ): Promise<PendingResolutionSession | undefined> {
+    return Array.from(this.sessions.values())
+      .map((candidate) => this.liveSession(candidate))
+      .filter(
+        (candidate): candidate is PendingResolutionSession =>
+          candidate?.type === "pending_resolution"
+      )
+      .filter((candidate) => candidate.profileName === lookup.profileName)
+      .filter((candidate) => sourceMatches(candidate.source, lookup.source))
+      .filter((candidate) =>
+        requesterMatchesForSource(lookup.source, candidate.requesterUserId, lookup.requesterUserId)
+      )
+      .sort(
+        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+      )[0];
+  }
+
+  async takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined> {
+    const session = Array.from(this.sessions.values())
+      .map((candidate) => this.liveSession(candidate))
+      .filter((candidate): candidate is UploadIntentSession => candidate?.type === "upload_intent")
+      .filter((candidate) => candidate.profileName === lookup.profileName)
+      .filter((candidate) => sourceMatches(candidate.source, lookup.source))
+      .filter((candidate) =>
+        requesterMatchesForSource(lookup.source, candidate.requesterUserId, lookup.requesterUserId)
+      )
+      .sort(
+        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+      )[0];
+    if (session) this.sessions.delete(session.id);
+    return session;
+  }
+
   async findExternalSearchConsent(
     lookup: ExternalSearchConsentLookup
   ): Promise<ExternalSearchConsentSession | undefined> {
@@ -291,6 +351,23 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async set(session: ConversationSession): Promise<void> {
+    if (isInteractiveSession(session)) {
+      for (const existing of this.sessions.values()) {
+        if (
+          existing.id !== session.id &&
+          isInteractiveSession(existing) &&
+          existing.profileName === session.profileName &&
+          sourceMatches(existing.source, session.source) &&
+          requesterMatchesForSource(
+            session.source,
+            existing.requesterUserId,
+            session.requesterUserId
+          )
+        ) {
+          this.sessions.delete(existing.id);
+        }
+      }
+    }
     this.sessions.set(session.id, {
       ...session,
       expiresAt: session.expiresAt || new Date(this.now().getTime() + this.ttlMs).toISOString()
@@ -322,6 +399,12 @@ export class InMemorySessionStore implements SessionStore {
     this.sessions.clear();
     return count;
   }
+}
+
+function isInteractiveSession(session: ConversationSession): boolean {
+  return ["pending_function", "pending_resolution", "pending_attachment", "upload_intent"].includes(
+    session.type
+  );
 }
 
 function sourceMatches(expected: LineSource, actual: LineSource): boolean {

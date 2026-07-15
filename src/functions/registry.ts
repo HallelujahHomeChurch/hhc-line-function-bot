@@ -33,6 +33,7 @@ import type {
 } from "../types.js";
 import { FUNCTION_MODULES } from "./modules.js";
 import { createPendingFunctionTextMessageHandler } from "./pending-function.js";
+import { createPendingResolutionTextMessageHandler } from "./pending-resolution.js";
 
 export interface RegistryClients {
   graph?: GraphDriveClient;
@@ -119,6 +120,10 @@ export function createFunctionRegistries(
   }
 
   if (Object.keys(functions).length > 0) {
+    textMessages.pending_resolution_answer = createPendingResolutionTextMessageHandler({
+      sessionStore,
+      functions
+    });
     textMessages.pending_function_answer = createPendingFunctionTextMessageHandler({
       sessionStore,
       functions

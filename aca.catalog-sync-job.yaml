@@ -92,7 +92,7 @@ properties:
           - name: GRAPH_LINK_TYPE
             value: view
           - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
-            value: pdf,jpg,jpeg
+            value: pdf,jpg,jpeg,png
           - name: NOTION_TOKEN
             secretRef: notion-token
           - name: NOTION_SERVICE_DATABASE_ID

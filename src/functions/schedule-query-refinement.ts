@@ -13,6 +13,9 @@ export type QueryScheduleStructuredArguments = JsonRecord & {
   specificDate?: string;
   meeting?: string;
   role?: string;
+  month?: string;
+  participant?: string;
+  domainKey?: string;
   scheduleType?: QueryScheduleArguments["scheduleType"];
   scheduleCategory?: ScheduleCategory;
   limit?: number;
@@ -97,12 +100,32 @@ export function refineScheduleQuery(
   if (!structuredArguments.meeting && originalQuery.includes("主日")) {
     structuredArguments.meeting = "主日";
   }
+  if (!structuredArguments.meeting && originalQuery.includes("仙履奇緣")) {
+    structuredArguments.meeting = "仙履奇緣";
+  }
+  if (!structuredArguments.meeting && originalQuery.includes("晨更")) {
+    structuredArguments.meeting = "晨更";
+  }
   consumeIfPresent(originalQuery, structuredArguments.meeting, consumedTerms);
 
   if (!structuredArguments.role) {
     structuredArguments.role = extractKnownScheduleRole(originalQuery);
   }
   consumeIfPresent(originalQuery, structuredArguments.role, consumedTerms);
+
+  if (!structuredArguments.participant) {
+    structuredArguments.participant = inferScheduleParticipant(originalQuery);
+  }
+  consumeIfPresent(originalQuery, structuredArguments.participant, consumedTerms);
+
+  if (!structuredArguments.month) {
+    const month = originalQuery.match(/(?<!\d)(?<month>\d{1,2})\s*月(?!\s*\d)/u)?.groups?.month;
+    if (month) {
+      const year = Number(new Intl.DateTimeFormat("en", { timeZone, year: "numeric" }).format(now));
+      structuredArguments.month = `${year}-${String(Number(month)).padStart(2, "0")}`;
+      consumedTerms.push(`${month}月`);
+    }
+  }
 
   const mediaTerm = MEDIA_TERMS.find((term) => originalQuery.includes(term));
   if (mediaTerm) {
@@ -131,6 +154,16 @@ export function refineScheduleQuery(
       genericTerms: GENERIC_SCHEDULE_TERMS
     })
   };
+}
+
+function inferScheduleParticipant(query: string): string | undefined {
+  const match = query.match(/[\p{Script=Han}\d]{1,12}(?:家族|家園)\d?/u)?.[0];
+  if (!match) return undefined;
+  const cleaned = match.replace(
+    /^.*(?:幫我|請|查詢|查|找|給我|下一次|下一場|下次|下場|最近一場)/u,
+    ""
+  );
+  return /^(?:晨更|服事|哪個)/u.test(cleaned) || /服事家族/u.test(cleaned) ? undefined : cleaned;
 }
 
 export function extractScheduleRoleFocus(input: {
@@ -229,6 +262,9 @@ function copyStructuredArguments(args: QueryScheduleArguments): QueryScheduleStr
       specificDate: args.specificDate,
       meeting: args.meeting,
       role: args.role,
+      month: args.month,
+      participant: args.participant,
+      domainKey: args.domainKey,
       scheduleType: args.scheduleType,
       limit: args.limit
     }).filter(([, value]) => value !== undefined)
@@ -262,11 +298,6 @@ function inferScheduleType(query: string):
   for (const term of ["為耶穌", "舉牌"]) {
     if (query.includes(term)) {
       return { scheduleType: "street_sign_service", term };
-    }
-  }
-  for (const term of ["仙履奇緣", "晨更"]) {
-    if (query.includes(term)) {
-      return { scheduleType: "morning_prayer_family", term };
     }
   }
   return undefined;
