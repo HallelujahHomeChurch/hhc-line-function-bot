@@ -463,6 +463,8 @@ alive.azurecr.io/alive/hhc-line-function-bot:latest
 
 `scripts/deploy-aca.sh` updates the bot and catalog-sync job, restores the required Dapr configuration, and waits for the new bot revision to be healthy. Azure Container Apps runtime secrets remain preconfigured in Azure.
 
+`azure-pipelines.yml` is retained as a manual rollback path with CI and PR triggers disabled. Do not enable both automatic deployment systems at the same time.
+
 ## Verification
 
 ```powershell

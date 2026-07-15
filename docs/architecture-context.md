@@ -557,3 +557,4 @@ Pushing app/build/deploy path changes to `main` can deploy through GitHub
 Actions. Docs and agent-instruction-only changes should not trigger the workflow
 by current path filters, but still check
 `.github/workflows/hhc-line-function-bot.yml` if trigger behavior changes.
+The retained `azure-pipelines.yml` has no CI or PR trigger and is manual-only.

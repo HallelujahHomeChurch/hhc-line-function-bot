@@ -232,7 +232,7 @@ Testing map:
 
 ## Deployment Context
 
-- CI/CD is defined in `.github/workflows/hhc-line-function-bot.yml`; `scripts/deploy-aca.sh` owns the shared Azure Container Apps deployment sequence.
+- CI/CD is defined in `.github/workflows/hhc-line-function-bot.yml`; `scripts/deploy-aca.sh` owns the shared Azure Container Apps deployment sequence. `azure-pipelines.yml` is retained as a manual-only fallback with CI and PR triggers disabled.
 - Images are built for `alive.azurecr.io`.
 - Runtime configuration and secrets belong in Azure Container Apps/Azure secrets, not in the repository.
 - Production LINE callback traffic enters through the public `api-gateway`, whose Nginx route invokes Dapr app id `hhc-line-function-bot` at `/v1.0/invoke/hhc-line-function-bot/method/api/line/webhook/{profileName}`. The bot Container App must keep Dapr enabled with `appId=hhc-line-function-bot`, `appPort=3000`, and `appProtocol=http`; do not disable Dapr while this gateway route exists.
