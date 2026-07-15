@@ -10,6 +10,7 @@ import {
   RedisRegistrationInviteCodeStore
 } from "./access/registration-invite-code-store.js";
 import { createAgentMemoryStore } from "./agent/create-agent-memory-store.js";
+import { backfillAgentTextMemoryEmbeddings } from "./agent/text-memory-embedding-backfill.js";
 import { createAgentRuntime } from "./agent/agent-runtime.js";
 import { createAgentPlanner } from "./agent/planner.js";
 import { createControlledAgentRouter } from "./agent/controlled-agent-router.js";
@@ -212,6 +213,13 @@ const knowledgeEmbedding = config.knowledge
       keepAlive: config.knowledge.embedding.keepAlive
     })
   : undefined;
+if (knowledgeEmbedding) {
+  void backfillAgentTextMemoryEmbeddings({
+    store: memoryStore,
+    embedding: knowledgeEmbedding,
+    batchSize: config.knowledge?.embedding.batchSize ?? 20
+  }).catch(() => undefined);
+}
 const notionKnowledge = config.knowledge
   ? createNotionKnowledgeClient(config.knowledge.notionToken)
   : undefined;

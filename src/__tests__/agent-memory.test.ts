@@ -8,6 +8,9 @@ import {
   createSaveMemoryHandler
 } from "../functions/agent-memory-functions.js";
 import type { BotProfileConfig, FunctionHandlerContext, GraphDriveClient } from "../types.js";
+import type { EmbeddingClient } from "../clients/ollama-embedding.js";
+import type { TextGenerationProvider } from "../types.js";
+import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
 
 function profile(): BotProfileConfig {
   return {
@@ -39,6 +42,103 @@ function context(): FunctionHandlerContext {
 }
 
 describe("agent memory", () => {
+  it("can retrieve a visible memory by semantic similarity without a substring match", async () => {
+    const store = new InMemoryAgentMemoryStore({ now: () => new Date("2026-07-16T12:00:00Z") });
+    await store.saveTextMemory({
+      profileName: "helper",
+      source: { type: "user", userId: "U1" },
+      createdBy: "U1",
+      content: "器材室鑰匙放在行政桌抽屜",
+      embedding: [1, 0, 0]
+    });
+
+    await expect(
+      store.searchTextMemories({
+        profileName: "helper",
+        source: { type: "user", userId: "U1" },
+        requesterUserId: "U1",
+        query: "要去哪裡拿開門的東西",
+        queryEmbedding: [0.98, 0.02, 0],
+        limit: 5
+      })
+    ).resolves.toEqual([expect.objectContaining({ content: "器材室鑰匙放在行政桌抽屜" })]);
+  });
+
+  it("backfills missing text-memory embeddings in a bounded idempotent batch", async () => {
+    const store = new InMemoryAgentMemoryStore();
+    await store.saveTextMemory({
+      profileName: "helper",
+      source: { type: "user", userId: "U1" },
+      createdBy: "U1",
+      title: "鑰匙",
+      content: "放在行政桌"
+    });
+    const embedding: EmbeddingClient = {
+      provider: "test",
+      model: "test",
+      dimensions: 3,
+      embed: vi.fn().mockResolvedValue([[1, 0, 0]])
+    };
+
+    await expect(
+      backfillAgentTextMemoryEmbeddings({ store, embedding, batchSize: 10 })
+    ).resolves.toEqual({ scanned: 1, updated: 1, failed: 0 });
+    await expect(
+      backfillAgentTextMemoryEmbeddings({ store, embedding, batchSize: 10 })
+    ).resolves.toEqual({ scanned: 0, updated: 0, failed: 0 });
+  });
+
+  it("falls back to lexical memory search when embedding is unavailable", async () => {
+    const store = new InMemoryAgentMemoryStore();
+    await store.saveTextMemory({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      createdBy: "U1",
+      content: "器材室鑰匙放在行政桌抽屜"
+    });
+    const embedding: EmbeddingClient = {
+      provider: "test",
+      model: "test",
+      dimensions: 3,
+      embed: vi.fn().mockRejectedValue(new Error("offline"))
+    };
+    const handler = createRetrieveMemoryHandler({ memoryStore: store, embedding });
+
+    await expect(handler({ query: "器材室鑰匙" }, context())).resolves.toMatchObject({
+      ok: true,
+      replyText: "器材室鑰匙放在行政桌抽屜"
+    });
+  });
+
+  it("sends only requester-visible memories to the grounded answer provider", async () => {
+    const store = new InMemoryAgentMemoryStore();
+    const source = { type: "group" as const, groupId: "C1", userId: "U1" };
+    await store.saveTextMemory({
+      profileName: "helper",
+      source,
+      createdBy: "U1",
+      visibility: "group",
+      title: "集合",
+      content: "集合地點在一樓"
+    });
+    await store.saveTextMemory({
+      profileName: "helper",
+      source: { ...source, userId: "U2" },
+      createdBy: "U2",
+      visibility: "private",
+      title: "私人",
+      content: "不可洩漏的內容"
+    });
+    const completeText = vi.fn().mockResolvedValue("一樓");
+    const textGenerator: TextGenerationProvider = { completeText };
+    const handler = createRetrieveMemoryHandler({ memoryStore: store, textGenerator });
+
+    await handler({ query: "集合" }, context());
+
+    expect(completeText).toHaveBeenCalledOnce();
+    expect(completeText.mock.calls[0]?.[0].text).toContain("集合地點在一樓");
+    expect(completeText.mock.calls[0]?.[0].text).not.toContain("不可洩漏的內容");
+  });
   it("previews group-shared memory with its 30-day retention before saving", async () => {
     const store = new InMemoryAgentMemoryStore();
     const handler = createSaveMemoryHandler({ memoryStore: store });
@@ -514,5 +614,26 @@ describe("agent memory", () => {
         }
       }
     ]);
+  });
+
+  it("filters Postgres memory authority before hybrid ranking", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const store = new PostgresAgentMemoryStore({ query });
+
+    await store.searchTextMemories({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      requesterUserId: "U1",
+      query: "鑰匙在哪裡",
+      queryEmbedding: [1, 0, 0],
+      limit: 3
+    });
+
+    const [sql, values] = query.mock.calls[0]!;
+    expect(sql).toContain("with authorized_memories as materialized");
+    expect(sql).toContain("profile_name = $1");
+    expect(sql).toContain("visibility = 'group' or created_by");
+    expect(sql).toContain("embedding <=>");
+    expect(values).toEqual(["helper", "group", "C1", "U1", "鑰匙在哪裡", "[1,0,0]", 3]);
   });
 });

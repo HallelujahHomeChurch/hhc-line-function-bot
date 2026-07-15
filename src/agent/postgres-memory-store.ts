@@ -16,6 +16,7 @@ import {
   type AgentScheduleEntryRecord,
   type AgentScheduleMemoryRecord,
   type AgentTextMemoryRecord,
+  type AgentTextMemoryEmbeddingCandidate,
   type FindAgentResourceByAliasInput,
   type FindRecentAgentResourceInput,
   type ForgetAgentMemoryInput,
@@ -243,8 +244,9 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
     const result = await this.db.query(
       `
       insert into agent_text_memories
-        (id, profile_name, scope_type, scope_id, title, content, query_text, created_by, visibility, expires_at)
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        (id, profile_name, scope_type, scope_id, title, content, query_text, created_by,
+         visibility, expires_at, embedding)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::vector)
       returning *
       `,
       [
@@ -257,7 +259,8 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
         input.query ?? null,
         input.createdBy ?? null,
         input.visibility ?? "private",
-        input.expiresAt ?? this.defaultExpiresAt()
+        input.expiresAt ?? this.defaultExpiresAt(),
+        vectorParameter(input.embedding)
       ]
     );
     return mapTextMemory(result.rows[0]);
@@ -265,7 +268,7 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
 
   async searchTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]> {
     const scope = scopeFromSource(input.source);
-    const limit = Math.max(input.limit ?? 5, 5);
+    const limit = Math.max(1, Math.min(input.limit ?? 5, 20));
     const values: unknown[] = [input.profileName, scope.type, scope.id];
     const visibilityFilter = visibilitySqlFilter(
       "visibility",
@@ -273,32 +276,79 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
       input.requesterUserId ?? input.source.userId,
       values
     );
-    const limitParam = values.length + 1;
-    values.push(Math.max(limit, 50));
+    const queryParam = values.push(normalizeLookupText(input.query ?? ""));
+    const vectorParam = input.queryEmbedding?.length
+      ? values.push(vectorParameter(input.queryEmbedding))
+      : undefined;
+    const limitParam = values.push(limit);
+    const normalizedDocument =
+      "regexp_replace(lower(coalesce(title, '') || ' ' || content || ' ' || coalesce(query_text, '')), '\\s+', '', 'g')";
+    const lexicalMatch = `${normalizedDocument} like '%' || $${queryParam} || '%'`;
+    const semanticScore = vectorParam
+      ? `case when embedding is null then null else 1 - (embedding <=> $${vectorParam}::vector) end`
+      : "null::double precision";
+    const semanticMatch = vectorParam
+      ? `embedding is not null and (embedding <=> $${vectorParam}::vector) <= 0.35`
+      : "false";
     const result = await this.db.query(
       `
+      with authorized_memories as materialized (
+        select *
+        from agent_text_memories
+        where profile_name = $1
+          and scope_type = $2
+          and scope_id = $3
+          ${visibilityFilter}
+          and deleted_at is null
+          and expires_at > now()
+      ), ranked as (
+        select *,
+          ($${queryParam} = '' or ${lexicalMatch}) as lexical_match,
+          ${semanticScore} as semantic_score
+        from authorized_memories
+      )
       select *
-      from agent_text_memories
-      where profile_name = $1
-        and scope_type = $2
-        and scope_id = $3
-        ${visibilityFilter}
-        and deleted_at is null
-        and expires_at > now()
-      order by created_at desc
+      from ranked
+      where $${queryParam} = '' or lexical_match or (${semanticMatch})
+      order by lexical_match desc, semantic_score desc nulls last, created_at desc
       limit $${limitParam}
       `,
       values
     );
-    const query = normalizeLookupText(input.query ?? "");
-    return result.rows
-      .map(mapTextMemory)
-      .filter((memory) => !query || normalizeLookupText(memorySearchText(memory)).includes(query))
-      .slice(0, input.limit ?? 5);
+    return result.rows.map(mapTextMemory);
   }
 
   async listTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]> {
     return this.searchTextMemories({ ...input, query: undefined });
+  }
+
+  async listTextMemoriesMissingEmbedding(
+    limit: number
+  ): Promise<AgentTextMemoryEmbeddingCandidate[]> {
+    const result = await this.db.query(
+      `select id, title, content
+       from agent_text_memories
+       where embedding is null and deleted_at is null and expires_at > now()
+       order by created_at asc
+       limit $1`,
+      [Math.max(0, Math.min(limit, 100))]
+    );
+    return result.rows.map((row) => ({
+      id: String(row.id),
+      title: optionalString(row.title),
+      content: String(row.content)
+    }));
+  }
+
+  async updateTextMemoryEmbedding(id: string, embedding: number[]): Promise<boolean> {
+    const result = await this.db.query(
+      `update agent_text_memories
+       set embedding = $2::vector
+       where id = $1 and embedding is null and deleted_at is null and expires_at > now()
+       returning id`,
+      [id, vectorParameter(embedding)]
+    );
+    return result.rows.length > 0;
   }
 
   async saveScheduleMemory(
@@ -803,8 +853,9 @@ function visibilitySqlFilter(
   return `and (${column} = 'group' or ${createdByColumn} = $${values.length})`;
 }
 
-function memorySearchText(record: AgentTextMemoryRecord): string {
-  return [record.title, record.query, record.content].filter(Boolean).join(" ");
+function vectorParameter(vector: number[] | undefined): string | null {
+  if (!vector?.length || vector.some((value) => !Number.isFinite(value))) return null;
+  return `[${vector.join(",")}]`;
 }
 
 function scheduleEntrySearchText(record: AgentScheduleEntryRecord): string {
