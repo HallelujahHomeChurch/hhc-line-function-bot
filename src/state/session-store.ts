@@ -95,6 +95,18 @@ export interface PendingResolutionSession {
   expiresAt: string;
 }
 
+export interface PendingCapabilityResolutionSession {
+  id: string;
+  type: "pending_capability_resolution";
+  version: 1;
+  profileName: string;
+  requesterUserId: string;
+  source: LineSource;
+  originalText: string;
+  candidates: Array<{ capability: FunctionName; label: string }>;
+  expiresAt: string;
+}
+
 export interface ExternalSearchConsentSession {
   id: string;
   type: "external_search_consent";
@@ -129,6 +141,7 @@ export type ConversationSession =
   | PendingAttachmentSession
   | UploadIntentSession
   | PendingResolutionSession
+  | PendingCapabilityResolutionSession
   | ExternalSearchConsentSession
   | ExternalSheetMusicImportSession;
 export type ConversationSessionType = ConversationSession["type"];
@@ -165,6 +178,9 @@ export interface SessionStore {
   findPendingFunction(lookup: PendingFunctionLookup): Promise<PendingFunctionSession | undefined>;
   findPendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
   findPendingResolution(lookup: PptSelectionLookup): Promise<PendingResolutionSession | undefined>;
+  findPendingCapabilityResolution(
+    lookup: PptSelectionLookup
+  ): Promise<PendingCapabilityResolutionSession | undefined>;
   takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined>;
   findExternalSearchConsent(
     lookup: ExternalSearchConsentLookup
@@ -274,6 +290,25 @@ export class InMemorySessionStore implements SessionStore {
       .filter(
         (candidate): candidate is PendingResolutionSession =>
           candidate?.type === "pending_resolution"
+      )
+      .filter((candidate) => candidate.profileName === lookup.profileName)
+      .filter((candidate) => sourceMatches(candidate.source, lookup.source))
+      .filter((candidate) =>
+        requesterMatchesForSource(lookup.source, candidate.requesterUserId, lookup.requesterUserId)
+      )
+      .sort(
+        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+      )[0];
+  }
+
+  async findPendingCapabilityResolution(
+    lookup: PptSelectionLookup
+  ): Promise<PendingCapabilityResolutionSession | undefined> {
+    return Array.from(this.sessions.values())
+      .map((candidate) => this.liveSession(candidate))
+      .filter(
+        (candidate): candidate is PendingCapabilityResolutionSession =>
+          candidate?.type === "pending_capability_resolution"
       )
       .filter((candidate) => candidate.profileName === lookup.profileName)
       .filter((candidate) => sourceMatches(candidate.source, lookup.source))
@@ -402,9 +437,13 @@ export class InMemorySessionStore implements SessionStore {
 }
 
 function isInteractiveSession(session: ConversationSession): boolean {
-  return ["pending_function", "pending_resolution", "pending_attachment", "upload_intent"].includes(
-    session.type
-  );
+  return [
+    "pending_function",
+    "pending_resolution",
+    "pending_capability_resolution",
+    "pending_attachment",
+    "upload_intent"
+  ].includes(session.type);
 }
 
 function sourceMatches(expected: LineSource, actual: LineSource): boolean {

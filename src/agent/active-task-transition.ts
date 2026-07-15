@@ -6,6 +6,8 @@ import type { ConversationWindowScope, ConversationWindowStore } from "./context
 
 export type ActiveTaskTransitionOutcome = "write" | "replace" | "preserve" | "clear";
 
+const CONTINUATION_OPERATIONS = new Set(["continue", "refine", "advance", "view_full"]);
+
 export async function applyActiveTaskTransition(input: {
   store?: ConversationWindowStore;
   scope?: ConversationWindowScope;
@@ -27,7 +29,9 @@ export async function applyActiveTaskTransition(input: {
   const contractOperations = getFunctionDefinition(input.capability)?.agentCapability?.operations;
   const resultOperations = input.result.agentResult.supportedOperations ?? [];
   const continuable = Boolean(
-    contractOperations?.some((operation) => resultOperations.includes(operation))
+    contractOperations?.some(
+      (operation) => CONTINUATION_OPERATIONS.has(operation) && resultOperations.includes(operation)
+    )
   );
   const ttlMs = Math.max(1, input.ttlMs);
   const next = continuable

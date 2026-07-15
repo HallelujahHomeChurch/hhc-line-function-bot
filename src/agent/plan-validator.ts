@@ -75,6 +75,7 @@ export type ValidatedAgentPlan =
   | {
       disposition: "clarify";
       capability?: FunctionName;
+      candidateCapabilities?: FunctionName[];
       reasonCode:
         | "active_task_unavailable"
         | "ambiguous_entity"

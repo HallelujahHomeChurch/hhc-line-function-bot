@@ -4,6 +4,7 @@ import type {
   ExternalSearchConsentSession,
   ExternalSheetMusicImportSession,
   PendingAttachmentSession,
+  PendingCapabilityResolutionSession,
   PendingFunctionLookup,
   PendingFunctionSession,
   PendingResolutionSession,
@@ -145,6 +146,22 @@ export class RedisSessionStore implements SessionStore {
     return latestSession(sessions);
   }
 
+  async findPendingCapabilityResolution(
+    lookup: PptSelectionLookup
+  ): Promise<PendingCapabilityResolutionSession | undefined> {
+    const liveSessions = (await this.liveSessions())
+      .filter(
+        (session): session is PendingCapabilityResolutionSession =>
+          session.type === "pending_capability_resolution"
+      )
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => sourceMatches(session.source, lookup.source))
+      .filter((session) =>
+        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+      );
+    return latestSession(liveSessions);
+  }
+
   async takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined> {
     const sessions = (await this.liveSessions())
       .filter((session): session is UploadIntentSession => session.type === "upload_intent")
@@ -242,9 +259,13 @@ export class RedisSessionStore implements SessionStore {
 }
 
 function isInteractiveSession(session: ConversationSession): boolean {
-  return ["pending_function", "pending_resolution", "pending_attachment", "upload_intent"].includes(
-    session.type
-  );
+  return [
+    "pending_function",
+    "pending_resolution",
+    "pending_capability_resolution",
+    "pending_attachment",
+    "upload_intent"
+  ].includes(session.type);
 }
 
 function ttlSeconds(ttlMs: number): number {

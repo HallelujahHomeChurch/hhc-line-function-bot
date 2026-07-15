@@ -49,6 +49,10 @@ import type {
 } from "../types.js";
 import type { AgentRuntime } from "./agent-runtime.js";
 import {
+  createCapabilityResolution,
+  resumeCapabilityResolution
+} from "./capability-resolution.js";
+import {
   type AgentTraceStore,
   type AgentTurnTraceRecord,
   type AgentTurnTraceStep
@@ -248,14 +252,36 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         return undefined;
       }
 
-      const queryClarification = createQueryClarificationReply(input.profile, text);
+      const resumedResolution = await resumeCapabilityResolution({
+        sessionStore: options.sessionStore,
+        profileName: input.profile.name,
+        source: input.event.source,
+        requesterUserId: input.event.source.userId,
+        text,
+        enabledFunctions: input.profile.enabledFunctions
+      });
+      if (resumedResolution.kind === "reply") {
+        steps.push({ phase: "capability_resolution", outcome: "handled", ok: true });
+        return finish(input, steps, resumedResolution.result);
+      }
+      const routingText =
+        resumedResolution.kind === "selected" ? resumedResolution.originalText : text;
+      const routingFunctions =
+        resumedResolution.kind === "selected"
+          ? [resumedResolution.capability]
+          : input.profile.enabledFunctions;
+
+      const queryClarification =
+        resumedResolution.kind === "selected"
+          ? undefined
+          : createQueryClarificationReply(input.profile, text);
       if (queryClarification) {
         steps.push({ phase: "query_clarification", outcome: "handled", ok: true });
         return finish(input, steps, queryClarification);
       }
 
       const adminActionResult = await handleNaturalLanguageAdminAction({
-        text,
+        text: routingText,
         profile: input.profile,
         event: input.event,
         adminActionRouter: options.adminActionRouter,
@@ -286,9 +312,10 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         plan = await resolveControlledPlan(
           options.controlledAgentRouter,
           input,
-          text,
+          routingText,
           activeTask,
-          options.traceStore ? steps : undefined
+          options.traceStore ? steps : undefined,
+          routingFunctions
         );
       } catch {
         plan = { disposition: "clarify", reasonCode: "planner_unavailable" };
@@ -326,11 +353,27 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         );
       }
       if (plan.disposition === "clarify") {
+        if (plan.candidateCapabilities && plan.candidateCapabilities.length > 1) {
+          const resolution = await createCapabilityResolution({
+            sessionStore: options.sessionStore,
+            id: input.requestId,
+            profileName: input.profile.name,
+            source: input.event.source,
+            requesterUserId: input.event.source.userId,
+            originalText: routingText,
+            candidates: plan.candidateCapabilities,
+            now: now()
+          });
+          if (resolution) {
+            steps.push({ phase: "capability_resolution", outcome: "created", ok: true });
+            return finish(input, steps, resolution);
+          }
+        }
         return finish(input, steps, controlledClarificationResult(plan, context));
       }
       const controlledContinuationAuthorized =
         plan.disposition === "execute" && plan.reasonCode === "active_task_refinement";
-      const route = controlledPlanToRoute(plan, input, text);
+      const route = controlledPlanToRoute(plan, input, routingText);
 
       const routeDurationMs = elapsedMs(routeStartedAt);
       steps.push({
@@ -405,7 +448,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
       }
 
       const normalizedArguments = normalizeFunctionArguments(route.action, route.arguments, {
-        text
+        text: routingText
       });
       steps.push({
         phase: "argument_grounding",
@@ -783,14 +826,15 @@ async function resolveControlledPlan(
   input: AgentTextTurnInput,
   text: string,
   activeTask: ActiveTaskContext | undefined,
-  steps?: AgentTurnTraceStep[]
+  steps?: AgentTurnTraceStep[],
+  enabledFunctions?: readonly FunctionName[]
 ): Promise<ValidatedAgentPlan> {
   if (!router) return { disposition: "clarify", reasonCode: "planner_unavailable" };
   try {
     const routerInput = {
       profileName: input.profile.name,
       text,
-      enabledFunctions: input.profile.enabledFunctions,
+      enabledFunctions: enabledFunctions ?? input.profile.enabledFunctions,
       sourceType: input.event.source.type,
       sourceId: controlledSourceId(input.event.source),
       requesterUserId: input.event.source.userId,

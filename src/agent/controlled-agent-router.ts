@@ -82,7 +82,7 @@ export function createControlledAgentRouter(options: {
       });
       emitDiagnostic(observe, plannerTraceStep(proposal));
 
-      const plan = validateAgentPlan({
+      const validatedPlan = validateAgentPlan({
         text: input.text,
         enabledFunctions: input.enabledFunctions,
         candidates,
@@ -92,6 +92,15 @@ export function createControlledAgentRouter(options: {
         sourceType: source,
         now: now()
       });
+      const plan =
+        validatedPlan.disposition === "clarify" &&
+        validatedPlan.reasonCode === "capability_evidence_unresolved" &&
+        candidates.length > 1
+          ? {
+              ...validatedPlan,
+              candidateCapabilities: candidates.map(({ capability }) => capability)
+            }
+          : validatedPlan;
       emitDiagnostic(observe, {
         phase: "plan_validation",
         outcome: "accepted",

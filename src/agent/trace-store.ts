@@ -9,6 +9,7 @@ export type AgentTurnTracePhase =
   | "admin_action_route"
   | "admin_action_result"
   | "active_task"
+  | "capability_resolution"
   | "capability_candidates"
   | "planner"
   | "plan_validation"

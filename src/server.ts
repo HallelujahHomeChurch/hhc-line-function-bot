@@ -379,7 +379,8 @@ async function handleWebhook(
       event,
       textMessageHandlers,
       accessStore,
-      conversationWindowStore
+      conversationWindowStore,
+      sessionStore
     );
     if (allow.allowed) {
       allowedEvents.push(event);
@@ -1077,7 +1078,8 @@ async function allowEvent(
   event: LineEvent,
   textMessageHandlers: TextMessageHandlerRegistry,
   accessStore: AccessStore,
-  conversationWindowStore: ConversationWindowStore
+  conversationWindowStore: ConversationWindowStore,
+  sessionStore?: SessionStore
 ): Promise<AllowResult> {
   const eventType = event.type?.trim().toLowerCase();
   const sourceType = event.source?.type?.trim().toLowerCase();
@@ -1127,6 +1129,17 @@ async function allowEvent(
       }
       if (await hasActiveConversationWindow(profile, event, conversationWindowStore)) {
         return { allowed: true, reason: "group_conversation_window_active" };
+      }
+      if (
+        sessionStore &&
+        event.source.userId &&
+        (await sessionStore.findPendingCapabilityResolution({
+          profileName: profile.name,
+          source: event.source,
+          requesterUserId: event.source.userId
+        }))
+      ) {
+        return { allowed: true, reason: "group_capability_resolution_active" };
       }
       if (
         await matchingTextMessageHandler(

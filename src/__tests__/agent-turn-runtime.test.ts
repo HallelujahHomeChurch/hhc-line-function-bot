@@ -259,4 +259,73 @@ describe("AgentTurnRuntime controlled path", () => {
       expect.any(Object)
     );
   });
+
+  it("stores and resumes a cross-capability choice through the controlled router", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const querySchedule = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "晨更家族：中平家族"
+    });
+    const retrieveMemory = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "記憶內容"
+    });
+    const resolve = vi
+      .fn()
+      .mockResolvedValueOnce({
+        disposition: "clarify",
+        reasonCode: "capability_evidence_unresolved",
+        candidateCapabilities: ["query_schedule", "retrieve_memory"]
+      })
+      .mockResolvedValueOnce({
+        disposition: "execute",
+        capability: "query_schedule",
+        arguments: { query: "7/21 晨更家族是誰", meeting: "晨更" },
+        reasonCode: "deterministic_explicit_intent"
+      });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {
+        query_schedule: querySchedule,
+        retrieve_memory: retrieveMemory
+      },
+      textMessageHandlers: {},
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: { resolve },
+      now
+    });
+
+    const first = await runtime.handleTextTurn({
+      profile: profile(["query_schedule", "retrieve_memory"]),
+      event: event("7/21 晨更家族是誰"),
+      requestId: "ambiguous-1"
+    });
+    await expect(sessionStore.summary()).resolves.toMatchObject({
+      total: 1,
+      byType: { pending_capability_resolution: 1 }
+    });
+    const second = await runtime.handleTextTurn({
+      profile: profile(["query_schedule", "retrieve_memory"]),
+      event: event("查服事表"),
+      requestId: "ambiguous-2"
+    });
+
+    expect(first?.quickReplies?.map(({ label }) => label)).toEqual([
+      "查服事表",
+      "查記住的資訊"
+    ]);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolve).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "7/21 晨更家族是誰",
+        enabledFunctions: ["query_schedule"]
+      })
+    );
+    expect(querySchedule).toHaveBeenCalledOnce();
+    expect(retrieveMemory).not.toHaveBeenCalled();
+    expect(second?.replyText).toBe("晨更家族：中平家族");
+  });
 });
