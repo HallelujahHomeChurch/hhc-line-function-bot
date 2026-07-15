@@ -3208,6 +3208,37 @@ describe("LINE entrance", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("silently ignores a group attachment from a requester without save permission", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      allowedMessageTypes: ["text", "image", "file"],
+      enabledFunctions: ["save_resource"]
+    };
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(config, {
+      router: { route: vi.fn() },
+      accessStore: defaultAccessStore(),
+      sessionStore: new InMemorySessionStore(),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "Uungranted" },
+      message: { type: "image", id: "image-unrelated" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(replyText).not.toHaveBeenCalled();
+  });
+
   it("accepts only the same requester's next group attachment after upload activation", async () => {
     const config = testConfig();
     config.profiles[0] = {

@@ -732,19 +732,22 @@ async function handleAttachmentMessage(input: {
   if (!isSupportedAttachment(input.event.message)) {
     return { ok: true, replyText: "目前只支援圖片或檔案附件。" };
   }
-  if (!input.profile.enabledFunctions.includes("save_resource")) {
-    return { ok: true, replyText: "目前沒有開放保存檔案。" };
-  }
-  if (!input.sessionStore) {
-    return { ok: true, replyText: "目前無法保存檔案，請稍後再試。" };
-  }
   if (input.event.source.type === "group") {
+    if (!input.sessionStore) return undefined;
     const uploadIntent = await consumeUploadIntent(
       input.sessionStore,
       input.profile.name,
       input.event.source
     );
-    if (!uploadIntent) return undefined;
+    if (!uploadIntent || !input.profile.enabledFunctions.includes("save_resource")) {
+      return undefined;
+    }
+  }
+  if (!input.profile.enabledFunctions.includes("save_resource")) {
+    return { ok: true, replyText: "目前沒有開放保存檔案。" };
+  }
+  if (!input.sessionStore) {
+    return { ok: true, replyText: "目前無法保存檔案，請稍後再試。" };
   }
   if (
     input.event.message.fileSize !== undefined &&
