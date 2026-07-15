@@ -224,6 +224,8 @@ Testing map:
 ## Deployment Rule
 
 - `main` is protected by a no-bypass repository ruleset. Administrators and automated agents must use a pull request; never push or force push directly to `main` and never add a bypass actor for routine or emergency work.
+- Before starting any task, inspect the current branch, worktree status, and matching GitHub pull request. If an open PR belongs to the same unfinished task, continue that branch. If its PR is merged or closed, or the new work is a different task, do not reuse or branch from it: switch to and synchronize the latest `main`, then create a new `codex/*` branch.
+- Preserve unrelated uncommitted or unmerged work. Do not overwrite it, discard it, mix it into a new task, or create a new task branch from a stale feature branch; isolate the new task from the latest `main` instead.
 - Work on a `codex/*` branch, open a pull request, and wait for the required `PR CI` check. The required approving-review count is zero, so an agent may enable auto-merge and GitHub will squash the PR after CI succeeds.
 - `.github/workflows/ci.yml` is the pull-request validation boundary. A CI failure blocks merge and is not a production deployment failure.
 - `.github/workflows/release.yml` is the post-merge production boundary. It builds the ACR image and deploys ACA without repeating pnpm validation. App/build/deploy path changes merged to `main` trigger it; `AGENTS.md`, `README.md`, and `docs/**`-only merges do not.
