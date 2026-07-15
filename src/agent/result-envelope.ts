@@ -9,6 +9,12 @@ export interface AgentEntity {
   aliases?: string[];
 }
 
+export interface AgentReplyData {
+  kind: string;
+  fields: JsonRecord;
+  records?: JsonRecord[];
+}
+
 export interface AgentResultEnvelope {
   status: AgentResultStatus;
   anchors?: JsonRecord;
@@ -18,4 +24,6 @@ export interface AgentResultEnvelope {
   clarification?: { prompt: string; choices?: string[] };
   replyText: string;
   quickReplies?: QuickReplyItem[];
+  replyData?: AgentReplyData;
+  projectionHint?: "focused" | "full";
 }

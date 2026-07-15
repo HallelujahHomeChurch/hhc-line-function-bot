@@ -56,19 +56,19 @@ For normal LINE webhook messages, read the flow in this order:
    continue without repeating the wake word.
 7. Slash commands stay in `src/server.ts`; normal text turns enter
    `src/agent/turn-runtime.ts`.
-8. Pending text sessions are arbitrated before new planning: exact confirmation
-   or cancellation, explicit function switch with domain evidence, then the
-   same requester's other slot answer. A bare confirmation stays with its
-   current pending write. Agent-memory
-   follow-ups can also short-circuit the router.
+8. Text continuation handlers declare a controlled workflow stage. The kernel
+   orders pending confirmation/cancellation and slot collection first, then
+   capability/entity selection, attachment workflow, and bounded resource
+   recall. Registration or object iteration order is never authority. A bare
+   confirmation stays with its current pending write.
 9. Intro and small-talk system actions can respond without function execution.
 10. In controlled mode, the runtime reads the independently expiring,
-    requester-scoped active task and generates at most the configured number of
+    requester-scoped version-2 task frame and generates at most the configured number of
     candidates from declarative function contracts.
 11. `src/agent/planner.ts` asks the `function_routing` provider for a bounded
     semantic proposal. DeepSeek is primary for helper and Ollama is fallback.
 12. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
-    rechecks current-message evidence, active-task authority, effective function
+    rechecks current-message evidence, task-frame authority, effective function
     policy, side effects, source, confidence, schema, and required slots.
 13. Definition-driven validation separates `collect` from `execute`. Missing
     slots create requester-scoped collection state regardless of whether the
@@ -77,7 +77,7 @@ For normal LINE webhook messages, read the flow in this order:
     write authoritative, or carry an undeclared value from old context.
 14. Agent memory can resolve aliases before expensive file searches.
 15. The turn runtime applies in-flight locks, calls only the registered handler,
-    records a sanitized result envelope, and transitions active-task state only
+    records a sanitized result envelope, and transitions task-frame state only
     from a successful structured read result.
 16. Slow turns can be stored as long-running jobs and returned through a
     requester-scoped LINE postback.
@@ -230,14 +230,14 @@ The generic turn contract is:
 1. Generate a bounded candidate set only from effective enabled functions and
    each definition's `agentCapability` metadata.
 2. Let DeepSeek (primary) or Ollama (fallback) propose semantics over that set.
-   The planner receives bounded contracts and safe active-task summaries, not
+   The planner receives bounded contracts and safe task-frame summaries, not
    arbitrary source content or execution authority.
 3. Deterministically validate capability choice, source, side effects,
-   confidence, current-message evidence, active-task evidence, arguments,
+   confidence, current-message evidence, task-frame evidence, arguments,
    references, and required slots.
 4. Enter `collect` for missing slots, execute one registered handler only when
    complete, or return a controlled chat/clarify/deny outcome.
-5. Consume the handler's structured result envelope and update an active task
+5. Consume the handler's structured result envelope and update a task frame
    only for a successful result with operations allowed by both the function
    contract and result.
 
@@ -249,7 +249,7 @@ handler:
 - in-flight duplicate protection for long-running lookups
 - requester-scoped conversation windows for natural follow-up messages
   (default 60 seconds; each handled reply refreshes the requester window)
-- structured active-task state containing handler-confirmed canonical anchors,
+- structured task-frame state containing handler-confirmed canonical anchors,
   declared entities, and safe references; it has an independent absolute expiry, does not extend
   with ordinary conversation turns, and cannot be inherited by another group requester
 - bounded runtime context building and compression
@@ -270,8 +270,10 @@ Result envelopes use the shared statuses `success`, `not_found`, `ambiguous`,
 and `unavailable`. Entity types must be declared by the capability contract.
 Anchors and references must be canonical, bounded, and safe to persist. A
 missing, failed, not-found, or unavailable envelope cannot manufacture a new
-active task. Active tasks have an absolute TTL separate from the conversation
-window and are keyed by profile, LINE source, and requester.
+task frame. Task frames have a 600-second absolute TTL separate from the conversation
+window and are keyed by profile, LINE source, and requester. Successful writes
+may nominate a declared read capability through a contract handoff, but the
+target must still be effective for the requester and source.
 
 Dynamic knowledge uses a separate `knowledge_*` read model rather than catalog
 items or schedule rows. Admin direct-chat actions register Notion roots, the sync

@@ -91,6 +91,10 @@ async function createCatalogItemReply(
     return {
       ok: true,
       replyText: [item.title, item.storageRef.url].join("\n"),
+      responseData: {
+        kind: "resource",
+        fields: { title: item.title, link: item.storageRef.url }
+      },
       agentResult: catalogItemEnvelope(item.id, { resourceId: item.id })
     };
   }
@@ -104,6 +108,7 @@ async function createCatalogItemReply(
   return {
     ok: true,
     replyText: [item.title, link].join("\n"),
+    responseData: { kind: "resource", fields: { title: item.title, link } },
     agentResult: catalogItemEnvelope(item.id, {
       resourceId: item.id,
       driveId: item.storageRef.driveId,

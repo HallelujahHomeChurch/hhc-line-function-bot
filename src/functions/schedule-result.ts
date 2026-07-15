@@ -7,6 +7,9 @@ export interface ScheduleResultRow {
   meeting?: string;
   meetingName?: string;
   role?: string;
+  assignee?: string;
+  person?: string;
+  familyName?: string;
   sourceKey?: string;
 }
 
@@ -56,7 +59,29 @@ export function scheduleResultEnvelope(
     replyText: filters.replyText,
     anchors: scheduleAnchors(rows, filters.sourceKeys),
     entities,
-    supportedOperations: [...SCHEDULE_OPERATIONS]
+    supportedOperations: [...SCHEDULE_OPERATIONS],
+    replyData: scheduleReplyData(rows)
+  };
+}
+
+function scheduleReplyData(rows: ScheduleResultRow[]) {
+  const first = rows[0];
+  return {
+    kind: "schedule",
+    fields: {
+      ...(first?.date || first?.serviceDate ? { date: first.date ?? first.serviceDate } : {}),
+      ...(first?.meeting || first?.meetingName
+        ? { meeting: first.meeting ?? first.meetingName }
+        : {})
+    },
+    records: rows.map((row) => ({
+      ...(row.date || row.serviceDate ? { date: row.date ?? row.serviceDate } : {}),
+      ...(row.meeting || row.meetingName ? { meeting: row.meeting ?? row.meetingName } : {}),
+      ...(row.role ? { role: row.role } : {}),
+      ...(row.person || row.assignee || row.familyName
+        ? { people: row.person ?? row.assignee ?? row.familyName }
+        : {})
+    }))
   };
 }
 

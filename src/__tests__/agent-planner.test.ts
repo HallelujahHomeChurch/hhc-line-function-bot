@@ -5,7 +5,9 @@ import type { ActiveTaskContext } from "../agent/active-task.js";
 import type { ChatProvider, ModelProviderName } from "../types.js";
 
 const scheduleTask: ActiveTaskContext = {
-  version: 1,
+  version: 2,
+  currentCapability: "query_schedule",
+  allowedCapabilities: ["query_schedule"],
   capability: "query_schedule",
   anchors: {
     date: "2026-07-14",
@@ -37,9 +39,17 @@ const scheduleCandidateWithContract: AgentPlannerCandidate = {
   contract: {
     intents: ["查服事"],
     candidateHints: ["服事"],
+    semanticDescription: "依日期、聚會或角色查詢服事安排。",
     entityTypes: ["role"],
     refinableFields: ["role"],
     operations: ["continue", "refine"],
+    responseProjection: {
+      defaultMode: "focused",
+      fields: {
+        role: { label: "服事", aliases: ["誰", "人員"] },
+        date: { label: "日期", aliases: ["何時"] }
+      }
+    },
     ambiguity: "clarify"
   }
 };
@@ -132,6 +142,9 @@ describe("constrained semantic planner", () => {
       "Write actions are unavailable unless deterministic candidates include them"
     );
     expect(request?.prompt).toContain('"capability":"query_schedule"');
+    expect(request?.prompt).toContain("依日期、聚會或角色查詢服事安排");
+    expect(request?.prompt).toContain('"requiredSlots":["schedule_range_or_type"]');
+    expect(request?.prompt).toContain('"responseFields":["role","date"]');
     expect(request?.prompt).toContain('"ref":"entity-1","type":"role"');
     expect(request?.prompt).toContain('"supportedOperations":["continue","refine"]');
     for (const sensitiveValue of [
@@ -163,7 +176,7 @@ describe("constrained semantic planner", () => {
     });
 
     const prompt = vi.mocked(primary.completeJson).mock.calls[0]?.[0].prompt;
-    expect(prompt).toContain('Active-task summary: {"version":1,"capability":"query_schedule"}');
+    expect(prompt).toContain('Active-task summary: {"version":2,"capability":"query_schedule"}');
     expect(prompt).not.toContain("supportedOperations");
     expect(prompt).not.toContain("entities");
     expect(prompt).not.toContain("front-camera");

@@ -782,7 +782,8 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             memoryStore: clients.memoryStore,
             sessionStore: clients.sessionStore,
             now: clients.now,
-            requestIdFactory: clients.requestIdFactory
+            requestIdFactory: clients.requestIdFactory,
+            embedding: clients.embedding
           })
         }
       };
@@ -940,7 +941,9 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         functions: {
           retrieve_memory: createRetrieveMemoryHandler({
             memoryStore: clients.memoryStore,
-            now: clients.now
+            now: clients.now,
+            embedding: clients.embedding,
+            textGenerator: clients.knowledgeTextGenerator
           })
         }
       };

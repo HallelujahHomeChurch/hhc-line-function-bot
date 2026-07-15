@@ -50,15 +50,37 @@ export interface FunctionGrantPolicy {
   principals: Array<"user" | "group">;
 }
 
+export type AgentOperation = "continue" | "refine" | "advance" | "select" | "view_full";
+
+export interface AgentResponseField {
+  label: string;
+  aliases: string[];
+}
+
+export interface AgentResponseProjection {
+  defaultMode: "focused" | "full";
+  fields: Record<string, AgentResponseField>;
+}
+
+export interface AgentCapabilityHandoff {
+  on: "success";
+  to: FunctionName;
+  map: Record<string, string>;
+  when?: Record<string, string>;
+}
+
 export interface AgentCapabilityContract {
   intents: string[];
   candidateHints: string[];
+  semanticDescription: string;
   genericWriteFallback?: boolean;
   argumentEvidence?: AgentArgumentEvidenceContract;
   retrievalEvidence?: { provider: string };
   entityTypes?: string[];
   refinableFields?: string[];
-  operations: Array<"continue" | "refine" | "advance" | "select">;
+  operations: AgentOperation[];
+  responseProjection: AgentResponseProjection;
+  handoffs?: AgentCapabilityHandoff[];
   ambiguity?: "clarify";
   activeEvidence?: AgentActiveEvidenceContract;
 }
@@ -116,9 +138,18 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查投影片", "找投影片", "搜尋投影片", "查簡報", "找簡報"],
       candidateHints: ["投影片", "簡報", "ppt", "powerpoint", "slides", "keynote", "odp"],
+      semanticDescription: "依名稱或關鍵字搜尋教會投影片檔案。",
+      retrievalEvidence: { provider: "catalog_presentation" },
       entityTypes: ["resource"],
       refinableFields: ["query", "type", "selection"],
-      operations: [],
+      operations: ["continue", "refine", "select", "view_full"],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: {
+          title: { label: "投影片", aliases: ["名稱", "標題", "哪一份"] },
+          link: { label: "連結", aliases: ["連結", "下載", "開啟"] }
+        }
+      },
       ambiguity: "clarify",
       activeEvidence: {
         arguments: { query: { entityTypes: ["resource"] } }
@@ -169,6 +200,8 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查服事", "查服事表", "找服事", "下一場服事", "本週服事", "主日服事"],
       candidateHints: ["服事", "服事表", "服事安排", "聚會服事"],
+      semanticDescription: "依日期、聚會、服事角色或服事表類型查詢安排。",
+      retrievalEvidence: { provider: "schedule" },
       argumentEvidence: {
         queryArgument: "query",
         allOf: ["role"],
@@ -177,6 +210,15 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       entityTypes: ["date", "meeting", "role", "scheduleType"],
       refinableFields: ["date", "specificDate", "dateIntent", "meeting", "role", "scheduleType"],
       operations: ["continue", "refine", "advance", "select"],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: {
+          date: { label: "日期", aliases: ["日期", "哪一天", "何時", "什麼時候"] },
+          meeting: { label: "聚會", aliases: ["聚會", "哪一場"] },
+          scheduleType: { label: "服事表", aliases: ["類型", "哪種服事表"] },
+          role: { label: "服事", aliases: ["誰", "人員", "角色", "家族"] }
+        }
+      },
       ambiguity: "clarify",
       activeEvidence: {
         arguments: {
@@ -245,10 +287,18 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查知識", "知識查詢", "找知識"],
       candidateHints: ["知識", "sop", "計畫", "流程"],
+      semanticDescription: "從管理員已加入的內部知識回答問題。",
       retrievalEvidence: { provider: "knowledge" },
       entityTypes: ["source", "document", "section", "ordinal"],
       refinableFields: ["sourceKey", "sourceId", "documentId", "sectionKey", "ordinal"],
       operations: ["continue", "refine", "select"],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: {
+          answer: { label: "答案", aliases: ["是什麼", "哪裡", "誰", "如何", "為什麼"] },
+          ordinal: { label: "順序", aliases: ["第一個", "第二個", "第幾個"] }
+        }
+      },
       ambiguity: "clarify",
       activeEvidence: {
         arguments: {
@@ -325,9 +375,21 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         "刪除服事"
       ],
       candidateHints: ["服事表"],
+      semanticDescription: "整理並保存使用者明確提供的共用服事表。",
       entityTypes: ["schedule"],
       refinableFields: ["content", "scheduleType", "operation", "targetQuery"],
       operations: [],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: { summary: { label: "保存結果", aliases: ["保存", "結果"] } }
+      },
+      handoffs: [
+        {
+          on: "success",
+          to: "query_schedule",
+          map: { scheduleType: "scheduleType" }
+        }
+      ],
       ambiguity: "clarify"
     },
     clarificationPrompt: "請貼上要記住的服事表文字內容。",
@@ -351,9 +413,18 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查歌譜", "找歌譜", "搜尋歌譜", "查樂譜", "找樂譜"],
       candidateHints: ["歌譜", "樂譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"],
+      semanticDescription: "依歌名、演出者或檔案類型搜尋歌譜。",
+      retrievalEvidence: { provider: "catalog_sheet_music" },
       entityTypes: ["resource"],
       refinableFields: ["query", "type", "selection"],
-      operations: [],
+      operations: ["continue", "refine", "select", "view_full"],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: {
+          title: { label: "歌譜", aliases: ["名稱", "歌名", "哪一份"] },
+          link: { label: "連結", aliases: ["連結", "下載", "開啟"] }
+        }
+      },
       ambiguity: "clarify",
       activeEvidence: {
         arguments: { query: { entityTypes: ["resource"] } }
@@ -399,9 +470,18 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查教會資料", "找教會資料", "查小哈資料庫", "找小哈資料庫"],
       candidateHints: ["教會資料", "小哈資料庫", "週報音檔"],
+      semanticDescription: "搜尋已授權的泛用教會文件、圖片或音檔資源。",
+      retrievalEvidence: { provider: "catalog_general" },
       entityTypes: ["resource"],
       refinableFields: ["query", "type", "selection"],
-      operations: [],
+      operations: ["continue", "refine", "select", "view_full"],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: {
+          title: { label: "資料", aliases: ["名稱", "標題", "哪一份"] },
+          link: { label: "連結", aliases: ["連結", "下載", "開啟"] }
+        }
+      },
       ambiguity: "clarify",
       activeEvidence: {
         arguments: { query: { entityTypes: ["resource"] } }
@@ -442,9 +522,17 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查維基百科", "找維基百科", "查wiki", "查wikipedia"],
       candidateHints: ["維基百科", "wiki", "wikipedia"],
+      semanticDescription: "查詢一個維基百科主題並回答相關事實問題。",
       entityTypes: ["topic"],
       refinableFields: ["query"],
-      operations: [],
+      operations: ["continue", "refine", "view_full"],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: {
+          answer: { label: "答案", aliases: ["誰", "什麼", "何時", "哪裡", "為什麼"] },
+          summary: { label: "摘要", aliases: ["摘要", "完整內容", "全文"] }
+        }
+      },
       ambiguity: "clarify",
       activeEvidence: {
         arguments: { query: { entityTypes: ["topic"] } }
@@ -497,10 +585,22 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["幫我記住", "記住這個", "幫我保存", "幫我儲存", "保存這段資訊"],
       candidateHints: ["記住", "保存", "儲存"],
+      semanticDescription: "保存使用者明確要求記住的文字資訊。",
       genericWriteFallback: true,
       entityTypes: ["memory"],
       refinableFields: ["title", "content", "visibility"],
       operations: [],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: { summary: { label: "保存結果", aliases: ["保存", "結果"] } }
+      },
+      handoffs: [
+        {
+          on: "success",
+          to: "retrieve_memory",
+          map: { memoryId: "memoryId" }
+        }
+      ],
       ambiguity: "clarify"
     },
     clarificationPrompt: "請直接告訴我要記住的內容。",
@@ -552,6 +652,39 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       alias: false
     },
     memoryPolicy: { kind: "explicit_text" },
+    agentCapability: {
+      intents: ["保存連結", "保存檔案", "上傳檔案", "幫我保存"],
+      candidateHints: ["保存", "上傳", "檔案", "連結"],
+      semanticDescription: "經確認後保存投影片、歌譜或泛用教會資源。",
+      entityTypes: ["resource"],
+      refinableFields: ["url", "resourceType", "title", "visibility"],
+      operations: [],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: { summary: { label: "保存結果", aliases: ["保存", "結果"] } }
+      },
+      handoffs: [
+        {
+          on: "success",
+          to: "find_ppt_slides",
+          map: { query: "title" },
+          when: { resourceKind: "ppt_slide" }
+        },
+        {
+          on: "success",
+          to: "find_sheet_music",
+          map: { query: "title" },
+          when: { resourceKind: "sheet_music" }
+        },
+        {
+          on: "success",
+          to: "find_resource",
+          map: { query: "title" },
+          when: { resourceKind: "resource" }
+        }
+      ],
+      ambiguity: "clarify"
+    },
     clarificationPrompt: "請提供要保存的連結、類型與名稱。",
     description:
       '- save_resource: save an explicit HTTPS link as a private resource by default. Arguments: {"url":"https URL", "resourceType":"ppt_slide|sheet_music", "title":"user-provided title", "description":"optional", "visibility":"private|group optional", "confirm":boolean optional}. Always preview before persisting. Use visibility group only when the requester explicitly asks to share with the group.',
@@ -573,9 +706,18 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查我記住的", "查我保存的", "查我儲存的", "查記住的資訊"],
       candidateHints: ["記住的資訊", "保存的資訊", "小哈記得"],
+      semanticDescription: "查詢目前來源中可見且未過期的明確文字記憶。",
+      retrievalEvidence: { provider: "memory" },
       entityTypes: ["memory"],
       refinableFields: ["query", "selection"],
-      operations: [],
+      operations: ["continue", "refine", "select", "view_full"],
+      responseProjection: {
+        defaultMode: "focused",
+        fields: {
+          answer: { label: "答案", aliases: ["誰", "什麼", "何時", "哪裡", "內容"] },
+          title: { label: "記憶", aliases: ["名稱", "標題", "哪一段"] }
+        }
+      },
       ambiguity: "clarify",
       activeEvidence: {
         arguments: { query: { entityTypes: ["memory"] } }

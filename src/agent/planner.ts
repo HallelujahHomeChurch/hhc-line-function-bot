@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { ActiveTaskContext } from "./active-task.js";
 import type { CapabilityCandidateReason } from "./capability-candidates.js";
-import type { AgentCapabilityContract } from "../functions/definitions.js";
+import { getFunctionDefinition, type AgentCapabilityContract } from "../functions/definitions.js";
 import {
   AGENT_PLAN_DISPOSITIONS,
   FUNCTION_NAMES,
@@ -28,6 +28,8 @@ const LIMITS = {
   arrayStringCharacters: 200,
   metadataItems: 6,
   metadataCharacters: 60,
+  descriptionCharacters: 300,
+  contractFields: 20,
   activeTaskEntityScan: 20,
   activeTaskEntities: 6,
   timeoutMs: 8_000,
@@ -110,6 +112,9 @@ interface CandidateSummary {
   reason: CapabilityCandidateReason;
   score: number;
   contract?: {
+    semanticDescription?: string;
+    requiredSlots?: string[];
+    responseFields?: string[];
     entityTypes?: string[];
     refinableFields?: string[];
     operations?: string[];
@@ -357,7 +362,7 @@ function summarizeCandidates(candidates: readonly AgentPlannerCandidate[]): Cand
       continue;
     }
     seen.add(candidate.capability);
-    const contract = summarizeContract(candidate.contract);
+    const contract = summarizeContract(candidate.capability, candidate.contract);
     summaries.push({
       capability: candidate.capability,
       reason: candidate.reason,
@@ -369,13 +374,29 @@ function summarizeCandidates(candidates: readonly AgentPlannerCandidate[]): Cand
 }
 
 function summarizeContract(
+  capability: FunctionName,
   contract: AgentCapabilityContract | undefined
 ): CandidateSummary["contract"] {
   if (!contract) return undefined;
   const summary: NonNullable<CandidateSummary["contract"]> = {};
+  const semanticDescription = sanitizeText(
+    contract.semanticDescription ?? "",
+    LIMITS.descriptionCharacters
+  );
+  const requiredSlots = getFunctionDefinition(capability)
+    ?.requiredSlots.slice(0, LIMITS.contractFields)
+    .map(({ name }) => sanitizeText(name, LIMITS.metadataCharacters))
+    .filter(Boolean);
+  const responseFields = Object.keys(contract.responseProjection?.fields ?? {})
+    .slice(0, LIMITS.contractFields)
+    .map((field) => sanitizeText(field, LIMITS.metadataCharacters))
+    .filter(Boolean);
   const entityTypes = summarizeMetadata(contract.entityTypes);
   const refinableFields = summarizeMetadata(contract.refinableFields);
   const operations = summarizeMetadata(contract.operations);
+  if (semanticDescription) summary.semanticDescription = semanticDescription;
+  if (requiredSlots?.length) summary.requiredSlots = requiredSlots;
+  if (responseFields.length) summary.responseFields = responseFields;
   if (entityTypes.length > 0) summary.entityTypes = entityTypes;
   if (refinableFields.length > 0) summary.refinableFields = refinableFields;
   if (operations.length > 0) summary.operations = operations;
@@ -399,7 +420,7 @@ function summarizeActiveTask(
   if (!candidate) return undefined;
 
   const summary: {
-    version: 1;
+    version: 2;
     capability: FunctionName;
     supportedOperations?: string[];
     entities?: Array<{ ref: string; type: string }>;

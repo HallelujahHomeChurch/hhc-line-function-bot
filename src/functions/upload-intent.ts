@@ -46,6 +46,7 @@ export function createUploadIntentTextMessageHandler(input: {
 }): TextMessageHandler {
   const now = input.now ?? (() => new Date());
   return {
+    turnStage: "attachment",
     matches: async (request, context) =>
       context.event.source.type === "group" &&
       context.profile.enabledFunctions.includes("save_resource") &&

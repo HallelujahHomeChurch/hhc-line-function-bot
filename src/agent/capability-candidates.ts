@@ -207,7 +207,14 @@ function matchesActiveTaskEntity(
   activeTask: ActiveTaskContext | undefined
 ): boolean {
   const contract = definition.agentCapability;
-  if (!activeTask || !contract || activeTask.capability !== definition.name) return false;
+  if (
+    !activeTask ||
+    !contract ||
+    activeTask.currentCapability !== definition.name ||
+    !activeTask.allowedCapabilities.includes(definition.name)
+  ) {
+    return false;
+  }
   if (
     !contract.operations?.some((operation) => activeTask.supportedOperations.includes(operation))
   ) {
@@ -375,7 +382,28 @@ function cloneContract(contract: AgentCapabilityContract): AgentCapabilityContra
   return {
     intents: [...contract.intents],
     candidateHints: [...contract.candidateHints],
+    semanticDescription: contract.semanticDescription,
     operations: [...contract.operations],
+    responseProjection: {
+      defaultMode: contract.responseProjection.defaultMode,
+      fields: Object.fromEntries(
+        Object.entries(contract.responseProjection.fields).map(([key, field]) => [
+          key,
+          { label: field.label, aliases: [...field.aliases] }
+        ])
+      )
+    },
+    ...(contract.handoffs
+      ? {
+          handoffs: contract.handoffs.map((handoff) => ({
+            on: handoff.on,
+            to: handoff.to,
+            map: { ...handoff.map },
+            ...(handoff.when ? { when: { ...handoff.when } } : {})
+          }))
+        }
+      : {}),
+    ...(contract.genericWriteFallback ? { genericWriteFallback: true } : {}),
     ...(contract.entityTypes ? { entityTypes: [...contract.entityTypes] } : {}),
     ...(contract.argumentEvidence
       ? {

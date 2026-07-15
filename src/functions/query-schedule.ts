@@ -353,6 +353,7 @@ async function queryScheduleReadModel(input: {
       date: row.serviceDate,
       meeting: row.meeting,
       role: row.role,
+      assignee: row.assignee,
       sourceKey: row.sourceKey
     })),
     { replyText, role: filters.role, sourceKeys: input.sourceKeys }

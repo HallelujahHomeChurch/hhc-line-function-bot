@@ -121,6 +121,7 @@ export interface SaveAgentTextMemoryInput {
   content: string;
   query?: string;
   expiresAt?: string;
+  embedding?: number[];
 }
 
 export interface SaveAgentScheduleMemoryInput {
@@ -177,6 +178,13 @@ export interface SearchAgentTextMemoriesInput {
   requesterUserId?: string;
   query?: string;
   limit?: number;
+  queryEmbedding?: number[];
+}
+
+export interface AgentTextMemoryEmbeddingCandidate {
+  id: string;
+  title?: string;
+  content: string;
 }
 
 export interface SearchAgentResourcesInput {
@@ -223,6 +231,8 @@ export interface AgentMemoryStore {
   saveTextMemory(input: SaveAgentTextMemoryInput): Promise<AgentTextMemoryRecord>;
   searchTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]>;
   listTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]>;
+  listTextMemoriesMissingEmbedding(limit: number): Promise<AgentTextMemoryEmbeddingCandidate[]>;
+  updateTextMemoryEmbedding(id: string, embedding: number[]): Promise<boolean>;
   saveScheduleMemory(input: SaveAgentScheduleMemoryInput): Promise<AgentScheduleMemoryRecord>;
   listScheduleMemories(input: ListAgentScheduleMemoriesInput): Promise<AgentScheduleMemoryRecord[]>;
   searchScheduleEntries(
@@ -264,6 +274,7 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
   private readonly ttlMs: number;
   private readonly resources = new Map<string, AgentResourceRecord>();
   private readonly textMemories = new Map<string, AgentTextMemoryRecord>();
+  private readonly textMemoryEmbeddings = new Map<string, number[]>();
   private readonly scheduleMemories = new Map<string, AgentScheduleMemoryRecord>();
   private readonly scheduleEntries = new Map<string, AgentScheduleEntryRecord>();
   private readonly aliases = new Map<string, AgentAliasRecord>();
@@ -384,20 +395,50 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
       expiresAt: input.expiresAt ?? this.defaultExpiresAt()
     };
     this.textMemories.set(record.id, record);
+    if (input.embedding?.length) this.textMemoryEmbeddings.set(record.id, [...input.embedding]);
     return record;
   }
 
   async searchTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]> {
     const scope = scopeFromSource(input.source);
     const query = normalizeLookupText(input.query ?? "");
+    const queryEmbedding = input.queryEmbedding;
     return Array.from(this.textMemories.values())
       .filter((record) => this.textMemoryMatches(record, input.profileName, scope))
       .filter((record) =>
         this.isVisible(record, input.requesterUserId ?? input.source.userId, scope)
       )
-      .filter((record) => !query || normalizeLookupText(memorySearchText(record)).includes(query))
-      .sort(descendingCreatedAt)
+      .map((record) => ({
+        record,
+        lexical: !query || normalizeLookupText(memorySearchText(record)).includes(query),
+        semantic: cosineSimilarity(queryEmbedding, this.textMemoryEmbeddings.get(record.id))
+      }))
+      .filter(({ lexical, semantic }) => lexical || semantic >= 0.65)
+      .sort(
+        (left, right) =>
+          Number(right.lexical) - Number(left.lexical) ||
+          right.semantic - left.semantic ||
+          descendingCreatedAt(left.record, right.record)
+      )
+      .map(({ record }) => record)
       .slice(0, input.limit ?? 5);
+  }
+
+  async listTextMemoriesMissingEmbedding(
+    limit: number
+  ): Promise<AgentTextMemoryEmbeddingCandidate[]> {
+    return Array.from(this.textMemories.values())
+      .filter((record) => !this.textMemoryEmbeddings.has(record.id))
+      .filter((record) => !record.deletedAt && Date.parse(record.expiresAt) > this.now().getTime())
+      .sort(descendingCreatedAt)
+      .slice(0, Math.max(0, limit))
+      .map(({ id, title, content }) => ({ id, title, content }));
+  }
+
+  async updateTextMemoryEmbedding(id: string, embedding: number[]): Promise<boolean> {
+    if (!this.textMemories.has(id) || !embedding.length) return false;
+    this.textMemoryEmbeddings.set(id, [...embedding]);
+    return true;
   }
 
   async listTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]> {
@@ -699,6 +740,19 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
   private defaultExpiresAt(): string {
     return new Date(this.now().getTime() + this.ttlMs).toISOString();
   }
+}
+
+function cosineSimilarity(left: number[] | undefined, right: number[] | undefined): number {
+  if (!left?.length || !right?.length || left.length !== right.length) return -1;
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftNorm += left[index] * left[index];
+    rightNorm += right[index] * right[index];
+  }
+  return leftNorm > 0 && rightNorm > 0 ? dot / Math.sqrt(leftNorm * rightNorm) : -1;
 }
 
 export function scopeFromSource(source: LineSource): AgentMemoryScope {

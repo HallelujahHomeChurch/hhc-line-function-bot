@@ -97,7 +97,7 @@ When adding or changing an admin action:
 - `src/functions/*`: function definitions, modules, and implementations.
 - `src/agent/turn-runtime.ts`: shared text-turn pipeline after LINE entrance checks.
 - `src/agent/capability-candidates.ts`, `src/agent/planner.ts`, and `src/agent/plan-validator.ts`: deterministic candidate generation, advisory semantic planning, and the server-owned authority boundary.
-- `src/agent/active-task.ts` and `src/agent/active-task-transition.ts`: requester-scoped active-task state derived from successful structured read results.
+- `src/agent/active-task.ts` and `src/agent/active-task-transition.ts`: compatibility filenames for requester-scoped version-2 task-frame state derived from successful structured results; do not add version-1 behavior.
 - `src/agent/context-manager.ts`: runtime context budget/compression plus requester-scoped conversation windows.
 - `src/agent/jobs.ts`: long-running job results scoped by profile/source/requester.
 - `src/agent/slot-clarification.ts`: definition-driven required-slot clarification.
@@ -106,6 +106,8 @@ When adding or changing an admin action:
 - `src/agent/*`: controlled agent runtime, resource metadata memory, explicit text memory, aliases, and Postgres/in-memory stores.
 
 The controlled turn state machine owns workflow state; model output does not.
+Every text continuation handler must declare a `turnStage`; execution order is
+the stage order, never registry insertion order.
 Its precedence is pending confirmation/cancellation, resolver selection,
 required-slot collection, attachment workflow, explicit function switch,
 active-task continuation, then a new plan. A bare confirmation such as `保存`

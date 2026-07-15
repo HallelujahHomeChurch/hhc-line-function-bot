@@ -1,4 +1,4 @@
-import type { AgentResultEnvelope } from "./agent/result-envelope.js";
+import type { AgentReplyData, AgentResultEnvelope } from "./agent/result-envelope.js";
 
 export const FUNCTION_NAMES = [
   "find_ppt_slides",
@@ -190,6 +190,10 @@ export interface LongRunningJobsConfig {
   resultTtlMinutes: number;
 }
 
+export interface AgentRuntimeConfig {
+  taskFrameSeconds: number;
+}
+
 export interface BotProfileConfig {
   name: string;
   webhookPath: string;
@@ -212,6 +216,7 @@ export interface BotProfileConfig {
   allowSubscriptionProviders: boolean;
   providerPolicy?: ProviderPolicy;
   controlledAgent: ControlledAgentConfig;
+  agentRuntime?: AgentRuntimeConfig;
   schedulePolicy: SchedulePolicyConfig;
   generalAgent?: GeneralAgentConfig;
   longRunningJobs?: LongRunningJobsConfig;
@@ -601,6 +606,8 @@ export interface FunctionExecutionResult {
   writePhase?: "preview" | "commit";
   quickReplies?: QuickReplyItem[];
   agentResult?: AgentResultEnvelope;
+  /** Ephemeral response-only data. Never persist in task frames or traces. */
+  responseData?: AgentReplyData;
   agentResource?: AgentResourceReference;
   smallTalkTrace?: {
     lane: "smart_talk";
@@ -683,7 +690,11 @@ export interface TextMessageContext {
   requesterIsAdmin?: boolean;
 }
 
+export type ControlledTurnStage =
+  "pending_function" | "resolution" | "attachment" | "pre_route_recall";
+
 export interface TextMessageHandler {
+  turnStage: ControlledTurnStage;
   matches(request: TextMessageRequest, context: TextMessageContext): Promise<boolean> | boolean;
   handle(
     request: TextMessageRequest,

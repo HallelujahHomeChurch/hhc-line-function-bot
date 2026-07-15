@@ -198,6 +198,22 @@ const migrations = [
   alter table agent_schedule_entries
     add column if not exists updated_at timestamptz not null default now(),
     add column if not exists deleted_at timestamptz
+  `,
+  `
+  alter table agent_text_memories
+    add column if not exists embedding vector(1024)
+  `,
+  `
+  create index if not exists agent_text_memories_search_idx
+  on agent_text_memories using gin (
+    to_tsvector('simple', coalesce(title, '') || ' ' || content || ' ' || coalesce(query_text, ''))
+  )
+  where deleted_at is null
+  `,
+  `
+  create index if not exists agent_text_memories_embedding_idx
+  on agent_text_memories using hnsw (embedding vector_cosine_ops)
+  where deleted_at is null and embedding is not null
   `
 ];
 

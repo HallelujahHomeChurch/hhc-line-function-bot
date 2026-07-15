@@ -10,7 +10,9 @@ import type { AgentPlanner } from "../agent/planner.js";
 const now = new Date("2026-07-13T00:00:30.000Z");
 
 const scheduleTask: ActiveTaskContext = {
-  version: 1,
+  version: 2,
+  currentCapability: "query_schedule",
+  allowedCapabilities: ["query_schedule"],
   capability: "query_schedule",
   anchors: { date: "2026-07-14", meeting: "晨更" },
   entities: [{ type: "role", key: "front-camera", label: "前攝影", aliases: ["攝影"] }],
@@ -20,7 +22,9 @@ const scheduleTask: ActiveTaskContext = {
 };
 
 const knowledgeTask: ActiveTaskContext = {
-  version: 1,
+  version: 2,
+  currentCapability: "query_knowledge",
+  allowedCapabilities: ["query_knowledge"],
   capability: "query_knowledge",
   anchors: { sourceKey: "retreat" },
   entities: [{ type: "section", key: "day-one", label: "第一天" }],
@@ -283,6 +287,8 @@ describe("ControlledAgentRouter", () => {
       text: "急救箱位置",
       enabledFunctions: ["query_knowledge"],
       sourceType: "group",
+      sourceId: "group-1",
+      requesterUserId: "user-1",
       maxCandidates: 3,
       minPlannerConfidence: 0.65
     });
@@ -290,7 +296,10 @@ describe("ControlledAgentRouter", () => {
     expect(probe).toHaveBeenCalledWith({
       profileName: "helper",
       text: "急救箱位置",
-      maxSources: 20
+      maxResults: 20,
+      source: "group",
+      sourceId: "group-1",
+      requesterUserId: "user-1"
     });
     expect(propose).toHaveBeenCalledWith(
       expect.objectContaining({

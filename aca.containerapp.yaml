@@ -87,8 +87,6 @@ properties:
             value: 1m
           - name: OLLAMA_TIMEOUT_MS
             value: "8000"
-          - name: KEYWORD_FALLBACK_ENABLED
-            value: "true"
           - name: DEEPSEEK_API_KEY
             secretRef: deepseek-api-key
           - name: DEEPSEEK_BASE_URL

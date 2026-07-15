@@ -130,6 +130,7 @@ export function createResourceBinaryPublisher(
       });
       return {
         ok: true,
+        writePhase: "commit",
         replyText: [
           "已保存檔案：",
           `名稱：${target.title}`,
@@ -138,6 +139,19 @@ export function createResourceBinaryPublisher(
           `大小：${formatBytes(sizeBytes)}`
         ].join("\n"),
         executedAction: "save_resource",
+        agentResult: {
+          status: "success",
+          replyText: "檔案已保存。",
+          anchors: {
+            resourceId: item.id,
+            resourceKind:
+              resourceTypeForItemKind(target.itemKind) === "general_resource"
+                ? "resource"
+                : resourceTypeForItemKind(target.itemKind),
+            title: target.title
+          },
+          entities: [{ type: "resource", key: item.id, label: "已保存資源" }]
+        },
         agentResource: {
           resourceType: resourceTypeForItemKind(target.itemKind),
           title: target.title,

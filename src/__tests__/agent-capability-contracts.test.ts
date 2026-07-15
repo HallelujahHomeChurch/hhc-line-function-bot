@@ -11,17 +11,25 @@ const eligibleReadDefinitions = FUNCTION_DEFINITIONS.filter(
 );
 
 describe("controlled read capability contracts", () => {
-  it("requires every eligible read to declare routing hints, an argument schema, and operations", () => {
+  it("requires every eligible read to declare safe planner and response contracts", () => {
     expect(eligibleReadDefinitions.length).toBeGreaterThan(0);
     for (const definition of eligibleReadDefinitions) {
       expect(definition.agentCapability, definition.name).toBeDefined();
       expect(definition.agentCapability?.candidateHints.length, definition.name).toBeGreaterThan(0);
       expect(typeof definition.argumentSchema.safeParse, definition.name).toBe("function");
       expect(Array.isArray(definition.agentCapability?.operations), definition.name).toBe(true);
+      expect(definition.agentCapability?.semanticDescription, definition.name).toBeTruthy();
+      expect(definition.agentCapability?.responseProjection?.defaultMode, definition.name).toMatch(
+        /^(focused|full)$/u
+      );
+      expect(
+        Object.keys(definition.agentCapability?.responseProjection?.fields ?? {}).length,
+        definition.name
+      ).toBeGreaterThan(0);
     }
   });
 
-  it("keeps one-shot and selection-session reads out of active-task continuation", () => {
+  it("declares meaningful continuation operations for every read capability", () => {
     for (const name of [
       "find_ppt_slides",
       "find_sheet_music",
@@ -29,7 +37,9 @@ describe("controlled read capability contracts", () => {
       "query_wikipedia",
       "retrieve_memory"
     ] as FunctionName[]) {
-      expect(getFunctionDefinition(name)?.agentCapability?.operations, name).toEqual([]);
+      expect(getFunctionDefinition(name)?.agentCapability?.operations.length, name).toBeGreaterThan(
+        0
+      );
     }
     expect(getFunctionDefinition("query_schedule")?.agentCapability?.operations).toEqual([
       "continue",
@@ -42,6 +52,22 @@ describe("controlled read capability contracts", () => {
       "refine",
       "select"
     ]);
+  });
+
+  it("declares write-to-read handoffs without router-specific branches", () => {
+    expect(getFunctionDefinition("save_schedule")?.agentCapability?.handoffs).toContainEqual(
+      expect.objectContaining({ on: "success", to: "query_schedule" })
+    );
+    expect(getFunctionDefinition("save_memory")?.agentCapability?.handoffs).toContainEqual(
+      expect.objectContaining({ on: "success", to: "retrieve_memory" })
+    );
+    expect(getFunctionDefinition("save_resource")?.agentCapability?.handoffs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ to: "find_ppt_slides" }),
+        expect.objectContaining({ to: "find_sheet_music" }),
+        expect.objectContaining({ to: "find_resource" })
+      ])
+    );
   });
 
   it.each([
@@ -62,7 +88,14 @@ describe("controlled read capability contracts", () => {
         source: "user"
       });
       expect(candidates).toEqual([
-        expect.objectContaining({ capability, reason: "explicit_intent" })
+        expect.objectContaining({
+          capability,
+          reason: "explicit_intent",
+          contract: expect.objectContaining({
+            semanticDescription: expect.any(String),
+            responseProjection: expect.objectContaining({ defaultMode: "focused" })
+          })
+        })
       ]);
     }
   );

@@ -20,6 +20,7 @@ describe("function capability contracts", () => {
       expect(definition.resourcePolicy, definition.name).toBeTruthy();
       expect(definition.memoryPolicy, definition.name).toBeTruthy();
       expect(definition.requiredSlots, definition.name).toBeDefined();
+      expect(definition.agentCapability, definition.name).toBeDefined();
     }
   });
 

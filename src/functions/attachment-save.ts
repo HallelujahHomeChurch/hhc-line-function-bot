@@ -50,6 +50,7 @@ export function createPendingAttachmentTextMessageHandler(
   });
 
   return {
+    turnStage: "attachment",
     matches: async (_request, context) =>
       Boolean(
         await options.sessionStore.findPendingAttachment({

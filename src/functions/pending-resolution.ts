@@ -46,6 +46,7 @@ export function createPendingResolutionTextMessageHandler(input: {
   functions: FunctionRegistry;
 }): TextMessageHandler {
   return {
+    turnStage: "resolution",
     matches: async (request, context) => {
       const pending = await input.sessionStore.findPendingResolution({
         profileName: context.profile.name,

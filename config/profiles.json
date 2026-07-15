@@ -47,6 +47,9 @@
       "maxCandidates": 3,
       "minPlannerConfidence": 0.65
     },
+    "agentRuntime": {
+      "taskFrameSeconds": 600
+    },
     "schedulePolicy": {
       "meetingWindows": [
         {

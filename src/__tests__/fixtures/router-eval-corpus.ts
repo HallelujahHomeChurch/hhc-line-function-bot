@@ -6,15 +6,12 @@ export const routerEvalEnabledFunctions: FunctionName[] = [
   "query_schedule",
   "query_knowledge",
   "save_schedule",
-  "query_service_schedule",
   "find_sheet_music",
   "find_resource",
   "query_wikipedia",
   "save_memory",
   "save_resource",
-  "retrieve_memory",
-  "save_schedule_memory",
-  "query_schedule_memory"
+  "retrieve_memory"
 ];
 
 export const keywordRouteEvalCases: RouterEvalCase[] = getRouterEvalCases();

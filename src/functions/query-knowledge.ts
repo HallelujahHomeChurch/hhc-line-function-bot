@@ -187,6 +187,7 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
       ok: true,
       executedAction: "query_knowledge",
       agentResult,
+      responseData: { kind: "knowledge", fields: { answer } },
       replyText
     };
   };
@@ -220,6 +221,7 @@ export function createQueryKnowledgeTextMessageHandler(
   options: QueryKnowledgeOptions & { sessionStore: SessionStore }
 ): TextMessageHandler {
   return {
+    turnStage: "resolution",
     matches: async (request, context) =>
       context.profile.enabledFunctions.includes("query_knowledge") &&
       numericSelectionToIndex(request.text) !== undefined &&

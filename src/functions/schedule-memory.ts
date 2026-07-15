@@ -147,7 +147,7 @@ export function createSaveScheduleMemoryHandler(
     }
 
     const expiresAt = new Date(now().getTime() + SCHEDULE_MEMORY_TTL_MS).toISOString();
-    await options.memoryStore.saveScheduleMemory({
+    const saved = await options.memoryStore.saveScheduleMemory({
       profileName: context.profile.name,
       source: context.event.source,
       createdBy: context.event.source.userId,
@@ -162,7 +162,20 @@ export function createSaveScheduleMemoryHandler(
 
     return {
       ok: true,
-      replyText: `已保存 ${parsed.entries.length} 筆${scheduleTypeLabel(parsed.scheduleType)}，之後可以請我查。`
+      writePhase: "commit",
+      replyText: `已保存 ${parsed.entries.length} 筆${scheduleTypeLabel(parsed.scheduleType)}，之後可以請我查。`,
+      agentResult: {
+        status: "success",
+        replyText: "服事表已保存。",
+        anchors: { scheduleType: saved.scheduleType, memoryId: saved.id },
+        entities: [
+          {
+            type: "scheduleType",
+            key: saved.scheduleType,
+            label: scheduleTypeLabel(saved.scheduleType)
+          }
+        ]
+      }
     };
   };
 }
@@ -402,7 +415,9 @@ export function createQueryScheduleMemoryHandler(
       entries.map((entry) => ({
         date: entry.serviceDate,
         meeting: entry.meetingName,
-        role: entry.role
+        role: entry.role,
+        assignee: entry.assignee,
+        familyName: entry.familyName
       })),
       { replyText, role: args.role }
     );

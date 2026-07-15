@@ -297,6 +297,7 @@ export function createFindPptSlidesTextMessageHandler(
   const now = options.now ?? (() => new Date());
 
   return {
+    turnStage: "resolution",
     matches: async (request, context) =>
       context.profile.enabledFunctions.includes("find_ppt_slides") &&
       numericSelectionToIndex(request.text) !== undefined &&
@@ -433,6 +434,10 @@ async function createRememberedReferenceReply(
         query: resource.query,
         storage: resource.storage
       },
+      responseData: {
+        kind: "resource",
+        fields: { title: resource.title, link: resource.storage.url }
+      },
       agentResult: pptSuccessEnvelope(resourceId, { resourceId })
     };
   }
@@ -540,6 +545,7 @@ async function createSharingLinkReply(
       title: item.name,
       storage: { provider: "graph", driveId, itemId: item.id }
     },
+    responseData: { kind: "resource", fields: { title: item.name, link } },
     agentResult: pptSuccessEnvelope(resourceId, {
       resourceId,
       driveId,

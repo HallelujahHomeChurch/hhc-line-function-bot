@@ -363,7 +363,7 @@ describe("query_schedule", () => {
     );
 
     expect(result.replyText).toContain("前攝影：姵穎,佳美");
-    expect(result.agentResult).toEqual({
+    expect(result.agentResult).toMatchObject({
       status: "success",
       replyText: result.replyText,
       anchors: {
@@ -376,7 +376,13 @@ describe("query_schedule", () => {
         expect.objectContaining({ type: "role", label: "前攝影" }),
         expect.objectContaining({ type: "role", label: "導播" })
       ]),
-      supportedOperations: ["continue", "refine", "advance"]
+      supportedOperations: ["continue", "refine", "advance"],
+      replyData: {
+        kind: "schedule",
+        records: expect.arrayContaining([
+          expect.objectContaining({ role: "前攝影", people: "姵穎,佳美" })
+        ])
+      }
     });
   });
 

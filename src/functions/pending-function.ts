@@ -56,6 +56,7 @@ export function createPendingFunctionTextMessageHandler(
   options: PendingFunctionTextMessageOptions
 ): TextMessageHandler {
   return {
+    turnStage: "pending_function",
     matches: async (request, context) => {
       if (!request.text.trim()) return false;
       const pending = await findPendingFunction(options.sessionStore, context);

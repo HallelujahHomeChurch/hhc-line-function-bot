@@ -65,6 +65,10 @@ export function createWikipediaLookupHandler(
       replyText: [article.title, summary.trim(), `來源：${article.articleUrl}`]
         .filter(Boolean)
         .join("\n"),
+      responseData: {
+        kind: "wikipedia",
+        fields: { answer: summary.trim(), summary: summary.trim() }
+      },
       agentResult: {
         status: "success",
         replyText: "維基百科查詢完成。",
