@@ -434,6 +434,7 @@ async function handleWebhook(
           store: conversationWindowStore,
           scope: activeTaskScopeForEvent(conversationWindowStore, effectiveProfile, event),
           capability: postbackFunctionName,
+          enabledFunctions: effectiveProfile.enabledFunctions,
           result,
           now: new Date(),
           ttlMs: Math.max(1, effectiveProfile.generalAgent?.conversationWindowSeconds ?? 60) * 1000

@@ -55,7 +55,7 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
         ]
       };
     }
-    await options.memoryStore.saveTextMemory({
+    const saved = await options.memoryStore.saveTextMemory({
       profileName: context.profile.name,
       source: context.event.source,
       createdBy: context.event.source.userId,
@@ -65,7 +65,17 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
       query: args.query,
       expiresAt: new Date(now().getTime() + TEXT_MEMORY_TTL_MS).toISOString()
     });
-    return { ok: true, replyText: "已記住，之後你可以請我查這段資訊。" };
+    return {
+      ok: true,
+      writePhase: "commit",
+      replyText: "已記住，之後你可以請我查這段資訊。",
+      agentResult: {
+        status: "success",
+        replyText: "資訊已保存。",
+        anchors: { memoryId: saved.id },
+        entities: [{ type: "memory", key: saved.id, label: "已保存資訊" }]
+      }
+    };
   };
 }
 

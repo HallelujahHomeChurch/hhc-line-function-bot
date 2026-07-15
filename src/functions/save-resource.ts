@@ -71,7 +71,7 @@ export function createSaveResourceHandler(options: SaveResourceFunctionOptions):
       };
     }
 
-    await options.memoryStore.recordResource({
+    const saved = await options.memoryStore.recordResource({
       profileName: context.profile.name,
       source: context.event.source,
       createdBy: context.event.source.userId,
@@ -86,7 +86,21 @@ export function createSaveResourceHandler(options: SaveResourceFunctionOptions):
       },
       expiresAt: new Date(now().getTime() + RESOURCE_TTL_MS).toISOString()
     });
-    return { ok: true, replyText: `已保存：${title}` };
+    return {
+      ok: true,
+      writePhase: "commit",
+      replyText: `已保存：${title}`,
+      agentResult: {
+        status: "success",
+        replyText: "資源已保存。",
+        anchors: {
+          resourceId: saved.id,
+          resourceKind: args.resourceType,
+          title
+        },
+        entities: [{ type: "resource", key: saved.id, label: "已保存資源" }]
+      }
+    };
   };
 }
 
