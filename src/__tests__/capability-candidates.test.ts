@@ -12,7 +12,6 @@ const scheduleTask: ActiveTaskContext = {
   version: 2,
   currentCapability: "query_schedule",
   allowedCapabilities: ["query_schedule"],
-  capability: "query_schedule",
   anchors: { date: "2026-07-14", meeting: "晨更" },
   entities: [
     {
@@ -31,7 +30,6 @@ const knowledgeTask: ActiveTaskContext = {
   version: 2,
   currentCapability: "query_knowledge",
   allowedCapabilities: ["query_knowledge"],
-  capability: "query_knowledge",
   anchors: { sourceKey: "retreat" },
   entities: [{ type: "section", key: "day-one", label: "第一天" }],
   supportedOperations: ["continue", "refine", "advance", "select"],
@@ -535,6 +533,20 @@ describe("deterministic capability candidates", () => {
         maxCandidates: 3
       }).map(({ capability }) => capability)
     ).toEqual(["find_sheet_music"]);
+  });
+
+  it("recognizes a natural saved-file lookup without requiring the catalog title to match first", () => {
+    expect(
+      buildCapabilityCandidates({
+        text: "我想查詢牧師師母五十週年檔案",
+        enabledFunctions: ["find_resource", "save_resource"],
+        source: "user",
+        knowledgeSources: [],
+        maxCandidates: 3
+      })
+    ).toEqual([
+      expect.objectContaining({ capability: "find_resource", reason: "capability_hint" })
+    ]);
   });
 
   it("does not treat the role token inside 投影片 as schedule argument evidence", () => {

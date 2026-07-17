@@ -421,10 +421,23 @@ export function createQueryScheduleMemoryHandler(
       })),
       { replyText, role: args.role }
     );
+    const memoryIds = [...new Set(entries.map((entry) => entry.memoryId))];
     return {
       ok: true,
       replyText: agentResult.replyText,
-      agentResult
+      agentResult: {
+        ...agentResult,
+        anchors: {
+          ...agentResult.anchors,
+          scheduleType: entries[0].scheduleType,
+          ...(memoryIds.length === 1 ? { memoryId: memoryIds[0] } : {})
+        },
+        ...(memoryIds.length === 1
+          ? {
+              evidence: [{ kind: "schedule_memory", reference: { memoryId: memoryIds[0] } }]
+            }
+          : {})
+      }
     };
   };
 }

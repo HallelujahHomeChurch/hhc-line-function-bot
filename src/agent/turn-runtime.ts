@@ -196,7 +196,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               steps.push({
                 phase: "active_task",
                 outcome: previousTask ? "present" : "missing",
-                action: previousTask?.capability,
+                action: previousTask?.currentCapability,
                 lifecycleOutcome: previousTask ? "read" : "missing"
               });
             }
@@ -229,24 +229,6 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         }
         return finish(input, steps, result);
       }
-
-      const preRoute = await options.agentRuntime?.handleTextBeforeRouting({
-        text,
-        context
-      });
-      if (preRoute) {
-        steps.push({ phase: "pre_route_memory", outcome: "handled", ok: preRoute.ok });
-        await emitRouteEvent(options.routeObserver, {
-          kind: "text_handler",
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          requestId: input.requestId,
-          handler: "agent_runtime",
-          ok: preRoute.ok
-        });
-        return finish(input, steps, preRoute);
-      }
-      steps.push({ phase: "pre_route_memory", outcome: "miss" });
 
       if (input.allowRouting === false) {
         return undefined;
@@ -305,7 +287,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           steps.push({
             phase: "active_task",
             outcome: activeTask ? "present" : "missing",
-            action: activeTask?.capability,
+            action: activeTask?.currentCapability,
             lifecycleOutcome: activeTask ? "read" : "missing"
           });
         }
@@ -939,6 +921,12 @@ function controlledClarificationResult(
   plan: Extract<ValidatedAgentPlan, { disposition: "clarify" }>,
   context: FunctionHandlerContext
 ): FunctionExecutionResult {
+  if (plan.reasonCode === "retrieval_unavailable") {
+    return {
+      ok: true,
+      replyText: withRequesterDisplayName(context, "資料來源暫時無法查詢，請稍後再試。")
+    };
+  }
   const definition = plan.capability ? getFunctionDefinition(plan.capability) : undefined;
   const slot = definition?.requiredSlots[0];
   const replyText =
@@ -962,9 +950,9 @@ async function readActiveTask(
   if (!scope || !options.conversationWindowStore) return undefined;
   const task = await options.conversationWindowStore.activeTask(scope);
   if (!task) return undefined;
-  const definition = getFunctionDefinition(task.capability);
+  const definition = getFunctionDefinition(task.currentCapability);
   const valid = Boolean(
-    input.profile.enabledFunctions.includes(task.capability) &&
+    input.profile.enabledFunctions.includes(task.currentCapability) &&
     definition?.allowedSources.includes(input.event.source.type as "user" | "group")
   );
   if (valid) return task;
@@ -991,7 +979,7 @@ function activeTaskView(
 ): FunctionHandlerContext["activeTask"] {
   if (!activeTask) return undefined;
   return {
-    capability: activeTask.capability,
+    capability: activeTask.currentCapability,
     anchors: { ...activeTask.anchors },
     references: activeTask.references ? { ...activeTask.references } : undefined,
     entities: activeTask.entities.map((entity) => ({

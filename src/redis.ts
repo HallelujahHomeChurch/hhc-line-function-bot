@@ -11,6 +11,7 @@ import type { RedisRateLimitClient } from "./rate-limit.js";
 import type { RedisSessionClient } from "./state/redis-session-store.js";
 import type { RedisAgentJobClient } from "./agent/jobs.js";
 import type { RedisConversationWindowClient } from "./agent/context-manager.js";
+import type { RedisAgentTraceClient } from "./agent/trace-store.js";
 
 export interface RedisRuntime {
   client: RedisCacheClient &
@@ -22,6 +23,7 @@ export interface RedisRuntime {
     DiagnosticRedisClient &
     RedisInFlightClient &
     RedisAgentJobClient &
+    RedisAgentTraceClient &
     RedisConversationWindowClient;
   keyPrefix: string;
 }

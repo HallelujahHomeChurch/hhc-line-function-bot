@@ -37,6 +37,8 @@ const AFFIRMATIVE_TERMS = ["確認", "確定", "同意", "可以"];
 const EXPLICIT_NEGATIVE_PATTERN =
   /(?:不要|不用|不必|先不要|先別|別|取消|否|拒絕|不確認|不確定|不同意|不可以)/u;
 const AFFIRMATIVE_NEGATION_PREFIX = /(?:不要|不用|不必|先不要|先別|別|不)$/u;
+const ACTIVE_TASK_REPLAY_PATTERN =
+  /(?:再給我一次|再給一次|再傳一次|再貼一次|剛剛那份|剛才那份|剛剛那個|上一份)/u;
 
 export function groundPlanRecord(input: GroundPlanRecordInput): GroundedPlanRecord {
   const output: JsonRecord = {};
@@ -93,8 +95,40 @@ export function hasActiveEntityTextEvidence(
   return (
     activeTask.entities.some(
       (entity) => declaredTypes.has(entity.type) && entityHasTextEvidence(text, entity)
-    ) || hasEllipticalActiveTaskReference(text)
+    ) ||
+    hasEllipticalActiveTaskReference(text) ||
+    hasDeclaredResponseFieldEvidence(text, contract, activeTask)
   );
+}
+
+function hasDeclaredResponseFieldEvidence(
+  text: string,
+  contract: AgentCapabilityContract,
+  activeTask: ActiveTaskContext
+): boolean {
+  if (isInterpersonalOrSmallTalkText(text)) return false;
+  const normalized = normalizeComparable(text);
+  if (!normalized || Array.from(normalized).length > 40) return false;
+  if (
+    activeTask.supportedOperations.includes("continue") &&
+    ACTIVE_TASK_REPLAY_PATTERN.test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    activeTask.supportedOperations.includes("view_full") &&
+    /(?:完整|全部|整份|全文|查看全文)/u.test(normalized)
+  ) {
+    return true;
+  }
+  const available = new Set(activeTask.responseContext?.availableFields ?? []);
+  return Object.entries(contract.responseProjection?.fields ?? {}).some(([key, field]) => {
+    if (available.size > 0 && !available.has(key)) return false;
+    return [key, field.label, ...field.aliases].some((value) => {
+      const candidate = normalizeComparable(value);
+      return candidate.length > 0 && normalized.includes(candidate);
+    });
+  });
 }
 
 export function hasEllipticalActiveTaskReference(text: string): boolean {

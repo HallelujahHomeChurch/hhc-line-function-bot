@@ -73,4 +73,51 @@ describe("declarative task handoffs", () => {
 
     expect(target.recordActiveTask).not.toHaveBeenCalled();
   });
+
+  it("hands a saved general resource to exact catalog lookup", async () => {
+    const target = store();
+    await expect(
+      applyActiveTaskTransition({
+        store: target,
+        scope,
+        capability: "save_resource",
+        enabledFunctions: ["save_resource", "find_resource"],
+        result: {
+          ok: true,
+          replyText: "已保存",
+          writePhase: "commit",
+          agentResult: {
+            status: "success",
+            replyText: "已保存",
+            anchors: {
+              resourceId: "11111111-1111-4111-8111-111111111111",
+              resourceKind: "resource",
+              title: "牧師師母 50 週年"
+            },
+            entities: [
+              {
+                type: "resource",
+                key: "11111111-1111-4111-8111-111111111111",
+                label: "已保存資源"
+              }
+            ]
+          }
+        },
+        now,
+        ttlMs: 600_000
+      })
+    ).resolves.toBe("write");
+
+    expect(target.recordActiveTask).toHaveBeenCalledWith({
+      scope,
+      ttlMs: 600_000,
+      task: expect.objectContaining({
+        currentCapability: "find_resource",
+        anchors: {
+          query: "牧師師母 50 週年",
+          resourceId: "11111111-1111-4111-8111-111111111111"
+        }
+      })
+    });
+  });
 });

@@ -4,9 +4,11 @@ import { createControlledAgentRouter } from "../agent/controlled-agent-router.js
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
+import { InMemoryCatalogStore } from "../catalog/store.js";
 import type { AgentPlanner } from "../agent/planner.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
+import { createFindResourceHandler } from "../functions/find-resource.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
@@ -115,6 +117,89 @@ async function fixture() {
 }
 
 describe("AgentTurnRuntime controlled path", () => {
+  it("replays the exact prior resource through the controlled active task instead of a pre-route shortcut", async () => {
+    const catalog = new InMemoryCatalogStore();
+    const source = await catalog.upsertSource({
+      profileName: "helper",
+      sourceKey: "xiaoha_database",
+      adapterType: "onedrive",
+      domain: "general",
+      defaultItemKind: "church_document",
+      rootLocation: { driveId: "drive-1", folderItemId: "root" },
+      enabled: true,
+      syncPolicy: { mode: "scheduled" },
+      capabilities: { read: ["helper"], write: [] }
+    });
+    const target = await catalog.upsertItem({
+      sourceId: source.id,
+      itemKind: "church_document",
+      domain: "general",
+      title: "牧師師母 50 週年感恩餐會",
+      storageRef: { provider: "graph", driveId: "drive-1", itemId: "item-1" }
+    });
+    const createSharingLink = vi
+      .fn()
+      .mockResolvedValueOnce("https://example.test/first")
+      .mockResolvedValueOnce("https://example.test/replayed");
+    const planner: AgentPlanner = {
+      propose: vi.fn(async ({ text }) => ({
+        status: "proposed" as const,
+        version: 1 as const,
+        disposition: "execute" as const,
+        capability: "find_resource" as const,
+        arguments: {
+          query: text.includes("牧師師母") ? "牧師師母 50 週年" : text
+        },
+        confidence: 0.98,
+        provider: "deepseek" as const,
+        attempts: []
+      }))
+    };
+    const conversationWindowStore = new InMemoryConversationWindowStore({ now });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {
+        find_resource: createFindResourceHandler({
+          catalog,
+          graph: { listFolderChildren: vi.fn(), createSharingLink },
+          now
+        })
+      },
+      textMessageHandlers: {},
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      conversationWindowStore,
+      controlledAgentRouter: createControlledAgentRouter({ planner, now }),
+      now
+    });
+
+    const first = await runtime.handleTextTurn({
+      profile: profile(["find_resource"]),
+      event: event("查教會資料 牧師師母 50 週年"),
+      requestId: "resource-1"
+    });
+    const second = await runtime.handleTextTurn({
+      profile: profile(["find_resource"]),
+      event: event("再給我一次"),
+      requestId: "resource-2"
+    });
+
+    expect(first?.replyText).toContain("https://example.test/first");
+    expect(second?.replyText).toContain("https://example.test/replayed");
+    expect(second?.replyText).toContain("牧師師母 50 週年感恩餐會");
+    expect(createSharingLink).toHaveBeenLastCalledWith("drive-1", "item-1", expect.any(String));
+    expect(
+      await conversationWindowStore.activeTask({
+        profileName: "helper",
+        sourceKey: "group:C1",
+        requesterUserId: "U1"
+      })
+    ).toMatchObject({
+      currentCapability: "find_resource",
+      references: { resourceId: target.id, driveId: "drive-1", itemId: "item-1" }
+    });
+  });
+
   it("answers a bare role follow-up from the exact next schedule selected in the prior turn", async () => {
     const { runtime, lastErrorStore } = await fixture();
 
@@ -183,6 +268,31 @@ describe("AgentTurnRuntime controlled path", () => {
     });
 
     expect(result?.replyText).toContain("請再告訴我");
+  });
+
+  it("distinguishes a temporarily unavailable retrieval source from an unclear request", async () => {
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "clarify",
+          reasonCode: "retrieval_unavailable"
+        })
+      },
+      now
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["find_resource"]),
+      event: event("查教會資料 牧師師母 50 週年"),
+      requestId: "retrieval-down"
+    });
+
+    expect(result?.replyText).toBe("資料來源暫時無法查詢，請稍後再試。");
   });
 
   it("collects missing write content and uses the next requester reply", async () => {

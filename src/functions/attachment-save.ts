@@ -101,9 +101,17 @@ export function createPendingAttachmentTextMessageHandler(
             quickReplies: confirmationQuickReplies()
           };
         }
+        const claimed = await options.sessionStore.takePendingAttachment({
+          profileName: context.profile.name,
+          source: context.event.source,
+          requesterUserId: context.event.source.userId
+        });
+        if (!claimed) {
+          return { ok: true, replyText: "這個檔案保存流程已經在處理或已完成。" };
+        }
         return publishAttachment({
           options,
-          pending,
+          pending: claimed,
           maxBytes,
           now: now(),
           profile: context.profile,

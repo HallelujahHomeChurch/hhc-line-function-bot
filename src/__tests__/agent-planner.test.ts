@@ -8,7 +8,6 @@ const scheduleTask: ActiveTaskContext = {
   version: 2,
   currentCapability: "query_schedule",
   allowedCapabilities: ["query_schedule"],
-  capability: "query_schedule",
   anchors: {
     date: "2026-07-14",
     meeting: "晨更",
@@ -40,6 +39,15 @@ const scheduleCandidateWithContract: AgentPlannerCandidate = {
     intents: ["查服事"],
     candidateHints: ["服事"],
     semanticDescription: "依日期、聚會或角色查詢服事安排。",
+    arguments: {
+      query: { type: "string", authority: "current_text" },
+      role: { type: "string", authority: "model_grounded" },
+      dateIntent: {
+        type: "string",
+        authority: "model_grounded",
+        values: ["today", "next_meeting"]
+      }
+    },
     entityTypes: ["role"],
     refinableFields: ["role"],
     operations: ["continue", "refine"],
@@ -144,6 +152,10 @@ describe("constrained semantic planner", () => {
     expect(request?.prompt).toContain('"capability":"query_schedule"');
     expect(request?.prompt).toContain("依日期、聚會或角色查詢服事安排");
     expect(request?.prompt).toContain('"requiredSlots":["schedule_range_or_type"]');
+    expect(request?.prompt).toContain(
+      '"arguments":{"query":{"type":"string","authority":"current_text"},"role":{"type":"string","authority":"model_grounded"}'
+    );
+    expect(request?.prompt).toContain('"values":["today","next_meeting"]');
     expect(request?.prompt).toContain('"responseFields":["role","date"]');
     expect(request?.prompt).toContain('"ref":"entity-1","type":"role"');
     expect(request?.prompt).toContain('"supportedOperations":["continue","refine"]');

@@ -177,6 +177,7 @@ export interface SessionStore {
   findSelection(lookup: SelectionLookup): Promise<SelectionSession | undefined>;
   findPendingFunction(lookup: PendingFunctionLookup): Promise<PendingFunctionSession | undefined>;
   findPendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
+  takePendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
   findPendingResolution(lookup: PptSelectionLookup): Promise<PendingResolutionSession | undefined>;
   findPendingCapabilityResolution(
     lookup: PptSelectionLookup
@@ -280,6 +281,27 @@ export class InMemorySessionStore implements SessionStore {
     return liveSessions.sort(
       (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
     )[0];
+  }
+
+  async takePendingAttachment(
+    lookup: PptSelectionLookup
+  ): Promise<PendingAttachmentSession | undefined> {
+    const session = Array.from(this.sessions.values())
+      .map((candidate) => this.liveSession(candidate))
+      .filter(
+        (candidate): candidate is PendingAttachmentSession =>
+          candidate?.type === "pending_attachment"
+      )
+      .filter((candidate) => candidate.profileName === lookup.profileName)
+      .filter((candidate) => sourceMatches(candidate.source, lookup.source))
+      .filter((candidate) =>
+        requesterMatchesForSource(lookup.source, candidate.requesterUserId, lookup.requesterUserId)
+      )
+      .sort(
+        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+      )[0];
+    if (session) this.sessions.delete(session.id);
+    return session;
   }
 
   async findPendingResolution(

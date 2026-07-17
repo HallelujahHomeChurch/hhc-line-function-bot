@@ -117,6 +117,15 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     const args = findPopSheetMusicArgumentsSchema.parse(rawArgs);
     const rawQuery = args.query.trim();
 
+    if (args.driveId && args.itemId) {
+      return createSharingLinkReply(
+        options.graph,
+        { id: args.itemId, driveId: args.driveId, name: "歌譜" },
+        now(),
+        args.resourceId ?? args.itemId
+      );
+    }
+
     if (!rawQuery) {
       await storePendingFunctionQuery({
         sessionStore,
@@ -708,7 +717,7 @@ function sheetMusicSuccessEnvelope(resourceId: string, reference: JsonRecord) {
     replyText: "歌譜查詢完成。",
     entities: [{ type: "resource", key: resourceId, label: "歌譜資源" }],
     evidence: [{ kind: "catalog_item", reference }],
-    supportedOperations: []
+    supportedOperations: ["continue", "refine", "view_full"]
   };
 }
 

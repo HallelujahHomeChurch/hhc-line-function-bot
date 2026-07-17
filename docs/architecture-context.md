@@ -58,8 +58,10 @@ For normal LINE webhook messages, read the flow in this order:
    `src/agent/turn-runtime.ts`.
 8. Text continuation handlers declare a controlled workflow stage. The kernel
    orders pending confirmation/cancellation and slot collection first, then
-   capability/entity selection, attachment workflow, and bounded resource
-   recall. Registration or object iteration order is never authority. A bare
+   capability/entity selection and attachment workflow. Registration or object
+   iteration order is never authority. There is no pre-route resource-recall
+   bypass; replay and field follow-ups use the normal task-frame candidate,
+   planner, validator, and exact-reference path. A bare
    confirmation stays with its current pending write.
 9. Intro and small-talk system actions can respond without function execution.
 10. In controlled mode, the runtime reads the independently expiring,
@@ -75,7 +77,8 @@ For normal LINE webhook messages, read the flow in this order:
     model proposed execute, clarify, chat, low confidence, or no plan.
     Ambiguity remains clarification. The model cannot invent a function, make a
     write authoritative, or carry an undeclared value from old context.
-14. Agent memory can resolve aliases before expensive file searches.
+14. After a validated file-search plan, agent memory can resolve explicit aliases
+    before an expensive provider search.
 15. The turn runtime applies in-flight locks, calls only the registered handler,
     records a sanitized result envelope, and transitions task-frame state only
     from a successful structured read result.
@@ -254,7 +257,8 @@ handler:
   with ordinary conversation turns, and cannot be inherited by another group requester
 - bounded runtime context building and compression
 - postback-based long-running job result retrieval
-- recent file recall such as "再給我一次"
+- task-frame file replay such as "再給我一次", routed through the same
+  candidate/planner/validator path with exact safe references
 - scope-local aliases such as "以後 X 就用這份"
 - explicit external resource links such as "幫我記住這份投影片 https://..."
 - explicit text memories such as "幫我記住..."
@@ -285,12 +289,16 @@ from the promoted last-known-good snapshot: staged administrator fields plus
 document titles and headings from the latest successful sync. Failed syncs
 preserve the previous live content, core/lifecycle fields, and routing snapshot, and never-successfully-synced rows remain visible
 to admins but ineligible for routing, anchors, and retrieval. Read functions can
-declare a retrieval-evidence provider; the knowledge provider makes one read-only,
-profile-scoped probe over at most 20 promoted sources and returns only bounded
-candidate evidence. Active-task entities, routing metadata, knowledge capability
+declare a retrieval-evidence provider and capability-specific stop words; the
+kernel projects a bounded query without wake words and request wrappers before
+the provider probe, while preserving identity/date/topic conditions. The
+knowledge provider makes one read-only, profile-scoped probe over at most 20
+promoted sources and returns only bounded candidate evidence. Task-frame entities, routing metadata, knowledge capability
 hints, and retrieval evidence share the engagement classifier and centralized
 write-intent guard whenever the current message has no explicit knowledge intent.
-Disabled functions and provider failures fail closed. The controlled planner never receives source ids or
+Disabled functions fail closed. Retrieval provider failure is reported as
+temporarily unavailable rather than conflated with no-match or unclear intent.
+The controlled planner never receives source ids or
 names, titles, chunks, URLs, or answer content. Successful results persist
 opaque source/document/hashed-section ids with generic labels and ordinals;
 follow-ups fall back section to document to source, never profile-wide, unless the
@@ -327,13 +335,15 @@ validator reason, result status/anchor count/entity types, and task lifecycle
 only. Raw messages, people, prompts, filenames, URLs, source titles/IDs,
 retrieval evidence, tokens, and sharing links are never used as a diagnostic
 fallback; fields that cannot be safely normalized are omitted. Trace writes are
-best-effort and never acquire routing authority.
+best-effort and never acquire routing authority. Production uses a bounded Redis
+list when `REDIS_URL` is present, so replica changes and restarts do not erase the
+latest sanitized decision traces.
 
 Do not use it for unrestricted chat logging. Normal group chatter must not be
 saved. Temporary Graph sharing links must not be saved; store drive/item ids and
 regenerate links on demand. External resource memories store user-provided URLs
-and do not verify continued access. LINE attachment download/storage is out of
-scope unless a future plan explicitly adds it.
+and do not verify continued access. LINE attachment download/storage is allowed
+only through the controlled `save_resource` workflow below.
 
 Successful PPT and sheet-music lookups are the one controlled read-function
 metadata exception: they may store short-lived, scope-local resource metadata for
@@ -465,12 +475,16 @@ metadata-only confirmation target. It does not download or scan content. On
 explicit confirmation, the handler performs one bounded LINE Content API
 download and hands the bytes to the shared binary publisher for actual-size,
 MIME/magic-byte, extension, safe-filename, hash, virus-scan, conflict, upload,
-and catalog checks. Scanner results other than `clean` fail closed. The
+and catalog checks. The pending session is claimed atomically before download,
+so duplicate confirmations cannot publish twice. OneDrive upload and catalog
+upsert form one logical commit; catalog failure compensates by deleting the
+uploaded Graph item. Scanner results other than `clean` fail closed. The
 `xiaoha_database` manual source is skipped by catalog sync and receives a 90-day
 catalog `expiresAt`; formal synced sources do not. Successful publication
 records opaque drive/item metadata as a recent general resource, so a scoped
-follow-up such as `剛剛那份` can regenerate a temporary link without storing the
-link itself.
+task-frame follow-up such as `剛剛那份` can re-enter `find_resource` with the exact
+catalog item reference and regenerate a temporary link without storing the link
+itself.
 
 LINE binary bytes travel in the bot's outbound Content API response, not through
 the inbound webhook body. Gateway, Dapr, and Fastify webhook body limits are not

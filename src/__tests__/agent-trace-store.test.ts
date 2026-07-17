@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { formatAgentTurnTraces, InMemoryAgentTraceStore } from "../agent/trace-store.js";
+import {
+  formatAgentTurnTraces,
+  InMemoryAgentTraceStore,
+  RedisAgentTraceStore
+} from "../agent/trace-store.js";
 
 const sensitiveValues = [
   "王小明",
@@ -12,6 +16,46 @@ const sensitiveValues = [
 ];
 
 describe("controlled agent trace sanitization", () => {
+  it("persists the same sanitized bounded traces in Redis", async () => {
+    const values: string[] = [];
+    const store = new RedisAgentTraceStore({
+      keyPrefix: "test",
+      maxEntries: 2,
+      client: {
+        lPush: async (_key, value) => values.unshift(value),
+        lTrim: async (_key, start, stop) => {
+          values.splice(stop + 1);
+          return "OK";
+        },
+        lRange: async (_key, start, stop) => values.slice(start, stop + 1),
+        del: async () => {
+          const count = values.length > 0 ? 1 : 0;
+          values.splice(0);
+          return count;
+        }
+      }
+    });
+
+    await store.record({
+      requestId: "secret-request",
+      occurredAt: "2026-07-17T00:00:00.000Z",
+      profileName: "helper-secret",
+      sourceType: "group",
+      steps: [{ phase: "route", action: "query_schedule", reason: "王小明" }]
+    });
+
+    await expect(store.list()).resolves.toEqual([
+      {
+        requestId: "present",
+        occurredAt: "2026-07-17T00:00:00.000Z",
+        profileName: "configured",
+        sourceType: "group",
+        steps: [{ phase: "route", action: "query_schedule" }]
+      }
+    ]);
+    expect(values.join("\n")).not.toMatch(/secret-request|helper-secret|王小明/u);
+  });
+
   it("fails closed for metadata and every legacy trace phase", async () => {
     const store = new InMemoryAgentTraceStore(10);
 

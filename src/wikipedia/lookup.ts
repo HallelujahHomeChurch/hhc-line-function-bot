@@ -75,7 +75,7 @@ export function createWikipediaLookupHandler(
         anchors: { language: article.language },
         entities: [{ type: "topic", key: pageId, label: "維基百科主題" }],
         evidence: [{ kind: "wikipedia_page", reference: { pageId } }],
-        supportedOperations: []
+        supportedOperations: ["continue", "refine", "view_full"]
       }
     };
   };

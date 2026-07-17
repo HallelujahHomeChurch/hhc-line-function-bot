@@ -97,12 +97,12 @@ When adding or changing an admin action:
 - `src/functions/*`: function definitions, modules, and implementations.
 - `src/agent/turn-runtime.ts`: shared text-turn pipeline after LINE entrance checks.
 - `src/agent/capability-candidates.ts`, `src/agent/planner.ts`, and `src/agent/plan-validator.ts`: deterministic candidate generation, advisory semantic planning, and the server-owned authority boundary.
-- `src/agent/active-task.ts` and `src/agent/active-task-transition.ts`: compatibility filenames for requester-scoped version-2 task-frame state derived from successful structured results; do not add version-1 behavior.
+- `src/agent/active-task.ts` and `src/agent/active-task-transition.ts`: compatibility filenames for requester-scoped version-2 task-frame state derived from successful structured results. `currentCapability` is the single authority field; do not add a duplicate legacy capability field or version-1 behavior.
 - `src/agent/context-manager.ts`: runtime context budget/compression plus requester-scoped conversation windows.
 - `src/agent/jobs.ts`: long-running job results scoped by profile/source/requester.
 - `src/agent/slot-clarification.ts`: definition-driven required-slot clarification.
 - `src/agent/resolution.ts` and `src/functions/pending-resolution.ts`: reusable multi-domain resolution and requester-scoped continuation with grounded arguments.
-- `src/agent/trace-store.ts`: sanitized recent agent turn diagnostics for `/last-agent-turns`.
+- `src/agent/trace-store.ts`: sanitized recent agent turn diagnostics for `/last-agent-turns`, persisted as a bounded Redis list when `REDIS_URL` is configured.
 - `src/agent/*`: controlled agent runtime, resource metadata memory, explicit text memory, aliases, and Postgres/in-memory stores.
 
 The controlled turn state machine owns workflow state; model output does not.
@@ -189,6 +189,7 @@ routers.
 - LINE attachment download/storage is allowed only through the controlled `save_resource` pending-attachment flow. Direct chat may create a short-lived requester/source-scoped pending attachment session. A group must first receive a requester-scoped, two-minute, one-shot upload intent from an explicit activation phrase; unrelated group attachments remain silent. The requester must opt in, choose one of the four declared purposes, enter a title, review the preview, and explicitly confirm. The later text handler may download only after final confirmation, must check target source write capability, size, MIME/magic bytes, extension, safe filename, hash, and virus scan, and must fail closed when scanning is unavailable or not clean before uploading to OneDrive and upserting catalog metadata. Do not add another binary publish path.
 - Agent turn traces are diagnostic metadata only. Do not store raw user text, file names, invite codes, secrets, or generated sharing links in traces.
 - Controlled-agent traces are allowlist-only. Record phases, bounded capability names/counts, provider/disposition/confidence bucket, validator reason, result status/anchor count/entity types, and lifecycle outcome. Never fall back to serializing raw prompts, messages, people, URLs, source titles/IDs, retrieval evidence, or provider payloads.
+- Resource replay and response-field follow-ups must use requester-scoped task-frame evidence plus the normal candidate/planner/validator path. Do not reintroduce pre-route latest-resource lookup or phrase-specific execution shortcuts.
 - Do not assume multi-replica safety without Redis for sessions/cache/invite codes.
 - Group and room clarification/selection sessions are requester-scoped. They require the same `source.userId` to continue, and should not be created or matched when LINE does not provide a requester user id.
 - Long-running job result retrieval follows the same requester/source rule. A group user must not be able to fetch another user's job result.

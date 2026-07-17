@@ -22,7 +22,7 @@ const LIMITS = {
 type NormalizeMode = "sanitize" | "strict";
 
 const ACTIVE_TASK_KEYS = new Set(
-  "version currentCapability allowedCapabilities capability anchors entities references supportedOperations responseContext createdAt expiresAt".split(
+  "version currentCapability allowedCapabilities anchors entities references supportedOperations responseContext createdAt expiresAt".split(
     " "
   )
 );
@@ -103,7 +103,6 @@ function normalizeActiveTask(
   if (
     input.version !== 2 ||
     !isFunctionName(input.currentCapability) ||
-    input.capability !== input.currentCapability ||
     !isCanonicalTimestamp(input.createdAt) ||
     !isCanonicalTimestamp(input.expiresAt) ||
     Date.parse(input.expiresAt) <= Date.parse(input.createdAt) ||
@@ -138,7 +137,6 @@ function normalizeActiveTask(
     version: 2,
     currentCapability: input.currentCapability,
     allowedCapabilities,
-    capability: input.currentCapability,
     anchors,
     entities,
     ...(references ? { references } : {}),

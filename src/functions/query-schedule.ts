@@ -36,7 +36,11 @@ import {
 } from "./schedule-result.js";
 import { selectFirstUpcomingOccurrence } from "../schedules/occurrence-policy.js";
 import type { MeetingWindowRule } from "../types.js";
-import { resolveScheduleDomain, SCHEDULE_DOMAIN_KEYS } from "./schedule-resolver.js";
+import {
+  resolveScheduleDomain,
+  scheduleDomainChoices,
+  SCHEDULE_DOMAIN_KEYS
+} from "./schedule-resolver.js";
 import { storePendingResolution } from "./pending-resolution.js";
 
 export interface QueryScheduleFunctionOptions {
@@ -151,13 +155,16 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
           ? familyArgs
           : refinedArgs;
       const memoryResult = await memoryHandler(memoryArgs, context);
+      const memoryDomainKey =
+        selectedDomain === SCHEDULE_DOMAIN_KEYS.family ||
+        ambiguousDomains ||
+        memoryResult.agentResult?.anchors?.scheduleType === "morning_prayer_family"
+          ? SCHEDULE_DOMAIN_KEYS.family
+          : "saved_schedule";
       results.push({
-        domainKey:
-          selectedDomain === SCHEDULE_DOMAIN_KEYS.family || ambiguousDomains
-            ? SCHEDULE_DOMAIN_KEYS.family
-            : "saved_schedule",
+        domainKey: memoryDomainKey,
         result:
-          selectedDomain === SCHEDULE_DOMAIN_KEYS.family || ambiguousDomains
+          memoryDomainKey === SCHEDULE_DOMAIN_KEYS.family
             ? withScheduleDomain(memoryResult, SCHEDULE_DOMAIN_KEYS.family)
             : memoryResult
       });
@@ -216,8 +223,16 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
         })
       };
     }
-    if (ambiguousDomains && new Set(found.map(({ domainKey }) => domainKey)).size > 1) {
-      const candidates = resolution.status === "ambiguous" ? resolution.candidates : [];
+    const foundDomainKeys = new Set(found.map(({ domainKey }) => domainKey));
+    const unresolvedGenericDomain =
+      resolution.status === "not_found" &&
+      !memorySpecific &&
+      refinedArgs.dateIntent === "next_meeting" &&
+      !isExplicitAllScheduleDomainsRequest(args.query);
+    if ((ambiguousDomains || unresolvedGenericDomain) && foundDomainKeys.size > 1) {
+      const candidates = (
+        resolution.status === "ambiguous" ? resolution.candidates : scheduleDomainChoices()
+      ).filter((candidate) => foundDomainKeys.has(candidate.domainKey));
       await storePendingResolution({
         sessionStore: options.sessionStore,
         requestId: options.requestIdFactory?.() ?? context.requestId ?? randomUUID(),
@@ -293,6 +308,12 @@ function isScheduleListRequest(query: string): boolean {
 
 function isMemorySpecificRequest(query: string): boolean {
   return /舉牌|為耶穌|晨更家族|家族晨更|仙履奇緣|家族|家園/u.test(query);
+}
+
+function isExplicitAllScheduleDomainsRequest(query: string): boolean {
+  return /(?:所有|全部|各類|每一類|跨類型).*(?:服事|服事表)|(?:服事|服事表).*(?:所有|全部|各類|每一類|跨類型)/u.test(
+    query.normalize("NFKC")
+  );
 }
 
 function isNoScheduleResult(replyText: string): boolean {

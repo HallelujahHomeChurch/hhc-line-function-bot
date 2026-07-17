@@ -20,6 +20,9 @@ export const scheduleTypeSchema = z.enum([
 export const findPptSlidesArgumentsSchema = z
   .object({
     query: z.string().optional().default(""),
+    resourceId: z.string().optional(),
+    driveId: z.string().optional(),
+    itemId: z.string().optional(),
     originalQuery: z.string().optional(),
     includePdf: z.boolean().optional(),
     fileType: z.enum(["ppt", "pdf", "any"]).optional(),
@@ -96,6 +99,9 @@ export const queryScheduleArgumentsSchema = z
 export const findPopSheetMusicArgumentsSchema = z
   .object({
     query: z.string().optional().default(""),
+    resourceId: z.string().optional(),
+    driveId: z.string().optional(),
+    itemId: z.string().optional(),
     artist: z.string().optional(),
     fileType: z.enum(["pdf", "image", "any"]).optional(),
     matchMode: z.enum(["fuzzy", "exact"]).optional()
@@ -105,6 +111,7 @@ export const findPopSheetMusicArgumentsSchema = z
 export const findResourceArgumentsSchema = z
   .object({
     query: z.string().optional().default(""),
+    resourceId: z.string().optional(),
     itemKind: z.string().optional(),
     domain: z.string().optional(),
     limit: numericLimitSchema.optional()
@@ -153,7 +160,8 @@ export const saveResourceArgumentsSchema = z
 
 export const retrieveMemoryArgumentsSchema = z
   .object({
-    query: z.string().optional().default("")
+    query: z.string().optional().default(""),
+    memoryId: z.string().optional()
   })
   .strip();
 

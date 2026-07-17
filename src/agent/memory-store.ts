@@ -89,13 +89,6 @@ export interface RecordAgentResourceInput {
   expiresAt?: string;
 }
 
-export interface FindRecentAgentResourceInput {
-  profileName: string;
-  source: LineSource;
-  requesterUserId?: string;
-  resourceTypes?: AgentResourceType[];
-}
-
 export interface RememberAgentAliasInput {
   profileName: string;
   source: LineSource;
@@ -176,6 +169,7 @@ export interface SearchAgentTextMemoriesInput {
   profileName: string;
   source: LineSource;
   requesterUserId?: string;
+  memoryId?: string;
   query?: string;
   limit?: number;
   queryEmbedding?: number[];
@@ -222,7 +216,6 @@ export interface AgentMemorySummary {
 
 export interface AgentMemoryStore {
   recordResource(input: RecordAgentResourceInput): Promise<AgentResourceRecord>;
-  findRecentResource(input: FindRecentAgentResourceInput): Promise<AgentResourceRecord | undefined>;
   searchResources(input: SearchAgentResourcesInput): Promise<AgentResourceRecord[]>;
   rememberAlias(input: RememberAgentAliasInput): Promise<void>;
   findResourceByAlias(
@@ -302,18 +295,6 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
     };
     this.resources.set(record.id, record);
     return record;
-  }
-
-  async findRecentResource(
-    input: FindRecentAgentResourceInput
-  ): Promise<AgentResourceRecord | undefined> {
-    const scope = scopeFromSource(input.source);
-    return Array.from(this.resources.values())
-      .filter((record) =>
-        this.resourceMatches(record, input.profileName, scope, input.resourceTypes)
-      )
-      .filter((record) => !input.requesterUserId || record.createdBy === input.requesterUserId)
-      .sort(descendingCreatedAt)[0];
   }
 
   async searchResources(input: SearchAgentResourcesInput): Promise<AgentResourceRecord[]> {
@@ -401,10 +382,11 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
 
   async searchTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]> {
     const scope = scopeFromSource(input.source);
-    const query = normalizeLookupText(input.query ?? "");
+    const query = input.memoryId ? "" : normalizeLookupText(input.query ?? "");
     const queryEmbedding = input.queryEmbedding;
     return Array.from(this.textMemories.values())
       .filter((record) => this.textMemoryMatches(record, input.profileName, scope))
+      .filter((record) => !input.memoryId || record.id === input.memoryId)
       .filter((record) =>
         this.isVisible(record, input.requesterUserId ?? input.source.userId, scope)
       )

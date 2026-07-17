@@ -94,6 +94,16 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
     const args = findPptSlidesArgumentsSchema.parse(rawArgs);
     const rawQuery = args.query.trim();
 
+    if (args.driveId && args.itemId) {
+      return createSharingLinkReply(
+        options.graph,
+        args.driveId,
+        { id: args.itemId, name: "投影片" },
+        now(),
+        args.resourceId ?? args.itemId
+      );
+    }
+
     if (!rawQuery) {
       await storePendingFunctionQuery({
         sessionStore,
@@ -560,7 +570,7 @@ function pptSuccessEnvelope(resourceId: string, reference: JsonRecord) {
     replyText: "投影片查詢完成。",
     entities: [{ type: "resource", key: resourceId, label: "投影片資源" }],
     evidence: [{ kind: "catalog_item", reference }],
-    supportedOperations: []
+    supportedOperations: ["continue", "refine", "view_full"]
   };
 }
 

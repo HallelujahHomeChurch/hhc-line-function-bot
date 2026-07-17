@@ -223,7 +223,7 @@ describe("find_ppt_slides", () => {
           reference: { resourceId: "1", driveId: "drive-id", itemId: "1" }
         }
       ],
-      supportedOperations: []
+      supportedOperations: ["continue", "refine", "view_full"]
     });
     expect(JSON.stringify(result.agentResult)).not.toMatch(/奇異恩典|download\.invalid/iu);
     expect(graph.createSharingLink).toHaveBeenCalledWith(

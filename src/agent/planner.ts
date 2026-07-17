@@ -2,7 +2,11 @@ import { z } from "zod";
 
 import type { ActiveTaskContext } from "./active-task.js";
 import type { CapabilityCandidateReason } from "./capability-candidates.js";
-import { getFunctionDefinition, type AgentCapabilityContract } from "../functions/definitions.js";
+import {
+  getFunctionDefinition,
+  type AgentArgumentContract,
+  type AgentCapabilityContract
+} from "../functions/definitions.js";
 import {
   AGENT_PLAN_DISPOSITIONS,
   FUNCTION_NAMES,
@@ -114,6 +118,7 @@ interface CandidateSummary {
   contract?: {
     semanticDescription?: string;
     requiredSlots?: string[];
+    arguments?: Record<string, AgentArgumentContract>;
     responseFields?: string[];
     entityTypes?: string[];
     refinableFields?: string[];
@@ -394,14 +399,40 @@ function summarizeContract(
   const entityTypes = summarizeMetadata(contract.entityTypes);
   const refinableFields = summarizeMetadata(contract.refinableFields);
   const operations = summarizeMetadata(contract.operations);
+  const argumentsSummary = summarizeArguments(contract.arguments);
   if (semanticDescription) summary.semanticDescription = semanticDescription;
   if (requiredSlots?.length) summary.requiredSlots = requiredSlots;
+  if (Object.keys(argumentsSummary).length > 0) summary.arguments = argumentsSummary;
   if (responseFields.length) summary.responseFields = responseFields;
   if (entityTypes.length > 0) summary.entityTypes = entityTypes;
   if (refinableFields.length > 0) summary.refinableFields = refinableFields;
   if (operations.length > 0) summary.operations = operations;
   if (contract.ambiguity === "clarify") summary.ambiguity = "clarify";
   return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
+function summarizeArguments(
+  values: Readonly<Record<string, AgentArgumentContract>> | undefined
+): Record<string, AgentArgumentContract> {
+  return Object.fromEntries(
+    Object.entries(values ?? {})
+      .slice(0, LIMITS.contractFields)
+      .flatMap(([key, argument]) => {
+        const safeKey = sanitizeText(key, LIMITS.metadataCharacters);
+        if (!safeKey) return [];
+        const allowedValues = summarizeMetadata(argument.values);
+        return [
+          [
+            safeKey,
+            {
+              type: argument.type,
+              authority: argument.authority,
+              ...(allowedValues.length > 0 ? { values: allowedValues } : {})
+            }
+          ]
+        ];
+      })
+  );
 }
 
 function summarizeMetadata(values: readonly string[] | undefined): string[] {
@@ -416,7 +447,9 @@ function summarizeActiveTask(
   candidates: readonly CandidateSummary[]
 ): unknown {
   if (!activeTask) return undefined;
-  const candidate = candidates.find(({ capability }) => capability === activeTask.capability);
+  const candidate = candidates.find(
+    ({ capability }) => capability === activeTask.currentCapability
+  );
   if (!candidate) return undefined;
 
   const summary: {
@@ -426,7 +459,7 @@ function summarizeActiveTask(
     entities?: Array<{ ref: string; type: string }>;
   } = {
     version: activeTask.version,
-    capability: activeTask.capability
+    capability: activeTask.currentCapability
   };
   const declaredOperations = declaredCategoricalValues(candidate.contract?.operations);
   const supportedOperations = uniqueDeclaredMatches(

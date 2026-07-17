@@ -301,6 +301,11 @@ export class PostgresCatalogStore implements CatalogStore {
       "(catalog_items.expires_at is null or catalog_items.expires_at > now())"
     ];
 
+    if (input.itemIds?.length) {
+      values.push(input.itemIds);
+      conditions.push(`catalog_items.id = any($${values.length}::uuid[])`);
+    }
+
     if (input.itemKinds?.length) {
       values.push(input.itemKinds);
       conditions.push(`catalog_items.item_kind = any($${values.length}::text[])`);

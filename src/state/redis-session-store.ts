@@ -131,6 +131,17 @@ export class RedisSessionStore implements SessionStore {
     return latestSession(liveSessions);
   }
 
+  async takePendingAttachment(
+    lookup: PptSelectionLookup
+  ): Promise<PendingAttachmentSession | undefined> {
+    const selected = await this.findPendingAttachment(lookup);
+    if (!selected) return undefined;
+    const raw = await this.options.client.getDel(this.key(selected.id));
+    if (!raw) return undefined;
+    return this.liveSession(JSON.parse(raw) as PendingAttachmentSession) as
+      PendingAttachmentSession | undefined;
+  }
+
   async findPendingResolution(
     lookup: PptSelectionLookup
   ): Promise<PendingResolutionSession | undefined> {

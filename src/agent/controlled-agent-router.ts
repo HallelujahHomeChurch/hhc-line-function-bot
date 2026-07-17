@@ -65,7 +65,7 @@ export function createControlledAgentRouter(options: {
         enabledFunctions: input.enabledFunctions,
         activeTask: input.activeTask,
         knowledgeSources,
-        retrievalEvidence,
+        retrievalEvidence: retrievalEvidence.matched,
         maxCandidates: input.maxCandidates,
         source
       });
@@ -74,6 +74,15 @@ export function createControlledAgentRouter(options: {
         candidates: candidates.map(({ capability }) => capability),
         candidateCount: candidates.length
       });
+      if (candidates.length === 0 && retrievalEvidence.unavailable.length > 0) {
+        emitDiagnostic(observe, {
+          phase: "plan_validation",
+          outcome: "unavailable",
+          disposition: "clarify",
+          validatorReason: "retrieval_unavailable"
+        });
+        return { disposition: "clarify", reasonCode: "retrieval_unavailable" };
+      }
       const proposal = await proposeOrNoPlan(options.planner, {
         profileName: input.profileName,
         text: input.text,
@@ -155,27 +164,36 @@ async function readRetrievalEvidence(
   providers: Readonly<Record<string, RetrievalEvidenceProvider>> | undefined,
   input: ControlledAgentRouterInput,
   source: FunctionAllowedSource
-): Promise<FunctionName[]> {
-  if (!providers) return [];
+): Promise<{ matched: FunctionName[]; unavailable: FunctionName[] }> {
+  if (!providers) return { matched: [], unavailable: [] };
   const requests = retrievalEvidenceRequests({
     text: input.text,
     enabledFunctions: input.enabledFunctions,
     source
   });
-  const byProvider = new Map<string, FunctionName[]>();
+  const byProviderAndQuery = new Map<
+    string,
+    { provider: string; query: string; capabilities: FunctionName[] }
+  >();
   for (const request of requests) {
-    const capabilities = byProvider.get(request.provider) ?? [];
-    capabilities.push(request.capability);
-    byProvider.set(request.provider, capabilities);
+    const key = `${request.provider}\u0000${request.query}`;
+    const entry = byProviderAndQuery.get(key) ?? {
+      provider: request.provider,
+      query: request.query,
+      capabilities: []
+    };
+    entry.capabilities.push(request.capability);
+    byProviderAndQuery.set(key, entry);
   }
   const matched = new Set<FunctionName>();
-  for (const [providerName, capabilities] of byProvider) {
+  const unavailable = new Set<FunctionName>();
+  for (const { provider: providerName, query, capabilities } of byProviderAndQuery.values()) {
     const provider = providers[providerName];
     if (!provider) continue;
     try {
       const evidence = await provider.probe({
         profileName: input.profileName,
-        text: input.text,
+        text: query,
         source,
         sourceId: input.sourceId,
         requesterUserId: input.requesterUserId,
@@ -183,10 +201,10 @@ async function readRetrievalEvidence(
       });
       if (evidence.matched) for (const capability of capabilities) matched.add(capability);
     } catch {
-      // Retrieval evidence is advisory and fails closed.
+      for (const capability of capabilities) unavailable.add(capability);
     }
   }
-  return Array.from(matched);
+  return { matched: Array.from(matched), unavailable: Array.from(unavailable) };
 }
 
 const KNOWLEDGE_METADATA_LIMIT = 20;

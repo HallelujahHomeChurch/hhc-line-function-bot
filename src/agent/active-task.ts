@@ -7,8 +7,6 @@ export interface ActiveTaskContext {
   version: 2;
   currentCapability: FunctionName;
   allowedCapabilities: FunctionName[];
-  /** @deprecated Use currentCapability until the task-frame rename is complete. */
-  capability: FunctionName;
   anchors: JsonRecord;
   entities: AgentEntity[];
   references?: JsonRecord;
@@ -34,7 +32,6 @@ export function activeTaskFromResult(
       version: 2,
       currentCapability: capability,
       allowedCapabilities: [capability],
-      capability,
       anchors: result.agentResult.anchors ?? {},
       entities: result.agentResult.entities ?? [],
       references: result.agentResult.evidence?.[0]?.reference,

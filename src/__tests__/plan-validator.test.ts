@@ -7,8 +7,9 @@ import { hasExplicitWriteEvidence } from "../functions/argument-normalization.js
 const now = new Date("2026-07-13T00:00:30.000Z");
 
 const scheduleTask: ActiveTaskContext = {
-  version: 1,
-  capability: "query_schedule",
+  version: 2,
+  currentCapability: "query_schedule",
+  allowedCapabilities: ["query_schedule"],
   anchors: { date: "2026-07-14", meeting: "晨更" },
   entities: [
     {
@@ -24,8 +25,9 @@ const scheduleTask: ActiveTaskContext = {
 };
 
 const knowledgeTask: ActiveTaskContext = {
-  version: 1,
-  capability: "query_knowledge",
+  version: 2,
+  currentCapability: "query_knowledge",
+  allowedCapabilities: ["query_knowledge"],
   anchors: { sourceId: "source-1", documentId: "doc-1" },
   entities: [
     { type: "source", key: "source-1", label: "知識來源" },
@@ -56,6 +58,47 @@ function input(overrides: Partial<ValidateAgentPlanInput> = {}): ValidateAgentPl
 }
 
 describe("deterministic agent plan validation", () => {
+  it("materializes exact resource references for a declared field follow-up", () => {
+    expect(
+      validateAgentPlan(
+        input({
+          text: "連結呢",
+          enabledFunctions: ["find_resource"],
+          candidates: [{ capability: "find_resource", reason: "active_task_entity", score: 300 }],
+          proposal: {
+            disposition: "continue",
+            capability: "find_resource",
+            arguments: { query: "連結呢" },
+            confidence: 0.95
+          },
+          activeTask: {
+            version: 2,
+            currentCapability: "find_resource",
+            allowedCapabilities: ["find_resource"],
+            anchors: { resourceId: "11111111-1111-4111-8111-111111111111" },
+            entities: [{ type: "resource", key: "resource-1", label: "教會資料" }],
+            references: { resourceId: "11111111-1111-4111-8111-111111111111" },
+            supportedOperations: ["continue", "refine", "view_full"],
+            responseContext: {
+              availableFields: ["title", "link"],
+              defaultProjection: "focused"
+            },
+            createdAt: "2026-07-13T00:00:00.000Z",
+            expiresAt: "2026-07-13T00:01:00.000Z"
+          }
+        })
+      )
+    ).toMatchObject({
+      disposition: "execute",
+      capability: "find_resource",
+      arguments: {
+        query: "連結呢",
+        resourceId: "11111111-1111-4111-8111-111111111111"
+      },
+      reasonCode: "active_task_refinement"
+    });
+  });
+
   it("executes a candidate-confined explicit request with grounded arguments", () => {
     expect(validateAgentPlan(input())).toMatchObject({
       disposition: "execute",
@@ -745,6 +788,22 @@ describe("deterministic agent plan validation", () => {
         })
       )
     ).toEqual({ disposition: "chat", reasonCode: "no_capability_evidence" });
+  });
+
+  it.each([
+    { status: "no_plan" as const, reasonCode: "no_candidates" as const },
+    { disposition: "chat" as const, arguments: {}, confidence: 0.9 }
+  ])("does not turn an unresolved task-shaped request into small talk", (proposal) => {
+    expect(
+      validateAgentPlan(
+        input({
+          text: "我想查詢牧師師母五十週年檔案",
+          enabledFunctions: ["find_resource"],
+          candidates: [],
+          proposal
+        })
+      )
+    ).toEqual({ disposition: "clarify", reasonCode: "capability_evidence_unresolved" });
   });
 
   it("recovers a complete explicit read request from an over-cautious planner clarification", () => {

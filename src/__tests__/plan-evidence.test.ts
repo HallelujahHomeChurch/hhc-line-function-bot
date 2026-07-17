@@ -1,11 +1,38 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hasActiveEntityTextEvidence,
   hasCurrentTextEvidence,
   hasEllipticalActiveTaskReference
 } from "../agent/plan-evidence.js";
+import { getFunctionDefinition } from "../functions/definitions.js";
+import type { ActiveTaskContext } from "../agent/active-task.js";
 
 describe("plan evidence scalar grounding", () => {
+  it("recognizes declared response-field and full-view follow-ups without repeating the function", () => {
+    const task: ActiveTaskContext = {
+      version: 2,
+      currentCapability: "find_resource",
+      allowedCapabilities: ["find_resource"],
+      anchors: { resourceId: "resource-1" },
+      entities: [{ type: "resource", key: "resource-1", label: "教會資料" }],
+      references: { resourceId: "resource-1" },
+      supportedOperations: ["continue", "refine", "view_full"],
+      responseContext: {
+        availableFields: ["title", "link"],
+        defaultProjection: "focused"
+      },
+      createdAt: "2026-07-17T00:00:00.000Z",
+      expiresAt: "2026-07-17T00:10:00.000Z"
+    };
+    const contract = getFunctionDefinition("find_resource")?.agentCapability;
+    expect(contract).toBeDefined();
+
+    expect(hasActiveEntityTextEvidence("連結呢", contract!, task)).toBe(true);
+    expect(hasActiveEntityTextEvidence("給我完整內容", contract!, task)).toBe(true);
+    expect(hasActiveEntityTextEvidence("你叫什麼名字", contract!, task)).toBe(false);
+  });
+
   it("matches numeric evidence as an exact token instead of a substring", () => {
     expect(hasCurrentTextEvidence("第10個", 1)).toBe(false);
     expect(hasCurrentTextEvidence("選 1 和 10", 1)).toBe(true);

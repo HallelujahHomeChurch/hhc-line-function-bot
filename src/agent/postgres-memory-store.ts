@@ -18,7 +18,6 @@ import {
   type AgentTextMemoryRecord,
   type AgentTextMemoryEmbeddingCandidate,
   type FindAgentResourceByAliasInput,
-  type FindRecentAgentResourceInput,
   type ForgetAgentMemoryInput,
   type RecordAgentResourceInput,
   type RememberAgentAliasInput,
@@ -88,40 +87,6 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
       ]
     );
     return mapResource(result.rows[0]);
-  }
-
-  async findRecentResource(
-    input: FindRecentAgentResourceInput
-  ): Promise<AgentResourceRecord | undefined> {
-    const scope = scopeFromSource(input.source);
-    const typeFilter = input.resourceTypes?.length ? "and resource_type = any($4::text[])" : "";
-    const requesterFilter = input.requesterUserId
-      ? `and created_by = $${input.resourceTypes?.length ? 5 : 4}`
-      : "";
-    const values: unknown[] = [input.profileName, scope.type, scope.id];
-    if (input.resourceTypes?.length) {
-      values.push(input.resourceTypes);
-    }
-    if (input.requesterUserId) {
-      values.push(input.requesterUserId);
-    }
-    const result = await this.db.query(
-      `
-      select *
-      from agent_resources
-      where profile_name = $1
-        and scope_type = $2
-        and scope_id = $3
-        ${typeFilter}
-        ${requesterFilter}
-        and deleted_at is null
-        and expires_at > now()
-      order by created_at desc
-      limit 1
-      `,
-      values
-    );
-    return result.rows[0] ? mapResource(result.rows[0]) : undefined;
   }
 
   async searchResources(input: SearchAgentResourcesInput): Promise<AgentResourceRecord[]> {
@@ -276,7 +241,8 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
       input.requesterUserId ?? input.source.userId,
       values
     );
-    const queryParam = values.push(normalizeLookupText(input.query ?? ""));
+    const memoryIdFilter = input.memoryId ? `and id = $${values.push(input.memoryId)}::uuid` : "";
+    const queryParam = values.push(input.memoryId ? "" : normalizeLookupText(input.query ?? ""));
     const vectorParam = input.queryEmbedding?.length
       ? values.push(vectorParameter(input.queryEmbedding))
       : undefined;
@@ -299,6 +265,7 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
           and scope_type = $2
           and scope_id = $3
           ${visibilityFilter}
+          ${memoryIdFilter}
           and deleted_at is null
           and expires_at > now()
       ), ranked as (

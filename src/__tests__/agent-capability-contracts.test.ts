@@ -11,6 +11,36 @@ const eligibleReadDefinitions = FUNCTION_DEFINITIONS.filter(
 );
 
 describe("controlled read capability contracts", () => {
+  it("declares planner-visible argument authority for every required and refinable field", () => {
+    for (const definition of FUNCTION_DEFINITIONS) {
+      const contract = definition.agentCapability;
+      if (!contract) continue;
+      for (const slot of definition.requiredSlots) {
+        expect(
+          contract.arguments?.[slot.argument],
+          `${definition.name}.${slot.argument}`
+        ).toBeDefined();
+      }
+      for (const field of contract.refinableFields ?? []) {
+        expect(contract.arguments?.[field], `${definition.name}.${field}`).toBeDefined();
+      }
+    }
+  });
+
+  it("maps handoffs only into arguments accepted by the target contract", () => {
+    for (const definition of FUNCTION_DEFINITIONS) {
+      for (const handoff of definition.agentCapability?.handoffs ?? []) {
+        const targetArguments = getFunctionDefinition(handoff.to)?.agentCapability?.arguments ?? {};
+        for (const targetKey of Object.keys(handoff.map)) {
+          expect(
+            targetArguments[targetKey],
+            `${definition.name}->${handoff.to}.${targetKey}`
+          ).toBeDefined();
+        }
+      }
+    }
+  });
+
   it("requires every eligible read to declare safe planner and response contracts", () => {
     expect(eligibleReadDefinitions.length).toBeGreaterThan(0);
     for (const definition of eligibleReadDefinitions) {

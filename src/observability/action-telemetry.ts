@@ -152,7 +152,6 @@ const EVENT_KINDS = new Set([
 const SOURCE_TYPES = new Set(["user", "group", "room"]);
 const PHASES = new Set([
   "context",
-  "pre_route_memory",
   "query_clarification",
   "text_handler",
   "admin_action_route",

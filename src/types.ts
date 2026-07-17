@@ -753,6 +753,7 @@ export interface GraphDriveClient {
     data: Uint8Array,
     contentType: string
   ): Promise<DriveItem>;
+  deleteItem?(driveId: string, itemId: string): Promise<void>;
 }
 
 export interface LineContent {

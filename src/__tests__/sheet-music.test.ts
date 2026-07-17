@@ -138,7 +138,7 @@ describe("find_sheet_music", () => {
       status: "success",
       replyText: "歌譜查詢完成。",
       entities: [{ type: "resource", key: "catalog-sheet-1", label: "歌譜資源" }],
-      supportedOperations: []
+      supportedOperations: ["continue", "refine", "view_full"]
     });
     expect(JSON.stringify(result.agentResult)).not.toMatch(/A TIME FOR US|download\.invalid/iu);
     expect(graph.listFolderFilesRecursive).not.toHaveBeenCalled();

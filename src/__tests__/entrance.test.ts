@@ -5,8 +5,6 @@ import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invi
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
-import { createAgentRuntime } from "../agent/agent-runtime.js";
-import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
@@ -335,89 +333,6 @@ describe("LINE entrance", () => {
     );
     const serializedEvents = JSON.stringify(routeObserver.mock.calls.map(([event]) => event));
     expect(serializedEvents).not.toContain("小哈 查投影片 奇異恩典");
-  });
-
-  it("records file results and answers follow-up recalls without routing again", async () => {
-    const memoryStore = new InMemoryAgentMemoryStore({
-      now: () => new Date("2026-07-08T00:00:00.000Z")
-    });
-    const graph: GraphDriveClient = {
-      listFolderChildren: vi.fn(),
-      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/recalled")
-    };
-    const route = vi
-      .fn<FunctionRouterPort["route"]>()
-      .mockResolvedValueOnce({
-        type: "execute",
-        action: "find_ppt_slides",
-        arguments: { query: "奇異恩典" },
-        provider: "ollama"
-      })
-      .mockResolvedValue({
-        type: "deny",
-        reason: "should_not_route_follow_up",
-        provider: "ollama"
-      });
-    const findPptSlides = vi.fn().mockResolvedValue({
-      ok: true,
-      replyText:
-        "已找到詩歌投影片：\n奇異恩典.pptx\n下載連結（1 天內有效）：\nhttps://download.invalid/first",
-      agentResource: {
-        resourceType: "ppt_slide",
-        title: "奇異恩典.pptx",
-        storage: { provider: "graph", driveId: "drive-id", itemId: "ppt-1" }
-      }
-    });
-    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
-    const app = createTestApp(testConfig(), {
-      router: { route },
-      functionRegistry: { find_ppt_slides: findPptSlides },
-      agentRuntime: createAgentRuntime({
-        memoryStore,
-        graph,
-        now: () => new Date("2026-07-08T00:00:00.000Z")
-      }),
-      createLineReplyClient: () => ({ replyText })
-    });
-
-    const firstBody = lineBody({
-      type: "message",
-      replyToken: "reply-1",
-      source: { type: "group", groupId: "Cmain", userId: "U1" },
-      message: { type: "text", text: "小哈 查投影片 奇異恩典" }
-    });
-    await app.inject({
-      method: "POST",
-      url: "/api/line/webhook/main",
-      headers: signedHeaders(firstBody, "main-secret"),
-      payload: firstBody
-    });
-
-    const followUpBody = lineBody({
-      type: "message",
-      replyToken: "reply-2",
-      source: { type: "group", groupId: "Cmain", userId: "U1" },
-      message: { type: "text", text: "小哈 再給我一次" }
-    });
-    const followUpResponse = await app.inject({
-      method: "POST",
-      url: "/api/line/webhook/main",
-      headers: signedHeaders(followUpBody, "main-secret"),
-      payload: followUpBody
-    });
-
-    expect(followUpResponse.statusCode).toBe(200);
-    expect(route).toHaveBeenCalledOnce();
-    expect(replyText).toHaveBeenLastCalledWith(
-      "reply-2",
-      [
-        "這是剛剛那份：",
-        "奇異恩典.pptx",
-        "下載連結（1 天內有效）：",
-        "https://download.invalid/recalled"
-      ].join("\n"),
-      undefined
-    );
   });
 
   it("does not execute a duplicate function request while the same query is in flight", async () => {

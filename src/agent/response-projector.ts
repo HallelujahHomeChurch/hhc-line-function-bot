@@ -53,10 +53,8 @@ function requestedField(
   fields: Record<string, { label: string; aliases: string[] }>
 ): string | undefined {
   const normalizedText = normalize(text);
-  return Object.entries(fields).find(([key, field]) =>
-    [key, field.label, ...field.aliases].some((candidate) =>
-      normalizedText.includes(normalize(candidate))
-    )
+  return Object.entries(fields).find(([, field]) =>
+    field.aliases.some((candidate) => normalizedText.includes(normalize(candidate)))
   )?.[0];
 }
 

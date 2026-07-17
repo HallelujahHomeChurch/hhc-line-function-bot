@@ -92,12 +92,15 @@ function isCancelText(value: string | undefined): boolean {
 export function createRetrieveMemoryHandler(options: AgentMemoryFunctionOptions): FunctionHandler {
   return async (rawArgs, context) => {
     const args = retrieveMemoryArgumentsSchema.parse(rawArgs);
-    const queryEmbedding = await embedOrUndefined(options.embedding, args.query);
+    const queryEmbedding = args.memoryId
+      ? undefined
+      : await embedOrUndefined(options.embedding, args.query);
     const memories = await options.memoryStore.searchTextMemories({
       profileName: context.profile.name,
       source: context.event.source,
       requesterUserId: context.event.source.userId,
-      query: args.query,
+      memoryId: args.memoryId,
+      query: args.memoryId ? undefined : args.query,
       queryEmbedding,
       limit: 3
     });
@@ -136,7 +139,7 @@ export function createRetrieveMemoryHandler(options: AgentMemoryFunctionOptions)
           kind: "saved_memory",
           reference: { memoryId: id }
         })),
-        supportedOperations: []
+        supportedOperations: ["continue", "refine", "view_full"]
       }
     };
   };

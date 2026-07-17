@@ -13,7 +13,6 @@ const previousTask: ActiveTaskContext = {
   version: 2,
   currentCapability: "query_schedule",
   allowedCapabilities: ["query_schedule"],
-  capability: "query_schedule",
   anchors: { date: "2026-07-14", meeting: "晨更" },
   entities: [
     {

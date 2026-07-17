@@ -125,6 +125,58 @@ describe("query_schedule", () => {
     });
   });
 
+  it("clarifies a generic next-service request when multiple schedule domains match", async () => {
+    const now = () => new Date("2026-07-15T00:00:00.000Z");
+    const memoryStore = new InMemoryAgentMemoryStore({ now });
+    await memoryStore.saveScheduleMemory({
+      profileName: "helper",
+      source: { type: "user", userId: "U1" },
+      scheduleType: "morning_prayer_family",
+      title: "晨更家族服事表",
+      originalText: "7/21二黃弘家族1",
+      entries: [
+        {
+          serviceDate: "2026-07-21",
+          meetingName: "晨更",
+          role: "服事家族",
+          assignee: "黃弘家族1"
+        }
+      ]
+    });
+    const scheduleStore = new InMemoryScheduleStore();
+    await scheduleStore.upsertItem({
+      profileName: "helper",
+      sourceKey: "media_team_service_schedule",
+      origin: "notion",
+      externalId: "media-0717",
+      serviceDate: "2026-07-17",
+      meeting: "晨更",
+      role: "音控",
+      assignee: "資恆"
+    });
+    const sessionStore = new InMemorySessionStore({ now });
+    const query = createQueryScheduleHandler({
+      memoryStore,
+      scheduleStore,
+      sessionStore,
+      now,
+      requestIdFactory: () => "resolution-generic",
+      timeZone: "Asia/Taipei"
+    });
+
+    const result = await query(
+      { query: "下一場服事", dateIntent: "next_meeting" },
+      context("下一場服事", { type: "user", userId: "U1" })
+    );
+
+    expect(result.agentResult).toMatchObject({
+      status: "ambiguous",
+      clarification: { choices: ["影視團隊服事", "晨更家族服事"] }
+    });
+    expect(result.replyText).not.toContain("資恆");
+    expect(result.replyText).not.toContain("黃弘家族1");
+  });
+
   it("uses role evidence to query only the media schedule resolver", async () => {
     const scheduleStore = new InMemoryScheduleStore();
     await scheduleStore.upsertItem({

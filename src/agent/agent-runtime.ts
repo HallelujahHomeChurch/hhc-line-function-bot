@@ -24,11 +24,6 @@ export interface AfterFunctionResultInput {
   result: FunctionExecutionResult;
 }
 
-export interface AgentTextInput {
-  text: string;
-  context: FunctionHandlerContext;
-}
-
 export interface BeforeFunctionExecutionInput {
   context: FunctionHandlerContext;
   action: FunctionName;
@@ -43,7 +38,6 @@ export interface AgentCommandInput {
 
 export interface AgentRuntime {
   afterFunctionResult(input: AfterFunctionResultInput): Promise<void>;
-  handleTextBeforeRouting(input: AgentTextInput): Promise<FunctionExecutionResult | undefined>;
   handleBeforeFunctionExecution(
     input: BeforeFunctionExecutionInput
   ): Promise<FunctionExecutionResult | undefined>;
@@ -97,21 +91,6 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
         storage: reference.storage,
         expiresAt: new Date(now().getTime() + RESOURCE_TTL_MS).toISOString()
       });
-    },
-
-    async handleTextBeforeRouting(input) {
-      const text = stripBotAddress(input.text, input.context.profile.wakeKeywords);
-      if (isRecentResourceRecall(text)) {
-        const recent = await options.memoryStore.findRecentResource({
-          profileName: input.context.profile.name,
-          source: input.context.event.source,
-          requesterUserId: input.context.event.source.userId,
-          resourceTypes: ["ppt_slide", "sheet_music", "general_resource"]
-        });
-        return recent ? createResourceReply(recent) : undefined;
-      }
-
-      return undefined;
     },
 
     async handleBeforeFunctionExecution(input) {
@@ -272,20 +251,6 @@ function toResourceReference(resource: AgentResourceRecord): AgentResourceRefere
 function stringArgument(args: JsonRecord, key: string): string | undefined {
   const value = args[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function stripBotAddress(text: string, wakeKeywords: string[]): string {
-  let result = text.trim();
-  for (const keyword of [...wakeKeywords, "小哈"]) {
-    if (keyword && result.startsWith(keyword)) {
-      result = result.slice(keyword.length).trim();
-    }
-  }
-  return result.replace(/^[,，。:：\s]+/u, "").trim();
-}
-
-function isRecentResourceRecall(text: string): boolean {
-  return /再給我一次|剛剛那份|剛才那份|剛剛那個|上一份|再傳一次|再貼一次/u.test(text);
 }
 
 function resourceTypesForAction(action: FunctionName): AgentResourceType[] | undefined {

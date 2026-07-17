@@ -3,7 +3,6 @@ import type { AgentPlanDisposition, FunctionName } from "../types.js";
 
 export type AgentTurnTracePhase =
   | "context"
-  | "pre_route_memory"
   | "query_clarification"
   | "text_handler"
   | "admin_action_route"
@@ -73,6 +72,7 @@ export type AgentValidatorReason =
   | "planner_clarification"
   | "planner_denied"
   | "planner_unavailable"
+  | "retrieval_unavailable"
   | "source_not_allowed"
   | "write_evidence_missing";
 
@@ -101,6 +101,53 @@ export interface AgentTraceStore {
   record(record: AgentTurnTraceRecord): Promise<void>;
   list(limit?: number): Promise<AgentTurnTraceRecord[]>;
   clear(): Promise<number>;
+}
+
+export interface RedisAgentTraceClient {
+  lPush(key: string, value: string): Promise<number>;
+  lTrim(key: string, start: number, stop: number): Promise<unknown>;
+  lRange(key: string, start: number, stop: number): Promise<string[]>;
+  del(key: string | string[]): Promise<number>;
+}
+
+export class RedisAgentTraceStore implements AgentTraceStore {
+  private readonly key: string;
+
+  constructor(
+    private readonly options: {
+      client: RedisAgentTraceClient;
+      keyPrefix: string;
+      maxEntries?: number;
+    }
+  ) {
+    this.key = `${options.keyPrefix}:agent-turn-traces:v1`;
+  }
+
+  async record(record: AgentTurnTraceRecord): Promise<void> {
+    await this.options.client.lPush(this.key, JSON.stringify(sanitizeAgentTurnTrace(record)));
+    await this.options.client.lTrim(this.key, 0, this.maxEntries - 1);
+  }
+
+  async list(limit?: number): Promise<AgentTurnTraceRecord[]> {
+    const bounded = Math.max(0, Math.min(limit ?? this.maxEntries, this.maxEntries));
+    if (bounded === 0) return [];
+    const values = await this.options.client.lRange(this.key, 0, bounded - 1);
+    return values.flatMap((value) => {
+      try {
+        return [sanitizeAgentTurnTrace(JSON.parse(value) as AgentTurnTraceRecord)];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  async clear(): Promise<number> {
+    return this.options.client.del(this.key);
+  }
+
+  private get maxEntries(): number {
+    return Math.max(1, Math.min(this.options.maxEntries ?? 20, 100));
+  }
 }
 
 export class InMemoryAgentTraceStore implements AgentTraceStore {

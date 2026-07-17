@@ -17,7 +17,8 @@ import {
   isConservativeKnowledgeEvidenceText,
   isInterpersonalOrSmallTalkText
 } from "./knowledge-evidence-guard.js";
-import { hasEllipticalActiveTaskReference } from "./plan-evidence.js";
+import { hasActiveEntityTextEvidence } from "./plan-evidence.js";
+import { projectRetrievalQuery } from "./retrieval-query.js";
 
 export interface KnowledgeSourceMetadata extends Omit<KnowledgeRoutingMetadata, "sampleQueries"> {
   sampleQueries?: string[];
@@ -226,7 +227,7 @@ function matchesActiveTaskEntity(
       (entity) =>
         entityTypes.has(entity.type) &&
         matchesAnyExact(text, [entity.key, entity.label, ...(entity.aliases ?? [])])
-    ) || hasEllipticalActiveTaskReference(text)
+    ) || hasActiveEntityTextEvidence(text, contract, activeTask)
   );
 }
 
@@ -357,13 +358,15 @@ export function retrievalEvidenceRequests(input: {
   text: string;
   enabledFunctions: readonly FunctionName[];
   source: FunctionAllowedSource;
-}): Array<{ capability: FunctionName; provider: string }> {
+}): Array<{ capability: FunctionName; provider: string; query: string }> {
   if (!isConservativeKnowledgeEvidenceText(input.text)) return [];
   const enabled = new Set(input.enabledFunctions);
   return FUNCTION_DEFINITIONS.flatMap((definition) => {
     if (!isEligibleDefinition(definition, enabled, input.source)) return [];
     const provider = definition.agentCapability?.retrievalEvidence?.provider.trim();
-    return provider ? [{ capability: definition.name, provider }] : [];
+    if (!provider) return [];
+    const query = projectRetrievalQuery({ text: input.text, definition });
+    return query ? [{ capability: definition.name, provider, query }] : [];
   });
 }
 
@@ -383,6 +386,20 @@ function cloneContract(contract: AgentCapabilityContract): AgentCapabilityContra
     intents: [...contract.intents],
     candidateHints: [...contract.candidateHints],
     semanticDescription: contract.semanticDescription,
+    ...(contract.arguments
+      ? {
+          arguments: Object.fromEntries(
+            Object.entries(contract.arguments).map(([key, argument]) => [
+              key,
+              {
+                type: argument.type,
+                authority: argument.authority,
+                ...(argument.values ? { values: [...argument.values] } : {})
+              }
+            ])
+          )
+        }
+      : {}),
     operations: [...contract.operations],
     responseProjection: {
       defaultMode: contract.responseProjection.defaultMode,
@@ -418,7 +435,14 @@ function cloneContract(contract: AgentCapabilityContract): AgentCapabilityContra
       : {}),
     ...(contract.refinableFields ? { refinableFields: [...contract.refinableFields] } : {}),
     ...(contract.retrievalEvidence
-      ? { retrievalEvidence: { provider: contract.retrievalEvidence.provider } }
+      ? {
+          retrievalEvidence: {
+            provider: contract.retrievalEvidence.provider,
+            ...(contract.retrievalEvidence.queryStopWords
+              ? { queryStopWords: [...contract.retrievalEvidence.queryStopWords] }
+              : {})
+          }
+        }
       : {}),
     ...(contract.ambiguity ? { ambiguity: contract.ambiguity } : {}),
     ...(contract.activeEvidence

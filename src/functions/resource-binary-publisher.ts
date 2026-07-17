@@ -107,27 +107,40 @@ export function createResourceBinaryPublisher(
         input.binary.data,
         detected.mimeType
       );
-      await options.catalog.upsertItem({
-        sourceId: sourceGate.source.id,
-        itemKind: target.itemKind,
-        domain: target.domain,
-        title: target.title,
-        path: item.path ?? item.name,
-        mimeType: detected.mimeType,
-        extension: detected.extension,
-        sizeBytes,
-        sha256,
-        storageRef: {
-          provider: "graph",
-          driveId: item.driveId ?? driveId,
-          itemId: item.id
-        },
-        externalUpdatedAt: input.now.toISOString(),
-        expiresAt:
-          target.sourceKey === "xiaoha_database"
-            ? new Date(input.now.getTime() + XIAOHA_DATABASE_RETENTION_MS).toISOString()
-            : undefined
-      });
+      const uploadedDriveId = item.driveId ?? driveId;
+      let catalogItem: CatalogItemRecord;
+      try {
+        catalogItem = await options.catalog.upsertItem({
+          sourceId: sourceGate.source.id,
+          itemKind: target.itemKind,
+          domain: target.domain,
+          title: target.title,
+          path: item.path ?? item.name,
+          mimeType: detected.mimeType,
+          extension: detected.extension,
+          sizeBytes,
+          sha256,
+          storageRef: {
+            provider: "graph",
+            driveId: uploadedDriveId,
+            itemId: item.id
+          },
+          externalUpdatedAt: input.now.toISOString(),
+          expiresAt:
+            target.sourceKey === "xiaoha_database"
+              ? new Date(input.now.getTime() + XIAOHA_DATABASE_RETENTION_MS).toISOString()
+              : undefined
+        });
+      } catch {
+        if (options.graph.deleteItem) {
+          try {
+            await options.graph.deleteItem(uploadedDriveId, item.id);
+          } catch {
+            // A later catalog sync can reconcile an upload that could not be compensated.
+          }
+        }
+        return { ok: true, replyText: "檔案索引建立失敗，這次沒有完成保存，請稍後重試。" };
+      }
       return {
         ok: true,
         writePhase: "commit",
@@ -143,21 +156,21 @@ export function createResourceBinaryPublisher(
           status: "success",
           replyText: "檔案已保存。",
           anchors: {
-            resourceId: item.id,
+            resourceId: catalogItem.id,
             resourceKind:
               resourceTypeForItemKind(target.itemKind) === "general_resource"
                 ? "resource"
                 : resourceTypeForItemKind(target.itemKind),
             title: target.title
           },
-          entities: [{ type: "resource", key: item.id, label: "已保存資源" }]
+          entities: [{ type: "resource", key: catalogItem.id, label: "已保存資源" }]
         },
         agentResource: {
           resourceType: resourceTypeForItemKind(target.itemKind),
           title: target.title,
           storage: {
             provider: "graph",
-            driveId: item.driveId ?? driveId,
+            driveId: uploadedDriveId,
             itemId: item.id
           }
         }

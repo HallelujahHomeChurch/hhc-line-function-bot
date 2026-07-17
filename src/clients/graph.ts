@@ -180,6 +180,10 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
         throw new Error("graph_upload_missing_item");
       }
       return graphItemToDriveItem(item, driveId);
+    },
+
+    async deleteItem(driveId: string, itemId: string): Promise<void> {
+      await client.api(`/drives/${driveId}/items/${itemId}`).delete();
     }
   };
 }

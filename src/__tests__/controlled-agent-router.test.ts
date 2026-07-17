@@ -13,7 +13,6 @@ const scheduleTask: ActiveTaskContext = {
   version: 2,
   currentCapability: "query_schedule",
   allowedCapabilities: ["query_schedule"],
-  capability: "query_schedule",
   anchors: { date: "2026-07-14", meeting: "晨更" },
   entities: [{ type: "role", key: "front-camera", label: "前攝影", aliases: ["攝影"] }],
   supportedOperations: ["continue", "refine", "advance"],
@@ -25,7 +24,6 @@ const knowledgeTask: ActiveTaskContext = {
   version: 2,
   currentCapability: "query_knowledge",
   allowedCapabilities: ["query_knowledge"],
-  capability: "query_knowledge",
   anchors: { sourceKey: "retreat" },
   entities: [{ type: "section", key: "day-one", label: "第一天" }],
   supportedOperations: ["continue", "refine", "advance", "select"],
@@ -265,6 +263,40 @@ describe("ControlledAgentRouter", () => {
     );
   });
 
+  it("probes catalog evidence with a projected resource query", async () => {
+    const probe = vi.fn().mockResolvedValue({ matched: true, count: 1, opaqueIds: ["r1"] });
+    const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+      status: "proposed",
+      version: 1,
+      disposition: "execute",
+      capability: "find_resource",
+      arguments: { query: "牧師師母 50 週年" },
+      confidence: 0.95,
+      provider: "deepseek",
+      attempts: []
+    });
+    const router = createControlledAgentRouter({
+      planner: { propose },
+      retrievalEvidenceProviders: { catalog_general: { probe } },
+      now: () => now
+    });
+
+    await expect(
+      router.resolve({
+        profileName: "helper",
+        text: "我想查詢牧師師母 50 週年檔案",
+        enabledFunctions: ["find_resource"],
+        sourceType: "user",
+        sourceId: "user-1",
+        requesterUserId: "user-1",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toMatchObject({ disposition: "execute", capability: "find_resource" });
+
+    expect(probe).toHaveBeenCalledWith(expect.objectContaining({ text: "牧師師母 50 週年" }));
+  });
+
   it("uses a declarative bounded retrieval provider without leaking its evidence to planning", async () => {
     const probe = vi.fn().mockResolvedValue({
       matched: true,
@@ -380,6 +412,31 @@ describe("ControlledAgentRouter", () => {
 
     expect(probe).not.toHaveBeenCalled();
     expect(propose.mock.calls.every((call) => call[0].candidates.length === 0)).toBe(true);
+  });
+
+  it("distinguishes unavailable retrieval evidence from no matching capability", async () => {
+    const propose = vi.fn<AgentPlanner["propose"]>();
+    const router = createControlledAgentRouter({
+      planner: { propose },
+      retrievalEvidenceProviders: {
+        knowledge: { probe: vi.fn().mockRejectedValue(new Error("database unavailable")) }
+      },
+      now: () => now
+    });
+
+    await expect(
+      router.resolve({
+        profileName: "helper",
+        text: "急救箱位置",
+        enabledFunctions: ["query_knowledge"],
+        sourceType: "group",
+        sourceId: "group-1",
+        requesterUserId: "user-1",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toEqual({ disposition: "clarify", reasonCode: "retrieval_unavailable" });
+    expect(propose).not.toHaveBeenCalled();
   });
 
   it("fails closed before planning for an unsupported source", async () => {

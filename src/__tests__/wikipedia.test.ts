@@ -128,7 +128,7 @@ describe("Wikipedia lookup handler", () => {
           reference: { pageId: expect.stringMatching(/^[a-f0-9]{24}$/u) }
         }
       ],
-      supportedOperations: []
+      supportedOperations: ["continue", "refine", "view_full"]
     });
     expect(JSON.stringify(result.agentResult)).not.toMatch(/馬丁|Martin Luther|wikipedia\.org/iu);
   });

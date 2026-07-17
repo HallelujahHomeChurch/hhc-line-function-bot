@@ -18,7 +18,7 @@ export function createFindResourceHandler(options: FindResourceOptions): Functio
   return async (rawArgs, context) => {
     const args = findResourceArgumentsSchema.parse(rawArgs);
     const query = args.query.trim();
-    if (!query) {
+    if (!query && !args.resourceId) {
       return {
         ok: true,
         replyText: "請告訴我要查什麼教會資料，例如：週報音檔、文件名稱或關鍵字。",
@@ -38,7 +38,8 @@ export function createFindResourceHandler(options: FindResourceOptions): Functio
     const items = (
       await options.catalog.searchItems({
         profileName: context.profile.name,
-        query,
+        itemIds: args.resourceId ? [args.resourceId] : undefined,
+        query: args.resourceId ? undefined : query,
         itemKinds: itemKinds.length ? itemKinds : undefined,
         domains: args.domain ? [args.domain] : undefined,
         allowedSourceKeys: options.allowedSourceKeys,
@@ -123,6 +124,6 @@ function catalogItemEnvelope(resourceId: string, reference: Record<string, strin
     replyText: "教會資料查詢完成。",
     entities: [{ type: "resource", key: resourceId, label: "教會資料" }],
     evidence: [{ kind: "catalog_item", reference }],
-    supportedOperations: []
+    supportedOperations: ["continue", "refine", "view_full"]
   };
 }

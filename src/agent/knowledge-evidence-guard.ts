@@ -54,6 +54,14 @@ export function isInterpersonalOrSmallTalkText(text: string): boolean {
   return SECOND_PERSON_IDENTITY_QUESTION.test(normalized);
 }
 
+export function isTaskShapedText(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  if (!normalized || isInterpersonalOrSmallTalkText(text)) return false;
+  return /^(?:我想|我要|請|麻煩|可以|可不可以|能不能)?(?:幫我|替我)?(?:查詢|查|找|搜尋|給我|列出|顯示|下載|保存|儲存|記住|上傳)/u.test(
+    normalized
+  );
+}
+
 function stripBotAddress(text: string): string {
   return text
     .normalize("NFKC")

@@ -19,7 +19,6 @@ const scheduleTask: ActiveTaskContext = {
   version: 2,
   currentCapability: "query_schedule",
   allowedCapabilities: ["query_schedule"],
-  capability: "query_schedule",
   anchors: { meeting: "晨更", date: "2026-07-14" },
   entities: [
     { type: "meeting", key: "morning-prayer", label: "晨更" },
@@ -37,7 +36,6 @@ const knowledgeTask: ActiveTaskContext = {
   version: 2,
   currentCapability: "query_knowledge",
   allowedCapabilities: ["query_knowledge"],
-  capability: "query_knowledge",
   anchors: {
     sourceId: "source-opaque-1",
     documentId: "document-opaque-1",

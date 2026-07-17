@@ -82,4 +82,27 @@ describe("response projector", () => {
       projectAgentReply({ capability: "find_sheet_music", text: "連結給我", result }).replyText
     ).toBe("連結：https://example.test/file");
   });
+
+  it("does not mistake a capability wrapper for a requested response field", () => {
+    const result: FunctionExecutionResult = {
+      ok: true,
+      replyText: "牧師師母 50 週年\nhttps://example.test/file",
+      agentResult: {
+        status: "success",
+        replyText: "牧師師母 50 週年\nhttps://example.test/file",
+        replyData: {
+          kind: "resource",
+          fields: { title: "牧師師母 50 週年", link: "https://example.test/file" }
+        }
+      }
+    };
+
+    expect(
+      projectAgentReply({
+        capability: "find_resource",
+        text: "查教會資料 牧師師母 50 週年",
+        result
+      }).replyText
+    ).toBe(result.replyText);
+  });
 });

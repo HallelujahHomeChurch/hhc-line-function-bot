@@ -55,6 +55,7 @@ export interface CatalogItemRecord extends CatalogItemInput {
 
 export interface CatalogSearchInput {
   profileName: string;
+  itemIds?: string[];
   query?: string;
   itemKinds?: string[];
   domains?: string[];
@@ -219,11 +220,13 @@ export class InMemoryCatalogStore implements CatalogStore {
 
   async searchItems(input: CatalogSearchInput): Promise<CatalogItemRecord[]> {
     const query = normalizeCatalogText(input.query ?? "");
+    const itemIds = new Set(input.itemIds ?? []);
     const itemKinds = new Set(input.itemKinds ?? []);
     const domains = new Set(input.domains ?? []);
     const allowedSourceKeys = new Set(input.allowedSourceKeys ?? []);
     const records = Array.from(this.items.values())
       .filter((item) => !item.deletedAt)
+      .filter((item) => itemIds.size === 0 || itemIds.has(item.id))
       .filter((item) => !item.expiresAt || new Date(item.expiresAt).getTime() > Date.now())
       .map((item) => this.withSource(item))
       .filter((item) => item.source.profileName === input.profileName)

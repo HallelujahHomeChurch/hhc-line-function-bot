@@ -24,6 +24,7 @@ import {
 import { createWikipediaSummarizer } from "./wikipedia/summarizer.js";
 import { RedisAgentJobStore } from "./agent/jobs.js";
 import { RedisConversationWindowStore } from "./agent/context-manager.js";
+import { RedisAgentTraceStore } from "./agent/trace-store.js";
 import { createCacheStore } from "./cache/create-cache-store.js";
 import { createCatalogStore } from "./catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "./catalog/source-seeds.js";
@@ -160,6 +161,13 @@ const confirmationStore = redis
   ? new RedisConfirmationStore({ client: redis.client, keyPrefix: redis.keyPrefix })
   : undefined;
 const sessionStore = createSessionStore({ redis });
+const agentTraceStore = redis
+  ? new RedisAgentTraceStore({
+      client: redis.client,
+      keyPrefix: redis.keyPrefix,
+      maxEntries: config.lastErrors?.maxEntries ?? 20
+    })
+  : undefined;
 const cache = createCacheStore({ redis });
 const catalog = await createCatalogStore({ db: postgres?.pool });
 await seedCatalogSources({
@@ -287,6 +295,7 @@ const app = createApp(config, {
   confirmationStore,
   inFlightStore,
   sessionStore,
+  agentTraceStore,
   agentJobStore,
   conversationWindowStore,
   controlledAgentRouter,

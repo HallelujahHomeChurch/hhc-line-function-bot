@@ -19,7 +19,7 @@ import {
 } from "./capability-candidates.js";
 import { groundPlanRecord, hasActiveEntityTextEvidence, liveActiveTask } from "./plan-evidence.js";
 import { findMissingRequiredSlot } from "./slot-clarification.js";
-import { hasWriteIntent } from "./knowledge-evidence-guard.js";
+import { hasWriteIntent, isTaskShapedText } from "./knowledge-evidence-guard.js";
 
 export interface AgentPlanValidationCandidate {
   capability: FunctionName;
@@ -86,7 +86,8 @@ export type ValidatedAgentPlan =
         | "missing_required_slot"
         | "operation_not_allowed"
         | "planner_clarification"
-        | "planner_unavailable";
+        | "planner_unavailable"
+        | "retrieval_unavailable";
     }
   | { disposition: "chat"; reasonCode: "no_capability_evidence" }
   | {
@@ -130,7 +131,9 @@ export function validateAgentPlan(input: ValidateAgentPlanInput): ValidatedAgent
   const explicitCandidates = revalidatedExplicitCandidates(input);
   if (proposal.disposition === "chat") {
     if (explicitCandidates.length === 0 && !hasAnyActiveEvidence(input, liveTask)) {
-      return { disposition: "chat", reasonCode: "no_capability_evidence" };
+      return isTaskShapedText(input.text)
+        ? { disposition: "clarify", reasonCode: "capability_evidence_unresolved" }
+        : { disposition: "chat", reasonCode: "no_capability_evidence" };
     }
     const deterministicPlan = deterministicExplicitIntentPlan(input, explicitCandidates);
     return (
@@ -308,9 +311,12 @@ function validateNoPlan(input: ValidateAgentPlanInput): ValidatedAgentPlan {
     return { disposition: "deny", reasonCode: "function_disabled" };
   }
   if (explicitCandidates.length !== 1) {
-    return input.candidates.length === 0
-      ? { disposition: "chat", reasonCode: "no_capability_evidence" }
-      : { disposition: "clarify", reasonCode: "planner_unavailable" };
+    if (input.candidates.length > 0) {
+      return { disposition: "clarify", reasonCode: "planner_unavailable" };
+    }
+    return isTaskShapedText(input.text)
+      ? { disposition: "clarify", reasonCode: "capability_evidence_unresolved" }
+      : { disposition: "chat", reasonCode: "no_capability_evidence" };
   }
 
   const deterministicPlan = deterministicExplicitIntentPlan(input, explicitCandidates);
@@ -417,7 +423,7 @@ function deterministicClarificationRecovery(
   const disposition =
     candidate.reason !== "active_task_entity" &&
     activeTask &&
-    activeTask.capability !== candidate.capability
+    activeTask.currentCapability !== candidate.capability
       ? "switch"
       : "execute";
 
@@ -456,7 +462,7 @@ function validateActiveAuthority(
 ): Extract<ValidatedAgentPlan, { disposition: "clarify" }> | undefined {
   if (
     !activeTask ||
-    activeTask.capability !== capability ||
+    activeTask.currentCapability !== capability ||
     !definition.agentCapability ||
     !hasActiveEntityTextEvidence(text, definition.agentCapability, activeTask)
   ) {
@@ -557,13 +563,13 @@ function hasAnyActiveEvidence(
   if (!activeTask) return false;
   const candidate = input.candidates.find(
     ({ capability, reason }) =>
-      capability === activeTask.capability && reason === "active_task_entity"
+      capability === activeTask.currentCapability && reason === "active_task_entity"
   );
-  const definition = getFunctionDefinition(activeTask.capability);
+  const definition = getFunctionDefinition(activeTask.currentCapability);
   return Boolean(
     candidate &&
     definition?.agentCapability &&
-    input.enabledFunctions.includes(activeTask.capability) &&
+    input.enabledFunctions.includes(activeTask.currentCapability) &&
     sourceAllowed(definition, input.sourceType) &&
     hasActiveEntityTextEvidence(input.text, definition.agentCapability, activeTask)
   );

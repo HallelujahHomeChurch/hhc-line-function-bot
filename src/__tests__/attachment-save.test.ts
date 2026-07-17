@@ -369,6 +369,22 @@ describe("attachment save pipeline", () => {
     ]);
   });
 
+  it("atomically claims final confirmation so concurrent replies publish only once", async () => {
+    const { sessionStore, graph, handler } = await setup();
+    await seedPendingAttachment(sessionStore);
+    await handler.handle({ text: "投影片" }, context("投影片", "req-purpose"));
+    await handler.handle({ text: "SundayDeck" }, context("SundayDeck", "req-preview"));
+
+    const results = await Promise.all([
+      handler.handle({ text: "保存" }, context("保存", "req-confirm-1")),
+      handler.handle({ text: "保存" }, context("保存", "req-confirm-2"))
+    ]);
+
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result?.replyText).join("\n")).toContain("已保存檔案");
+    expect(results.map((result) => result?.replyText).join("\n")).toContain("已經在處理或已完成");
+  });
+
   it("refuses attachment publish when the target source has no write capability", async () => {
     const { sessionStore, graph, handler } = await setup({ pptWriteCapabilities: [] });
     await seedPendingAttachment(sessionStore);
