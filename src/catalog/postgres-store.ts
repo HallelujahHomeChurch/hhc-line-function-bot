@@ -32,6 +32,13 @@ type CatalogSourceRow = {
   sync_policy: CatalogSourceRecord["syncPolicy"];
   capabilities: CatalogSourceRecord["capabilities"];
   sync_cursor: string | null;
+  revision: string;
+  health_status: CatalogSourceRecord["healthStatus"];
+  last_attempt_at: Date | string | null;
+  last_success_at: Date | string | null;
+  last_failure_at: Date | string | null;
+  last_error_code: string | null;
+  published_item_count: string | number;
 };
 
 type CatalogItemRow = {
@@ -60,6 +67,14 @@ type CatalogItemRow = {
   enabled: boolean;
   sync_policy: CatalogSourceRecord["syncPolicy"];
   capabilities: CatalogSourceRecord["capabilities"];
+  sync_cursor: string | null;
+  revision: string;
+  health_status: CatalogSourceRecord["healthStatus"];
+  last_attempt_at: Date | string | null;
+  last_success_at: Date | string | null;
+  last_failure_at: Date | string | null;
+  last_error_code: string | null;
+  published_item_count: string | number;
 };
 
 export class PostgresCatalogStore implements CatalogStore {
@@ -201,10 +216,177 @@ export class PostgresCatalogStore implements CatalogStore {
     );
   }
 
+  async publishSourceSnapshot(input: {
+    sourceId: string;
+    expectedRevision: string;
+    items: CatalogItemInput[];
+    syncCursor?: string;
+    publishedAt: string;
+  }): Promise<CatalogSourceRecord | undefined> {
+    assertPublicationScope(input.sourceId, input.items);
+    const payload = input.items.map(publicationItem);
+    const result = await this.db.query<CatalogSourceRow>(
+      `
+      with eligible as (
+        select id from catalog_sources where id = $1 and revision = $2
+      ), incoming as (
+        select * from jsonb_to_recordset($3::jsonb) as row(
+          id uuid, "itemKind" text, domain text, title text, "normalizedTitle" text,
+          path text, "mimeType" text, extension text, "sizeBytes" bigint, sha256 text,
+          "storageRef" jsonb, "storageIdentity" text, "externalUpdatedAt" timestamptz,
+          "expiresAt" timestamptz
+        )
+      ), upserted as (
+        insert into catalog_items
+          (id, source_id, item_kind, domain, title, normalized_title, path, mime_type,
+           extension, size_bytes, sha256, storage_ref, storage_identity,
+           external_updated_at, expires_at, deleted_at, updated_at)
+        select incoming.id, eligible.id, "itemKind", domain, title, "normalizedTitle", path,
+               "mimeType", extension, "sizeBytes", sha256, "storageRef", "storageIdentity",
+               "externalUpdatedAt", "expiresAt", null, $5::timestamptz
+        from incoming cross join eligible
+        on conflict (source_id, storage_identity) do update
+        set item_kind = excluded.item_kind, domain = excluded.domain, title = excluded.title,
+            normalized_title = excluded.normalized_title, path = excluded.path,
+            mime_type = excluded.mime_type, extension = excluded.extension,
+            size_bytes = excluded.size_bytes, sha256 = excluded.sha256,
+            storage_ref = excluded.storage_ref, external_updated_at = excluded.external_updated_at,
+            expires_at = excluded.expires_at, deleted_at = null, updated_at = $5::timestamptz
+        returning id
+      ), tombstoned as (
+        update catalog_items
+        set deleted_at = $5::timestamptz, updated_at = $5::timestamptz
+        where source_id in (select id from eligible)
+          and deleted_at is null
+          and storage_identity not in (select "storageIdentity" from incoming)
+        returning id
+      )
+      update catalog_sources
+      set revision = (revision::bigint + 1)::text,
+          sync_cursor = $4,
+          health_status = 'ready',
+          last_attempt_at = $5::timestamptz,
+          last_success_at = $5::timestamptz,
+          last_error_code = null,
+          published_item_count = (select count(*) from incoming),
+          updated_at = $5::timestamptz
+      where id in (select id from eligible)
+      returning *
+      `,
+      [
+        input.sourceId,
+        input.expectedRevision,
+        JSON.stringify(payload),
+        input.syncCursor ?? null,
+        input.publishedAt
+      ]
+    );
+    return result.rows[0] ? mapSource(result.rows[0]) : undefined;
+  }
+
+  async publishSourceDelta(input: {
+    sourceId: string;
+    expectedRevision: string;
+    upserts: CatalogItemInput[];
+    deletedStorageIdentities: string[];
+    syncCursor: string;
+    publishedAt: string;
+  }): Promise<CatalogSourceRecord | undefined> {
+    assertPublicationScope(input.sourceId, input.upserts);
+    const payload = input.upserts.map(publicationItem);
+    const result = await this.db.query<CatalogSourceRow>(
+      `
+      with eligible as (
+        select id from catalog_sources where id = $1 and revision = $2
+      ), tombstoned as (
+        update catalog_items
+        set deleted_at = $6::timestamptz, updated_at = $6::timestamptz
+        where source_id in (select id from eligible)
+          and storage_identity = any($4::text[])
+        returning id
+      ), incoming as (
+        select * from jsonb_to_recordset($3::jsonb) as row(
+          id uuid, "itemKind" text, domain text, title text, "normalizedTitle" text,
+          path text, "mimeType" text, extension text, "sizeBytes" bigint, sha256 text,
+          "storageRef" jsonb, "storageIdentity" text, "externalUpdatedAt" timestamptz,
+          "expiresAt" timestamptz
+        )
+      ), inserted as (
+        insert into catalog_items
+          (id, source_id, item_kind, domain, title, normalized_title, path, mime_type,
+           extension, size_bytes, sha256, storage_ref, storage_identity,
+           external_updated_at, expires_at, deleted_at, updated_at)
+        select incoming.id, eligible.id, "itemKind", domain, title, "normalizedTitle", path,
+               "mimeType", extension, "sizeBytes", sha256, "storageRef", "storageIdentity",
+               "externalUpdatedAt", "expiresAt", null, $6::timestamptz
+        from incoming cross join eligible
+        on conflict (source_id, storage_identity) do update
+        set item_kind = excluded.item_kind, domain = excluded.domain, title = excluded.title,
+            normalized_title = excluded.normalized_title, path = excluded.path,
+            mime_type = excluded.mime_type, extension = excluded.extension,
+            size_bytes = excluded.size_bytes, sha256 = excluded.sha256,
+            storage_ref = excluded.storage_ref, external_updated_at = excluded.external_updated_at,
+            expires_at = excluded.expires_at, deleted_at = null, updated_at = $6::timestamptz
+        returning id
+      )
+      update catalog_sources
+      set revision = (revision::bigint + 1)::text,
+          sync_cursor = $5,
+          health_status = 'ready',
+          last_attempt_at = $6::timestamptz,
+          last_success_at = $6::timestamptz,
+          last_error_code = null,
+          published_item_count = (
+            select count(*) from (
+              select storage_identity
+              from catalog_items
+              where source_id in (select id from eligible)
+                and deleted_at is null
+                and not (storage_identity = any($4::text[]))
+              union
+              select "storageIdentity" from incoming
+            ) active_items
+          ),
+          updated_at = $6::timestamptz
+      where id in (select id from eligible)
+      returning *
+      `,
+      [
+        input.sourceId,
+        input.expectedRevision,
+        JSON.stringify(payload),
+        input.deletedStorageIdentities,
+        input.syncCursor,
+        input.publishedAt
+      ]
+    );
+    return result.rows[0] ? mapSource(result.rows[0]) : undefined;
+  }
+
+  async markSourceSyncFailure(input: {
+    sourceId: string;
+    expectedRevision: string;
+    failedAt: string;
+    errorCode: string;
+  }): Promise<CatalogSourceRecord | undefined> {
+    const result = await this.db.query<CatalogSourceRow>(
+      `
+      update catalog_sources
+      set health_status = 'unavailable', last_attempt_at = $3::timestamptz,
+          last_failure_at = $3::timestamptz, last_error_code = $4, updated_at = $3::timestamptz
+      where id = $1 and revision = $2
+      returning *
+      `,
+      [input.sourceId, input.expectedRevision, input.failedAt, input.errorCode]
+    );
+    return result.rows[0] ? mapSource(result.rows[0]) : undefined;
+  }
+
   async upsertItem(input: CatalogItemInput): Promise<CatalogItemRecord> {
     const normalizedTitle = input.normalizedTitle ?? normalizeCatalogText(input.title);
     const result = await this.db.query<{ id: string }>(
       `
+      with upserted as (
       insert into catalog_items
         (id, source_id, item_kind, domain, title, normalized_title, path, mime_type,
          extension, size_bytes, sha256, storage_ref, storage_identity,
@@ -226,6 +408,23 @@ export class PostgresCatalogStore implements CatalogStore {
           deleted_at = excluded.deleted_at,
           updated_at = now()
       returning id
+      ), promoted as (
+        update catalog_sources
+        set revision = (revision::bigint + 1)::text,
+            health_status = 'ready',
+            last_attempt_at = now(),
+            last_success_at = now(),
+            last_error_code = null,
+            published_item_count = (
+              select count(*)
+              from catalog_items
+              where source_id = $2 and deleted_at is null and storage_identity <> $13
+            ) + 1,
+            updated_at = now()
+        where id = $2
+        returning id
+      )
+      select id from upserted
       `,
       [
         randomUUID(),
@@ -342,7 +541,15 @@ export class PostgresCatalogStore implements CatalogStore {
         catalog_sources.root_location,
         catalog_sources.enabled,
         catalog_sources.sync_policy,
-        catalog_sources.capabilities
+        catalog_sources.capabilities,
+        catalog_sources.sync_cursor,
+        catalog_sources.revision,
+        catalog_sources.health_status,
+        catalog_sources.last_attempt_at,
+        catalog_sources.last_success_at,
+        catalog_sources.last_failure_at,
+        catalog_sources.last_error_code,
+        catalog_sources.published_item_count
       from catalog_items
       join catalog_sources on catalog_sources.id = catalog_items.source_id
       where ${conditions.join("\n        and ")}
@@ -367,7 +574,15 @@ export class PostgresCatalogStore implements CatalogStore {
         catalog_sources.root_location,
         catalog_sources.enabled,
         catalog_sources.sync_policy,
-        catalog_sources.capabilities
+        catalog_sources.capabilities,
+        catalog_sources.sync_cursor,
+        catalog_sources.revision,
+        catalog_sources.health_status,
+        catalog_sources.last_attempt_at,
+        catalog_sources.last_success_at,
+        catalog_sources.last_failure_at,
+        catalog_sources.last_error_code,
+        catalog_sources.published_item_count
       from catalog_items
       join catalog_sources on catalog_sources.id = catalog_items.source_id
       where catalog_items.id = $1
@@ -393,7 +608,14 @@ function mapSource(row: CatalogSourceRow): CatalogSourceRecord {
     enabled: row.enabled,
     syncPolicy: row.sync_policy,
     capabilities: row.capabilities,
-    syncCursor: row.sync_cursor ?? undefined
+    syncCursor: row.sync_cursor ?? undefined,
+    revision: row.revision,
+    healthStatus: row.health_status,
+    lastAttemptAt: optionalIso(row.last_attempt_at),
+    lastSuccessAt: optionalIso(row.last_success_at),
+    lastFailureAt: optionalIso(row.last_failure_at),
+    lastErrorCode: row.last_error_code ?? undefined,
+    publishedItemCount: Number(row.published_item_count)
   };
 }
 
@@ -426,7 +648,44 @@ function mapItem(row: CatalogItemRow): CatalogItemRecord {
       rootLocation: row.root_location,
       enabled: row.enabled,
       syncPolicy: row.sync_policy,
-      capabilities: row.capabilities
+      capabilities: row.capabilities,
+      syncCursor: row.sync_cursor ?? undefined,
+      revision: row.revision,
+      healthStatus: row.health_status,
+      lastAttemptAt: optionalIso(row.last_attempt_at),
+      lastSuccessAt: optionalIso(row.last_success_at),
+      lastFailureAt: optionalIso(row.last_failure_at),
+      lastErrorCode: row.last_error_code ?? undefined,
+      publishedItemCount: Number(row.published_item_count)
     }
   };
+}
+
+function publicationItem(input: CatalogItemInput) {
+  return {
+    id: randomUUID(),
+    itemKind: input.itemKind,
+    domain: input.domain,
+    title: input.title,
+    normalizedTitle: input.normalizedTitle ?? normalizeCatalogText(input.title),
+    path: input.path ?? null,
+    mimeType: input.mimeType ?? null,
+    extension: input.extension ?? null,
+    sizeBytes: input.sizeBytes ?? null,
+    sha256: input.sha256 ?? null,
+    storageRef: input.storageRef,
+    storageIdentity: catalogStorageIdentity(input.storageRef),
+    externalUpdatedAt: input.externalUpdatedAt ?? null,
+    expiresAt: input.expiresAt ?? null
+  };
+}
+
+function assertPublicationScope(sourceId: string, items: CatalogItemInput[]): void {
+  if (items.some((item) => item.sourceId !== sourceId)) {
+    throw new Error("Catalog publication item scope does not match source");
+  }
+}
+
+function optionalIso(value: Date | string | null): string | undefined {
+  return value ? new Date(value).toISOString() : undefined;
 }

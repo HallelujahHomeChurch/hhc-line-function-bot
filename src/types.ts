@@ -807,6 +807,7 @@ export interface GraphDriveClient {
     deltaLink?: string
   ): Promise<{ items: DriveItem[]; deltaLink: string }>;
   getItemByPath?(driveId: string, path: string): Promise<DriveItem | undefined>;
+  getItemById?(driveId: string, itemId: string): Promise<DriveItem | undefined>;
   createSharingLink(driveId: string, itemId: string, expirationDateTime: string): Promise<string>;
   uploadFile?(
     driveId: string,

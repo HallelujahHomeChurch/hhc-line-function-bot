@@ -89,6 +89,16 @@ export async function syncCatalogSources(
           properties: options.notionProperties,
           now: options.now
         });
+        const publishedAt = (options.now ?? (() => new Date()))().toISOString();
+        const promoted = await options.catalog.publishSourceSnapshot({
+          sourceId: source.id,
+          expectedRevision: source.revision,
+          items: [],
+          publishedAt
+        });
+        if (!promoted) {
+          throw new Error(`catalog_publication_revision_conflict:${source.sourceKey}`);
+        }
         result.synced += 1;
         result.scheduleUpserted += sync.upserted;
         result.scheduleSkipped += sync.skipped;
@@ -120,7 +130,8 @@ export async function syncCatalogSources(
       const sync = await syncOneDriveCatalogSource({
         catalog: options.catalog,
         graph: options.graph,
-        source
+        source,
+        now: options.now
       });
       result.synced += 1;
       result.upserted += sync.upserted;
@@ -135,6 +146,12 @@ export async function syncCatalogSources(
         ...baseLog
       });
     } catch (error) {
+      await options.catalog.markSourceSyncFailure({
+        sourceId: source.id,
+        expectedRevision: source.revision,
+        failedAt: (options.now ?? (() => new Date()))().toISOString(),
+        errorCode: catalogSyncErrorCode(error)
+      });
       options.logger?.({
         event: "catalog_source_sync_failed",
         elapsedMs: Date.now() - startedAt,
@@ -147,4 +164,14 @@ export async function syncCatalogSources(
 
   options.logger?.({ event: "catalog_sync_done", ...result });
   return result;
+}
+
+function catalogSyncErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message
+      .split(":", 1)[0]
+      ?.replace(/[^a-z0-9_]/giu, "_")
+      .slice(0, 80) || "sync_failed"
+  );
 }

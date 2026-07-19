@@ -225,7 +225,7 @@ If a request only selects a capability—such as `查投影片`, `查流行歌�
 
 ## Catalog Sources
 
-`catalog_sources` and `catalog_items` are created automatically when `DATABASE_URL` is configured; local single-process development falls back to the in-memory catalog store. `catalog_sources` is the durable source registry. Startup and the catalog sync job run an idempotent seed step from environment-backed roots such as `GRAPH_PPT_FOLDER_ITEM_ID`, `GRAPH_POP_SHEET_FOLDER_ITEM_ID`, and `NOTION_SERVICE_DATABASE_ID`; the seed only creates missing rows and does not overwrite existing DB-owned source state such as `enabled`, `rootLocation`, or capabilities.
+`catalog_sources` and `catalog_items` are created automatically when `DATABASE_URL` is configured; local single-process development falls back to the in-memory catalog store. `catalog_sources` is the durable source registry and records publication revision, health, last-attempt/success/failure watermarks, and active item count. Full and delta syncs publish item changes, tombstones, cursor, revision, and health atomically; a failed refresh leaves the prior successful snapshot intact and marks it stale instead of reporting a false not-found. Startup and the catalog sync job run an idempotent seed step from environment-backed roots such as `GRAPH_PPT_FOLDER_ITEM_ID`, `GRAPH_POP_SHEET_FOLDER_ITEM_ID`, and `NOTION_SERVICE_DATABASE_ID`; the seed only creates missing rows and does not overwrite existing DB-owned source state such as `enabled`, `rootLocation`, or capabilities.
 
 Item kinds are data values, not a closed TypeScript enum. Existing values include `ppt_slide`, `pop_sheet`, `hymn_sheet`, `church_document`, `church_image`, and `church_other`; a future folder such as weekly report audio can add `weekly_report_audio` by adding a seed/source row plus resolver aliases without schema changes.
 
@@ -261,11 +261,11 @@ The memory layer adds controlled memory without making the bot an unrestricted c
 
 - Recent PPT and sheet music results store only resource metadata: profile, LINE scope, requester, file title, Graph drive id, and item id.
 - This automatic resource metadata is a controlled read-function exception for recall and aliasing. It is not the same as a user explicitly asking the bot to remember or save content.
-- Users can explicitly ask the bot to remember an external PPT or sheet-music link. These are saved as scoped resource memories and can be found by the same PPT/sheet-music lookup functions.
-- Temporary sharing links are never stored. While the requester-scoped task frame is live, a follow-up for the same item uses its opaque catalog/Graph reference and creates a fresh 24 hour Graph link through the normal validated function path.
+- Users can explicitly ask the bot to remember an external PPT or sheet-music link. These remain scoped resource memories, but ordinary file lookup does not treat remembered metadata as current storage evidence.
+- Temporary sharing links are never stored. While the requester-scoped task frame is live, a follow-up for the same item uses its opaque catalog/Graph reference, verifies that the current item still exists and is authorized, and then creates a fresh 24 hour Graph link. Resource memory only ranks current catalog/provider candidates; it cannot answer by itself or revive a tombstoned resource.
 - External links are stored as user-provided links. The bot does not verify whether those links remain accessible.
 - Task-frame continuation is requester-scoped. In a group, another user cannot inherit or replay someone else's result.
-- Resource aliases are scope-scoped. A user can say `以後 X 就用這份` after a successful result, and the bot will try that alias before doing a folder search in the same group or direct chat.
+- Resource aliases are scope-scoped ranking hints. They never bypass a current catalog/provider search or reference validation.
 - Text memories are saved only when the user clearly asks the bot to remember, save, or store content. Normal group chatter is not saved.
 - The helper profile enables `retrieve_memory` for registered users and keeps `save_memory` admin/explicit-user-grant only. In a registered group, a granted requester may explicitly choose group sharing; otherwise the memory stays private to that requester in that group.
 - Explicit text-memory retrieval reuses the private Ollama `bge-m3` model and PostgreSQL `vector(1024)`. Profile/source/requester visibility, deletion, and expiry are filtered before lexical/semantic ranking. Embedding failure falls back to lexical search, answer generation receives only authorized results, and a bounded non-blocking startup batch fills vectors for older records.
@@ -297,7 +297,7 @@ Set `REDIS_URL` to move sessions, cache, recent errors, rate-limit state, conver
 
 Set `DATABASE_URL` to persist access state and agent memory. If PostgreSQL is configured, the app creates both access tables and agent memory tables on startup. Agent resource storage supports Graph file metadata and user-provided external links. If PostgreSQL is missing, agent memory falls back to in-memory and is lost on restart.
 
-Sheet music search reads the PostgreSQL catalog populated by the scheduled sync job; LINE requests do not crawl OneDrive folders directly.
+Sheet music search reads a fresh PostgreSQL catalog snapshot when available. A proven fresh miss can proceed to the existing consent-based web fallback; a never-published or unavailable snapshot may perform a current provider lookup instead of treating stale state as a definitive miss. The old unversioned 30-minute provider index cache is removed, so a later query can see newly added files.
 
 Admin commands use slash syntax and are gated by each profile's bootstrap `adminUserId` or DB-managed admin principals. `/help` lists public commands and enabled functions. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
 

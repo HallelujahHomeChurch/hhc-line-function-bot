@@ -235,7 +235,7 @@ describe("find_ppt_slides", () => {
     );
   });
 
-  it("returns an external remembered slide before searching Graph", async () => {
+  it("does not let an external remembered slide bypass current provider search", async () => {
     const now = new Date("2026-07-04T10:00:00.000Z");
     const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
     await memoryStore.recordResource({
@@ -265,17 +265,16 @@ describe("find_ppt_slides", () => {
     const result = await handler({ query: "青年聚會" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("已找到我記住的");
-    expect(result.replyText).toContain("青年聚會投影片");
-    expect(result.replyText).toContain("https://example.com/youth-slides");
-    expect(graph.listFolderChildren).not.toHaveBeenCalled();
+    expect(result.agentResult).toMatchObject({ status: "not_found" });
+    expect(result.replyText).not.toContain("https://example.com/youth-slides");
+    expect(graph.listFolderChildren).toHaveBeenCalledOnce();
     expect(graph.createSharingLink).not.toHaveBeenCalled();
   });
 
-  it("merges remembered and Graph slide candidates into one selection flow", async () => {
+  it("uses remembered slide metadata only to rank current Graph candidates", async () => {
     const now = new Date("2026-07-04T10:00:00.000Z");
     const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
-    const remembered = await memoryStore.recordResource({
+    await memoryStore.recordResource({
       profileName: "main",
       source: { type: "group", groupId: "Cgroup", userId: "U1" },
       createdBy: "U1",
@@ -287,7 +286,7 @@ describe("find_ppt_slides", () => {
     });
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn().mockResolvedValue([{ id: "ppt-1", name: "青年主日.pptx" }]),
-      createSharingLink: vi.fn()
+      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/current-slide")
     };
     const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
     const handler = createFindPptSlidesHandler({
@@ -304,40 +303,14 @@ describe("find_ppt_slides", () => {
 
     const result = await handler({ query: "青年" }, handlerContext());
 
-    expect(result.replyText).toContain("青年聚會投影片");
     expect(result.replyText).toContain("青年主日.pptx");
-    await expect(sessionStore.get("mixed-ppt")).resolves.toMatchObject({
-      type: "ppt_selection",
-      items: [
-        {
-          id: remembered.id,
-          name: "青年聚會投影片",
-          memoryResource: { storage: { provider: "external_link" } }
-        },
-        { id: "ppt-1", name: "青年主日.pptx" }
-      ]
-    });
-
-    const handlePostback = createFindPptSlidesPostbackHandler({
-      graph,
-      sessionStore,
-      now: () => now
-    });
-    const selected = await handlePostback(
-      { action: "select_ppt", params: { requestId: "mixed-ppt", index: "0" } },
-      {
-        profile: profile(),
-        event: {
-          type: "postback",
-          replyToken: "reply-token",
-          source: { type: "group", groupId: "Cgroup", userId: "U1" },
-          postback: { data: "action=select_ppt&requestId=mixed-ppt&index=0" }
-        }
-      }
+    expect(result.replyText).not.toContain("https://example.com/youth-slides");
+    await expect(sessionStore.get("mixed-ppt")).resolves.toBeUndefined();
+    expect(graph.createSharingLink).toHaveBeenCalledWith(
+      "drive-id",
+      "ppt-1",
+      "2026-07-05T10:00:00.000Z"
     );
-
-    expect(selected.replyText).toContain("https://example.com/youth-slides");
-    expect(graph.createSharingLink).not.toHaveBeenCalled();
   });
 
   it("uses file type metadata to search PDF slide exports", async () => {

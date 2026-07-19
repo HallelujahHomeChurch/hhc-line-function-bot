@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import type { CacheStore } from "../cache/cache-store.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
 import {
   catalogSourceAllowsRead,
   type CatalogItemRecord,
   type CatalogStore
 } from "../catalog/store.js";
+import { searchCatalogWithFreshness } from "../catalog/retrieval.js";
 import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
 import type { ExternalBinaryClient } from "../clients/external-binary.js";
 import {
@@ -38,16 +38,15 @@ import type {
   WebSearchClient,
   WebSearchResult
 } from "../types.js";
+import { createValidatedSharingLink } from "./validated-sharing-link.js";
 
 const POSTBACK_ACTION = "select_sheet_music";
 const EXTERNAL_SEARCH_ACTION = "sheet_music_external_search";
 const MAX_CANDIDATES = 5;
 const SELECTION_TTL_MS = 10 * 60 * 1000;
 const EXTERNAL_SEARCH_CONSENT_TTL_MS = 10 * 60 * 1000;
-const FILE_INDEX_TTL_MS = 30 * 60 * 1000;
 const MIN_FUZZY_SCORE = 0.42;
 const INVALID_SELECTION_MESSAGE = "請只回覆清單中的數字，例如：1。不要加上其他字。";
-export const SHEET_MUSIC_INDEX_CACHE_PREFIX = "sheet-music-index:";
 
 export interface FindPopSheetMusicOptions {
   graph: GraphDriveClient;
@@ -58,7 +57,6 @@ export interface FindPopSheetMusicOptions {
   allowedExtensions: string[];
   recursive?: boolean;
   memoryStore?: AgentMemoryStore;
-  cache?: CacheStore;
   sessionStore?: SessionStore;
   now?: () => Date;
   requestIdFactory?: () => string;
@@ -147,28 +145,22 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     }
 
     const remembered = await findRememberedSheetMusic(options.memoryStore, rawQuery, context);
-    const exactRemembered = remembered.find((resource) =>
-      resourceMatchesQueryExactly(resource, rawQuery)
-    );
-    if (exactRemembered) {
-      return createRememberedResourceReply(options.graph, exactRemembered, now());
-    }
-
     const extensions = resolveSearchExtensions(configuredExtensions, args);
-    const catalogItems = await findCatalogSheetMusic(
+    const catalogResult = await findCatalogSheetMusic(
       options.catalog,
       context.profile.name,
       rawQuery,
       extensions
     );
+    const catalogItems = catalogResult.items;
     if (catalogItems.length > 0) {
-      const candidates: SheetMusicCandidate[] = [
-        ...remembered.map((resource) => ({ kind: "memory" as const, resource })),
-        ...catalogItems.map((item) => ({
+      const candidates: SheetMusicCandidate[] = rankWithRememberedResources(
+        catalogItems.map((item) => ({
           kind: "graph" as const,
           item: catalogItemToDriveItem(item)
-        }))
-      ].slice(0, MAX_CANDIDATES);
+        })),
+        remembered
+      ).slice(0, MAX_CANDIDATES);
 
       if (candidates.length === 1) {
         return createSheetMusicCandidateReply(options.graph, candidates[0], now());
@@ -214,7 +206,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       };
     }
 
-    if (options.catalog) {
+    if (options.catalog && catalogResult.status === "not_found") {
       return createSheetMusicNotFoundResult({
         args,
         context,
@@ -227,7 +219,7 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     }
 
     const root = await resolveSheetMusicRoot(options);
-    const allItems = await getCachedFileIndex(options, root);
+    const allItems = await getFreshFileIndex(options, root);
     const graphCandidates = rankSheetMusicCandidates(
       allItems,
       rawQuery,
@@ -235,10 +227,10 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       extensions,
       args.matchMode ?? "fuzzy"
     );
-    const candidates: SheetMusicCandidate[] = [
-      ...remembered.map((resource) => ({ kind: "memory" as const, resource })),
-      ...graphCandidates.map(({ item }) => ({ kind: "graph" as const, item }))
-    ].slice(0, MAX_CANDIDATES);
+    const candidates: SheetMusicCandidate[] = rankWithRememberedResources(
+      graphCandidates.map(({ item }) => ({ kind: "graph" as const, item })),
+      remembered
+    ).slice(0, MAX_CANDIDATES);
 
     if (candidates.length === 0) {
       return createSheetMusicNotFoundResult({
@@ -569,33 +561,56 @@ function candidateName(candidate: SheetMusicCandidate): string {
   return candidate.kind === "memory" ? candidate.resource.title : candidate.item.name;
 }
 
-function resourceMatchesQueryExactly(resource: AgentResourceRecord, rawQuery: string): boolean {
-  const query = normalizeSearchText(rawQuery);
-  return [resource.title, resource.query]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .some((value) => normalizeSearchText(value) === query);
-}
-
 async function findCatalogSheetMusic(
   catalog: CatalogStore | undefined,
   profileName: string,
   query: string,
   extensions: string[]
-): Promise<CatalogItemRecord[]> {
+): Promise<{
+  status: "fresh" | "stale_allowed" | "unavailable" | "not_found";
+  revision: string;
+  items: CatalogItemRecord[];
+}> {
   if (!catalog) {
-    return [];
+    return { status: "unavailable", revision: "", items: [] };
   }
-  const items = await catalog.searchItems({
-    profileName,
-    query,
-    itemKinds: ["pop_sheet", "hymn_sheet"],
-    domains: ["sheet_music"],
-    limit: MAX_CANDIDATES
+  const result = await searchCatalogWithFreshness({
+    catalog,
+    search: {
+      profileName,
+      query,
+      itemKinds: ["pop_sheet", "hymn_sheet"],
+      domains: ["sheet_music"],
+      limit: MAX_CANDIDATES
+    }
   });
-  return items
-    .filter((item) => catalogSourceAllowsRead(item.source, [profileName, "find_sheet_music"]))
-    .filter((item) => item.storageRef.provider === "graph")
-    .filter((item) => extensions.some((extension) => catalogItemExtension(item) === extension));
+  return {
+    ...result,
+    items: result.items
+      .filter((item) => catalogSourceAllowsRead(item.source, [profileName, "find_sheet_music"]))
+      .filter((item) => item.storageRef.provider === "graph")
+      .filter((item) => extensions.some((extension) => catalogItemExtension(item) === extension))
+  };
+}
+
+function rankWithRememberedResources(
+  candidates: SheetMusicCandidate[],
+  remembered: AgentResourceRecord[]
+): SheetMusicCandidate[] {
+  const identities = new Set(
+    remembered.flatMap((resource) =>
+      resource.storage.provider === "graph"
+        ? [`${resource.storage.driveId}:${resource.storage.itemId}`]
+        : []
+    )
+  );
+  return [...candidates].sort((left, right) => {
+    const leftRemembered =
+      left.kind === "graph" && identities.has(`${left.item.driveId ?? ""}:${left.item.id}`);
+    const rightRemembered =
+      right.kind === "graph" && identities.has(`${right.item.driveId ?? ""}:${right.item.id}`);
+    return Number(rightRemembered) - Number(leftRemembered);
+  });
 }
 
 function catalogItemToDriveItem(item: CatalogItemRecord): DriveItem {
@@ -631,22 +646,15 @@ async function resolveSheetMusicRoot(options: FindPopSheetMusicOptions) {
   };
 }
 
-async function getCachedFileIndex(
+async function getFreshFileIndex(
   options: FindPopSheetMusicOptions,
   root: { driveId: string; itemId: string }
 ): Promise<DriveItem[]> {
-  const cacheKey = `sheet-music-index:${root.driveId}:${root.itemId}`;
-  const cached = await options.cache?.get<DriveItem[]>(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
   const items =
     options.recursive !== false && options.graph.listFolderFilesRecursive
       ? await options.graph.listFolderFilesRecursive(root.driveId, root.itemId)
       : await options.graph.listFolderChildren(root.driveId, root.itemId);
   const indexedItems = items.map((item) => ({ ...item, driveId: item.driveId ?? root.driveId }));
-  await options.cache?.set(cacheKey, indexedItems, FILE_INDEX_TTL_MS);
   return indexedItems;
 }
 
@@ -706,7 +714,17 @@ async function createSharingLinkReply(
   resourceId = item.id
 ): Promise<FunctionExecutionResult> {
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-  const link = await graph.createSharingLink(item.driveId ?? "", item.id, expiresAt);
+  const current = await createValidatedSharingLink({
+    graph,
+    driveId: item.driveId ?? "",
+    itemId: item.id,
+    expiresAt
+  });
+  if (!current.link) {
+    const replyText = "這份歌譜已不存在或沒有權限，請重新查詢。";
+    return { ok: true, replyText, agentResult: { status: "unavailable", replyText } };
+  }
+  const link = current.link;
 
   return {
     ok: true,

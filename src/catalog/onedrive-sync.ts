@@ -1,7 +1,12 @@
 import { extname } from "node:path";
 
 import type { GraphDriveClient } from "../types.js";
-import { catalogStorageIdentity, type CatalogSourceRecord, type CatalogStore } from "./store.js";
+import {
+  catalogStorageIdentity,
+  type CatalogItemInput,
+  type CatalogSourceRecord,
+  type CatalogStore
+} from "./store.js";
 
 export interface OneDriveCatalogSyncOptions {
   catalog: CatalogStore;
@@ -19,7 +24,12 @@ export interface OneDriveCatalogSyncResult {
 export async function syncOneDriveCatalogSource(
   options: OneDriveCatalogSyncOptions
 ): Promise<OneDriveCatalogSyncResult> {
-  const { catalog, graph, source } = options;
+  const { catalog, graph } = options;
+  const source =
+    (await catalog.listSources({ profileName: options.source.profileName })).find(
+      (candidate) => candidate.id === options.source.id
+    ) ?? options.source;
+  options = { ...options, source };
   if (!source.enabled || source.adapterType !== "onedrive") {
     return { upserted: 0, skipped: 0, tombstoned: 0 };
   }
@@ -53,9 +63,8 @@ export async function syncOneDriveCatalogSource(
     ? await graph.listFolderFilesRecursive(driveId, folderItemId)
     : await graph.listFolderChildren(driveId, folderItemId);
 
-  let upserted = 0;
   let skipped = 0;
-  const liveStorageIdentities: string[] = [];
+  const snapshotItems: CatalogItemInput[] = [];
   const allowedExtensions = new Set(
     source.syncPolicy.allowedExtensions?.map((extension) => extension.toLowerCase()) ?? []
   );
@@ -75,8 +84,7 @@ export async function syncOneDriveCatalogSource(
       driveId: item.driveId ?? driveId,
       itemId: item.id
     };
-    liveStorageIdentities.push(catalogStorageIdentity(storageRef));
-    await catalog.upsertItem({
+    snapshotItems.push({
       sourceId: source.id,
       itemKind: source.defaultItemKind,
       domain: source.domain,
@@ -86,16 +94,22 @@ export async function syncOneDriveCatalogSource(
       mimeType: guessMimeType(item.name),
       storageRef
     });
-    upserted += 1;
   }
 
-  const tombstoned = await catalog.tombstoneMissingItems({
+  const publishedAt = (options.now ?? (() => new Date()))().toISOString();
+  const published = await catalog.publishSourceSnapshot({
     sourceId: source.id,
-    liveStorageIdentities,
-    deletedAt: (options.now ?? (() => new Date()))().toISOString()
+    expectedRevision: source.revision,
+    items: snapshotItems,
+    publishedAt
   });
+  if (!published) throw new Error(`catalog_publication_revision_conflict:${source.sourceKey}`);
 
-  return { upserted, skipped, tombstoned };
+  return {
+    upserted: snapshotItems.length,
+    skipped,
+    tombstoned: Math.max(0, source.publishedItemCount - snapshotItems.length)
+  };
 }
 
 async function syncOneDriveDelta(
@@ -109,9 +123,8 @@ async function syncOneDriveDelta(
   const allowedExtensions = new Set(
     source.syncPolicy.allowedExtensions?.map((extension) => extension.toLowerCase()) ?? []
   );
-  const liveStorageIdentities: string[] = [];
   const deletedStorageIdentities: string[] = [];
-  let upserted = 0;
+  const upserts: CatalogItemInput[] = [];
   let skipped = 0;
   for (const item of delta.items) {
     const storageRef = {
@@ -133,8 +146,7 @@ async function syncOneDriveDelta(
       skipped += 1;
       continue;
     }
-    liveStorageIdentities.push(storageIdentity);
-    await catalog.upsertItem({
+    upserts.push({
       sourceId: source.id,
       itemKind: source.defaultItemKind,
       domain: source.domain,
@@ -144,22 +156,26 @@ async function syncOneDriveDelta(
       mimeType: guessMimeType(item.name),
       storageRef
     });
-    upserted += 1;
   }
-  const deletedAt = (options.now ?? (() => new Date()))().toISOString();
-  const tombstoned = source.syncCursor
-    ? await catalog.tombstoneItemsByStorageIdentities({
+  const publishedAt = (options.now ?? (() => new Date()))().toISOString();
+  const published = source.syncCursor
+    ? await catalog.publishSourceDelta({
         sourceId: source.id,
-        storageIdentities: deletedStorageIdentities,
-        deletedAt
+        expectedRevision: source.revision,
+        upserts,
+        deletedStorageIdentities,
+        syncCursor: delta.deltaLink,
+        publishedAt
       })
-    : await catalog.tombstoneMissingItems({
+    : await catalog.publishSourceSnapshot({
         sourceId: source.id,
-        liveStorageIdentities,
-        deletedAt
+        expectedRevision: source.revision,
+        items: upserts,
+        syncCursor: delta.deltaLink,
+        publishedAt
       });
-  await catalog.updateSourceSyncCursor(source.id, delta.deltaLink);
-  return { upserted, skipped, tombstoned };
+  if (!published) throw new Error(`catalog_publication_revision_conflict:${source.sourceKey}`);
+  return { upserted: upserts.length, skipped, tombstoned: deletedStorageIdentities.length };
 }
 
 function isDeltaResetError(error: unknown): boolean {
