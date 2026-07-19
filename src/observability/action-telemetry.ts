@@ -61,6 +61,7 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       return allowedString(value, HANDLERS);
     case "authorized":
     case "ok":
+    case "retry":
       return typeof value === "boolean" ? value : undefined;
     case "errorName":
       return presentMarker(value) ? "Error" : undefined;
@@ -113,6 +114,22 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
     case "queryFingerprint":
     case "referenceFingerprint":
       return typeof value === "string" && /^[a-f0-9]{16}$/u.test(value) ? value : undefined;
+    case "eventName":
+      return allowedString(value, PRODUCT_EVENT_NAMES);
+    case "actorFingerprint":
+      return typeof value === "string" && /^[a-f0-9]{16}$/u.test(value) ? value : undefined;
+    case "resultClass":
+      return allowedString(
+        value,
+        new Set(["success", "not_found", "ambiguous", "unavailable", "error"])
+      );
+    case "latencyBucket":
+      return allowedString(
+        value,
+        new Set(["under_100ms", "under_500ms", "under_2s", "under_10s", "over_10s"])
+      );
+    case "clarificationCountBucket":
+      return allowedString(value, new Set(["zero", "one", "multiple"]));
     default:
       return undefined;
   }
@@ -170,7 +187,16 @@ const EVENT_KINDS = new Set([
   "text_handler",
   "postback",
   "admin_command",
-  "rate_limited"
+  "rate_limited",
+  "product_event"
+]);
+const PRODUCT_EVENT_NAMES = new Set([
+  "registration_completed",
+  "clarification_requested",
+  "function_completed",
+  "write_previewed",
+  "write_committed",
+  "retry_observed"
 ]);
 const SOURCE_TYPES = new Set(["user", "group", "room"]);
 const PHASES = new Set([

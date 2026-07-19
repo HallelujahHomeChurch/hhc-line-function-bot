@@ -20,6 +20,7 @@ import { createIntroReply } from "../intro.js";
 import { createQueryClarificationReply } from "../query-clarification.js";
 import { sanitizeActionTelemetryEvent } from "../observability/action-telemetry.js";
 import { stateAgeBucket } from "../observability/retrieval-diagnostics.js";
+import { emitProductEvent } from "../observability/product-events.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
 import type { LastRouteRecord, LastRouteStore } from "../observability/last-route-store.js";
 import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
@@ -77,6 +78,7 @@ export interface AgentTurnRuntimeOptions {
   controlledAgentRouter?: ControlledAgentRouter;
   timeZone?: string;
   now?: () => Date;
+  observabilityHmacKey?: string;
 }
 
 export interface AgentTextTurnInput {
@@ -323,6 +325,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             action: plan.capability,
             query: queryMarker(plan.arguments)
           });
+          await emitProductEvent(options.routeObserver, {
+            eventName: "clarification_requested",
+            requestId: input.requestId,
+            profileName: input.profile.name,
+            source: input.event.source,
+            hmacKey: options.observabilityHmacKey,
+            action: plan.capability,
+            clarificationCount: 1
+          });
           return finish(input, steps, slotCollection);
         }
         return finish(
@@ -462,6 +473,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           action: route.action,
           query: queryMarker(normalizedArguments)
         });
+        await emitProductEvent(options.routeObserver, {
+          eventName: "clarification_requested",
+          requestId: input.requestId,
+          profileName: input.profile.name,
+          source: input.event.source,
+          hmacKey: options.observabilityHmacKey,
+          action: route.action,
+          clarificationCount: 1
+        });
         return finish(input, steps, slotClarification);
       }
 
@@ -518,6 +538,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             ok: false,
             dedup: "busy",
             queryHash: inFlight.queryHash
+          });
+          await emitProductEvent(options.routeObserver, {
+            eventName: "retry_observed",
+            requestId: input.requestId,
+            profileName: input.profile.name,
+            source: input.event.source,
+            hmacKey: options.observabilityHmacKey,
+            action: route.action,
+            retry: true
           });
           return finish(input, steps, {
             ok: true,
@@ -600,6 +629,29 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           durationMs,
           ...result.diagnostics
         });
+        await emitProductEvent(options.routeObserver, {
+          eventName: "function_completed",
+          requestId: input.requestId,
+          profileName: input.profile.name,
+          source: input.event.source,
+          hmacKey: options.observabilityHmacKey,
+          action: route.action,
+          resultClass: productResultClass(result),
+          durationMs,
+          clarificationCount: 0
+        });
+        if (result.writePhase) {
+          await emitProductEvent(options.routeObserver, {
+            eventName: result.writePhase === "commit" ? "write_committed" : "write_previewed",
+            requestId: input.requestId,
+            profileName: input.profile.name,
+            source: input.event.source,
+            hmacKey: options.observabilityHmacKey,
+            action: route.action,
+            resultClass: productResultClass(result),
+            durationMs
+          });
+        }
         await options.lastRouteStore.record({
           requestId: input.requestId,
           occurredAt: now().toISOString(),
@@ -660,6 +712,13 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
       }
     }
   };
+}
+
+function productResultClass(
+  result: FunctionExecutionResult
+): "success" | "not_found" | "ambiguous" | "unavailable" | "error" {
+  if (!result.ok) return "error";
+  return result.agentResult?.status ?? "success";
 }
 
 async function recordFunctionWriteAudit(

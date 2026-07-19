@@ -518,7 +518,8 @@ export interface RouteObserverEvent {
     | "text_handler"
     | "postback"
     | "admin_command"
-    | "rate_limited";
+    | "rate_limited"
+    | "product_event";
   profileName: string;
   sourceType: string;
   requestId?: string;
@@ -547,6 +548,12 @@ export interface RouteObserverEvent {
   sourceRevision?: RetrievalDiagnostics["sourceRevision"];
   queryFingerprint?: string;
   referenceFingerprint?: string;
+  eventName?: string;
+  actorFingerprint?: string;
+  resultClass?: string;
+  latencyBucket?: string;
+  clarificationCountBucket?: string;
+  retry?: boolean;
 }
 
 export type RouteObserver = (event: RouteObserverEvent) => void | Promise<void>;
