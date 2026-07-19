@@ -310,7 +310,7 @@ export interface AppConfig {
   access?: AccessConfig;
   rateLimit?: RateLimitConfig;
   lastErrors?: LastErrorsConfig;
-  observability: ObservabilityConfig;
+  observability?: ObservabilityConfig;
 }
 
 export interface ObservabilityConfig {
@@ -521,6 +521,7 @@ export interface RouteObserverEvent {
   profileName: string;
   sourceType: string;
   requestId?: string;
+  supportId?: string;
   durationMs?: number;
   provider?: RouteResult["provider"];
   lane?: ModelProviderLane;

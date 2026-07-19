@@ -10,7 +10,7 @@ import type { ActiveTaskContext } from "./active-task.js";
 import { applyActiveTaskTransition } from "./active-task-transition.js";
 import type { ControlledAgentRouter } from "./controlled-agent-router.js";
 import type { ValidatedAgentPlan } from "./plan-validator.js";
-import { messages } from "../messages.js";
+import { messages, requestFailedMessage } from "../messages.js";
 import {
   createControlledSmallTalkReply,
   smallTalkCategoryFromArguments,
@@ -401,7 +401,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             force: true,
             variant: introVariantRouteArgument(route.arguments)
           });
-          return finish(input, steps, intro ?? { ok: false, replyText: messages.requestFailed });
+          return finish(input, steps, intro ?? { ok: false, replyText: requestFailedMessage(input.requestId) });
         }
         if (route.action === "small_talk") {
           const result = await createControlledSmallTalkReply({
@@ -641,7 +641,10 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           errorName: error instanceof Error ? error.name : typeof error,
           durationMs
         });
-        return finish(input, steps, { ok: false, replyText: messages.requestFailed });
+        return finish(input, steps, {
+          ok: false,
+          replyText: requestFailedMessage(input.requestId)
+        });
       } finally {
         if (inFlight) {
           await releaseInFlight(options.inFlightStore, inFlight.key);

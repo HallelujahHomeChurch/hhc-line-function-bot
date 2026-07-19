@@ -9,12 +9,19 @@ import {
 } from "../types.js";
 import type { LastErrorRecord } from "./last-error-store.js";
 import type { LastRouteRecord } from "./last-route-store.js";
+import { createSupportId } from "./opaque-identifiers.js";
 
 type TelemetryInput = object;
 
 export function sanitizeActionTelemetryEvent(event: TelemetryInput): Partial<RouteObserverEvent> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(event as Record<string, unknown>)) {
+    if (key === "requestId") {
+      if (typeof value === "string" && value.length > 0) {
+        sanitized.supportId = createSupportId(value);
+      }
+      continue;
+    }
     const safeValue = sanitizeTelemetryValueForKey(key, value);
     if (safeValue !== undefined) sanitized[key] = safeValue;
   }
@@ -25,8 +32,8 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
   switch (key) {
     case "kind":
       return allowedString(value, EVENT_KINDS);
-    case "requestId":
-      return presentMarker(value);
+    case "supportId":
+      return typeof value === "string" && /^[a-f0-9]{16}$/u.test(value) ? value : undefined;
     case "profileName":
       return presentMarker(value) ? "configured" : undefined;
     case "sourceType":
@@ -98,7 +105,7 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
 export function sanitizeLastRouteRecord(record: LastRouteRecord): LastRouteRecord {
   const event = sanitizeActionTelemetryEvent(record) as Record<string, unknown>;
   return compact({
-    requestId: (event.requestId as string | undefined) ?? "missing",
+    supportId: (event.supportId as string | undefined) ?? "missing",
     occurredAt: safeTimestamp(record.occurredAt),
     profileName: (event.profileName as string | undefined) ?? "configured",
     sourceType: (event.sourceType as string | undefined) ?? "unknown",
@@ -121,7 +128,7 @@ export function sanitizeLastRouteRecord(record: LastRouteRecord): LastRouteRecor
 export function sanitizeLastErrorRecord(error: LastErrorRecord): LastErrorRecord {
   const event = sanitizeActionTelemetryEvent(error) as Record<string, unknown>;
   return compact({
-    requestId: (event.requestId as string | undefined) ?? "missing",
+    supportId: (event.supportId as string | undefined) ?? "missing",
     occurredAt: safeTimestamp(error.occurredAt),
     profileName: (event.profileName as string | undefined) ?? "configured",
     sourceType: (event.sourceType as string | undefined) ?? "unknown",

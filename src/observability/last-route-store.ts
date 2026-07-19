@@ -1,7 +1,8 @@
 import { sanitizeLastRouteRecord } from "./action-telemetry.js";
 
 export interface LastRouteRecord {
-  requestId: string;
+  requestId?: string;
+  supportId?: string;
   occurredAt: string;
   profileName: string;
   sourceType: string;
@@ -57,7 +58,7 @@ export function formatLastRoutes(routes: LastRouteRecord[]): string {
     ...routes.map((route) =>
       [
         `- ${route.occurredAt}`,
-        `requestId=${route.requestId}`,
+        `supportId=${route.supportId ?? "missing"}`,
         `phase=${route.phase}`,
         route.provider ? `provider=${route.provider}` : undefined,
         route.lane ? `lane=${route.lane}` : undefined,

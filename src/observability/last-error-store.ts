@@ -1,7 +1,8 @@
 import { sanitizeLastErrorRecord } from "./action-telemetry.js";
 
 export interface LastErrorRecord {
-  requestId: string;
+  requestId?: string;
+  supportId?: string;
   occurredAt: string;
   profileName: string;
   sourceType: string;
@@ -49,7 +50,7 @@ export function formatLastErrors(errors: LastErrorRecord[]): string {
     ...errors.map((error) =>
       [
         `- ${error.occurredAt}`,
-        `requestId=${error.requestId}`,
+        `supportId=${error.supportId ?? "missing"}`,
         `phase=${error.phase}`,
         error.action ? `action=${error.action}` : undefined,
         error.command ? `command=${error.command}` : undefined,

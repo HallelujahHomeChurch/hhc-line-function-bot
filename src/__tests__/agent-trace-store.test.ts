@@ -5,6 +5,7 @@ import {
   InMemoryAgentTraceStore,
   RedisAgentTraceStore
 } from "../agent/trace-store.js";
+import { createSupportId } from "../observability/opaque-identifiers.js";
 
 const sensitiveValues = [
   "王小明",
@@ -46,7 +47,7 @@ describe("controlled agent trace sanitization", () => {
 
     await expect(store.list()).resolves.toEqual([
       {
-        requestId: "present",
+        supportId: createSupportId("secret-request"),
         occurredAt: "2026-07-17T00:00:00.000Z",
         profileName: "configured",
         sourceType: "group",
@@ -92,7 +93,7 @@ describe("controlled agent trace sanitization", () => {
     const traces = await store.list();
     expect(traces).toEqual([
       {
-        requestId: "present",
+        supportId: createSupportId("request-secret-id"),
         occurredAt: "2026-07-14T00:00:00.000Z",
         profileName: "configured",
         sourceType: "group",
@@ -172,7 +173,7 @@ describe("controlled agent trace sanitization", () => {
 
     await expect(store.list()).resolves.toEqual([
       {
-        requestId: "present",
+        supportId: createSupportId("req-1"),
         occurredAt: "2026-07-14T00:00:00.000Z",
         profileName: "configured",
         sourceType: "group",

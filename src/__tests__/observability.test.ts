@@ -4,6 +4,7 @@ import {
   redactSensitiveText,
   sanitizeActionTelemetryEvent
 } from "../observability/action-telemetry.js";
+import { createSupportId } from "../observability/opaque-identifiers.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
 import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
 import { createConsoleRouteObserver } from "../observability/route-observer.js";
@@ -74,7 +75,7 @@ describe("observability sanitization", () => {
 
     expect(sanitized).toEqual({
       kind: "route",
-      requestId: "present",
+      supportId: createSupportId("req-1"),
       profileName: "configured",
       sourceType: "user",
       provider: "ollama",
@@ -118,7 +119,7 @@ describe("observability sanitization", () => {
 
     expect(sanitized).toEqual({
       kind: "function_error",
-      requestId: "present",
+      supportId: createSupportId("request-secret-id"),
       profileName: "configured",
       sourceType: "group",
       phase: "function",
@@ -181,7 +182,7 @@ describe("observability sanitization", () => {
     const [record] = await store.list();
 
     expect(record).toEqual({
-      requestId: "present",
+      supportId: createSupportId("req-1"),
       occurredAt: "2026-07-07T00:00:00.000Z",
       profileName: "configured",
       sourceType: "user",

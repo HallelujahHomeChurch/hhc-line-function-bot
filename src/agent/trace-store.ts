@@ -90,7 +90,8 @@ export type AgentTraceEntityType =
   | "topic";
 
 export interface AgentTurnTraceRecord {
-  requestId: string;
+  requestId?: string;
+  supportId?: string;
   occurredAt: string;
   profileName: string;
   sourceType: string;
@@ -180,7 +181,7 @@ export function formatAgentTurnTraces(traces: AgentTurnTraceRecord[]): string {
     ...traces.map((trace) =>
       [
         `- ${trace.occurredAt}`,
-        `requestId=${trace.requestId}`,
+        `supportId=${trace.supportId ?? "missing"}`,
         `profile=${trace.profileName}`,
         `source=${trace.sourceType}`,
         `steps=${trace.steps.map(formatStep).join(">")}`
@@ -192,11 +193,12 @@ export function formatAgentTurnTraces(traces: AgentTurnTraceRecord[]): string {
 export function sanitizeAgentTurnTrace(record: AgentTurnTraceRecord): AgentTurnTraceRecord {
   const metadata = sanitizeActionTelemetryEvent({
     requestId: record.requestId,
+    supportId: record.supportId,
     profileName: record.profileName,
     sourceType: record.sourceType
   }) as Record<string, unknown>;
   return {
-    requestId: (metadata.requestId as string | undefined) ?? "missing",
+    supportId: (metadata.supportId as string | undefined) ?? "missing",
     occurredAt: safeTimestamp(record.occurredAt),
     profileName: (metadata.profileName as string | undefined) ?? "configured",
     sourceType: (metadata.sourceType as string | undefined) ?? "unknown",

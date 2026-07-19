@@ -2047,6 +2047,7 @@ describe("LINE entrance", () => {
       headers: signedHeaders(userBody, "main-secret"),
       payload: userBody
     });
+    expect(replyText.mock.calls[0]?.[1]).toContain("支援碼：");
 
     const adminBody = lineBody({
       type: "message",
@@ -2063,7 +2064,7 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(replyText.mock.calls[1]?.[1]).toContain("Last errors");
-    expect(replyText.mock.calls[1]?.[1]).toContain("requestId=present");
+    expect(replyText.mock.calls[1]?.[1]).toMatch(/supportId=[a-f0-9]{16}/u);
     expect(replyText.mock.calls[1]?.[1]).toContain("find_ppt_slides");
     expect(replyText.mock.calls[1]?.[1]).toContain("message=redacted");
   });
@@ -2119,7 +2120,7 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(replyText.mock.calls[1]?.[1]).toContain("Last routes");
-    expect(replyText.mock.calls[1]?.[1]).toContain("requestId=present");
+    expect(replyText.mock.calls[1]?.[1]).toMatch(/supportId=[a-f0-9]{16}/u);
     expect(replyText.mock.calls[1]?.[1]).toContain("find_ppt_slides");
     expect(replyText.mock.calls[1]?.[1]).toContain("provider=router");
     expect(replyText.mock.calls[1]?.[1]).toContain("query=present");
@@ -2174,7 +2175,7 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
     expect(replyText.mock.calls[0]?.[1]).toContain("Agent turns");
-    expect(replyText.mock.calls[0]?.[1]).toContain("requestId=present");
+    expect(replyText.mock.calls[0]?.[1]).toMatch(/supportId=[a-f0-9]{16}/u);
     expect(replyText.mock.calls[0]?.[1]).toContain("route:execute");
     expect(replyText.mock.calls[0]?.[1]).toContain("query:present");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("Amazing Grace");
