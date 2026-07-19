@@ -479,18 +479,18 @@ These ranges are planning estimates, not delivery commitments. They assume one
 primary implementation stream, test-first delivery, normal pull-request review,
 and production observation between behavior changes.
 
-| Milestone | Indicative range | May overlap with |
-|---|---:|---|
-| R0 Observable baseline | 1–2 weeks | Regression-corpus preparation for R1 |
-| R1 Agent state/cache lifecycle | 2–4 weeks | R2 design only |
-| R2 Declarative schedule domains | 4–6 weeks | R3 catalog contract design |
-| R3 Unified retrieval freshness | 3–5 weeks | R4 copy/onboarding prototype |
-| Kernel v1 stabilization | 2 weeks | R4 implementation |
-| R4 Product experience | 2–3 weeks | Late R3/R5 preparation |
-| R5 Production reliability | 4–6 weeks | R6 tenant-model design |
-| R6 Repeatable church package | 6–10 weeks | Pilot onboarding preparation |
-| R7 Managed pilot | 8–12 weeks of observation | No R8 decision before evidence |
-| R8 SaaS scale | Evidence-driven | Begins only after R7 exit criteria |
+| Milestone                       |          Indicative range | May overlap with                     |
+| ------------------------------- | ------------------------: | ------------------------------------ |
+| R0 Observable baseline          |                 1–2 weeks | Regression-corpus preparation for R1 |
+| R1 Agent state/cache lifecycle  |                 2–4 weeks | R2 design only                       |
+| R2 Declarative schedule domains |                 4–6 weeks | R3 catalog contract design           |
+| R3 Unified retrieval freshness  |                 3–5 weeks | R4 copy/onboarding prototype         |
+| Kernel v1 stabilization         |                   2 weeks | R4 implementation                    |
+| R4 Product experience           |                 2–3 weeks | Late R3/R5 preparation               |
+| R5 Production reliability       |                 4–6 weeks | R6 tenant-model design               |
+| R6 Repeatable church package    |                6–10 weeks | Pilot onboarding preparation         |
+| R7 Managed pilot                | 8–12 weeks of observation | No R8 decision before evidence       |
+| R8 SaaS scale                   |           Evidence-driven | Begins only after R7 exit criteria   |
 
 R0 through R3 therefore represent roughly 12 to 19 weeks on a single stream,
 including the stabilization gate. Parallelism may shorten calendar time only
