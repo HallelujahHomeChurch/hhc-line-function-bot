@@ -9,6 +9,10 @@ import {
   createLastErrorStore,
   RedisLastErrorStore
 } from "../observability/create-last-error-store.js";
+import {
+  createLastRouteStore,
+  RedisLastRouteStore
+} from "../observability/create-last-route-store.js";
 import { createRateLimiter, RedisRateLimiter } from "../rate-limit.js";
 import { createSessionStore } from "../state/create-session-store.js";
 import { InMemorySessionStore } from "../state/session-store.js";
@@ -81,8 +85,10 @@ class FakeRedisClient {
     const keys = Array.isArray(key) ? key : [key];
     let removed = 0;
     for (const item of keys) {
-      removed += this.values.delete(item) ? 1 : 0;
+      const existed = this.values.has(item) || this.lists.has(item);
+      this.values.delete(item);
       this.lists.delete(item);
+      removed += existed ? 1 : 0;
     }
     return removed;
   }
@@ -316,6 +322,44 @@ describe("store factories", () => {
     expect(await store.list()).toMatchObject([
       { supportId: expect.stringMatching(/^[a-f0-9]{16}$/u), message: "redacted" }
     ]);
+  });
+
+  it("stores only sanitized bounded recent routes through Redis", async () => {
+    const redis = new FakeRedisClient();
+    const store = createLastRouteStore({
+      redis: { client: redis, keyPrefix: "test" },
+      maxEntries: 1
+    });
+    expect(store).toBeInstanceOf(RedisLastRouteStore);
+
+    await store.record({
+      requestId: "secret-request-1",
+      occurredAt: "2026-07-20T00:00:00.000Z",
+      profileName: "helper-private",
+      sourceType: "group",
+      phase: "function",
+      action: "find_ppt_slides",
+      query: "present"
+    });
+    await store.record({
+      requestId: "secret-request-2",
+      occurredAt: "2026-07-20T00:01:00.000Z",
+      profileName: "helper-private",
+      sourceType: "group",
+      phase: "function",
+      action: "query_schedule"
+    });
+
+    await expect(store.list()).resolves.toEqual([
+      expect.objectContaining({
+        supportId: expect.stringMatching(/^[a-f0-9]{16}$/u),
+        action: "query_schedule"
+      })
+    ]);
+    expect(JSON.stringify([...redis.lists.values()])).not.toMatch(
+      /secret-request|helper-private/u
+    );
+    expect(await store.clear()).toBe(1);
   });
 
   it("rate limits through Redis", async () => {

@@ -44,6 +44,7 @@ import { listKnowledgeRoutingMetadata } from "./knowledge/routing-metadata.js";
 import { createKnowledgeRetrievalEvidenceProvider } from "./knowledge/retrieval-evidence.js";
 import { createProfileAwareProvider } from "./llm/provider-runtime.js";
 import { createLastErrorStore } from "./observability/create-last-error-store.js";
+import { createLastRouteStore } from "./observability/create-last-route-store.js";
 import { createConsoleRouteObserver } from "./observability/route-observer.js";
 import { createRateLimiter } from "./rate-limit.js";
 import { createRedisRuntime } from "./redis.js";
@@ -254,6 +255,10 @@ const lastErrorStore = createLastErrorStore({
   redis,
   maxEntries: config.lastErrors?.maxEntries ?? 20
 });
+const lastRouteStore = createLastRouteStore({
+  redis,
+  maxEntries: config.lastErrors?.maxEntries ?? 20
+});
 const rateLimiter = createRateLimiter({
   redis,
   config: config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
@@ -289,6 +294,7 @@ const app = createApp(config, {
   textMessageHandlers: registries.textMessages,
   adminHandlers: registries.adminHandlers,
   lastErrorStore,
+  lastRouteStore,
   rateLimiter,
   accessStore,
   registrationInviteCodeStore,
