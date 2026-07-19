@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { AgentResourceType } from "../types.js";
+import type { AgentResourceReference, AgentResourceType } from "../types.js";
 import {
   normalizeLookupText,
   profileScope,
@@ -63,8 +63,24 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
       insert into agent_resources
         (id, profile_name, scope_type, scope_id, resource_type, title, query_text,
          storage_provider, drive_id, item_id, external_url, source_label, description,
-         created_by, visibility, expires_at)
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         created_by, visibility, expires_at, identity_key, source_revision, verified_at)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now())
+      on conflict (profile_name, scope_type, scope_id, resource_type, identity_key)
+      do update set
+        title=excluded.title,
+        query_text=excluded.query_text,
+        storage_provider=excluded.storage_provider,
+        drive_id=excluded.drive_id,
+        item_id=excluded.item_id,
+        external_url=excluded.external_url,
+        source_label=excluded.source_label,
+        description=excluded.description,
+        visibility=excluded.visibility,
+        expires_at=excluded.expires_at,
+        source_revision=excluded.source_revision,
+        verified_at=now(),
+        deleted_at=null,
+        tombstoned_at=null
       returning *
       `,
       [
@@ -83,7 +99,9 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
         input.storage.provider === "external_link" ? (input.storage.description ?? null) : null,
         input.createdBy ?? null,
         input.visibility ?? "private",
-        input.expiresAt ?? this.defaultExpiresAt()
+        input.expiresAt ?? this.defaultExpiresAt(),
+        resourceIdentity(input.storage, input.createdBy),
+        input.sourceRevision ?? null
       ]
     );
     return mapResource(result.rows[0]);
@@ -102,6 +120,9 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
       input.requesterUserId ?? input.source.userId,
       values
     );
+    const revisionFilter = input.sourceRevision
+      ? `and source_revision = $${values.push(input.sourceRevision)}`
+      : "";
     const limitParam = values.length + 1;
     values.push(Math.max(input.limit ?? 5, 50));
     const result = await this.db.query(
@@ -114,7 +135,9 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
         ${typeFilter}
         ${visibilityFilter}
         and deleted_at is null
+        and tombstoned_at is null
         and expires_at > now()
+        ${revisionFilter}
       order by created_at desc
       limit $${limitParam}
       `,
@@ -727,8 +750,11 @@ function mapResource(row: Record<string, unknown>): AgentResourceRecord {
           },
     createdBy: optionalString(row.created_by),
     createdAt: toIso(row.created_at),
+    verifiedAt: toIso(row.verified_at ?? row.created_at),
+    sourceRevision: optionalString(row.source_revision),
     expiresAt: toIso(row.expires_at),
-    deletedAt: optionalIso(row.deleted_at)
+    deletedAt: optionalIso(row.deleted_at),
+    tombstonedAt: optionalIso(row.tombstoned_at)
   };
 }
 
@@ -851,6 +877,14 @@ function resourceSearchText(record: AgentResourceRecord): string {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function resourceIdentity(storage: AgentResourceReference["storage"], createdBy?: string): string {
+  const parts =
+    storage.provider === "graph"
+      ? [storage.provider, storage.driveId, storage.itemId, createdBy ?? ""]
+      : [storage.provider, storage.url, "", createdBy ?? ""];
+  return parts.map((part) => Buffer.from(part, "utf8").toString("base64")).join(":");
 }
 
 function optionalString(value: unknown): string | undefined {

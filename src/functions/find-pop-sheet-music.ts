@@ -678,11 +678,25 @@ async function selectSheetMusicCandidate(options: {
     return { ok: true, replyText: invalidSelectionMessage ?? "這個選擇已失效，請重新查詢。" };
   }
 
-  await sessionStore.delete(session.id);
-  if (item.memoryResource) {
-    return createRememberedReferenceReply(graph, item.memoryResource, now, item.id);
+  const consumed = await sessionStore.take(session.id);
+  if (
+    !consumed ||
+    consumed.type !== "selection" ||
+    consumed.action !== POSTBACK_ACTION ||
+    consumed.profileName !== context.profile.name ||
+    !sourceMatches(consumed.source, context.event.source) ||
+    (consumed.requesterUserId && consumed.requesterUserId !== context.event.source.userId)
+  ) {
+    return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
   }
-  return createSharingLinkReply(graph, item, now);
+  const consumedItem = consumed.items[selectedIndex];
+  if (!consumedItem) {
+    return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
+  }
+  if (consumedItem.memoryResource) {
+    return createRememberedReferenceReply(graph, consumedItem.memoryResource, now, consumedItem.id);
+  }
+  return createSharingLinkReply(graph, consumedItem, now);
 }
 
 async function createSharingLinkReply(

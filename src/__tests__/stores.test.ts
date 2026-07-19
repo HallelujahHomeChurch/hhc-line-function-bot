@@ -5,6 +5,11 @@ import { createCacheStore } from "../cache/create-cache-store.js";
 import { RedisCacheStore } from "../cache/redis-cache-store.js";
 import { createInFlightStore } from "../in-flight/create-in-flight-store.js";
 import { MemoryInFlightStore, RedisInFlightStore } from "../in-flight/in-flight-store.js";
+import { createWebhookEventStore } from "../idempotency/create-webhook-event-store.js";
+import {
+  InMemoryWebhookEventStore,
+  RedisWebhookEventStore
+} from "../idempotency/webhook-event-store.js";
 import {
   createLastErrorStore,
   RedisLastErrorStore
@@ -109,6 +114,39 @@ class FakeRedisClient {
 }
 
 describe("store factories", () => {
+  it("atomically consumes a Redis selection once", async () => {
+    const store = new RedisSessionStore({
+      client: new FakeRedisClient(),
+      keyPrefix: "test",
+      now: () => new Date("2026-07-15T10:00:00.000Z")
+    });
+    await store.set({
+      id: "selection-1",
+      type: "selection",
+      action: "find_sheet_music",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "G1", userId: "U1" },
+      items: [{ id: "item-1", name: "song.pdf", driveId: "drive-1" }],
+      expiresAt: "2026-07-15T10:02:00.000Z"
+    });
+
+    const results = await Promise.all([store.take("selection-1"), store.take("selection-1")]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it("deduplicates webhook events by profile with memory and Redis stores", async () => {
+    const stores = [
+      new InMemoryWebhookEventStore(() => new Date("2026-07-15T10:00:00.000Z")),
+      new RedisWebhookEventStore(new FakeRedisClient(), "test")
+    ];
+    for (const store of stores) {
+      await expect(store.tryStart("helper", "evt-1", 60_000)).resolves.toBe("started");
+      await expect(store.tryStart("helper", "evt-1", 60_000)).resolves.toBe("duplicate");
+      await expect(store.tryStart("other", "evt-1", 60_000)).resolves.toBe("started");
+    }
+  });
   it("atomically consumes a Redis upload intent once", async () => {
     const store = new RedisSessionStore({
       client: new FakeRedisClient(),
@@ -151,6 +189,11 @@ describe("store factories", () => {
     expect(createSessionStore({ redis })).toBeInstanceOf(RedisSessionStore);
     expect(createCacheStore({ redis })).toBeInstanceOf(RedisCacheStore);
     expect(createInFlightStore({ redis })).toBeInstanceOf(RedisInFlightStore);
+    expect(createWebhookEventStore(redis)).toBeInstanceOf(RedisWebhookEventStore);
+  });
+
+  it("uses a memory webhook idempotency store when Redis is absent", () => {
+    expect(createWebhookEventStore()).toBeInstanceOf(InMemoryWebhookEventStore);
   });
 
   it("uses memory in-flight store when Redis is not configured", async () => {

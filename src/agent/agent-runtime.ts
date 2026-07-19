@@ -1,6 +1,4 @@
 import type {
-  AgentResourceReference,
-  AgentResourceType,
   FunctionExecutionResult,
   FunctionHandlerContext,
   FunctionName,
@@ -9,7 +7,6 @@ import type {
 } from "../types.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "./memory-store.js";
 import type { AccessStore } from "../access/types.js";
-import { stateAgeBucket } from "../observability/retrieval-diagnostics.js";
 
 export interface AgentRuntimeOptions {
   memoryStore: AgentMemoryStore;
@@ -25,12 +22,6 @@ export interface AfterFunctionResultInput {
   result: FunctionExecutionResult;
 }
 
-export interface BeforeFunctionExecutionInput {
-  context: FunctionHandlerContext;
-  action: FunctionName;
-  arguments: JsonRecord;
-}
-
 export interface AgentCommandInput {
   text: string;
   context: FunctionHandlerContext;
@@ -39,48 +30,13 @@ export interface AgentCommandInput {
 
 export interface AgentRuntime {
   afterFunctionResult(input: AfterFunctionResultInput): Promise<void>;
-  handleBeforeFunctionExecution(
-    input: BeforeFunctionExecutionInput
-  ): Promise<FunctionExecutionResult | undefined>;
   handleCommand(input: AgentCommandInput): Promise<FunctionExecutionResult | undefined>;
 }
 
-const LINK_TTL_MS = 24 * 60 * 60 * 1000;
 const RESOURCE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
   const now = options.now ?? (() => new Date());
-
-  async function createResourceReply(
-    resource: AgentResourceRecord
-  ): Promise<FunctionExecutionResult> {
-    const diagnostics = {
-      executionMode: "alias_recall" as const,
-      stateAgeBucket: stateAgeBucket(resource.createdAt, now())
-    };
-    if (resource.storage.provider === "external_link") {
-      return {
-        ok: true,
-        replyText: ["這是我記住的：", resource.title, resource.storage.url].join("\n"),
-        agentResource: toResourceReference(resource),
-        diagnostics
-      };
-    }
-    if (!options.graph) {
-      return {
-        ok: true,
-        replyText: "我記得剛剛那份，但目前沒有檔案連結服務，請稍後再試。",
-        diagnostics
-      };
-    }
-    const link = await createGraphLink(options.graph, resource.storage, now());
-    return {
-      ok: true,
-      replyText: ["這是剛剛那份：", resource.title, "下載連結（1 天內有效）：", link].join("\n"),
-      agentResource: toResourceReference(resource),
-      diagnostics
-    };
-  }
 
   return {
     async afterFunctionResult(input) {
@@ -97,24 +53,9 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
         title: reference.title,
         query: reference.query ?? stringArgument(input.arguments, "query"),
         storage: reference.storage,
+        sourceRevision: reference.sourceRevision,
         expiresAt: new Date(now().getTime() + RESOURCE_TTL_MS).toISOString()
       });
-    },
-
-    async handleBeforeFunctionExecution(input) {
-      const resourceTypes = resourceTypesForAction(input.action);
-      const query = stringArgument(input.arguments, "query");
-      if (!resourceTypes || !query) {
-        return undefined;
-      }
-      const resource = await options.memoryStore.findResourceByAlias({
-        profileName: input.context.profile.name,
-        source: input.context.event.source,
-        requesterUserId: input.context.event.source.userId,
-        alias: query,
-        resourceTypes
-      });
-      return resource ? createResourceReply(resource) : undefined;
     },
 
     async handleCommand(input) {
@@ -235,43 +176,9 @@ async function recordMemoryAudit(
   });
 }
 
-async function createGraphLink(
-  graph: GraphDriveClient,
-  storage: AgentResourceReference["storage"],
-  now: Date
-): Promise<string> {
-  if (storage.provider !== "graph") {
-    throw new Error("graph_storage_required");
-  }
-  const expiresAt = new Date(now.getTime() + LINK_TTL_MS).toISOString();
-  return graph.createSharingLink(storage.driveId, storage.itemId, expiresAt);
-}
-
-function toResourceReference(resource: AgentResourceRecord): AgentResourceReference {
-  return {
-    resourceType: resource.resourceType,
-    title: resource.title,
-    query: resource.query,
-    storage: resource.storage
-  };
-}
-
 function stringArgument(args: JsonRecord, key: string): string | undefined {
   const value = args[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function resourceTypesForAction(action: FunctionName): AgentResourceType[] | undefined {
-  switch (action) {
-    case "find_ppt_slides":
-      return ["ppt_slide"];
-    case "find_sheet_music":
-      return ["sheet_music"];
-    case "find_resource":
-      return ["general_resource"];
-    default:
-      return undefined;
-  }
 }
 
 function formatTextMemory(memory: { id: string; title?: string; content: string }): string {

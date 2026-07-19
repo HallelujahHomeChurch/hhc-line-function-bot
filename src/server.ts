@@ -46,6 +46,10 @@ import {
 } from "./functions/pending-attachment.js";
 import { consumeUploadIntent } from "./functions/upload-intent.js";
 import { MemoryInFlightStore, type InFlightStore } from "./in-flight/in-flight-store.js";
+import {
+  InMemoryWebhookEventStore,
+  type WebhookEventStore
+} from "./idempotency/webhook-event-store.js";
 import { createIntroReply } from "./intro.js";
 import { buildPostbackQuickReply } from "./line-reply.js";
 import { verifyLineSignature } from "./line-signature.js";
@@ -110,6 +114,7 @@ export interface AppDependencies {
   diagnostics?: AppDiagnostics;
   confirmationStore?: ConfirmationStore;
   inFlightStore?: InFlightStore;
+  webhookEventStore?: WebhookEventStore;
   textGenerator?: TextGenerationProvider;
   agentRuntime?: AgentRuntime;
   agentTurnRuntime?: AgentTurnRuntime;
@@ -246,6 +251,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     );
   const diagnostics = deps.diagnostics ?? createStaticAppDiagnostics(config);
   const inFlightStore = deps.inFlightStore ?? new MemoryInFlightStore();
+  const webhookEventStore = deps.webhookEventStore ?? new InMemoryWebhookEventStore();
   const textGenerator = deps.textGenerator;
   const textFallbackGenerator = deps.textFallbackGenerator;
   const agentTraceStore =
@@ -320,6 +326,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.agentRuntime,
         agentJobStore,
         conversationWindowStore,
+        webhookEventStore,
         deps.sessionStore
       );
     });
@@ -355,6 +362,7 @@ async function handleWebhook(
   agentRuntime: AgentRuntime | undefined,
   agentJobStore: AgentJobStore,
   conversationWindowStore: ConversationWindowStore,
+  webhookEventStore: WebhookEventStore,
   sessionStore: SessionStore | undefined
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
@@ -402,6 +410,20 @@ async function handleWebhook(
   const line = createReplyClient(profile);
   const lineIdentity = createIdentityClient(profile);
   for (const event of allowedEvents) {
+    if (
+      event.webhookEventId &&
+      (await webhookEventStore.tryStart(
+        profile.name,
+        event.webhookEventId,
+        7 * 24 * 60 * 60 * 1000
+      )) === "duplicate"
+    ) {
+      ignoredCounts.set(
+        "duplicate_webhook_event",
+        (ignoredCounts.get("duplicate_webhook_event") ?? 0) + 1
+      );
+      continue;
+    }
     const requestId = requestIdFactory();
     const requesterIsAdmin = await isAdminUser(profile, event.source.userId, accessStore);
     const effectiveProfile = await resolveEffectiveProfile(

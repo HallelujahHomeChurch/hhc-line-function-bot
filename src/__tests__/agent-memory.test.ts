@@ -42,6 +42,44 @@ function context(): FunctionHandlerContext {
 }
 
 describe("agent memory", () => {
+  it("deduplicates resource metadata by stable storage identity and refreshes verification", async () => {
+    let now = new Date("2026-07-16T12:00:00Z");
+    const store = new InMemoryAgentMemoryStore({ now: () => now });
+    const first = await store.recordResource({
+      profileName: "helper",
+      source: { type: "user", userId: "U1" },
+      createdBy: "U1",
+      resourceType: "ppt_slide",
+      title: "舊名稱.pptx",
+      storage: { provider: "graph", driveId: "drive-1", itemId: "item-1" },
+      sourceRevision: "rev-1"
+    });
+    now = new Date("2026-07-16T12:05:00Z");
+    const refreshed = await store.recordResource({
+      profileName: "helper",
+      source: { type: "user", userId: "U1" },
+      createdBy: "U1",
+      resourceType: "ppt_slide",
+      title: "新名稱.pptx",
+      storage: { provider: "graph", driveId: "drive-1", itemId: "item-1" },
+      sourceRevision: "rev-2"
+    });
+
+    expect(refreshed.id).toBe(first.id);
+    expect(refreshed).toMatchObject({
+      title: "新名稱.pptx",
+      sourceRevision: "rev-2",
+      verifiedAt: "2026-07-16T12:05:00.000Z"
+    });
+    await expect(
+      store.searchResources({
+        profileName: "helper",
+        source: { type: "user", userId: "U1" },
+        requesterUserId: "U1",
+        resourceTypes: ["ppt_slide"]
+      })
+    ).resolves.toHaveLength(1);
+  });
   it("can retrieve a visible memory by semantic similarity without a substring match", async () => {
     const store = new InMemoryAgentMemoryStore({ now: () => new Date("2026-07-16T12:00:00Z") });
     await store.saveTextMemory({
@@ -304,7 +342,7 @@ describe("agent memory", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("marks a legacy alias replay without exposing the alias", async () => {
+  it("does not expose a legacy alias as a pre-handler execution path", async () => {
     const now = new Date("2026-07-08T00:00:00.000Z");
     const store = new InMemoryAgentMemoryStore({ now: () => now });
     const resource = await store.recordResource({
@@ -333,17 +371,7 @@ describe("agent memory", () => {
       now: () => now
     });
 
-    const result = await runtime.handleBeforeFunctionExecution({
-      context: context(),
-      action: "find_ppt_slides",
-      arguments: { query: "剛剛那份" }
-    });
-
-    expect(result?.diagnostics).toMatchObject({
-      executionMode: "alias_recall",
-      stateAgeBucket: "under_1m"
-    });
-    expect(JSON.stringify(result?.diagnostics)).not.toContain("剛剛那份");
+    expect(runtime).not.toHaveProperty("handleBeforeFunctionExecution");
   });
 
   it("keeps group resources private by default and shares only when explicit", async () => {

@@ -502,9 +502,25 @@ async function selectKnowledgeSource(
   }
   const selected = session.items[selectedIndex];
   if (!selected) return { ok: true, replyText: "請只回覆清單中的數字，例如：1。" };
-  await options.sessionStore.delete(session.id);
+  const consumed = await options.sessionStore.take(session.id);
+  if (
+    !consumed ||
+    consumed.type !== "selection" ||
+    consumed.action !== "query_knowledge" ||
+    consumed.profileName !== context.profile.name ||
+    !sameLineSource(consumed.source, context.event.source) ||
+    !requesterMatchesForSource(
+      context.event.source,
+      consumed.requesterUserId,
+      context.event.source.userId
+    )
+  ) {
+    return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
+  }
+  const consumedSelected = consumed.items[selectedIndex];
+  if (!consumedSelected) return { ok: true, replyText: "這個選擇已失效，請重新查詢。" };
   return createQueryKnowledgeHandler(options)(
-    { ...(session.arguments ?? {}), sourceId: selected.id },
+    { ...(consumed.arguments ?? {}), sourceId: consumedSelected.id },
     context
   );
 }

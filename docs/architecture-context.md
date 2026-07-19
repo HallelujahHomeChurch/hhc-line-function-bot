@@ -389,6 +389,7 @@ multiple replicas or restarts matter.
 - `src/agent/*`: controlled recent resources, aliases, explicit text memories,
   and Postgres/in-memory memory stores.
 - `src/in-flight/*`: duplicate in-flight function locks.
+- `src/idempotency/*`: profile-scoped LINE `webhookEventId` deduplication.
 - `src/agent/jobs.ts`: requester-scoped long-running job results.
 - `src/agent/context-manager.ts`: requester-scoped conversation window and
   context budget/compression.
@@ -405,6 +406,14 @@ the requested data.
 In-flight locks currently protect long-running function requests by
 `profileName + sourceKey + action + queryHash`. With Redis configured, this is
 cross-instance using Redis `NX` and `PX`. Without Redis, it is process-local.
+
+Current explicit query evidence outranks active tasks and remembered metadata.
+Only a validated `active_task_refinement` receives a task reference. Legacy
+resource aliases are cleared by migration and are never consulted before
+execution. One-shot selections use an atomic take, and resource-memory rows are
+deduplicated by storage identity with verification, revision, and tombstone
+metadata. Redis makes selection and webhook-event consumption cross-replica;
+the memory fallback is single-process only.
 
 Long-running job results are separate from in-flight locks. They are keyed by a
 random job id but can only be read from the same profile, LINE source, and

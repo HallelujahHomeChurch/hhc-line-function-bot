@@ -28,4 +28,18 @@ describe("agent memory migrations", () => {
     expect(sql).toContain("agent_text_memories_embedding_idx");
     expect(sql).toContain("if not exists");
   });
+
+  it("adds resource lifecycle metadata and retires legacy aliases without deleting resources", async () => {
+    const query = vi.fn().mockResolvedValue(undefined);
+
+    await runAgentMemoryMigrations({ query });
+
+    const sql = query.mock.calls.map(([statement]) => String(statement)).join("\n");
+    expect(sql).toContain("identity_key");
+    expect(sql).toContain("verified_at");
+    expect(sql).toContain("source_revision");
+    expect(sql).toContain("tombstoned_at");
+    expect(sql).toContain("delete from agent_resource_aliases");
+    expect(sql).not.toContain("delete from agent_resources\n");
+  });
 });

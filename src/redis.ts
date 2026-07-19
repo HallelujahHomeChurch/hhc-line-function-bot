@@ -12,6 +12,7 @@ import type { RedisSessionClient } from "./state/redis-session-store.js";
 import type { RedisAgentJobClient } from "./agent/jobs.js";
 import type { RedisConversationWindowClient } from "./agent/context-manager.js";
 import type { RedisAgentTraceClient } from "./agent/trace-store.js";
+import type { RedisWebhookEventClient } from "./idempotency/webhook-event-store.js";
 
 export interface RedisRuntime {
   client: RedisCacheClient &
@@ -24,6 +25,7 @@ export interface RedisRuntime {
     RedisInFlightClient &
     RedisAgentJobClient &
     RedisAgentTraceClient &
+    RedisWebhookEventClient &
     RedisConversationWindowClient;
   keyPrefix: string;
 }

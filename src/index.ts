@@ -39,6 +39,7 @@ import { createDependencyDiagnostics } from "./diagnostics/dependencies.js";
 import { createPostgresRuntime } from "./db/postgres.js";
 import { createFunctionRegistries } from "./functions/registry.js";
 import { createInFlightStore } from "./in-flight/create-in-flight-store.js";
+import { createWebhookEventStore } from "./idempotency/create-webhook-event-store.js";
 import { createKnowledgeStore } from "./knowledge/create-store.js";
 import { listKnowledgeRoutingMetadata } from "./knowledge/routing-metadata.js";
 import { createKnowledgeRetrievalEvidenceProvider } from "./knowledge/retrieval-evidence.js";
@@ -245,6 +246,7 @@ const knowledgeAdminActionRegistry = createAdminActionRegistry({
   knowledgeEmbeddingBatchSize: config.knowledge?.embedding.batchSize
 });
 const inFlightStore = createInFlightStore({ redis });
+const webhookEventStore = createWebhookEventStore(redis);
 const agentJobStore = redis
   ? new RedisAgentJobStore({ client: redis.client, keyPrefix: redis.keyPrefix })
   : undefined;
@@ -300,6 +302,7 @@ const app = createApp(config, {
   registrationInviteCodeStore,
   confirmationStore,
   inFlightStore,
+  webhookEventStore,
   sessionStore,
   agentTraceStore,
   agentJobStore,

@@ -9,7 +9,7 @@ describe("retrieval product regression corpus", () => {
     expect(new Set(RETRIEVAL_PRODUCT_CASES)).toEqual(
       new Set([
         "sequential_ppt_queries",
-        "alias_recall_visible",
+        "legacy_alias_cannot_execute",
         "active_task_follow_up",
         "schedule_domain_ambiguity",
         "explicit_schedule_domain",

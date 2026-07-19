@@ -45,6 +45,12 @@ export class RedisSessionStore implements SessionStore {
     return this.liveSession(session);
   }
 
+  async take(id: string): Promise<ConversationSession | undefined> {
+    const raw = await this.options.client.getDel(this.key(id));
+    if (!raw) return undefined;
+    return this.liveSession(JSON.parse(raw) as ConversationSession);
+  }
+
   async set(session: ConversationSession): Promise<void> {
     if (isInteractiveSession(session)) {
       const conflicts = (await this.liveSessions()).filter(

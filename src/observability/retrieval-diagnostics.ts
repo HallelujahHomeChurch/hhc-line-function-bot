@@ -3,7 +3,6 @@ import { createHmac } from "node:crypto";
 export const RETRIEVAL_EXECUTION_MODES = [
   "fresh_search",
   "explicit_task_replay",
-  "alias_recall",
   "resource_memory_candidate",
   "catalog_snapshot_read",
   "provider_fallback"

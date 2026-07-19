@@ -13,10 +13,17 @@ Execution modes:
 
 - `fresh_search`: a normal source search without reusable state.
 - `explicit_task_replay`: the requester explicitly refined or replayed the active result.
-- `alias_recall`: a legacy resource alias returned before source search. R1 removes unsafe implicit replay.
 - `resource_memory_candidate`: a requester-visible recent resource matched.
 - `catalog_snapshot_read`: the catalog answered before provider fallback.
 - `provider_fallback`: the live provider/folder path answered after catalog miss.
+
+R1 state rules:
+
+- A new explicit query must reach the handler and must not report alias replay.
+- `explicit_task_replay` is valid only for explicit continuation such as `剛剛那份`.
+- Automatic aliases are retired; resource rows remain, while legacy alias rows are cleared by migration.
+- Resource metadata is a candidate signal with verification/revision/tombstone lifecycle, not a completed-response cache.
+- Redis is required for restart-safe, multi-replica webhook deduplication and atomic one-shot selection consumption.
 
 Age and freshness are coarse buckets. Query/reference fingerprints are keyed, opaque equality markers; they are not IDs and cannot be used to retrieve content.
 
@@ -31,7 +38,7 @@ pnpm eval:retrieval-product
 pnpm eval:agent
 ```
 
-Both commands are deterministic and do not call DeepSeek or Ollama. The retrieval corpus includes sequential PPT lookup, alias visibility, active-task continuation, schedule ambiguity, explicit schedule domain, not-found, unavailable, and write-confirmation precedence.
+Both commands are deterministic and do not call DeepSeek or Ollama. The retrieval corpus includes sequential PPT lookup, legacy-alias retirement, active-task continuation, schedule ambiguity, explicit schedule domain, not-found, unavailable, and write-confirmation precedence.
 
 ## Azure Monitor baseline queries
 
@@ -70,5 +77,5 @@ ContainerAppConsoleLogs_CL
 - A failed function reply contains a support code.
 - `/last-errors`, `/last-routes`, and `/last-agent-turns` show that same code.
 - Two different PPT queries have different query fingerprints.
-- Alias, memory, catalog, provider fallback, and explicit replay are distinguishable.
+- Fresh search, memory candidate, catalog, provider fallback, and explicit replay are distinguishable.
 - No diagnostic JSON contains message text, person names, filenames, URLs, LINE IDs, tokens, or temporary links.

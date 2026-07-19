@@ -171,6 +171,7 @@ export interface ExternalSearchConsentLookup extends PptSelectionLookup {
 
 export interface SessionStore {
   get(id: string): Promise<ConversationSession | undefined>;
+  take(id: string): Promise<ConversationSession | undefined>;
   set(session: ConversationSession): Promise<void>;
   delete(id: string): Promise<void>;
   findPptSelection(lookup: PptSelectionLookup): Promise<PptSelectionSession | undefined>;
@@ -211,6 +212,13 @@ export class InMemorySessionStore implements SessionStore {
   async get(id: string): Promise<ConversationSession | undefined> {
     const session = this.sessions.get(id);
     return this.liveSession(session);
+  }
+
+  async take(id: string): Promise<ConversationSession | undefined> {
+    const session = this.liveSession(this.sessions.get(id));
+    if (!session) return undefined;
+    this.sessions.delete(id);
+    return session;
   }
 
   async findPptSelection(lookup: PptSelectionLookup): Promise<PptSelectionSession | undefined> {

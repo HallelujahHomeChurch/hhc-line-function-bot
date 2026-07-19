@@ -487,34 +487,6 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         return finish(input, steps, slotClarification);
       }
 
-      const memoryAlias = await options.agentRuntime?.handleBeforeFunctionExecution({
-        context,
-        action: route.action,
-        arguments: normalizedArguments
-      });
-      if (memoryAlias) {
-        steps.push({
-          phase: "memory_alias",
-          outcome: "hit",
-          action: route.action,
-          ok: memoryAlias.ok,
-          query: queryMarker(normalizedArguments),
-          ...memoryAlias.diagnostics
-        });
-        await emitRouteEvent(options.routeObserver, {
-          kind: "function_result",
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          requestId: input.requestId,
-          action: route.action,
-          ok: memoryAlias.ok,
-          dedup: "agent_memory",
-          ...memoryAlias.diagnostics
-        });
-        return finish(input, steps, memoryAlias);
-      }
-      steps.push({ phase: "memory_alias", outcome: "miss", action: route.action });
-
       const inFlight = buildInFlightKey(
         input.profile.name,
         input.event.source,

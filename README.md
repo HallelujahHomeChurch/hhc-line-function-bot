@@ -289,9 +289,11 @@ Useful memory commands:
 `/memories` and `/forget-memory <id>` work in the current LINE scope. `/memory-status` is admin-only.
 `/memories` lists both text memories and resource memories. `/forget-memory <id>` can remove either kind.
 
-The first version is single-instance friendly. If the Container App scales beyond one replica or restarts, pending selections can expire; use Redis or another shared store before enabling multiple replicas.
+New explicit file lookups always run retrieval. Prior resources can be replayed only through a validated explicit continuation such as `剛剛那份`; legacy automatic aliases no longer short-circuit handlers.
 
-Set `REDIS_URL` to move sessions, cache, recent errors, rate-limit state, conversation windows, and long-running job results to Redis. If `REDIS_URL` is unset, the app uses in-memory stores. If `REDIS_URL` is set but Redis cannot connect, startup fails.
+Redis provides cross-replica atomic selection consumption and seven-day LINE `webhookEventId` deduplication. Without Redis those guarantees are limited to one process and are lost on restart.
+
+Set `REDIS_URL` to move sessions, cache, recent errors, rate-limit state, conversation windows, webhook idempotency, and long-running job results to Redis. If `REDIS_URL` is unset, the app uses in-memory stores. If `REDIS_URL` is set but Redis cannot connect, startup fails.
 
 Set `DATABASE_URL` to persist access state and agent memory. If PostgreSQL is configured, the app creates both access tables and agent memory tables on startup. Agent resource storage supports Graph file metadata and user-provided external links. If PostgreSQL is missing, agent memory falls back to in-memory and is lost on restart.
 

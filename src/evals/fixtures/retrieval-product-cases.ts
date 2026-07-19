@@ -1,6 +1,6 @@
 export const RETRIEVAL_PRODUCT_CASES = [
   "sequential_ppt_queries",
-  "alias_recall_visible",
+  "legacy_alias_cannot_execute",
   "active_task_follow_up",
   "schedule_domain_ambiguity",
   "explicit_schedule_domain",

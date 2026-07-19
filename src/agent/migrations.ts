@@ -214,6 +214,47 @@ const migrations = [
   create index if not exists agent_text_memories_embedding_idx
   on agent_text_memories using hnsw (embedding vector_cosine_ops)
   where deleted_at is null and embedding is not null
+  `,
+  `
+  alter table agent_resources
+    add column if not exists identity_key text,
+    add column if not exists verified_at timestamptz,
+    add column if not exists source_revision text,
+    add column if not exists tombstoned_at timestamptz
+  `,
+  `
+  update agent_resources
+  set identity_key = coalesce(
+        identity_key,
+        encode(convert_to(storage_provider, 'UTF8'), 'base64') || ':' ||
+        encode(convert_to(coalesce(drive_id, external_url, ''), 'UTF8'), 'base64') || ':' ||
+        encode(convert_to(coalesce(item_id, ''), 'UTF8'), 'base64') || ':' ||
+        encode(convert_to(coalesce(created_by, ''), 'UTF8'), 'base64')
+      ),
+      verified_at = coalesce(verified_at, created_at)
+  where identity_key is null or verified_at is null
+  `,
+  `
+  delete from agent_resources older
+  using agent_resources newer
+  where older.profile_name = newer.profile_name
+    and older.scope_type = newer.scope_type
+    and older.scope_id = newer.scope_id
+    and older.resource_type = newer.resource_type
+    and older.identity_key = newer.identity_key
+    and (older.verified_at, older.id) < (newer.verified_at, newer.id)
+  `,
+  `
+  alter table agent_resources
+    alter column identity_key set not null,
+    alter column verified_at set not null
+  `,
+  `
+  create unique index if not exists agent_resources_identity_idx
+  on agent_resources (profile_name, scope_type, scope_id, resource_type, identity_key)
+  `,
+  `
+  delete from agent_resource_aliases
   `
 ];
 

@@ -479,6 +479,51 @@ describe("LINE entrance", () => {
     });
   });
 
+  it("does not execute a redelivered LINE webhook event twice", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "execute",
+      action: "find_ppt_slides",
+      arguments: { query: "奇異恩典" },
+      provider: "ollama"
+    });
+    const findPptSlides = vi.fn().mockResolvedValue({ ok: true, replyText: "result" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      functionRegistry: { find_ppt_slides: findPptSlides },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "evt-duplicate-1",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查投影片 奇異恩典" }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(findPptSlides).toHaveBeenCalledTimes(1);
+    expect(replyText).toHaveBeenCalledTimes(1);
+    expect(second.json()).toMatchObject({
+      ok: true,
+      ignored: "duplicate_webhook_event"
+    });
+  });
+
   it("does not let another group member answer someone else's pending clarification", async () => {
     const sessionStore = new InMemorySessionStore();
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({

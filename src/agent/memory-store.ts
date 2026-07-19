@@ -19,8 +19,11 @@ export interface AgentResourceRecord extends AgentResourceReference {
   visibility: AgentMemoryVisibility;
   createdBy?: string;
   createdAt: string;
+  verifiedAt: string;
+  sourceRevision?: string;
   expiresAt: string;
   deletedAt?: string;
+  tombstonedAt?: string;
 }
 
 export interface AgentTextMemoryRecord {
@@ -86,6 +89,7 @@ export interface RecordAgentResourceInput {
   title: string;
   query?: string;
   storage: AgentResourceReference["storage"];
+  sourceRevision?: string;
   expiresAt?: string;
 }
 
@@ -187,6 +191,7 @@ export interface SearchAgentResourcesInput {
   requesterUserId?: string;
   query?: string;
   resourceTypes?: AgentResourceType[];
+  sourceRevision?: string;
   limit?: number;
 }
 
@@ -280,8 +285,16 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
   async recordResource(input: RecordAgentResourceInput): Promise<AgentResourceRecord> {
     const scope = scopeFromSource(input.source);
     const createdAt = this.now().toISOString();
+    const identity = resourceIdentity(input.storage, input.createdBy);
+    const existing = Array.from(this.resources.values()).find(
+      (record) =>
+        record.profileName === input.profileName &&
+        sameScope(record.scope, scope) &&
+        record.resourceType === input.resourceType &&
+        resourceIdentity(record.storage, record.createdBy) === identity
+    );
     const record: AgentResourceRecord = {
-      id: randomUUID(),
+      id: existing?.id ?? randomUUID(),
       profileName: input.profileName,
       scope,
       visibility: input.visibility ?? defaultVisibility(scope),
@@ -290,7 +303,9 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
       title: input.title,
       query: input.query,
       storage: input.storage,
-      createdAt,
+      sourceRevision: input.sourceRevision,
+      createdAt: existing?.createdAt ?? createdAt,
+      verifiedAt: createdAt,
       expiresAt: input.expiresAt ?? this.defaultExpiresAt()
     };
     this.resources.set(record.id, record);
@@ -307,6 +322,8 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
       .filter((record) =>
         this.isVisible(record, input.requesterUserId ?? input.source.userId, scope)
       )
+      .filter((record) => !record.tombstonedAt)
+      .filter((record) => !input.sourceRevision || record.sourceRevision === input.sourceRevision)
       .filter((record) => !query || normalizeLookupText(resourceSearchText(record)).includes(query))
       .sort(descendingCreatedAt)
       .slice(0, input.limit ?? 5);
@@ -687,6 +704,7 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
       record.profileName === profileName &&
       sameScope(record.scope, scope) &&
       this.active(record) &&
+      !record.tombstonedAt &&
       (!resourceTypes || resourceTypes.includes(record.resourceType))
     );
   }
@@ -826,4 +844,12 @@ function resourceSearchText(record: AgentResourceRecord): string {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function resourceIdentity(storage: AgentResourceReference["storage"], createdBy?: string): string {
+  const parts =
+    storage.provider === "graph"
+      ? [storage.provider, storage.driveId, storage.itemId, createdBy ?? ""]
+      : [storage.provider, storage.url, "", createdBy ?? ""];
+  return parts.map((part) => Buffer.from(part, "utf8").toString("base64")).join(":");
 }

@@ -402,6 +402,8 @@ export interface LineWebhookPayload {
 
 export interface LineEvent {
   type: string;
+  webhookEventId?: string;
+  deliveryContext?: { isRedelivery?: boolean };
   replyToken?: string;
   source: LineSource;
   message?: LineMessage;
@@ -617,6 +619,8 @@ export interface AgentResourceReference {
   title: string;
   query?: string;
   storage: AgentResourceStorage;
+  /** Opaque source snapshot revision used only for bounded revalidation. */
+  sourceRevision?: string;
 }
 
 export interface FunctionExecutionResult {
