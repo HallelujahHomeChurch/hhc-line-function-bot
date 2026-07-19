@@ -33,17 +33,18 @@ export async function emitProductEvent(
 ): Promise<void> {
   if (!observer) return;
   const sourceType = normalizedSourceType(input.source.type);
-  const actorFingerprint = input.hmacKey && sourceType
-    ? createActorFingerprint(
-        {
-          profileName: input.profileName,
-          sourceType,
-          sourceId: sourceId(input.source),
-          requesterUserId: input.source.userId
-        },
-        input.hmacKey
-      )
-    : undefined;
+  const actorFingerprint =
+    input.hmacKey && sourceType
+      ? createActorFingerprint(
+          {
+            profileName: input.profileName,
+            sourceType,
+            sourceId: sourceId(input.source),
+            requesterUserId: input.source.userId
+          },
+          input.hmacKey
+        )
+      : undefined;
   const event = sanitizeActionTelemetryEvent({
     kind: "product_event",
     requestId: input.requestId,

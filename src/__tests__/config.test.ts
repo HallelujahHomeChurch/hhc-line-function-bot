@@ -76,9 +76,9 @@ describe("config", () => {
   });
 
   it("rejects short observability HMAC keys", () => {
-    expect(() =>
-      loadConfigFromEnv({ ...baseEnv(), OBSERVABILITY_HMAC_KEY: "too-short" })
-    ).toThrow("OBSERVABILITY_HMAC_KEY must contain at least 32 characters");
+    expect(() => loadConfigFromEnv({ ...baseEnv(), OBSERVABILITY_HMAC_KEY: "too-short" })).toThrow(
+      "OBSERVABILITY_HMAC_KEY must contain at least 32 characters"
+    );
   });
 
   it("uses bounded attachment defaults", () => {

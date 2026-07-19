@@ -22,6 +22,7 @@
 ### Task 1: Privacy-safe support and actor identifiers
 
 **Files:**
+
 - Create: `src/observability/opaque-identifiers.ts`
 - Modify: `src/types.ts`
 - Modify: `src/config.ts`
@@ -30,6 +31,7 @@
 - Test: `src/__tests__/config.test.ts`
 
 **Interfaces:**
+
 - Produces: `createSupportId(requestId: string): string` and `createActorFingerprint(input, key): string | undefined`.
 - Produces: `AppConfig.observability.hmacKey?: string` loaded from `OBSERVABILITY_HMAC_KEY`.
 
@@ -42,6 +44,7 @@
 ### Task 2: Replace redacted request markers with stable support IDs
 
 **Files:**
+
 - Modify: `src/observability/action-telemetry.ts`
 - Modify: `src/observability/last-route-store.ts`
 - Modify: `src/observability/last-error-store.ts`
@@ -52,6 +55,7 @@
 - Test: `src/__tests__/entrance.test.ts`
 
 **Interfaces:**
+
 - Consumes: `createSupportId(requestId)` from Task 1.
 - Produces: records and admin diagnostic output containing `supportId`, never raw `requestId`.
 
@@ -65,6 +69,7 @@
 ### Task 3: Bounded execution-path diagnostics
 
 **Files:**
+
 - Create: `src/observability/retrieval-diagnostics.ts`
 - Modify: `src/types.ts`
 - Modify: `src/observability/action-telemetry.ts`
@@ -78,6 +83,7 @@
 - Test: `src/__tests__/controlled-agent-turn-runtime.test.ts`
 
 **Interfaces:**
+
 - Produces: `FunctionExecutionResult.diagnostics?: RetrievalDiagnostics`, documented as ephemeral and non-persistent.
 - Produces: execution modes `fresh_search`, `explicit_task_replay`, `alias_recall`, `resource_memory_candidate`, `catalog_snapshot_read`, `provider_fallback`.
 - Produces: age buckets `under_1m`, `under_10m`, `under_1h`, `under_1d`, `under_30d`, `unknown`; freshness `fresh`, `stale_allowed`, `stale_rejected`, `unknown`.
@@ -92,6 +98,7 @@
 ### Task 4: Redis-backed recent route diagnostics
 
 **Files:**
+
 - Create: `src/observability/create-last-route-store.ts`
 - Modify: `src/observability/last-route-store.ts`
 - Modify: `src/index.ts`
@@ -99,6 +106,7 @@
 - Test: `src/__tests__/startup-wiring.test.ts`
 
 **Interfaces:**
+
 - Produces: `RedisLastRouteStore` using `${keyPrefix}:last-routes:v2` and storing sanitized records only.
 - Produces: `createLastRouteStore({ redis, maxEntries })` returning Redis or in-memory implementation.
 
@@ -112,6 +120,7 @@
 ### Task 5: Product events and deterministic retrieval regression corpus
 
 **Files:**
+
 - Create: `src/observability/product-events.ts`
 - Create: `src/evals/fixtures/retrieval-product-cases.ts`
 - Create: `src/tools/run-retrieval-product-evals.ts`
@@ -122,6 +131,7 @@
 - Test: `src/__tests__/retrieval-product-evals.test.ts`
 
 **Interfaces:**
+
 - Produces: `emitProductEvent(observer, event)` with event names `registration_completed`, `clarification_requested`, `function_completed`, `write_previewed`, `write_committed`, and `retry_observed`.
 - Produces: `pnpm eval:retrieval-product`, deterministic and offline.
 
@@ -135,12 +145,14 @@
 ### Task 6: R0 operations contract, full verification, and delivery
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `docs/architecture-context.md`
 - Modify: `AGENTS.md`
 - Create: `docs/operations/controlled-agent-support.md`
 
 **Interfaces:**
+
 - Documents: support-code lookup, execution-mode interpretation, Azure Monitor queries, secret configuration, regression command, and the R0 baseline checklist.
 
 - [ ] **Step 1: Document the support workflow**: locate support ID in `/last-agent-turns`, `/last-routes`, and `/last-errors`; map execution modes; verify second-query behavior; rotate `OBSERVABILITY_HMAC_KEY` only with an accepted actor-series break.

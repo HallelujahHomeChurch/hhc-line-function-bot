@@ -292,9 +292,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             outcome: activeTask ? "present" : "missing",
             action: activeTask?.currentCapability,
             lifecycleOutcome: activeTask ? "read" : "missing",
-            stateAgeBucket: activeTask
-              ? stateAgeBucket(activeTask.createdAt, now())
-              : undefined
+            stateAgeBucket: activeTask ? stateAgeBucket(activeTask.createdAt, now()) : undefined
           });
         }
         plan = await resolveControlledPlan(
@@ -416,7 +414,11 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             force: true,
             variant: introVariantRouteArgument(route.arguments)
           });
-          return finish(input, steps, intro ?? { ok: false, replyText: requestFailedMessage(input.requestId) });
+          return finish(
+            input,
+            steps,
+            intro ?? { ok: false, replyText: requestFailedMessage(input.requestId) }
+          );
         }
         if (route.action === "small_talk") {
           const result = await createControlledSmallTalkReply({

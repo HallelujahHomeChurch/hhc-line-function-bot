@@ -32,7 +32,9 @@ describe("product events", () => {
         clarificationCountBucket: "zero"
       })
     );
-    expect(JSON.stringify(observer.mock.calls)).not.toMatch(/C-private|U-private|牧師|private\.pptx/u);
+    expect(JSON.stringify(observer.mock.calls)).not.toMatch(
+      /C-private|U-private|牧師|private\.pptx/u
+    );
   });
 
   it("does not emit actor metrics when the requester or HMAC key is unavailable", async () => {

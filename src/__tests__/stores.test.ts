@@ -356,9 +356,7 @@ describe("store factories", () => {
         action: "query_schedule"
       })
     ]);
-    expect(JSON.stringify([...redis.lists.values()])).not.toMatch(
-      /secret-request|helper-private/u
-    );
+    expect(JSON.stringify([...redis.lists.values()])).not.toMatch(/secret-request|helper-private/u);
     expect(await store.clear()).toBe(1);
   });
 

@@ -18,12 +18,7 @@ export const STATE_AGE_BUCKETS = [
   "unknown"
 ] as const;
 
-export const FRESHNESS_STATUSES = [
-  "fresh",
-  "stale_allowed",
-  "stale_rejected",
-  "unknown"
-] as const;
+export const FRESHNESS_STATUSES = ["fresh", "stale_allowed", "stale_rejected", "unknown"] as const;
 
 export type RetrievalExecutionMode = (typeof RETRIEVAL_EXECUTION_MODES)[number];
 export type StateAgeBucket = (typeof STATE_AGE_BUCKETS)[number];

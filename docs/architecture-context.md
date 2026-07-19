@@ -268,7 +268,9 @@ handler:
   canonical record per schedule type and month.
 - memory commands such as `/memories`, `/forget-memory <id>`, and
   `/memory-status`
-- sanitized turn diagnostics through `/last-agent-turns`
+- sanitized turn diagnostics through `/last-agent-turns`, correlated with `/last-routes` and `/last-errors` by opaque support ID
+- response-only retrieval diagnostics for execution mode, task/resource age, source revision marker, freshness, and keyed query/reference equality fingerprints
+- privacy-safe product events for registration, clarification, result class, write completion, latency, and retry
 
 Result envelopes use the shared statuses `success`, `not_found`, `ambiguous`,
 and `unavailable`. Entity types must be declared by the capability contract.
@@ -559,6 +561,7 @@ pnpm test
 pnpm config:validate
 pnpm eval:admin
 pnpm eval:agent
+pnpm eval:retrieval-product
 pnpm build
 ```
 
