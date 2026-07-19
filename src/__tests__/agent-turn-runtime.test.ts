@@ -345,7 +345,7 @@ describe("AgentTurnRuntime controlled path", () => {
     });
     await expect(traceStore.list()).resolves.toEqual([
       expect.objectContaining({
-        requestId: "present",
+        supportId: expect.stringMatching(/^[a-f0-9]{16}$/u),
         steps: expect.arrayContaining([
           expect.objectContaining({
             phase: "controlled_route",

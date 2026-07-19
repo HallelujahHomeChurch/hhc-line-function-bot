@@ -1,4 +1,5 @@
 import type { AgentReplyData, AgentResultEnvelope } from "./agent/result-envelope.js";
+import type { RetrievalDiagnostics } from "./observability/retrieval-diagnostics.js";
 
 export const FUNCTION_NAMES = [
   "find_ppt_slides",
@@ -310,6 +311,11 @@ export interface AppConfig {
   access?: AccessConfig;
   rateLimit?: RateLimitConfig;
   lastErrors?: LastErrorsConfig;
+  observability?: ObservabilityConfig;
+}
+
+export interface ObservabilityConfig {
+  hmacKey?: string;
 }
 
 export interface KnowledgeConfig {
@@ -512,10 +518,12 @@ export interface RouteObserverEvent {
     | "text_handler"
     | "postback"
     | "admin_command"
-    | "rate_limited";
+    | "rate_limited"
+    | "product_event";
   profileName: string;
   sourceType: string;
   requestId?: string;
+  supportId?: string;
   durationMs?: number;
   provider?: RouteResult["provider"];
   lane?: ModelProviderLane;
@@ -534,6 +542,18 @@ export interface RouteObserverEvent {
   smallTalkCategory?: string;
   dedup?: string;
   queryHash?: string;
+  executionMode?: RetrievalDiagnostics["executionMode"];
+  stateAgeBucket?: RetrievalDiagnostics["stateAgeBucket"];
+  freshnessStatus?: RetrievalDiagnostics["freshnessStatus"];
+  sourceRevision?: RetrievalDiagnostics["sourceRevision"];
+  queryFingerprint?: string;
+  referenceFingerprint?: string;
+  eventName?: string;
+  actorFingerprint?: string;
+  resultClass?: string;
+  latencyBucket?: string;
+  clarificationCountBucket?: string;
+  retry?: boolean;
 }
 
 export type RouteObserver = (event: RouteObserverEvent) => void | Promise<void>;
@@ -608,6 +628,8 @@ export interface FunctionExecutionResult {
   agentResult?: AgentResultEnvelope;
   /** Ephemeral response-only data. Never persist in task frames or traces. */
   responseData?: AgentReplyData;
+  /** Ephemeral observability data. Never persist in task frames, memory, or replies. */
+  diagnostics?: RetrievalDiagnostics;
   agentResource?: AgentResourceReference;
   smallTalkTrace?: {
     lane: "smart_talk";

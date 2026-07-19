@@ -304,6 +304,48 @@ describe("agent memory", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("marks a legacy alias replay without exposing the alias", async () => {
+    const now = new Date("2026-07-08T00:00:00.000Z");
+    const store = new InMemoryAgentMemoryStore({ now: () => now });
+    const resource = await store.recordResource({
+      profileName: "helper",
+      source: context().event.source,
+      createdBy: "U1",
+      resourceType: "ppt_slide",
+      title: "私人投影片.pptx",
+      query: "私人查詢",
+      storage: { provider: "graph", driveId: "drive-id", itemId: "ppt-2" },
+      expiresAt: "2026-08-07T00:00:00.000Z"
+    });
+    await store.rememberAlias({
+      profileName: "helper",
+      source: context().event.source,
+      createdBy: "U1",
+      alias: "剛剛那份",
+      resourceId: resource.id
+    });
+    const runtime = createAgentRuntime({
+      memoryStore: store,
+      graph: {
+        listFolderChildren: vi.fn(),
+        createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/temporary")
+      },
+      now: () => now
+    });
+
+    const result = await runtime.handleBeforeFunctionExecution({
+      context: context(),
+      action: "find_ppt_slides",
+      arguments: { query: "剛剛那份" }
+    });
+
+    expect(result?.diagnostics).toMatchObject({
+      executionMode: "alias_recall",
+      stateAgeBucket: "under_1m"
+    });
+    expect(JSON.stringify(result?.diagnostics)).not.toContain("剛剛那份");
+  });
+
   it("keeps group resources private by default and shares only when explicit", async () => {
     const now = new Date("2026-07-08T00:00:00.000Z");
     const store = new InMemoryAgentMemoryStore({ now: () => now });

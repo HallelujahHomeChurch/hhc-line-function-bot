@@ -9,12 +9,24 @@ import {
 } from "../types.js";
 import type { LastErrorRecord } from "./last-error-store.js";
 import type { LastRouteRecord } from "./last-route-store.js";
+import { createSupportId } from "./opaque-identifiers.js";
+import {
+  FRESHNESS_STATUSES,
+  RETRIEVAL_EXECUTION_MODES,
+  STATE_AGE_BUCKETS
+} from "./retrieval-diagnostics.js";
 
 type TelemetryInput = object;
 
 export function sanitizeActionTelemetryEvent(event: TelemetryInput): Partial<RouteObserverEvent> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(event as Record<string, unknown>)) {
+    if (key === "requestId") {
+      if (typeof value === "string" && value.length > 0) {
+        sanitized.supportId = createSupportId(value);
+      }
+      continue;
+    }
     const safeValue = sanitizeTelemetryValueForKey(key, value);
     if (safeValue !== undefined) sanitized[key] = safeValue;
   }
@@ -25,8 +37,8 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
   switch (key) {
     case "kind":
       return allowedString(value, EVENT_KINDS);
-    case "requestId":
-      return presentMarker(value);
+    case "supportId":
+      return typeof value === "string" && /^[a-f0-9]{16}$/u.test(value) ? value : undefined;
     case "profileName":
       return presentMarker(value) ? "configured" : undefined;
     case "sourceType":
@@ -49,6 +61,7 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       return allowedString(value, HANDLERS);
     case "authorized":
     case "ok":
+    case "retry":
       return typeof value === "boolean" ? value : undefined;
     case "errorName":
       return presentMarker(value) ? "Error" : undefined;
@@ -90,6 +103,33 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       return allowedString(value, RESULT_STATUSES);
     case "lifecycleOutcome":
       return allowedString(value, LIFECYCLE_OUTCOMES);
+    case "executionMode":
+      return allowedString(value, new Set(RETRIEVAL_EXECUTION_MODES));
+    case "stateAgeBucket":
+      return allowedString(value, new Set(STATE_AGE_BUCKETS));
+    case "freshnessStatus":
+      return allowedString(value, new Set(FRESHNESS_STATUSES));
+    case "sourceRevision":
+      return allowedString(value, new Set(["present", "missing"]));
+    case "queryFingerprint":
+    case "referenceFingerprint":
+      return typeof value === "string" && /^[a-f0-9]{16}$/u.test(value) ? value : undefined;
+    case "eventName":
+      return allowedString(value, PRODUCT_EVENT_NAMES);
+    case "actorFingerprint":
+      return typeof value === "string" && /^[a-f0-9]{16}$/u.test(value) ? value : undefined;
+    case "resultClass":
+      return allowedString(
+        value,
+        new Set(["success", "not_found", "ambiguous", "unavailable", "error"])
+      );
+    case "latencyBucket":
+      return allowedString(
+        value,
+        new Set(["under_100ms", "under_500ms", "under_2s", "under_10s", "over_10s"])
+      );
+    case "clarificationCountBucket":
+      return allowedString(value, new Set(["zero", "one", "multiple"]));
     default:
       return undefined;
   }
@@ -98,7 +138,7 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
 export function sanitizeLastRouteRecord(record: LastRouteRecord): LastRouteRecord {
   const event = sanitizeActionTelemetryEvent(record) as Record<string, unknown>;
   return compact({
-    requestId: (event.requestId as string | undefined) ?? "missing",
+    supportId: (event.supportId as string | undefined) ?? "missing",
     occurredAt: safeTimestamp(record.occurredAt),
     profileName: (event.profileName as string | undefined) ?? "configured",
     sourceType: (event.sourceType as string | undefined) ?? "unknown",
@@ -121,7 +161,7 @@ export function sanitizeLastRouteRecord(record: LastRouteRecord): LastRouteRecor
 export function sanitizeLastErrorRecord(error: LastErrorRecord): LastErrorRecord {
   const event = sanitizeActionTelemetryEvent(error) as Record<string, unknown>;
   return compact({
-    requestId: (event.requestId as string | undefined) ?? "missing",
+    supportId: (event.supportId as string | undefined) ?? "missing",
     occurredAt: safeTimestamp(error.occurredAt),
     profileName: (event.profileName as string | undefined) ?? "configured",
     sourceType: (event.sourceType as string | undefined) ?? "unknown",
@@ -147,7 +187,16 @@ const EVENT_KINDS = new Set([
   "text_handler",
   "postback",
   "admin_command",
-  "rate_limited"
+  "rate_limited",
+  "product_event"
+]);
+const PRODUCT_EVENT_NAMES = new Set([
+  "registration_completed",
+  "clarification_requested",
+  "function_completed",
+  "write_previewed",
+  "write_committed",
+  "retry_observed"
 ]);
 const SOURCE_TYPES = new Set(["user", "group", "room"]);
 const PHASES = new Set([

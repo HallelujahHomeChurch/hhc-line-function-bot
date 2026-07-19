@@ -4,6 +4,7 @@ import {
   redactSensitiveText,
   sanitizeActionTelemetryEvent
 } from "../observability/action-telemetry.js";
+import { createSupportId } from "../observability/opaque-identifiers.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
 import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
 import { createConsoleRouteObserver } from "../observability/route-observer.js";
@@ -74,7 +75,7 @@ describe("observability sanitization", () => {
 
     expect(sanitized).toEqual({
       kind: "route",
-      requestId: "present",
+      supportId: createSupportId("req-1"),
       profileName: "configured",
       sourceType: "user",
       provider: "ollama",
@@ -88,6 +89,34 @@ describe("observability sanitization", () => {
     expect(JSON.stringify(sanitized)).not.toContain("reply-token");
     expect(JSON.stringify(sanitized)).not.toContain("U123");
     expect(JSON.stringify(sanitized)).not.toContain("token=secret");
+  });
+
+  it("keeps only bounded retrieval diagnostics", () => {
+    const sanitized = sanitizeActionTelemetryEvent({
+      kind: "function_result",
+      requestId: "req-1",
+      profileName: "helper",
+      sourceType: "user",
+      executionMode: "catalog_snapshot_read",
+      stateAgeBucket: "under_10m",
+      freshnessStatus: "fresh",
+      sourceRevision: "present",
+      queryFingerprint: "0123456789abcdef",
+      referenceFingerprint: "fedcba9876543210",
+      rawQuery: "牧師師母五十週年",
+      title: "private-title.pptx",
+      url: "https://example.invalid/private"
+    });
+
+    expect(sanitized).toMatchObject({
+      executionMode: "catalog_snapshot_read",
+      stateAgeBucket: "under_10m",
+      freshnessStatus: "fresh",
+      sourceRevision: "present",
+      queryFingerprint: "0123456789abcdef",
+      referenceFingerprint: "fedcba9876543210"
+    });
+    expect(JSON.stringify(sanitized)).not.toMatch(/牧師|private-title|example\.invalid/u);
   });
 
   it("fails closed for arbitrary strings in non-controlled telemetry", () => {
@@ -118,7 +147,7 @@ describe("observability sanitization", () => {
 
     expect(sanitized).toEqual({
       kind: "function_error",
-      requestId: "present",
+      supportId: createSupportId("request-secret-id"),
       profileName: "configured",
       sourceType: "group",
       phase: "function",
@@ -181,7 +210,7 @@ describe("observability sanitization", () => {
     const [record] = await store.list();
 
     expect(record).toEqual({
-      requestId: "present",
+      supportId: createSupportId("req-1"),
       occurredAt: "2026-07-07T00:00:00.000Z",
       profileName: "configured",
       sourceType: "user",

@@ -9,6 +9,7 @@ import type {
 } from "../types.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "./memory-store.js";
 import type { AccessStore } from "../access/types.js";
+import { stateAgeBucket } from "../observability/retrieval-diagnostics.js";
 
 export interface AgentRuntimeOptions {
   memoryStore: AgentMemoryStore;
@@ -53,24 +54,31 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
   async function createResourceReply(
     resource: AgentResourceRecord
   ): Promise<FunctionExecutionResult> {
+    const diagnostics = {
+      executionMode: "alias_recall" as const,
+      stateAgeBucket: stateAgeBucket(resource.createdAt, now())
+    };
     if (resource.storage.provider === "external_link") {
       return {
         ok: true,
         replyText: ["這是我記住的：", resource.title, resource.storage.url].join("\n"),
-        agentResource: toResourceReference(resource)
+        agentResource: toResourceReference(resource),
+        diagnostics
       };
     }
     if (!options.graph) {
       return {
         ok: true,
-        replyText: "我記得剛剛那份，但目前沒有檔案連結服務，請稍後再試。"
+        replyText: "我記得剛剛那份，但目前沒有檔案連結服務，請稍後再試。",
+        diagnostics
       };
     }
     const link = await createGraphLink(options.graph, resource.storage, now());
     return {
       ok: true,
       replyText: ["這是剛剛那份：", resource.title, "下載連結（1 天內有效）：", link].join("\n"),
-      agentResource: toResourceReference(resource)
+      agentResource: toResourceReference(resource),
+      diagnostics
     };
   }
 

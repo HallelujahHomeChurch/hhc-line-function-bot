@@ -56,6 +56,7 @@ update_args=(
   "EMBEDDING_BATCH_SIZE=16"
   "EMBEDDING_TIMEOUT_MS=30000"
   "EMBEDDING_KEEP_ALIVE=1m"
+  "OBSERVABILITY_HMAC_KEY=secretref:observability-hmac-key"
 )
 if [[ ${#legacy_profile_envs[@]} -gt 0 ]]; then
   update_args+=(--remove-env-vars "${legacy_profile_envs[@]}")

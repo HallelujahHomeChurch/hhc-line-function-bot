@@ -97,6 +97,7 @@ describe("find_ppt_slides", () => {
       "catalog-ppt-1",
       "2026-07-05T10:00:00.000Z"
     );
+    expect(result.diagnostics).toMatchObject({ executionMode: "catalog_snapshot_read" });
   });
 
   it("softly personalizes missing PPT title clarification", async () => {
@@ -200,6 +201,7 @@ describe("find_ppt_slides", () => {
     const result = await handler({ query: "奇易恩點" }, handlerContext());
 
     expect(result.ok).toBe(true);
+    expect(result.diagnostics).toMatchObject({ executionMode: "provider_fallback" });
     expect(result.replyText).toBe(
       [
         "已找到詩歌投影片：",

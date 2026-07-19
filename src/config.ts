@@ -171,6 +171,13 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   const normalizedProfiles = profiles.map((profile) => normalizeProfile(profile, env));
   validateProviderPolicy(normalizedProfiles, llmProvider, llmFallbackProvider);
   validateAccessConfig(normalizedProfiles, env);
+  const observabilityHmacKey = env.OBSERVABILITY_HMAC_KEY?.trim();
+  if (observabilityHmacKey && observabilityHmacKey.length < 32) {
+    throw new Error("OBSERVABILITY_HMAC_KEY must contain at least 32 characters");
+  }
+  if (env.NODE_ENV === "production" && !observabilityHmacKey) {
+    throw new Error("OBSERVABILITY_HMAC_KEY is required in production");
+  }
   const ollamaBaseUrl = env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
   return {
     serviceName: env.SERVICE_NAME || "hhc-line-function-bot",
@@ -312,6 +319,9 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     },
     lastErrors: {
       maxEntries: readInt(env.LAST_ERRORS_MAX_ENTRIES, 20)
+    },
+    observability: {
+      ...(observabilityHmacKey ? { hmacKey: observabilityHmacKey } : {})
     }
   };
 }

@@ -30,6 +30,11 @@ import type {
   TextMessageHandler,
   TextMessageContext
 } from "../types.js";
+import {
+  diagnosticFingerprint,
+  stateAgeBucket,
+  type RetrievalDiagnostics
+} from "../observability/retrieval-diagnostics.js";
 
 const POSTBACK_ACTION = "select_ppt";
 const MAX_CANDIDATES = 5;
@@ -66,6 +71,7 @@ export interface FindPptSlidesOptions {
   sessionStore?: SessionStore;
   now?: () => Date;
   requestIdFactory?: () => string;
+  observabilityHmacKey?: string;
 }
 
 export interface FindPptSlidesPostbackOptions {
@@ -95,12 +101,15 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
     const rawQuery = args.query.trim();
 
     if (args.driveId && args.itemId) {
-      return createSharingLinkReply(
-        options.graph,
-        args.driveId,
-        { id: args.itemId, name: "投影片" },
-        now(),
-        args.resourceId ?? args.itemId
+      return withRetrievalDiagnostics(
+        await createSharingLinkReply(
+          options.graph,
+          args.driveId,
+          { id: args.itemId, name: "投影片" },
+          now(),
+          args.resourceId ?? args.itemId
+        ),
+        retrievalDiagnostics(options, "explicit_task_replay", rawQuery, args.itemId)
       );
     }
 
@@ -134,7 +143,18 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       resourceMatchesQueryExactly(resource, rawQuery)
     );
     if (exactRemembered) {
-      return createRememberedResourceReply(options.graph, exactRemembered, now());
+      return withRetrievalDiagnostics(
+        await createRememberedResourceReply(options.graph, exactRemembered, now()),
+        {
+          ...retrievalDiagnostics(
+            options,
+            "resource_memory_candidate",
+            rawQuery,
+            exactRemembered.id
+          ),
+          stateAgeBucket: stateAgeBucket(exactRemembered.createdAt, now())
+        }
+      );
     }
 
     const catalogItems = await findCatalogPptSlides(
@@ -153,14 +173,18 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       ].slice(0, MAX_CANDIDATES);
 
       if (candidates.length === 1) {
-        return createPptCandidateReply(options.graph, options.driveId, candidates[0], now());
+        return withRetrievalDiagnostics(
+          await createPptCandidateReply(options.graph, options.driveId, candidates[0], now()),
+          catalogDiagnostics(options, rawQuery, catalogItems)
+        );
       }
 
       if (!canCreateRequesterScopedSession(context.event.source)) {
         return {
           ok: true,
           replyText: "找到多個相近的詩歌投影片，請提供更完整歌名。",
-          agentResult: pptAmbiguousEnvelope(candidates)
+          agentResult: pptAmbiguousEnvelope(candidates),
+          diagnostics: catalogDiagnostics(options, rawQuery, catalogItems)
         };
       }
 
@@ -192,7 +216,8 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
             }).toString()
           )
         ),
-        agentResult: pptAmbiguousEnvelope(candidates)
+        agentResult: pptAmbiguousEnvelope(candidates),
+        diagnostics: catalogDiagnostics(options, rawQuery, catalogItems)
       };
     }
 
@@ -221,19 +246,24 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
         agentResult: {
           status: "not_found",
           replyText: "找不到符合的詩歌投影片，請再提供更完整歌名。"
-        }
+        },
+        diagnostics: retrievalDiagnostics(options, "provider_fallback", rawQuery)
       };
     }
 
     if (candidates.length === 1) {
-      return createPptCandidateReply(options.graph, options.driveId, candidates[0], now());
+      return withRetrievalDiagnostics(
+        await createPptCandidateReply(options.graph, options.driveId, candidates[0], now()),
+        retrievalDiagnostics(options, "provider_fallback", rawQuery, candidateKey(candidates[0]))
+      );
     }
 
     if (!canCreateRequesterScopedSession(context.event.source)) {
       return {
         ok: true,
         replyText: "找到多個相近的詩歌投影片，請提供更完整歌名。",
-        agentResult: pptAmbiguousEnvelope(candidates)
+        agentResult: pptAmbiguousEnvelope(candidates),
+        diagnostics: retrievalDiagnostics(options, "provider_fallback", rawQuery)
       };
     }
 
@@ -265,9 +295,48 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
           }).toString()
         )
       ),
-      agentResult: pptAmbiguousEnvelope(candidates)
+      agentResult: pptAmbiguousEnvelope(candidates),
+      diagnostics: retrievalDiagnostics(options, "provider_fallback", rawQuery)
     };
   };
+}
+
+function withRetrievalDiagnostics(
+  result: FunctionExecutionResult,
+  diagnostics: RetrievalDiagnostics
+): FunctionExecutionResult {
+  return { ...result, diagnostics };
+}
+
+function retrievalDiagnostics(
+  options: FindPptSlidesOptions,
+  executionMode: RetrievalDiagnostics["executionMode"],
+  query: string,
+  reference?: string
+): RetrievalDiagnostics {
+  return {
+    executionMode,
+    queryFingerprint: diagnosticFingerprint("query", query, options.observabilityHmacKey),
+    referenceFingerprint: reference
+      ? diagnosticFingerprint("reference", reference, options.observabilityHmacKey)
+      : undefined
+  };
+}
+
+function catalogDiagnostics(
+  options: FindPptSlidesOptions,
+  query: string,
+  items: CatalogItemRecord[]
+): RetrievalDiagnostics {
+  return {
+    ...retrievalDiagnostics(options, "catalog_snapshot_read", query, items[0]?.id),
+    freshnessStatus: "unknown",
+    sourceRevision: items.some((item) => Boolean(item.source.syncCursor)) ? "present" : "missing"
+  };
+}
+
+function candidateKey(candidate: PptCandidate): string {
+  return candidate.kind === "memory" ? candidate.resource.id : candidate.item.id;
 }
 
 export function createFindPptSlidesPostbackHandler(

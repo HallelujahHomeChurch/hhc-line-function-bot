@@ -1,5 +1,6 @@
 import { sanitizeActionTelemetryEvent } from "../observability/action-telemetry.js";
 import type { AgentPlanDisposition, FunctionName } from "../types.js";
+import type { RetrievalDiagnostics } from "../observability/retrieval-diagnostics.js";
 
 export type AgentTurnTracePhase =
   | "context"
@@ -46,6 +47,12 @@ export interface AgentTurnTraceStep {
   anchorCount?: number;
   entityTypes?: string[];
   lifecycleOutcome?: AgentTaskLifecycleOutcome;
+  executionMode?: RetrievalDiagnostics["executionMode"];
+  stateAgeBucket?: RetrievalDiagnostics["stateAgeBucket"];
+  freshnessStatus?: RetrievalDiagnostics["freshnessStatus"];
+  sourceRevision?: RetrievalDiagnostics["sourceRevision"];
+  queryFingerprint?: string;
+  referenceFingerprint?: string;
 }
 
 export type AgentTaskLifecycleOutcome =
@@ -90,7 +97,8 @@ export type AgentTraceEntityType =
   | "topic";
 
 export interface AgentTurnTraceRecord {
-  requestId: string;
+  requestId?: string;
+  supportId?: string;
   occurredAt: string;
   profileName: string;
   sourceType: string;
@@ -180,7 +188,7 @@ export function formatAgentTurnTraces(traces: AgentTurnTraceRecord[]): string {
     ...traces.map((trace) =>
       [
         `- ${trace.occurredAt}`,
-        `requestId=${trace.requestId}`,
+        `supportId=${trace.supportId ?? "missing"}`,
         `profile=${trace.profileName}`,
         `source=${trace.sourceType}`,
         `steps=${trace.steps.map(formatStep).join(">")}`
@@ -192,11 +200,12 @@ export function formatAgentTurnTraces(traces: AgentTurnTraceRecord[]): string {
 export function sanitizeAgentTurnTrace(record: AgentTurnTraceRecord): AgentTurnTraceRecord {
   const metadata = sanitizeActionTelemetryEvent({
     requestId: record.requestId,
+    supportId: record.supportId,
     profileName: record.profileName,
     sourceType: record.sourceType
   }) as Record<string, unknown>;
   return {
-    requestId: (metadata.requestId as string | undefined) ?? "missing",
+    supportId: (metadata.supportId as string | undefined) ?? "missing",
     occurredAt: safeTimestamp(record.occurredAt),
     profileName: (metadata.profileName as string | undefined) ?? "configured",
     sourceType: (metadata.sourceType as string | undefined) ?? "unknown",
@@ -234,7 +243,11 @@ function formatStep(step: AgentTurnTraceStep): string {
     step.resultStatus ? `status:${step.resultStatus}` : undefined,
     typeof step.anchorCount === "number" ? `anchors:${step.anchorCount}` : undefined,
     step.entityTypes?.length ? `entities:${step.entityTypes.join(",")}` : undefined,
-    step.lifecycleOutcome ? `lifecycle:${step.lifecycleOutcome}` : undefined
+    step.lifecycleOutcome ? `lifecycle:${step.lifecycleOutcome}` : undefined,
+    step.executionMode ? `mode:${step.executionMode}` : undefined,
+    step.stateAgeBucket ? `age:${step.stateAgeBucket}` : undefined,
+    step.freshnessStatus ? `freshness:${step.freshnessStatus}` : undefined,
+    step.sourceRevision ? `revision:${step.sourceRevision}` : undefined
   ]
     .filter(Boolean)
     .join(":");

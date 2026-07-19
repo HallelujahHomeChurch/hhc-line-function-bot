@@ -52,6 +52,7 @@ import { verifyLineSignature } from "./line-signature.js";
 import { allowedProvidersForProfile, providerIsAllowedForProfile } from "./llm/provider-runtime.js";
 import { messages } from "./messages.js";
 import { sanitizeActionTelemetryEvent } from "./observability/action-telemetry.js";
+import { emitProductEvent } from "./observability/product-events.js";
 import { resolveRequesterDisplayName } from "./requester-personalization.js";
 import { createControlledSmallTalkReply } from "./small-talk.js";
 import {
@@ -271,6 +272,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
       textFallbackGenerator,
       conversationWindowStore,
       controlledAgentRouter: deps.controlledAgentRouter,
+      observabilityHmacKey: config.observability?.hmacKey,
       timeZone: config.timeZone
     });
 
@@ -555,7 +557,8 @@ async function handleWebhook(
         accessStore,
         registrationInviteCodeStore,
         lineIdentity,
-        adminHandlers
+        adminHandlers,
+        { routeObserver, requestId, hmacKey: config.observability?.hmacKey }
       );
       if (accessCommandResult) {
         await line.replyText(
@@ -1193,6 +1196,12 @@ function isAdminCommand(text: string | undefined): boolean {
   return Boolean(parseAdminCommand(text));
 }
 
+interface ProductEventContext {
+  routeObserver?: RouteObserver;
+  requestId: string;
+  hmacKey?: string;
+}
+
 async function handlePublicAccessCommand(
   text: string,
   profile: BotProfileConfig,
@@ -1200,7 +1209,8 @@ async function handlePublicAccessCommand(
   accessStore: AccessStore,
   registrationInviteCodeStore: RegistrationInviteCodeStore,
   lineIdentity: LineIdentityClient,
-  adminHandlers: AdminHandlerRegistry
+  adminHandlers: AdminHandlerRegistry,
+  productContext: ProductEventContext
 ): Promise<FunctionExecutionResult | undefined> {
   const parsed = parseAdminCommand(text);
   if (!parsed) {
@@ -1230,7 +1240,8 @@ async function handlePublicAccessCommand(
     event,
     accessStore,
     registrationInviteCodeStore,
-    lineIdentity
+    lineIdentity,
+    productContext
   );
 }
 
@@ -1283,7 +1294,8 @@ async function handleRegistryCommand(
   event: LineEvent,
   accessStore: AccessStore,
   registrationInviteCodeStore: RegistrationInviteCodeStore,
-  lineIdentity: LineIdentityClient
+  lineIdentity: LineIdentityClient,
+  productContext: ProductEventContext
 ): Promise<FunctionExecutionResult> {
   if (!profile.registration?.enabled) {
     return { ok: true, replyText: "這個 bot 目前沒有開放邀請碼註冊。" };
@@ -1300,7 +1312,8 @@ async function handleRegistryCommand(
       event,
       accessStore,
       registrationInviteCodeStore,
-      lineIdentity
+      lineIdentity,
+      productContext
     );
   }
 
@@ -1329,6 +1342,14 @@ async function handleRegistryCommand(
     targetType: "user",
     targetId: event.source.userId
   });
+  await emitProductEvent(productContext.routeObserver, {
+    eventName: "registration_completed",
+    requestId: productContext.requestId,
+    profileName: profile.name,
+    source: event.source,
+    hmacKey: productContext.hmacKey,
+    resultClass: "success"
+  });
   return { ok: true, replyText: "已開通小哈。" };
 }
 
@@ -1338,7 +1359,8 @@ async function handleGroupRegistryCommand(
   event: LineEvent,
   accessStore: AccessStore,
   registrationInviteCodeStore: RegistrationInviteCodeStore,
-  lineIdentity: LineIdentityClient
+  lineIdentity: LineIdentityClient,
+  productContext: ProductEventContext
 ): Promise<FunctionExecutionResult> {
   const groupId = event.source.groupId;
   const actorUserId = event.source.userId;
@@ -1365,6 +1387,14 @@ async function handleGroupRegistryCommand(
     action: "access.group.registry",
     targetType: "group",
     targetId: groupId
+  });
+  await emitProductEvent(productContext.routeObserver, {
+    eventName: "registration_completed",
+    requestId: productContext.requestId,
+    profileName: profile.name,
+    source: event.source,
+    hmacKey: productContext.hmacKey,
+    resultClass: "success"
   });
   return {
     ok: true,

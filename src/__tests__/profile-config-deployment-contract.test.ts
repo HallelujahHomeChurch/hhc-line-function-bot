@@ -57,6 +57,9 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).toContain("name: CLAMAV_HOST");
     expect(manifest).toContain("name: CLAMAV_PORT");
     expect(manifest).toContain("name: MAX_ATTACHMENT_BYTES");
+    expect(manifest).toContain("name: observability-hmac-key");
+    expect(manifest).toContain("name: OBSERVABILITY_HMAC_KEY");
+    expect(manifest).toContain("secretRef: observability-hmac-key");
     expect(manifest).toContain('value: "26214400"');
     expect(manifest).toContain("name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS");
     expect(manifest).toContain('value: "30000"');
@@ -67,6 +70,7 @@ describe("production profile configuration deployment contract", () => {
     expect(releaseWorkflow).toContain("- config/**");
     expect(ciWorkflow).toContain("pnpm config:validate");
     expect(deployment).toContain("PROFILE_CONFIG_PATH=/app/config/profiles.json");
+    expect(deployment).toContain("OBSERVABILITY_HMAC_KEY=secretref:observability-hmac-key");
     expect(deployment).toContain("--remove-env-vars");
     expect(deployment).toContain("az containerapp dapr enable");
     expect(deployment).toContain('--dapr-app-id "hhc-line-function-bot"');

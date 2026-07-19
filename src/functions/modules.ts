@@ -174,7 +174,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             memoryStore: clients.memoryStore,
             sessionStore: clients.sessionStore,
             now: clients.now,
-
+            observabilityHmacKey: config.observability?.hmacKey,
             requestIdFactory: clients.requestIdFactory
           })
         },

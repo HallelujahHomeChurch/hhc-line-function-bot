@@ -121,7 +121,7 @@ routers.
 - `src/access/*`: access principals, Redis-backed registration invite codes, audit events, and stores.
 - `src/state/*`: short-lived user sessions and selection state.
 - `src/cache/*`: shared cache abstractions, including Redis-backed cache.
-- `src/observability/*`: recent errors and route diagnostics used by admin commands.
+- `src/observability/*`: recent errors, routes, opaque support IDs, bounded retrieval diagnostics, and privacy-safe product events used by admin commands and Azure Monitor.
 - `src/diagnostics/*`: public data-layer readiness and admin-only dependency diagnostics.
 - `src/tools/*`: local verification helpers such as router eval, Notion checks, and signed webhook smoke tests.
 
@@ -165,6 +165,7 @@ routers.
 - Each module owns its router eval cases. Include positive, missing-slot, typo, negative, disabled, and cross-function cases.
 - Use `expected: { type: "execute", ... }` or `expected: { type: "deny", ... }` so evals can check both allowed and blocked behavior.
 - Keep `pnpm eval:agent` deterministic and offline. Use `pnpm eval:agent:live` only for manual live-model checks.
+- Keep `pnpm eval:retrieval-product` deterministic and offline. Add lifecycle regressions there when changing retrieval, task reuse, cache, or catalog behavior.
 
 ## State And Persistence
 

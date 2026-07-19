@@ -65,6 +65,22 @@ async function withJsonFile<T>(
 }
 
 describe("config", () => {
+  it("loads an optional observability HMAC key outside production", () => {
+    expect(loadConfigFromEnv(baseEnv()).observability).toEqual({});
+    expect(
+      loadConfigFromEnv({
+        ...baseEnv(),
+        OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef"
+      }).observability
+    ).toEqual({ hmacKey: "0123456789abcdef0123456789abcdef" });
+  });
+
+  it("rejects short observability HMAC keys", () => {
+    expect(() => loadConfigFromEnv({ ...baseEnv(), OBSERVABILITY_HMAC_KEY: "too-short" })).toThrow(
+      "OBSERVABILITY_HMAC_KEY must contain at least 32 characters"
+    );
+  });
+
   it("uses bounded attachment defaults", () => {
     expect(loadConfigFromEnv(baseEnv()).attachments).toEqual({
       maxBytes: 25 * 1024 * 1024,
@@ -123,7 +139,8 @@ describe("config", () => {
           LINE_HELPER_CHANNEL_ACCESS_TOKEN: "token",
           LINE_HELPER_ADMIN_USER_ID: "admin",
           DATABASE_URL: "postgres://placeholder",
-          REDIS_URL: "redis://placeholder"
+          REDIS_URL: "redis://placeholder",
+          OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef"
         });
 
         expect(config.profiles.map((profile) => profile.name)).toEqual(["helper"]);
@@ -155,7 +172,8 @@ describe("config", () => {
         expect(() =>
           loadConfigFromEnv({
             NODE_ENV: "production",
-            PROFILE_CONFIG_PATH: path
+            PROFILE_CONFIG_PATH: path,
+            OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef"
           })
         ).toThrow("Production profile helper must use channelSecretEnv instead of channelSecret");
       }
@@ -852,7 +870,8 @@ describe("config", () => {
             NODE_ENV: "production",
             PROFILE_CONFIG_PATH: path,
             LINE_HELPER_CHANNEL_SECRET: "secret",
-            LINE_HELPER_CHANNEL_ACCESS_TOKEN: "token"
+            LINE_HELPER_CHANNEL_ACCESS_TOKEN: "token",
+            OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef"
           })
         ).toThrow("Production LLM smallTalk prompting for helper must include safetyRulesPrompt");
       }

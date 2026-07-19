@@ -16,7 +16,8 @@ export function validateProductionProfileConfig(path: string): ProductionProfile
 
   const env: NodeJS.ProcessEnv = {
     NODE_ENV: "production",
-    PROFILE_CONFIG_PATH: path
+    PROFILE_CONFIG_PATH: path,
+    OBSERVABILITY_HMAC_KEY: "validation-placeholder-key-32-characters"
   };
   for (const profile of rawProfiles) {
     if (!profile || typeof profile !== "object") {
