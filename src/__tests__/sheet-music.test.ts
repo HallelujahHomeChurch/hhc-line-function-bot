@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
-import { MemoryCacheStore } from "../cache/cache-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
 import {
   createFindPopSheetMusicHandler,
@@ -127,7 +126,6 @@ describe("find_sheet_music", () => {
       driveId: "drive-id",
       folderItemId: "sheet-folder-id",
       allowedExtensions: [".pdf", ".jpg", ".jpeg"],
-      cache: new MemoryCacheStore({ now: () => now }),
       now: () => now
     });
 
@@ -149,7 +147,7 @@ describe("find_sheet_music", () => {
     );
   });
 
-  it("does not crawl OneDrive when the catalog has no match", async () => {
+  it("falls back to a fresh provider query when the catalog has never published", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
       listFolderFilesRecursive: vi
@@ -167,9 +165,9 @@ describe("find_sheet_music", () => {
 
     const result = await handler({ query: "A TIME FOR US", fileType: "pdf" }, handlerContext());
 
-    expect(result.replyText).not.toContain("https://download.invalid/legacy");
-    expect(graph.listFolderFilesRecursive).not.toHaveBeenCalled();
-    expect(graph.createSharingLink).not.toHaveBeenCalled();
+    expect(result.replyText).toContain("https://download.invalid/legacy");
+    expect(graph.listFolderFilesRecursive).toHaveBeenCalledOnce();
+    expect(graph.createSharingLink).toHaveBeenCalledOnce();
   });
 
   it("softly personalizes missing sheet music title clarification", async () => {
@@ -183,7 +181,6 @@ describe("find_sheet_music", () => {
       driveId: "drive-id",
       folderItemId: "sheet-folder-id",
       allowedExtensions: [".pdf"],
-      cache: new MemoryCacheStore({ now: () => now }),
       now: () => now
     });
 
@@ -211,7 +208,6 @@ describe("find_sheet_music", () => {
       driveId: "drive-id",
       folderItemId: "sheet-folder-id",
       allowedExtensions: [".pdf", ".jpg", ".jpeg"],
-      cache: new MemoryCacheStore({ now: () => now }),
       now: () => now
     });
 
@@ -238,7 +234,7 @@ describe("find_sheet_music", () => {
     );
   });
 
-  it("returns an external remembered sheet music link before searching Graph", async () => {
+  it("does not let an external remembered sheet bypass current provider search", async () => {
     const now = new Date("2026-07-04T10:00:00.000Z");
     const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
     await memoryStore.recordResource({
@@ -262,24 +258,22 @@ describe("find_sheet_music", () => {
       driveId: "drive-id",
       folderItemId: "sheet-folder-id",
       allowedExtensions: [".pdf"],
-      cache: new MemoryCacheStore({ now: () => now }),
       now: () => now
     });
 
     const result = await handler({ query: "A TIME FOR US" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("已找到我記住的");
-    expect(result.replyText).toContain("A TIME FOR US 手抄譜");
-    expect(result.replyText).toContain("https://example.com/a-time-for-us");
-    expect(graph.listFolderFilesRecursive).not.toHaveBeenCalled();
+    expect(result.agentResult).toMatchObject({ status: "not_found" });
+    expect(result.replyText).not.toContain("https://example.com/a-time-for-us");
+    expect(graph.listFolderFilesRecursive).toHaveBeenCalledOnce();
     expect(graph.createSharingLink).not.toHaveBeenCalled();
   });
 
-  it("merges remembered and Graph sheet music candidates into one selection flow", async () => {
+  it("uses remembered sheet metadata only to rank current Graph candidates", async () => {
     const now = new Date("2026-07-04T10:00:00.000Z");
     const memoryStore = new InMemoryAgentMemoryStore({ now: () => now });
-    const remembered = await memoryStore.recordResource({
+    await memoryStore.recordResource({
       profileName: "main",
       source: { type: "group", groupId: "Cgroup", userId: "U1" },
       createdBy: "U1",
@@ -294,7 +288,7 @@ describe("find_sheet_music", () => {
       listFolderFilesRecursive: vi
         .fn()
         .mockResolvedValue([{ id: "pdf-1", driveId: "drive-id", name: "A TIME FOR US.pdf" }]),
-      createSharingLink: vi.fn()
+      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/current-sheet")
     };
     const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
     const handler = createFindPopSheetMusicHandler({
@@ -304,57 +298,32 @@ describe("find_sheet_music", () => {
       folderItemId: "sheet-folder-id",
       allowedExtensions: [".pdf"],
       sessionStore,
-      cache: new MemoryCacheStore({ now: () => now }),
       now: () => now,
       requestIdFactory: () => "mixed-sheet"
     });
 
     const result = await handler({ query: "A TIME FOR US" }, handlerContext());
 
-    expect(result.replyText).toContain("A TIME FOR US 手抄譜");
     expect(result.replyText).toContain("A TIME FOR US.pdf");
-    await expect(sessionStore.get("mixed-sheet")).resolves.toMatchObject({
-      type: "selection",
-      action: "select_sheet_music",
-      items: [
-        {
-          id: remembered.id,
-          name: "A TIME FOR US 手抄譜",
-          memoryResource: { storage: { provider: "external_link" } }
-        },
-        { id: "pdf-1", driveId: "drive-id", name: "A TIME FOR US.pdf" }
-      ]
-    });
-
-    const handlePostback = createFindPopSheetMusicPostbackHandler({
-      graph,
-      sessionStore,
-      now: () => now
-    });
-    const selected = await handlePostback(
-      { action: "select_sheet_music", params: { requestId: "mixed-sheet", index: "0" } },
-      {
-        profile: profile(),
-        event: {
-          type: "postback",
-          replyToken: "reply-token",
-          source: { type: "group", groupId: "Cgroup", userId: "U1" },
-          postback: { data: "action=select_sheet_music&requestId=mixed-sheet&index=0" }
-        }
-      }
+    expect(result.replyText).not.toContain("https://example.com/a-time-for-us");
+    await expect(sessionStore.get("mixed-sheet")).resolves.toBeUndefined();
+    expect(graph.createSharingLink).toHaveBeenCalledWith(
+      "drive-id",
+      "pdf-1",
+      "2026-07-05T10:00:00.000Z"
     );
-
-    expect(selected.replyText).toContain("https://example.com/a-time-for-us");
-    expect(graph.createSharingLink).not.toHaveBeenCalled();
   });
 
-  it("uses the file index cache between searches", async () => {
+  it("refreshes the provider index so a second query can see newly added files", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
       listFolderFilesRecursive: vi
         .fn()
-        .mockResolvedValue([
+        .mockResolvedValueOnce([
           { id: "pdf-1", driveId: "drive-id", name: "YESTERDAY-The Beatles-001.pdf" }
+        ])
+        .mockResolvedValueOnce([
+          { id: "pdf-2", driveId: "drive-id", name: "NEW SONG-The Band-001.pdf" }
         ]),
       createSharingLink: vi
         .fn()
@@ -367,14 +336,13 @@ describe("find_sheet_music", () => {
       driveId: "drive-id",
       folderItemId: "sheet-folder-id",
       allowedExtensions: [".pdf"],
-      cache: new MemoryCacheStore({ now: () => now }),
       now: () => now
     });
 
     await handler({ query: "Yesterday" }, handlerContext());
-    await handler({ query: "Yesterday" }, handlerContext());
+    await handler({ query: "New Song" }, handlerContext());
 
-    expect(graph.listFolderFilesRecursive).toHaveBeenCalledOnce();
+    expect(graph.listFolderFilesRecursive).toHaveBeenCalledTimes(2);
     expect(graph.createSharingLink).toHaveBeenCalledTimes(2);
   });
 
@@ -419,7 +387,6 @@ describe("find_sheet_music", () => {
       driveId: "drive-id",
       folderItemId: "sheet-folder-id",
       allowedExtensions: [".pdf", ".jpg", ".jpeg"],
-      cache: new MemoryCacheStore({ now: () => now }),
       now: () => now
     });
 

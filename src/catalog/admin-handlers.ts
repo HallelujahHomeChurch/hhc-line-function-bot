@@ -156,6 +156,11 @@ function formatCatalogSources(title: string, sources: CatalogSourceRecord[]): st
         `adapter=${source.adapterType}`,
         `domain=${source.domain}`,
         `itemKind=${source.defaultItemKind}`,
+        `health=${source.healthStatus}`,
+        `revision=${source.revision}`,
+        `items=${source.publishedItemCount}`,
+        `lastSuccess=${source.lastSuccessAt ?? "(never)"}`,
+        `lastFailure=${source.lastFailureAt ?? "(none)"}`,
         `mode=${source.syncPolicy.mode}`,
         `read=${source.capabilities.read.join(",") || "(none)"}`,
         `write=${source.capabilities.write.join(",") || "(none)"}`

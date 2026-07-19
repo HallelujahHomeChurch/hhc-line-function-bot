@@ -1,6 +1,8 @@
+import { searchCatalogWithFreshness } from "../catalog/retrieval.js";
 import { catalogSourceAllowsRead, type CatalogStore } from "../catalog/store.js";
 import { findResourceArgumentsSchema } from "../function-arguments.js";
 import type { FunctionExecutionResult, FunctionHandler, GraphDriveClient } from "../types.js";
+import { createValidatedSharingLink } from "./validated-sharing-link.js";
 
 const LINK_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -35,8 +37,10 @@ export function createFindResourceHandler(options: FindResourceOptions): Functio
       ...(args.itemKind ? [args.itemKind] : [])
     ];
     const limit = args.limit ?? 5;
-    const items = (
-      await options.catalog.searchItems({
+    const retrieval = await searchCatalogWithFreshness({
+      catalog: options.catalog,
+      now: now(),
+      search: {
         profileName: context.profile.name,
         itemIds: args.resourceId ? [args.resourceId] : undefined,
         query: args.resourceId ? undefined : query,
@@ -44,14 +48,23 @@ export function createFindResourceHandler(options: FindResourceOptions): Functio
         domains: args.domain ? [args.domain] : undefined,
         allowedSourceKeys: options.allowedSourceKeys,
         limit: Math.max(limit, 20)
-      })
-    )
+      }
+    });
+    const items = retrieval.items
       .filter((item) =>
         catalogSourceAllowsRead(item.source, [context.profile.name, "find_resource"])
       )
       .slice(0, limit);
 
     if (items.length === 0) {
+      if (retrieval.items.length === 0 && retrieval.status !== "not_found") {
+        const replyText = "目前無法確認教會資料是否為最新，請稍後再試。";
+        return {
+          ok: true,
+          replyText,
+          agentResult: { status: "unavailable", replyText }
+        };
+      }
       return {
         ok: true,
         replyText: "查不到符合的教會資料。",
@@ -79,7 +92,11 @@ export function createFindResourceHandler(options: FindResourceOptions): Functio
       };
     }
 
-    return createCatalogItemReply(options.graph, items[0], now());
+    const result = await createCatalogItemReply(options.graph, items[0], now());
+    if (retrieval.status === "stale_allowed") {
+      return { ...result, replyText: `${result.replyText}\n資料可能不是最新版本。` };
+    }
+    return result;
   };
 }
 
@@ -101,11 +118,17 @@ async function createCatalogItemReply(
   }
 
   const expiresAt = new Date(now.getTime() + LINK_TTL_MS).toISOString();
-  const link = await graph.createSharingLink(
-    item.storageRef.driveId,
-    item.storageRef.itemId,
+  const current = await createValidatedSharingLink({
+    graph,
+    driveId: item.storageRef.driveId,
+    itemId: item.storageRef.itemId,
     expiresAt
-  );
+  });
+  if (!current.link) {
+    const replyText = "這份資料已不存在或沒有權限，請重新查詢。";
+    return { ok: true, replyText, agentResult: { status: "unavailable", replyText } };
+  }
+  const link = current.link;
   return {
     ok: true,
     replyText: [item.title, link].join("\n"),

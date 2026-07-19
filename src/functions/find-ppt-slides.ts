@@ -10,6 +10,7 @@ import {
   type CatalogItemRecord,
   type CatalogStore
 } from "../catalog/store.js";
+import { searchCatalogWithFreshness, type CatalogRetrievalStatus } from "../catalog/retrieval.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
 import { withRequesterDisplayName } from "../requester-personalization.js";
@@ -32,9 +33,9 @@ import type {
 } from "../types.js";
 import {
   diagnosticFingerprint,
-  stateAgeBucket,
   type RetrievalDiagnostics
 } from "../observability/retrieval-diagnostics.js";
+import { createValidatedSharingLink } from "./validated-sharing-link.js";
 
 const POSTBACK_ACTION = "select_ppt";
 const MAX_CANDIDATES = 5;
@@ -139,43 +140,26 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       options.defaultIncludePdf
     );
     const remembered = await findRememberedPptSlides(options.memoryStore, rawQuery, context);
-    const exactRemembered = remembered.find((resource) =>
-      resourceMatchesQueryExactly(resource, rawQuery)
-    );
-    if (exactRemembered) {
-      return withRetrievalDiagnostics(
-        await createRememberedResourceReply(options.graph, exactRemembered, now()),
-        {
-          ...retrievalDiagnostics(
-            options,
-            "resource_memory_candidate",
-            rawQuery,
-            exactRemembered.id
-          ),
-          stateAgeBucket: stateAgeBucket(exactRemembered.createdAt, now())
-        }
-      );
-    }
-
-    const catalogItems = await findCatalogPptSlides(
+    const catalogResult = await findCatalogPptSlides(
       options.catalog,
       context.profile.name,
       rawQuery,
       extensions
     );
+    const catalogItems = catalogResult.items;
     if (catalogItems.length > 0) {
-      const candidates: PptCandidate[] = [
-        ...remembered.map((resource) => ({ kind: "memory" as const, resource })),
-        ...catalogItems.map((item) => ({
+      const candidates: PptCandidate[] = rankWithRememberedResources(
+        catalogItems.map((item) => ({
           kind: "graph" as const,
           item: catalogItemToDriveItem(item)
-        }))
-      ].slice(0, MAX_CANDIDATES);
+        })),
+        remembered
+      ).slice(0, MAX_CANDIDATES);
 
       if (candidates.length === 1) {
         return withRetrievalDiagnostics(
           await createPptCandidateReply(options.graph, options.driveId, candidates[0], now()),
-          catalogDiagnostics(options, rawQuery, catalogItems)
+          catalogDiagnostics(options, rawQuery, catalogResult)
         );
       }
 
@@ -184,7 +168,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
           ok: true,
           replyText: "找到多個相近的詩歌投影片，請提供更完整歌名。",
           agentResult: pptAmbiguousEnvelope(candidates),
-          diagnostics: catalogDiagnostics(options, rawQuery, catalogItems)
+          diagnostics: catalogDiagnostics(options, rawQuery, catalogResult)
         };
       }
 
@@ -217,7 +201,7 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
           )
         ),
         agentResult: pptAmbiguousEnvelope(candidates),
-        diagnostics: catalogDiagnostics(options, rawQuery, catalogItems)
+        diagnostics: catalogDiagnostics(options, rawQuery, catalogResult)
       };
     }
 
@@ -228,10 +212,10 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       extensions,
       args.matchMode ?? "fuzzy"
     );
-    const candidates: PptCandidate[] = [
-      ...remembered.map((resource) => ({ kind: "memory" as const, resource })),
-      ...graphCandidates.map(({ item }) => ({ kind: "graph" as const, item }))
-    ].slice(0, MAX_CANDIDATES);
+    const candidates: PptCandidate[] = rankWithRememberedResources(
+      graphCandidates.map(({ item }) => ({ kind: "graph" as const, item })),
+      remembered
+    ).slice(0, MAX_CANDIDATES);
 
     if (candidates.length === 0) {
       return {
@@ -326,12 +310,17 @@ function retrievalDiagnostics(
 function catalogDiagnostics(
   options: FindPptSlidesOptions,
   query: string,
-  items: CatalogItemRecord[]
+  result: { status: CatalogRetrievalStatus; revision: string; items: CatalogItemRecord[] }
 ): RetrievalDiagnostics {
   return {
-    ...retrievalDiagnostics(options, "catalog_snapshot_read", query, items[0]?.id),
-    freshnessStatus: "unknown",
-    sourceRevision: items.some((item) => Boolean(item.source.syncCursor)) ? "present" : "missing"
+    ...retrievalDiagnostics(options, "catalog_snapshot_read", query, result.items[0]?.id),
+    freshnessStatus:
+      result.status === "fresh"
+        ? "fresh"
+        : result.status === "stale_allowed"
+          ? "stale_allowed"
+          : "stale_rejected",
+    sourceRevision: result.revision ? "present" : "missing"
   };
 }
 
@@ -575,21 +564,47 @@ async function findCatalogPptSlides(
   profileName: string,
   query: string,
   extensions: string[]
-): Promise<CatalogItemRecord[]> {
+): Promise<{ status: CatalogRetrievalStatus; revision: string; items: CatalogItemRecord[] }> {
   if (!catalog) {
-    return [];
+    return { status: "unavailable", revision: "", items: [] };
   }
-  const items = await catalog.searchItems({
-    profileName,
-    query,
-    itemKinds: ["ppt_slide"],
-    domains: ["presentation"],
-    limit: MAX_CANDIDATES
+  const result = await searchCatalogWithFreshness({
+    catalog,
+    search: {
+      profileName,
+      query,
+      itemKinds: ["ppt_slide"],
+      domains: ["presentation"],
+      limit: MAX_CANDIDATES
+    }
   });
-  return items
-    .filter((item) => catalogSourceAllowsRead(item.source, [profileName, "find_ppt_slides"]))
-    .filter((item) => item.storageRef.provider === "graph")
-    .filter((item) => extensions.some((extension) => catalogItemExtension(item) === extension));
+  return {
+    ...result,
+    items: result.items
+      .filter((item) => catalogSourceAllowsRead(item.source, [profileName, "find_ppt_slides"]))
+      .filter((item) => item.storageRef.provider === "graph")
+      .filter((item) => extensions.some((extension) => catalogItemExtension(item) === extension))
+  };
+}
+
+function rankWithRememberedResources(
+  candidates: PptCandidate[],
+  remembered: AgentResourceRecord[]
+): PptCandidate[] {
+  const identities = new Set(
+    remembered.flatMap((resource) =>
+      resource.storage.provider === "graph"
+        ? [`${resource.storage.driveId}:${resource.storage.itemId}`]
+        : []
+    )
+  );
+  return [...candidates].sort((left, right) => {
+    const leftRemembered =
+      left.kind === "graph" && identities.has(`${left.item.driveId ?? ""}:${left.item.id}`);
+    const rightRemembered =
+      right.kind === "graph" && identities.has(`${right.item.driveId ?? ""}:${right.item.id}`);
+    return Number(rightRemembered) - Number(leftRemembered);
+  });
 }
 
 function catalogItemToDriveItem(item: CatalogItemRecord): DriveItem {
@@ -612,13 +627,6 @@ function candidateName(candidate: PptCandidate): string {
   return candidate.kind === "memory" ? candidate.resource.title : candidate.item.name;
 }
 
-function resourceMatchesQueryExactly(resource: AgentResourceRecord, rawQuery: string): boolean {
-  const query = normalizeSearchText(rawQuery);
-  return [resource.title, resource.query]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .some((value) => normalizeSearchText(value) === query);
-}
-
 async function createSharingLinkReply(
   graph: GraphDriveClient,
   driveId: string,
@@ -627,7 +635,17 @@ async function createSharingLinkReply(
   resourceId = item.id
 ): Promise<FunctionExecutionResult> {
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-  const link = await graph.createSharingLink(driveId, item.id, expiresAt);
+  const current = await createValidatedSharingLink({
+    graph,
+    driveId,
+    itemId: item.id,
+    expiresAt
+  });
+  if (!current.link) {
+    const replyText = "這份投影片已不存在或沒有權限，請重新查詢。";
+    return { ok: true, replyText, agentResult: { status: "unavailable", replyText } };
+  }
+  const link = current.link;
 
   return {
     ok: true,

@@ -385,7 +385,7 @@ Short-lived state can use memory locally, but production should use Redis when
 multiple replicas or restarts matter.
 
 - `src/state/*`: pending clarifications and selection sessions.
-- `src/cache/*`: shared cache, including sheet music cache.
+- `src/cache/*`: shared short-lived state caches. Resource query results are not stored in an unversioned cache; any future query cache must bind profile, source, capability contract, normalized query/options, and source publication revision.
 - `src/agent/*`: controlled recent resources, aliases, explicit text memories,
   and Postgres/in-memory memory stores.
 - `src/in-flight/*`: duplicate in-flight function locks.
@@ -494,7 +494,11 @@ catalog `expiresAt`; formal synced sources do not. Successful publication
 records opaque drive/item metadata as a recent general resource, so a scoped
 task-frame follow-up such as `剛剛那份` can re-enter `find_resource` with the exact
 catalog item reference and regenerate a temporary link without storing the link
-itself.
+itself. Catalog full/delta publication atomically advances source revision,
+health, cursor, items, and tombstones. Retrieval distinguishes fresh,
+stale-but-allowed, unavailable, and genuine not-found. Recent resource memory is
+only a ranking signal for a currently authorized candidate, and Graph identity
+is validated again immediately before a temporary link is created.
 
 LINE binary bytes travel in the bot's outbound Content API response, not through
 the inbound webhook body. Gateway, Dapr, and Fastify webhook body limits are not

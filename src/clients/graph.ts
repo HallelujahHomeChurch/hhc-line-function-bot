@@ -116,6 +116,21 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
       return graphItemToDriveItem(item, driveId);
     },
 
+    async getItemById(driveId: string, itemId: string): Promise<DriveItem | undefined> {
+      try {
+        const item = (await client
+          .api(
+            `/drives/${driveId}/items/${itemId}?$select=id,name,webUrl,file,folder,remoteItem,parentReference`
+          )
+          .get()) as GraphItem;
+        if (!item.id || !item.name || item.deleted) return undefined;
+        return graphItemToDriveItem(item, driveId);
+      } catch (error) {
+        if (graphStatusCode(error) === 404) return undefined;
+        throw error;
+      }
+    },
+
     async listFolderFilesRecursive(driveId: string, folderItemId: string): Promise<DriveItem[]> {
       const files: DriveItem[] = [];
       const visited = new Set<string>();
@@ -186,6 +201,12 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
       await client.api(`/drives/${driveId}/items/${itemId}`).delete();
     }
   };
+}
+
+function graphStatusCode(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const statusCode = (error as { statusCode?: unknown }).statusCode;
+  return typeof statusCode === "number" ? statusCode : undefined;
 }
 
 export function resolveDriveItemTraversalTarget(
