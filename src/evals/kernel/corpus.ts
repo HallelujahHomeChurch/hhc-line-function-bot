@@ -1,7 +1,13 @@
 import type { KernelAcceptanceCase } from "./contracts.js";
 import { SCHEDULE_KERNEL_CASES } from "./cases/schedule.js";
+import { RETRIEVAL_KERNEL_CASES } from "./cases/retrieval.js";
+import { SECURITY_AND_STATE_KERNEL_CASES } from "./cases/security-and-state.js";
 
-export const KERNEL_ACCEPTANCE_CASES: KernelAcceptanceCase[] = [...SCHEDULE_KERNEL_CASES];
+export const KERNEL_ACCEPTANCE_CASES: KernelAcceptanceCase[] = [
+  ...SCHEDULE_KERNEL_CASES,
+  ...RETRIEVAL_KERNEL_CASES,
+  ...SECURITY_AND_STATE_KERNEL_CASES
+];
 
 export function validateKernelCorpus(cases: readonly KernelAcceptanceCase[]): string[] {
   const errors: string[] = [];
