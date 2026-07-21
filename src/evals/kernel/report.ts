@@ -25,15 +25,16 @@ export function renderKernelReportMarkdown(report: KernelGateReport): string {
     "",
     "| Metric | Numerator | Denominator | Value | Threshold | Result |",
     "| --- | ---: | ---: | ---: | --- | --- |",
-    ...Object.entries(report.metrics).map(([name, metric]) =>
-      [
-        `| ${name}`,
-        metric.numerator,
-        metric.denominator,
-        metric.value === undefined ? "incomplete" : metric.value.toFixed(4),
-        metric.threshold,
-        metric.passed && !metric.incomplete ? "PASS" : "FAIL"
-      ].join(" | ") + " |"
+    ...Object.entries(report.metrics).map(
+      ([name, metric]) =>
+        [
+          `| ${name}`,
+          metric.numerator,
+          metric.denominator,
+          metric.value === undefined ? "incomplete" : metric.value.toFixed(4),
+          metric.threshold,
+          metric.passed && !metric.incomplete ? "PASS" : "FAIL"
+        ].join(" | ") + " |"
     ),
     "",
     "## Failed Cases",

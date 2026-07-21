@@ -16,13 +16,7 @@ export const RECURRENCE_FAMILIES = [
 export type RecurrenceFamily = (typeof RECURRENCE_FAMILIES)[number];
 
 export type KernelJourney =
-  | "schedule"
-  | "ppt"
-  | "sheet_music"
-  | "resource"
-  | "knowledge"
-  | "memory"
-  | "write";
+  "schedule" | "ppt" | "sheet_music" | "resource" | "knowledge" | "memory" | "write";
 
 export type KernelBoundary =
   | "entrance_access"

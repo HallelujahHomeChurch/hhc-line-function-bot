@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { RECURRENCE_FAMILIES } from "../evals/kernel/contracts.js";
-import {
-  KERNEL_ACCEPTANCE_CASES,
-  validateKernelCorpus
-} from "../evals/kernel/corpus.js";
+import { KERNEL_ACCEPTANCE_CASES, validateKernelCorpus } from "../evals/kernel/corpus.js";
 import { SCHEDULE_KERNEL_CASES } from "../evals/kernel/cases/schedule.js";
 
 describe("Kernel v1 versioned acceptance corpus", () => {
@@ -18,7 +15,9 @@ describe("Kernel v1 versioned acceptance corpus", () => {
 
   it("contains fifty canonical schedule assertions and five ambiguity cases", async () => {
     const observations = await Promise.all(
-      SCHEDULE_KERNEL_CASES.map((entry) => entry.run({ now: () => new Date("2026-07-16T08:00:00Z") }))
+      SCHEDULE_KERNEL_CASES.map((entry) =>
+        entry.run({ now: () => new Date("2026-07-16T08:00:00Z") })
+      )
     );
     expect(observations.flatMap(({ scheduleAssertions }) => scheduleAssertions)).toHaveLength(50);
     const ambiguity = observations.filter(({ ambiguityEligible }) => ambiguityEligible);
@@ -64,9 +63,9 @@ describe("Kernel v1 versioned acceptance corpus", () => {
         "kernel-v1/state/expired-active-task-not-used@1"
       ])
     );
-    expect(new Set(KERNEL_ACCEPTANCE_CASES.map(({ recurrenceFamily }) => recurrenceFamily))).toEqual(
-      new Set(RECURRENCE_FAMILIES)
-    );
+    expect(
+      new Set(KERNEL_ACCEPTANCE_CASES.map(({ recurrenceFamily }) => recurrenceFamily))
+    ).toEqual(new Set(RECURRENCE_FAMILIES));
   });
 
   it("keeps unavailable and security denominators meaningful", async () => {
@@ -75,7 +74,9 @@ describe("Kernel v1 versioned acceptance corpus", () => {
         entry.run({ now: () => new Date("2026-07-16T08:00:00Z") })
       )
     );
-    expect(observations.filter(({ unavailableEligible }) => unavailableEligible).length).toBeGreaterThanOrEqual(10);
+    expect(
+      observations.filter(({ unavailableEligible }) => unavailableEligible).length
+    ).toBeGreaterThanOrEqual(10);
     expect(
       KERNEL_ACCEPTANCE_CASES.filter(({ journey }) => journey !== "schedule").length
     ).toBeGreaterThanOrEqual(20);

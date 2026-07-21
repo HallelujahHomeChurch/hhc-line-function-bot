@@ -123,9 +123,7 @@ describe("production profile configuration deployment contract", () => {
     expect(ciWorkflow).toContain("pnpm config:validate");
     expect(ciWorkflow).toContain("pnpm eval:agent");
     expect(ciWorkflow).toContain("pnpm eval:kernel");
-    expect(ciWorkflow.indexOf("pnpm eval:kernel")).toBeLessThan(
-      ciWorkflow.indexOf("pnpm build")
-    );
+    expect(ciWorkflow.indexOf("pnpm eval:kernel")).toBeLessThan(ciWorkflow.indexOf("pnpm build"));
     expect(ciWorkflow).toContain("pnpm build");
 
     expect(releaseWorkflow).toContain("name: Production Release");

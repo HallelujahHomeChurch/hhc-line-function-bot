@@ -47,9 +47,9 @@ describe("Kernel v1 redacted reports", () => {
     expect(markdown).toContain("schedule_accuracy");
     expect(markdown).toContain("kernel-v1/resource/failure@1");
     expect(() => assertKernelReportSafe(JSON.stringify(report))).not.toThrow();
-    expect(() => assertKernelReportSafe(JSON.stringify({ ...report, queryText: "private" }))).toThrow(
-      "kernel_report_contains_forbidden_data"
-    );
+    expect(() =>
+      assertKernelReportSafe(JSON.stringify({ ...report, queryText: "private" }))
+    ).toThrow("kernel_report_contains_forbidden_data");
   });
 
   it("writes deterministic JSON and Markdown artifact names", async () => {

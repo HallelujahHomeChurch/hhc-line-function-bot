@@ -5,10 +5,7 @@ import {
   InMemoryConversationWindowStore,
   type ConversationWindowStore
 } from "../../agent/context-manager.js";
-import {
-  InMemoryAgentTraceStore,
-  type AgentTurnTraceRecord
-} from "../../agent/trace-store.js";
+import { InMemoryAgentTraceStore, type AgentTurnTraceRecord } from "../../agent/trace-store.js";
 import { createAgentTurnRuntime } from "../../agent/turn-runtime.js";
 import { MemoryInFlightStore } from "../../in-flight/in-flight-store.js";
 import { InMemoryLastErrorStore } from "../../observability/last-error-store.js";
@@ -63,7 +60,10 @@ export function createKernelRuntimeHarness(
     inFlightStore: new MemoryInFlightStore(),
     sessionStore,
     conversationWindowStore,
-    controlledAgentRouter: createControlledAgentRouter({ planner: options.planner, now: options.now }),
+    controlledAgentRouter: createControlledAgentRouter({
+      planner: options.planner,
+      now: options.now
+    }),
     traceStore,
     lastErrorStore: new InMemoryLastErrorStore(20),
     lastRouteStore: new InMemoryLastRouteStore(20),

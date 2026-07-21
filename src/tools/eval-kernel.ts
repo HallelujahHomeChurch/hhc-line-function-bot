@@ -3,9 +3,7 @@ import { pathToFileURL } from "node:url";
 import { evaluateKernelGate } from "../evals/kernel/evaluate.js";
 import { writeKernelReport } from "../evals/kernel/report.js";
 
-export async function runKernelCli(
-  outputDirectory = "artifacts/kernel-v1"
-): Promise<0 | 1 | 2> {
+export async function runKernelCli(outputDirectory = "artifacts/kernel-v1"): Promise<0 | 1 | 2> {
   try {
     const report = await evaluateKernelGate({
       now: () => new Date("2026-07-21T00:00:00.000Z")

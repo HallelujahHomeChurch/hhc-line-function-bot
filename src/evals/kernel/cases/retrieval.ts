@@ -57,7 +57,8 @@ export const RETRIEVAL_KERNEL_CASES: KernelAcceptanceCase[] = [
     "kernel-v1/knowledge/body-only-routing@1",
     "knowledge",
     "required_slot_misrouted",
-    async () => knowledgeCandidates(undefined).some(({ capability }) => capability === "query_knowledge")
+    async () =>
+      knowledgeCandidates(undefined).some(({ capability }) => capability === "query_knowledge")
   ),
   checkCase(
     "kernel-v1/knowledge/section-document-source-follow-up@1",
