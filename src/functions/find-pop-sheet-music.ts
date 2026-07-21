@@ -218,8 +218,15 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       });
     }
 
-    const root = await resolveSheetMusicRoot(options);
-    const allItems = await getFreshFileIndex(options, root);
+    let root: { driveId: string; itemId: string };
+    let allItems: DriveItem[];
+    try {
+      root = await resolveSheetMusicRoot(options);
+      allItems = await getFreshFileIndex(options, root);
+    } catch {
+      const replyText = "目前無法查詢歌譜資料，請稍後再試。";
+      return { ok: true, replyText, agentResult: { status: "unavailable", replyText } };
+    }
     const graphCandidates = rankSheetMusicCandidates(
       allItems,
       rawQuery,

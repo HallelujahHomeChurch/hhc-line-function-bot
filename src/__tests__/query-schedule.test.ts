@@ -68,6 +68,63 @@ function scheduleTask(result: Awaited<ReturnType<ReturnType<typeof createQuerySc
 }
 
 describe("query_schedule", () => {
+  it("keeps a planner-grounded role when wrapper text leaves a misleading residual", async () => {
+    const now = () => new Date("2026-07-20T00:00:00.000Z");
+    const schedules = new InMemoryScheduleStore();
+    await schedules.upsertItem({
+      profileName: "helper",
+      sourceKey: "future-family-source",
+      origin: "line",
+      externalId: "future-family-1",
+      serviceDate: "2026-07-21",
+      meeting: "晨更",
+      role: "帶領家族",
+      assignee: "黃弘家族1"
+    });
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore({ now }),
+      scheduleStore: schedules,
+      now,
+      timeZone: "Asia/Taipei"
+    });
+    const ctx = context("下一場晨更家族服事的帶領家族是誰");
+    ctx.profile.schedulePolicy = {
+      meetingWindows: [],
+      domains: [
+        {
+          key: "future_family",
+          displayName: "晨更家族服事",
+          aliases: ["晨更家族"],
+          routingHints: ["帶領家族"],
+          schemaVersion: 1,
+          inputSchema: "family_rotation_v1",
+          occurrencePolicy: "profile_meeting_windows_v1",
+          binding: {
+            kind: "canonical",
+            sourceKeys: ["future-family-source"],
+            allowLiveFallback: false
+          },
+          origins: ["line"],
+          writePolicy: { mode: "read_only", allowedOperations: [] },
+          priority: 100,
+          revision: "1",
+          freshnessPolicy: { maxAgeSeconds: 86_400, staleBehavior: "reject" }
+        }
+      ]
+    };
+
+    const result = await query(
+      {
+        query: "下一場晨更家族服事的帶領家族是誰",
+        dateIntent: "next_meeting",
+        role: "帶領家族"
+      },
+      ctx
+    );
+
+    expect(result.replyText).toBe("帶領家族：黃弘家族1");
+  });
+
   it("uses an explicit domain alias even when another domain has matching meeting text", async () => {
     const now = () => new Date("2026-07-15T00:00:00.000Z");
     const memoryStore = new InMemoryAgentMemoryStore({ now });

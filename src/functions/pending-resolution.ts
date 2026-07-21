@@ -82,11 +82,14 @@ export function createPendingResolutionTextMessageHandler(input: {
         await input.sessionStore.delete(pending.id);
         return { ok: true, replyText: "已取消這次查詢。" };
       }
-      const selected = pending.candidates.find(
-        (candidate) =>
-          answer === candidate.displayName ||
-          answer.includes(candidate.displayName.replace(/服事$/u, ""))
-      );
+      const numericIndex = /^\d+$/u.test(answer) ? Number(answer) - 1 : -1;
+      const selected =
+        (numericIndex >= 0 ? pending.candidates[numericIndex] : undefined) ??
+        pending.candidates.find(
+          (candidate) =>
+            answer === candidate.displayName ||
+            answer.includes(candidate.displayName.replace(/服事$/u, ""))
+        );
       if (!selected) {
         return {
           ok: true,

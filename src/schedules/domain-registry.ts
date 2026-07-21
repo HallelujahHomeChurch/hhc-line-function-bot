@@ -137,9 +137,26 @@ export function resolveScheduleDomain(input: {
   if (!normalized) return { status: "not_found" };
   const matches = input.domains
     .filter(({ key }) => eligible.has(key))
-    .filter(({ aliases, routingHints }) =>
-      [...aliases, ...routingHints].some((term) => normalized.includes(normalize(term)))
+    .map((domain) => ({
+      domain,
+      aliases: domain.aliases.map(normalize).filter((term) => term && normalized.includes(term)),
+      hints: domain.routingHints.map(normalize).filter((term) => term && normalized.includes(term))
+    }))
+    .filter(({ aliases, hints }) => aliases.length > 0 || hints.length > 0)
+    .filter(
+      ({ aliases }, _index, all) =>
+        aliases.length === 0 ||
+        !aliases.every((term) =>
+          all.some(
+            (other) =>
+              other.aliases !== aliases &&
+              other.aliases.some(
+                (otherTerm) => otherTerm.length > term.length && otherTerm.includes(term)
+              )
+          )
+        )
     )
+    .map(({ domain }) => domain)
     .sort((left, right) => right.priority - left.priority || left.key.localeCompare(right.key))
     .map(scheduleDomainCandidate);
   return decideResolution(matches);

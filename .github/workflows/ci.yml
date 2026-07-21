@@ -43,5 +43,7 @@ jobs:
         run: pnpm config:validate
       - name: Controlled agent eval
         run: pnpm eval:agent
+      - name: Kernel v1 acceptance gate
+        run: pnpm eval:kernel
       - name: Compile app
         run: pnpm build

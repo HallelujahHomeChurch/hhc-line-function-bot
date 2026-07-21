@@ -53,6 +53,23 @@ function personalizedHandlerContext(): FunctionHandlerContext {
 }
 
 describe("find_ppt_slides", () => {
+  it("reports provider failures as unavailable instead of not found", async () => {
+    const handler = createFindPptSlidesHandler({
+      graph: {
+        listFolderChildren: vi.fn().mockRejectedValue(new Error("provider_down")),
+        createSharingLink: vi.fn()
+      },
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pptx"],
+      defaultIncludePdf: false
+    });
+
+    await expect(handler({ query: "synthetic" }, handlerContext())).resolves.toMatchObject({
+      agentResult: { status: "unavailable" }
+    });
+  });
+
   it("uses catalog results before crawling the presentation folder", async () => {
     const catalog = new InMemoryCatalogStore();
     const source = await catalog.upsertSource({

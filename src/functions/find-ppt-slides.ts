@@ -205,7 +205,18 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
       };
     }
 
-    const allItems = await options.graph.listFolderChildren(options.driveId, options.folderItemId);
+    let allItems: DriveItem[];
+    try {
+      allItems = await options.graph.listFolderChildren(options.driveId, options.folderItemId);
+    } catch {
+      const replyText = "目前無法查詢投影片資料，請稍後再試。";
+      return {
+        ok: true,
+        replyText,
+        agentResult: { status: "unavailable", replyText },
+        diagnostics: retrievalDiagnostics(options, "provider_fallback", rawQuery)
+      };
+    }
     const graphCandidates = rankPptCandidates(
       allItems,
       rawQuery,

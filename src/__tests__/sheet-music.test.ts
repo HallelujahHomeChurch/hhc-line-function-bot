@@ -51,6 +51,23 @@ function personalizedHandlerContext(): FunctionHandlerContext {
 }
 
 describe("find_sheet_music", () => {
+  it("reports provider failures as unavailable instead of not found", async () => {
+    const handler = createFindPopSheetMusicHandler({
+      graph: {
+        listFolderChildren: vi.fn().mockRejectedValue(new Error("provider_down")),
+        createSharingLink: vi.fn()
+      },
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pdf"],
+      recursive: false
+    });
+
+    await expect(handler({ query: "synthetic" }, handlerContext())).resolves.toMatchObject({
+      agentResult: { status: "unavailable" }
+    });
+  });
+
   it("finds a catalog PNG when the user does not constrain the format", async () => {
     const catalog = new InMemoryCatalogStore();
     const source = await catalog.upsertSource({
