@@ -1,6 +1,66 @@
 import { randomUUID } from "node:crypto";
 
+import { Pool } from "pg";
 import { createClient, type RedisClientType } from "redis";
+
+export interface KernelPostgresEnvironment {
+  pools: [Pool, Pool];
+  schemaName: string;
+  cleanup(): Promise<void>;
+}
+
+export async function createKernelPostgresEnvironment(): Promise<KernelPostgresEnvironment> {
+  const connectionString = process.env.KERNEL_POSTGRES_URL?.trim();
+  if (!connectionString) {
+    throw new Error("kernel_integration_postgres_url_required");
+  }
+
+  const schemaName = `kernel_v1_${randomUUID().replaceAll("-", "")}`;
+  const quotedSchema = quoteKernelSchema(schemaName);
+  const ownerPool = new Pool({ connectionString, max: 1 });
+  let pools: [Pool, Pool] | undefined;
+  try {
+    const vector = await ownerPool.query(
+      "select extversion from pg_extension where extname = 'vector'"
+    );
+    if (vector.rows.length !== 1) {
+      throw new Error("kernel_integration_pgvector_not_ready");
+    }
+    await ownerPool.query(`create schema ${quotedSchema}`);
+    pools = [
+      createSchemaPool(connectionString, schemaName),
+      createSchemaPool(connectionString, schemaName)
+    ];
+    await Promise.all(pools.map(async (pool) => pool.query("select 1")));
+  } catch (error) {
+    await Promise.allSettled(pools?.map(async (pool) => pool.end()) ?? []);
+    await ownerPool.query(`drop schema if exists ${quotedSchema} cascade`).catch(() => undefined);
+    await ownerPool.end().catch(() => undefined);
+    throw error;
+  }
+
+  let cleaned = false;
+  return {
+    pools,
+    schemaName,
+    async cleanup() {
+      if (cleaned) return;
+      const closeResults = await Promise.allSettled(pools.map(async (pool) => pool.end()));
+      let cleanupError: unknown;
+      try {
+        await ownerPool.query(`drop schema if exists ${quotedSchema} cascade`);
+      } catch (error) {
+        cleanupError = error;
+      }
+      await ownerPool.end();
+      if (cleanupError) throw cleanupError;
+      if (closeResults.some((result) => result.status === "rejected")) {
+        throw new Error("kernel_integration_postgres_cleanup_close_failed");
+      }
+      cleaned = true;
+    }
+  };
+}
 
 export interface KernelRedisEnvironment {
   clients: [RedisClientType, RedisClientType];
@@ -93,4 +153,19 @@ async function closeRedisClient(client: RedisClientType): Promise<void> {
   if (client.isOpen) {
     await client.quit();
   }
+}
+
+function createSchemaPool(connectionString: string, schemaName: string): Pool {
+  return new Pool({
+    connectionString,
+    max: 4,
+    options: `-c search_path=${schemaName},public`
+  });
+}
+
+function quoteKernelSchema(schemaName: string): string {
+  if (!/^kernel_v1_[a-f0-9]{32}$/.test(schemaName)) {
+    throw new Error("kernel_integration_postgres_schema_invalid");
+  }
+  return `"${schemaName}"`;
 }

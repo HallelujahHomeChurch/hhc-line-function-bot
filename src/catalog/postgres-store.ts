@@ -228,7 +228,7 @@ export class PostgresCatalogStore implements CatalogStore {
     const result = await this.db.query<CatalogSourceRow>(
       `
       with eligible as (
-        select id from catalog_sources where id = $1 and revision = $2
+        select id from catalog_sources where id = $1 and revision = $2 for update
       ), incoming as (
         select * from jsonb_to_recordset($3::jsonb) as row(
           id uuid, "itemKind" text, domain text, title text, "normalizedTitle" text,
@@ -297,7 +297,7 @@ export class PostgresCatalogStore implements CatalogStore {
     const result = await this.db.query<CatalogSourceRow>(
       `
       with eligible as (
-        select id from catalog_sources where id = $1 and revision = $2
+        select id from catalog_sources where id = $1 and revision = $2 for update
       ), tombstoned as (
         update catalog_items
         set deleted_at = $6::timestamptz, updated_at = $6::timestamptz
