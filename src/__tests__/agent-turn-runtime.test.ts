@@ -160,7 +160,11 @@ describe("AgentTurnRuntime controlled path", () => {
       functionRegistry: {
         find_resource: createFindResourceHandler({
           catalog,
-          graph: { listFolderChildren: vi.fn(), createSharingLink },
+          graph: {
+            listFolderChildren: vi.fn(),
+            getItemById: vi.fn(async (_driveId, itemId) => ({ id: itemId, name: "current-item" })),
+            createSharingLink
+          },
           now
         })
       },
