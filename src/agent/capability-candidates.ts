@@ -45,6 +45,7 @@ export interface BuildCapabilityCandidatesInput {
   activeTask?: ActiveTaskContext;
   knowledgeSources: readonly KnowledgeSourceMetadata[];
   retrievalEvidence?: readonly FunctionName[];
+  capabilityHints?: Partial<Record<FunctionName, readonly string[]>>;
   maxCandidates: number;
   source: FunctionAllowedSource;
 }
@@ -94,11 +95,12 @@ export function buildCapabilityCandidates(
 
   for (const [definitionOrder, definition] of FUNCTION_DEFINITIONS.entries()) {
     if (!isEligibleDefinition(definition, enabled, input.source)) continue;
-    const reason = strongestReason(definition, input);
+    const dynamicHints = boundedCapabilityHints(input.capabilityHints?.[definition.name]);
+    const reason = strongestReason(definition, input, dynamicHints);
     if (!reason) continue;
     ranked.push({
       capability: definition.name,
-      contract: cloneContract(definition.agentCapability!),
+      contract: cloneContract(definition.agentCapability!, dynamicHints),
       reason,
       score: REASON_SCORE[reason],
       definitionOrder,
@@ -136,13 +138,14 @@ function isEligibleDefinition(
 
 function strongestReason(
   definition: FunctionDefinition,
-  input: BuildCapabilityCandidatesInput
+  input: BuildCapabilityCandidatesInput,
+  dynamicHints: readonly string[]
 ): CapabilityCandidateReason | undefined {
   const contract = definition.agentCapability!;
   if (definition.sideEffectLevel !== "read") {
     return hasWriteIntent(input.text) &&
       (matchesAnyExact(input.text, contract.intents) ||
-        matchesAnyHint(input.text, contract.candidateHints))
+        matchesAnyHint(input.text, [...contract.candidateHints, ...dynamicHints]))
       ? "explicit_intent"
       : undefined;
   }
@@ -173,7 +176,10 @@ function strongestReason(
   if (taskOrRetrievalEvidenceAllowed && input.retrievalEvidence?.includes(definition.name)) {
     return "retrieval_evidence";
   }
-  if (taskOrRetrievalEvidenceAllowed && matchesAnyHint(input.text, contract.candidateHints)) {
+  if (
+    taskOrRetrievalEvidenceAllowed &&
+    matchesAnyHint(input.text, [...contract.candidateHints, ...dynamicHints])
+  ) {
     return "capability_hint";
   }
   return undefined;
@@ -381,10 +387,20 @@ function candidateLimit(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-function cloneContract(contract: AgentCapabilityContract): AgentCapabilityContract {
+function boundedCapabilityHints(hints: readonly string[] | undefined): string[] {
+  return (hints ?? [])
+    .slice(0, 100)
+    .map((hint) => Array.from(hint).slice(0, 100).join(""))
+    .filter(Boolean);
+}
+
+function cloneContract(
+  contract: AgentCapabilityContract,
+  dynamicHints: readonly string[] = []
+): AgentCapabilityContract {
   return {
     intents: [...contract.intents],
-    candidateHints: [...contract.candidateHints],
+    candidateHints: [...new Set([...contract.candidateHints, ...dynamicHints])],
     semanticDescription: contract.semanticDescription,
     ...(contract.arguments
       ? {

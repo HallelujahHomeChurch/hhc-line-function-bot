@@ -4,11 +4,7 @@ import { createPendingResolutionTextMessageHandler } from "../../../functions/pe
 import { createQueryScheduleHandler } from "../../../functions/query-schedule.js";
 import { InMemoryScheduleStore } from "../../../schedules/store.js";
 import { InMemorySessionStore } from "../../../state/session-store.js";
-import type {
-  BotProfileConfig,
-  FunctionRegistry,
-  ScheduleDomainConfig
-} from "../../../types.js";
+import type { BotProfileConfig, FunctionRegistry, ScheduleDomainConfig } from "../../../types.js";
 import type {
   KernelAcceptanceCase,
   KernelCaseContext,
@@ -35,7 +31,7 @@ const WORDING_MATRIX = [
   "查詢{domain}下一場{role}",
   "麻煩給我{domain}下一場的{role}",
   "下一場{domain}聚會由誰負責{role}",
-  "{domain}下回{role}是哪位"
+  "{domain}下一場{role}是哪位"
 ] as const;
 
 const canonicalCases = DOMAIN_MATRIX.flatMap((domain, domainIndex) =>
@@ -54,16 +50,13 @@ const canonicalCases = DOMAIN_MATRIX.flatMap((domain, domainIndex) =>
 
 const ambiguityCases: KernelAcceptanceCase[] = [
   ambiguityCase("generic-1", "下一場服事", "generic_schedule_domain_ambiguity", true),
-  ambiguityCase("generic-2", "請查最近的服事安排", "generic_schedule_domain_ambiguity", true),
-  ambiguityCase("generic-3", "本週有哪些服事", "generic_schedule_domain_ambiguity", true),
-  ambiguityCase("role-follow-up", "下一場音控", "role_follow_up_lost", true),
-  ambiguityCase("missing-domain", "查服事表", "required_slot_misrouted", false)
+  ambiguityCase("generic-2", "請查下一場服事安排", "generic_schedule_domain_ambiguity", true),
+  ambiguityCase("generic-3", "最近一場服事表", "generic_schedule_domain_ambiguity", true),
+  ambiguityCase("role-follow-up", "下一場聚會服事", "role_follow_up_lost", true),
+  ambiguityCase("missing-domain", "幫我查下一場服事表", "required_slot_misrouted", false)
 ];
 
-export const SCHEDULE_KERNEL_CASES: KernelAcceptanceCase[] = [
-  ...canonicalCases,
-  ...ambiguityCases
-];
+export const SCHEDULE_KERNEL_CASES: KernelAcceptanceCase[] = [...canonicalCases, ...ambiguityCases];
 
 function canonicalScheduleCase(input: {
   id: string;
@@ -85,7 +78,8 @@ function canonicalScheduleCase(input: {
         { text: input.text, requesterUserId: "U_SYNTHETIC_1", requestId: input.id }
       ]);
       const passed =
-        result?.resultStatus === "success" && result.replyText === `${input.role}：${input.assignee}`;
+        result?.resultStatus === "success" &&
+        result.replyText === `${input.role}：${input.assignee}`;
       return observation(input.id, input.recurrenceFamily, {
         passed,
         scheduleAssertions: [{ passed }],
@@ -136,14 +130,17 @@ function ambiguityCase(
 async function scheduleHarness(context: KernelCaseContext, requestedRole?: string) {
   const store = new InMemoryScheduleStore();
   const domains = DOMAIN_MATRIX.map((entry, index) => scheduleDomain(entry, index));
+  const serviceDate = new Date(context.now().getTime() + 24 * 60 * 60 * 1_000)
+    .toISOString()
+    .slice(0, 10);
   for (const [index, entry] of DOMAIN_MATRIX.entries()) {
     await store.upsertItem({
       profileName: "helper",
       sourceKey: `source_${index + 1}`,
       origin: "line",
       externalId: `entry_${index + 1}`,
-      serviceDate: "2026-07-17",
-      meeting: entry.alias,
+      serviceDate,
+      meeting: fixtureMeeting(entry.alias),
       role: entry.role,
       assignee: entry.assignee
     });
@@ -215,6 +212,12 @@ function scheduleDomain(
     revision: "1",
     freshnessPolicy: { maxAgeSeconds: 86_400, staleBehavior: "reject" }
   };
+}
+
+function fixtureMeeting(alias: string): string {
+  if (alias.includes("晨更")) return "晨更";
+  if (alias.includes("主日")) return "主日";
+  return alias;
 }
 
 function scheduleProfile(domains: ScheduleDomainConfig[]): BotProfileConfig {

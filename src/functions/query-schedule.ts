@@ -216,13 +216,15 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       };
     }
     const refinement = refineScheduleQuery(args, now(), timeZone);
-    const roleFocus = extractScheduleRoleFocus({
-      query: args.query,
-      hasContinuation: context.activeTask?.capability === "query_schedule",
-      availableRoles: activeTaskRoles(context.activeTask),
-      now: now(),
-      timeZone
-    });
+    const roleFocus =
+      args.role ??
+      extractScheduleRoleFocus({
+        query: args.query,
+        hasContinuation: context.activeTask?.capability === "query_schedule",
+        availableRoles: activeTaskRoles(context.activeTask),
+        now: now(),
+        timeZone
+      });
     const refinedArgs = queryScheduleArgumentsSchema.parse({
       ...args,
       ...refinement.structuredArguments,

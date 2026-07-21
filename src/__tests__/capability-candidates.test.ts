@@ -45,6 +45,21 @@ const retreatKnowledge: KnowledgeSourceMetadata = {
 };
 
 describe("deterministic capability candidates", () => {
+  it("accepts bounded profile routing hints for declaratively added domains", () => {
+    expect(
+      buildCapabilityCandidates({
+        text: "請幫我查晨更家族下一次帶領家族",
+        enabledFunctions: ["query_schedule"],
+        source: "group",
+        knowledgeSources: [],
+        capabilityHints: { query_schedule: ["晨更家族", "帶領家族"] },
+        maxCandidates: 3
+      })
+    ).toEqual([
+      expect.objectContaining({ capability: "query_schedule", reason: "capability_hint" })
+    ]);
+  });
+
   it("fails closed at runtime when source policy input is omitted", () => {
     const unsafeInput = {
       text: "查維基百科 Fastify",

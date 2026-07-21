@@ -25,6 +25,7 @@ export interface ControlledAgentRouterInput {
   sourceId?: string;
   requesterUserId?: string;
   activeTask?: ActiveTaskContext;
+  capabilityHints?: Partial<Record<FunctionName, readonly string[]>>;
   maxCandidates: number;
   minPlannerConfidence: number;
 }
@@ -66,6 +67,7 @@ export function createControlledAgentRouter(options: {
         activeTask: input.activeTask,
         knowledgeSources,
         retrievalEvidence: retrievalEvidence.matched,
+        capabilityHints: input.capabilityHints,
         maxCandidates: input.maxCandidates,
         source
       });

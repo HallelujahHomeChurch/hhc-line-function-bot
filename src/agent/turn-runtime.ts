@@ -49,6 +49,7 @@ import type {
   TextGenerationProvider,
   TextMessageHandlerRegistry
 } from "../types.js";
+import { profileCapabilityHints } from "./profile-capability-hints.js";
 import type { AgentRuntime } from "./agent-runtime.js";
 import { createCapabilityResolution, resumeCapabilityResolution } from "./capability-resolution.js";
 import { projectAgentReply } from "./response-projector.js";
@@ -871,6 +872,7 @@ async function resolveControlledPlan(
       sourceId: controlledSourceId(input.event.source),
       requesterUserId: input.event.source.userId,
       activeTask,
+      capabilityHints: profileCapabilityHints(input.profile),
       maxCandidates: input.profile.controlledAgent?.maxCandidates ?? 3,
       minPlannerConfidence: input.profile.controlledAgent?.minPlannerConfidence ?? 0.65
     };

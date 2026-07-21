@@ -34,6 +34,19 @@ describe("schedule domain registry", () => {
     });
   });
 
+  it("prefers the longest explicit alias over a contained generic alias", () => {
+    const domains = DEFAULT_SCHEDULE_DOMAINS.map((domain) =>
+      domain.key === "custom_service_schedule"
+        ? { ...domain, aliases: [...domain.aliases, "主日"] }
+        : domain
+    );
+
+    expect(resolveScheduleDomain({ domains, text: "下一場兒童主日服事" })).toMatchObject({
+      status: "selected",
+      candidate: { domainKey: "children_sunday" }
+    });
+  });
+
   it("adds future existing-schema domains through data only", () => {
     expect(
       scheduleDomainChoices(DEFAULT_SCHEDULE_DOMAINS).map(({ domainKey }) => domainKey)
