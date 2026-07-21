@@ -2,6 +2,7 @@ node_modules/
 .worktrees/
 dist/
 coverage/
+artifacts/
 .env
 .env.local
 .env.*
