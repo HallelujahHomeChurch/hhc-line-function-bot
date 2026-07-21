@@ -8,6 +8,8 @@ When a requester receives `支援碼：<16 hex characters>`, use the admin direc
 2. Run `/last-routes` to identify the selected action, result and duration.
 3. Run `/last-agent-turns 20` to identify planner, validator, task lifecycle and retrieval execution mode.
 4. Classify the failure before changing code. Never ask for group-chat history when the support code is sufficient.
+5. Reproduce the recurrence as a versioned Kernel case and run `pnpm eval:kernel`.
+6. Use the case's failed boundary ID to plan a shared contract or lifecycle fix；不要依失敗語句加入特例。
 
 Execution modes:
 
@@ -36,9 +38,10 @@ Production requires `OBSERVABILITY_HMAC_KEY` with at least 32 random characters.
 ```bash
 pnpm eval:retrieval-product
 pnpm eval:agent
+pnpm eval:kernel
 ```
 
-Both commands are deterministic and do not call DeepSeek or Ollama. The retrieval corpus includes sequential PPT lookup, legacy-alias retirement, active-task continuation, schedule ambiguity, explicit schedule domain, not-found, unavailable, and write-confirmation precedence.
+All three commands are deterministic and do not call DeepSeek or Ollama. The Kernel report is written to `artifacts/kernel-v1/report.json` and `.md`; reports contain case IDs, metric counts, and boundary classifications but no synthetic turn text. `case_execution_failed` means the evaluator itself could not complete a case. The retrieval corpus includes sequential PPT lookup, legacy-alias retirement, active-task continuation, schedule ambiguity, explicit schedule domain, not-found, unavailable, and write-confirmation precedence.
 
 ## Azure Monitor baseline queries
 

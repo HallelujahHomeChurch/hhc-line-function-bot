@@ -203,7 +203,7 @@ Sheet music lookup remains catalog/local-first. If no local sheet music matches 
 
 The candidate generator and validator guard model output when the user names an explicit domain. For example, `查維基百科` with no topic asks for the missing topic instead of letting a model invent one, and `查週報音檔` resolves to internal catalog search rather than Wikipedia when `find_resource` is enabled.
 
-The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) `function_routing` policy, requires DeepSeek as primary, allows its configured Ollama fallback, and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
+The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:kernel` runs the deterministic R0-R3 product gate through the real controlled turn runtime and writes privacy-safe reports to `artifacts/kernel-v1/report.json` and `artifacts/kernel-v1/report.md`; exit code `0` means every required metric passed, while a non-zero exit means at least one metric, case, or corpus-completeness rule failed. `case_execution_failed` identifies a case whose evaluator could not complete, not a user-facing result. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) `function_routing` policy, requires DeepSeek as primary, allows its configured Ollama fallback, and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
 
 ## Time Zone
 
@@ -455,7 +455,7 @@ Operational details are in `docs/runbooks/production-operations.md`.
 
 `main` is protected by a no-bypass GitHub ruleset. Every change—including changes made by administrators or automated agents—must use a pull request and pass the required `PR CI` check. No approving review is required, so an agent may enable auto-merge and GitHub will squash the PR after CI succeeds.
 
-`.github/workflows/ci.yml` runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the deterministic controlled-agent eval, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
+`.github/workflows/ci.yml` runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the deterministic controlled-agent eval, the Kernel v1 acceptance gate, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
 
 `.github/workflows/release.yml` runs only after app, build, or deployment inputs are merged to `main`, or through an explicit manual dispatch. It does not repeat the pnpm validation suite. It authenticates to Azure through a branch-scoped OIDC federated credential, builds the production image with `az acr build`, and publishes these ACR tags:
 
@@ -481,6 +481,7 @@ pnpm config:validate
 pnpm eval:admin
 pnpm eval:agent
 pnpm eval:retrieval-product
+pnpm eval:kernel
 pnpm build
 ```
 
