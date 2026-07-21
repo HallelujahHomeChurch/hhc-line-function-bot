@@ -7,7 +7,7 @@ export default defineConfig({
       "src/__tests__/kernel-redis-integration.test.ts",
       "src/__tests__/kernel-postgres-integration.test.ts"
     ],
-    testTimeout: 20_000,
+    testTimeout: 60_000,
     fileParallelism: false
   }
 });

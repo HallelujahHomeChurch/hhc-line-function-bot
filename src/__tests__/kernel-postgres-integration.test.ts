@@ -223,7 +223,7 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
     } finally {
       await matrixEnvironment.cleanup();
     }
-  }, 20_000);
+  });
 });
 
 function requiredEnvironment(

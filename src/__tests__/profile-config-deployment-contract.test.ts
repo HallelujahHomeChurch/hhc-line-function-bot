@@ -146,6 +146,7 @@ describe("production profile configuration deployment contract", () => {
   it("owns a loopback-only disposable Redis AOF and pgvector integration stack", () => {
     const compose = readProjectFile("compose.kernel-integration.yml");
     const vitestConfig = readProjectFile("vitest.config.ts");
+    const integrationVitestConfig = readProjectFile("vitest.kernel-integration.config.ts");
     const integrationCli = readProjectFile("src/tools/eval-kernel-integration.ts");
 
     expect(compose).toContain("redis:7.4.2-alpine");
@@ -159,6 +160,7 @@ describe("production profile configuration deployment contract", () => {
     expect(compose).toContain("postgres-data:");
     expect(vitestConfig).toContain("kernel-redis-integration.test.ts");
     expect(vitestConfig).toContain("kernel-postgres-integration.test.ts");
+    expect(integrationVitestConfig).toContain("testTimeout: 60_000");
     expect(integrationCli).toContain("kernel-redis-integration.test.ts");
     expect(integrationCli).toContain("kernel-postgres-integration.test.ts");
   });

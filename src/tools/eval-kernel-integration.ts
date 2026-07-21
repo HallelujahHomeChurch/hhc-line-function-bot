@@ -233,14 +233,12 @@ async function runIntegrationContractTests(): Promise<void> {
   const postgresTest = fileURLToPath(
     new URL("../__tests__/kernel-postgres-integration.test.ts", import.meta.url)
   );
-  await runCommand(process.execPath, [
-    vitestEntry,
-    "run",
-    redisTest,
-    postgresTest,
-    "--config",
-    config
-  ]);
+  await runCommand(
+    process.execPath,
+    [vitestEntry, "run", redisTest, postgresTest, "--config", config],
+    process.env,
+    "inherit"
+  );
 }
 
 async function restartOwnedRedis(): Promise<void> {
@@ -314,10 +312,11 @@ function isWorkerMessage(value: unknown): value is WorkerMessage {
 async function runCommand(
   command: string,
   args: string[],
-  environment: NodeJS.ProcessEnv = process.env
+  environment: NodeJS.ProcessEnv = process.env,
+  stdio: "ignore" | "inherit" = "ignore"
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { env: environment, stdio: "ignore", windowsHide: true });
+    const child = spawn(command, args, { env: environment, stdio, windowsHide: true });
     child.once("error", reject);
     child.once("exit", (code) => {
       if (code === 0) resolve();
