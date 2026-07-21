@@ -516,10 +516,17 @@ async function atomicInteractiveReplacement(environment: KernelRedisEnvironment)
   const found =
     (await stores[0]!.findPendingResolution(lookup)) ?? (await stores[0]!.takeUploadIntent(lookup));
   assert(Boolean(found));
+  if (found?.type === "pending_resolution") {
+    await stores[0]!.delete(found.id);
+  }
   const remainingKeys = await environment.clients[0].keys(
     `${environment.keyPrefix}:session:replace-*`
   );
-  if (found?.type === "upload_intent") assert(remainingKeys.length === 0);
+  assert(remainingKeys.length === 0);
+  const remainingIndexes = await environment.clients[0].keys(
+    `${environment.keyPrefix}:interactive-session-v1:*`
+  );
+  assert(remainingIndexes.length === 0);
 }
 
 function assert(condition: boolean): asserts condition {
