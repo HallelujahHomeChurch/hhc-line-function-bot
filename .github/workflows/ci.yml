@@ -45,5 +45,7 @@ jobs:
         run: pnpm eval:agent
       - name: Kernel v1 acceptance gate
         run: pnpm eval:kernel
+      - name: Kernel v1 real-dependency integration gate
+        run: pnpm eval:kernel:integration
       - name: Compile app
         run: pnpm build

@@ -39,9 +39,12 @@ Production requires `OBSERVABILITY_HMAC_KEY` with at least 32 random characters.
 pnpm eval:retrieval-product
 pnpm eval:agent
 pnpm eval:kernel
+pnpm eval:kernel:integration
 ```
 
-All three commands are deterministic and do not call DeepSeek or Ollama. The Kernel report is written to `artifacts/kernel-v1/report.json` and `.md`; reports contain case IDs, metric counts, and boundary classifications but no synthetic turn text. `case_execution_failed` means the evaluator itself could not complete a case. The retrieval corpus includes sequential PPT lookup, legacy-alias retirement, active-task continuation, schedule ambiguity, explicit schedule domain, not-found, unavailable, and write-confirmation precedence.
+The first three commands are deterministic and do not call DeepSeek or Ollama. The integration command additionally owns disposable Redis AOF and pgvector PostgreSQL containers, performs an actual Redis server restart, and fails if Docker, readiness, restart, namespace cleanup, or Compose volume cleanup fails. Its privacy-allowlisted report is `artifacts/kernel-v1/integration-report.json`; dependency URLs, key prefixes, schema names, queries, filenames, people, and payloads are excluded. The offline Kernel report is written to `artifacts/kernel-v1/report.json` and `.md`; reports contain case IDs, metric counts, and boundary classifications but no synthetic turn text. `case_execution_failed` means the evaluator itself could not complete a case. The retrieval corpus includes sequential PPT lookup, legacy-alias retirement, active-task continuation, schedule ambiguity, explicit schedule domain, not-found, unavailable, and write-confirmation precedence.
+
+Redis-backed workflows support app restart and multiple replicas until TTL. Without Redis they are only for single-process local development. This gate proves Redis server restart for the checked-in AOF Compose stack; production recovery remains an infrastructure persistence and failover responsibility. PostgreSQL-backed catalog, schedules, knowledge, access, and explicit memory survive app restart; their in-memory alternatives are development-only.
 
 ## Azure Monitor baseline queries
 

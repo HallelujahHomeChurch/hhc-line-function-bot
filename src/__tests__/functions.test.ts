@@ -52,6 +52,10 @@ function personalizedHandlerContext(): FunctionHandlerContext {
   };
 }
 
+async function currentItemById(_driveId: string, itemId: string) {
+  return { id: itemId, name: "current-item" };
+}
+
 describe("find_ppt_slides", () => {
   it("reports provider failures as unavailable instead of not found", async () => {
     const handler = createFindPptSlidesHandler({
@@ -92,6 +96,7 @@ describe("find_ppt_slides", () => {
     });
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn().mockResolvedValue([{ id: "legacy", name: "奇異恩典.pptx" }]),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/catalog-ppt")
     };
     const now = new Date("2026-07-04T10:00:00.000Z");
@@ -202,6 +207,7 @@ describe("find_ppt_slides", () => {
         { id: "1", name: "奇異恩典.pptx", webUrl: "https://example.invalid/1" },
         { id: "2", name: "主日報告.pptx", webUrl: "https://example.invalid/2" }
       ]),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/amazing-grace")
     };
     const now = new Date("2026-07-04T10:00:00.000Z");
@@ -303,6 +309,7 @@ describe("find_ppt_slides", () => {
     });
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn().mockResolvedValue([{ id: "ppt-1", name: "青年主日.pptx" }]),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/current-slide")
     };
     const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
@@ -336,6 +343,7 @@ describe("find_ppt_slides", () => {
         { id: "1", name: "主日報告.pptx", webUrl: "https://example.invalid/1" },
         { id: "2", name: "主日報告.pdf", webUrl: "https://example.invalid/2" }
       ]),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/report-pdf")
     };
     const now = new Date("2026-07-04T10:00:00.000Z");
@@ -375,6 +383,7 @@ describe("find_ppt_slides", () => {
         { id: "1", name: "主日報告.pptx", webUrl: "https://example.invalid/1" },
         { id: "2", name: "主日報告.pdf", webUrl: "https://example.invalid/2" }
       ]),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/report-ppt")
     };
     const now = new Date("2026-07-04T10:00:00.000Z");
@@ -511,6 +520,7 @@ describe("find_ppt_slides", () => {
   it("creates a sharing link only after a valid PPT selection postback", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/selected")
     };
     const now = new Date("2026-07-04T10:00:00.000Z");
@@ -595,6 +605,7 @@ describe("find_ppt_slides", () => {
   it("creates a sharing link when the user replies with a numeric PPT selection", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/numeric")
     };
     const now = new Date("2026-07-04T10:00:00.000Z");

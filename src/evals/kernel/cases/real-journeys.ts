@@ -315,6 +315,11 @@ function realAttachmentJourney(): KernelAcceptanceCase {
     const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]);
     const graph: GraphDriveClient = {
       listFolderChildren: async () => [],
+      getItemById: async (_driveId, itemId) => ({
+        id: itemId,
+        driveId: "drive",
+        name: "SundayDeck.pptx"
+      }),
       createSharingLink: async () => "https://example.test/retrieved",
       uploadFile: async (_driveId, _folderId, name) => {
         uploads += 1;
@@ -529,6 +534,11 @@ function profile(enabledFunctions: FunctionName[]): BotProfileConfig {
 function graphClient(): GraphDriveClient {
   return {
     listFolderChildren: async () => [],
+    getItemById: async (_driveId, itemId) => ({
+      id: itemId,
+      name: "synthetic",
+      driveId: "drive"
+    }),
     createSharingLink: async () => "https://example.test/synthetic-link",
     uploadFile: async () => ({ id: "unused", name: "unused", driveId: "drive" })
   };

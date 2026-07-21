@@ -203,7 +203,7 @@ Sheet music lookup remains catalog/local-first. If no local sheet music matches 
 
 The candidate generator and validator guard model output when the user names an explicit domain. For example, `查維基百科` with no topic asks for the missing topic instead of letting a model invent one, and `查週報音檔` resolves to internal catalog search rather than Wikipedia when `find_resource` is enabled.
 
-The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:kernel` runs the deterministic R0-R3 product gate through the real controlled turn runtime and writes privacy-safe reports to `artifacts/kernel-v1/report.json` and `artifacts/kernel-v1/report.md`; exit code `0` means every required metric passed, while a non-zero exit means at least one metric, case, or corpus-completeness rule failed. `case_execution_failed` identifies a case whose evaluator could not complete, not a user-facing result. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) `function_routing` policy, requires DeepSeek as primary, allows its configured Ollama fallback, and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
+The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:kernel` runs the deterministic R0-R3 product gate through the real controlled turn runtime and writes privacy-safe reports to `artifacts/kernel-v1/report.json` and `artifacts/kernel-v1/report.md`; exit code `0` means every required metric passed, while a non-zero exit means at least one metric, case, or corpus-completeness rule failed. `pnpm eval:kernel:integration` owns a disposable loopback-only Redis AOF and pgvector PostgreSQL Compose project, exercises two real clients, restarts the actual Redis server, and writes the allowlisted result to `artifacts/kernel-v1/integration-report.json`. It fails rather than skipping when Docker, a dependency, restart, or cleanup is unavailable. `case_execution_failed` identifies a case whose evaluator could not complete, not a user-facing result. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) `function_routing` policy, requires DeepSeek as primary, allows its configured Ollama fallback, and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
 
 ## Time Zone
 
@@ -212,6 +212,21 @@ Set `TIME_ZONE` for all calendar date range decisions, including `今天`, `明�
 Each profile may declare `schedulePolicy.meetingWindows` with meeting-name aliases and local start/end times, plus `schedulePolicy.domains` for the profile's schedule-domain registry. A domain contract declares its stable key, user-facing name, aliases and routing hints, input schema, canonical or saved-schedule binding, permitted origins and writes, priority, revision, occurrence policy, and freshness behavior. `下一場` uses the shared meeting-window policy across synchronized, saved, and live schedule sources: a same-day meeting is eligible only before its configured end time, so a 16:40 Taipei query does not return that morning's 晨更. Future dates without a configured window remain eligible; unknown same-day times fail closed instead of pretending the meeting is still upcoming.
 
 ## State
+
+Redis and PostgreSQL durability have explicit boundaries:
+
+- With `REDIS_URL`, app-process restart and cross-replica workflow state are supported until each record's TTL. A configured production Redis that is unavailable at startup fails readiness/startup policy instead of silently becoming durable in memory.
+- Without Redis, state is only supported for single-process local development and is lost on restart. Webhook deduplication and one-shot selection are then process-local, not multi-replica safe.
+- The integration gate proves Redis server restart against its owned AOF volume. Production Redis server recovery and data-loss guarantees still depend on the deployed persistence, replication, backup, and failover configuration.
+- With `DATABASE_URL`, catalog, schedules, knowledge, access records, and explicit memory survive app restart. Without PostgreSQL, in-memory catalog and memory implementations are development-only and are lost on restart.
+
+Run the complete disposable dependency gate with Docker/Compose available:
+
+```powershell
+pnpm eval:kernel:integration
+```
+
+The command selects random loopback ports, creates a unique Compose project, supplies its private `KERNEL_REDIS_URL` and `KERNEL_POSTGRES_URL` only to the matrix worker, and removes containers and volumes in `finally`. Directly running the low-level integration Vitest files for debugging requires those two URLs to point only to disposable test dependencies.
 
 When `generalAgent.enabled=true`, group conversations get a short requester-scoped follow-up window. The default is 60 seconds. If one user has just addressed the bot, that same user can send the next related message without repeating the wake word. Each handled reply records the latest turn and refreshes the window. Other group members do not inherit that window.
 
@@ -455,7 +470,7 @@ Operational details are in `docs/runbooks/production-operations.md`.
 
 `main` is protected by a no-bypass GitHub ruleset. Every change—including changes made by administrators or automated agents—must use a pull request and pass the required `PR CI` check. No approving review is required, so an agent may enable auto-merge and GitHub will squash the PR after CI succeeds.
 
-`.github/workflows/ci.yml` runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the deterministic controlled-agent eval, the Kernel v1 acceptance gate, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
+`.github/workflows/ci.yml` runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the deterministic controlled-agent eval, the Kernel v1 acceptance gate, the owned real-dependency integration gate, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
 
 `.github/workflows/release.yml` runs only after app, build, or deployment inputs are merged to `main`, or through an explicit manual dispatch. It does not repeat the pnpm validation suite. It authenticates to Azure through a branch-scoped OIDC federated credential, builds the production image with `az acr build`, and publishes these ACR tags:
 
@@ -482,6 +497,7 @@ pnpm eval:admin
 pnpm eval:agent
 pnpm eval:retrieval-product
 pnpm eval:kernel
+pnpm eval:kernel:integration
 pnpm build
 ```
 

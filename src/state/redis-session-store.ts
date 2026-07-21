@@ -25,7 +25,36 @@ export interface RedisSessionClient {
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
   del(key: string | string[]): Promise<number>;
   keys(pattern: string): Promise<string[]>;
+  eval?(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 }
+
+const REPLACE_INTERACTIVE_SESSION_SCRIPT = `
+local previousId = redis.call('GET', KEYS[1])
+if previousId and previousId ~= ARGV[3] then
+  redis.call('DEL', ARGV[4] .. previousId)
+end
+redis.call('PSETEX', KEYS[2], ARGV[1], ARGV[2])
+redis.call('PSETEX', KEYS[1], ARGV[1], ARGV[3])
+return previousId
+`;
+
+const CONSUME_INDEXED_SESSION_SCRIPT = `
+local value = redis.call('GETDEL', KEYS[2])
+local current = redis.call('GET', KEYS[1])
+if current == ARGV[1] then
+  redis.call('DEL', KEYS[1])
+end
+return value
+`;
+
+const DELETE_INDEXED_SESSION_SCRIPT = `
+redis.call('DEL', KEYS[2])
+local current = redis.call('GET', KEYS[1])
+if current == ARGV[1] then
+  redis.call('DEL', KEYS[1])
+end
+return 1
+`;
 
 export interface RedisSessionStoreOptions {
   client: RedisSessionClient;
@@ -46,27 +75,60 @@ export class RedisSessionStore implements SessionStore {
   }
 
   async take(id: string): Promise<ConversationSession | undefined> {
-    const raw = await this.options.client.getDel(this.key(id));
+    const sessionKey = this.key(id);
+    const existing = await this.readSession(sessionKey);
+    const indexKey =
+      existing && isInteractiveSession(existing)
+        ? this.interactiveIndexKey({
+            profileName: existing.profileName,
+            source: existing.source,
+            requesterUserId: existing.requesterUserId
+          })
+        : undefined;
+    const raw =
+      indexKey && this.options.client.eval
+        ? await this.consumeIndexedSessionByKey(indexKey, sessionKey, id)
+        : await this.options.client.getDel(sessionKey);
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as ConversationSession);
   }
 
   async set(session: ConversationSession): Promise<void> {
     if (isInteractiveSession(session)) {
-      const conflicts = (await this.liveSessions()).filter(
-        (existing) =>
-          existing.id !== session.id &&
-          isInteractiveSession(existing) &&
-          existing.profileName === session.profileName &&
-          sourceMatches(existing.source, session.source) &&
-          requesterMatchesForSource(
-            session.source,
-            existing.requesterUserId,
-            session.requesterUserId
-          )
-      );
-      if (conflicts.length > 0) {
-        await this.options.client.del(conflicts.map((existing) => this.key(existing.id)));
+      if (!this.options.client.eval) {
+        const conflicts = (await this.liveSessions()).filter(
+          (existing) =>
+            existing.id !== session.id &&
+            isInteractiveSession(existing) &&
+            existing.profileName === session.profileName &&
+            sourceMatches(existing.source, session.source) &&
+            requesterMatchesForSource(
+              session.source,
+              existing.requesterUserId,
+              session.requesterUserId
+            )
+        );
+        if (conflicts.length > 0) {
+          await this.options.client.del(conflicts.map((existing) => this.key(existing.id)));
+        }
+      }
+      const indexKey = this.interactiveIndexKey({
+        profileName: session.profileName,
+        source: session.source,
+        requesterUserId: session.requesterUserId
+      });
+      if (indexKey && this.options.client.eval) {
+        const ttlMs = new Date(session.expiresAt).getTime() - this.now().getTime();
+        await this.options.client.eval(REPLACE_INTERACTIVE_SESSION_SCRIPT, {
+          keys: [indexKey, this.key(session.id)],
+          arguments: [
+            String(Math.max(1, Math.ceil(ttlMs))),
+            JSON.stringify(session),
+            session.id,
+            this.key("")
+          ]
+        });
+        return;
       }
     }
     const ttlMs = new Date(session.expiresAt).getTime() - this.now().getTime();
@@ -78,7 +140,24 @@ export class RedisSessionStore implements SessionStore {
   }
 
   async delete(id: string): Promise<void> {
-    await this.options.client.del(this.key(id));
+    const sessionKey = this.key(id);
+    const existing = await this.readSession(sessionKey);
+    const indexKey =
+      existing && isInteractiveSession(existing)
+        ? this.interactiveIndexKey({
+            profileName: existing.profileName,
+            source: existing.source,
+            requesterUserId: existing.requesterUserId
+          })
+        : undefined;
+    if (indexKey && this.options.client.eval) {
+      await this.options.client.eval(DELETE_INDEXED_SESSION_SCRIPT, {
+        keys: [indexKey, sessionKey],
+        arguments: [id]
+      });
+      return;
+    }
+    await this.options.client.del(sessionKey);
   }
 
   async findPptSelection(lookup: PptSelectionLookup): Promise<PptSelectionSession | undefined> {
@@ -109,32 +188,18 @@ export class RedisSessionStore implements SessionStore {
   async findPendingFunction(
     lookup: PendingFunctionLookup
   ): Promise<PendingFunctionSession | undefined> {
-    const liveSessions = (await this.liveSessions())
-      .filter((session): session is PendingFunctionSession => session.type === "pending_function")
-      .filter((session) => !lookup.action || session.action === lookup.action)
-      .filter((session) => session.profileName === lookup.profileName)
-      .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) =>
-        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
-      );
-
-    return latestSession(liveSessions);
+    const session = await this.indexedInteractiveSession(lookup);
+    return session?.type === "pending_function" &&
+      (!lookup.action || session.action === lookup.action)
+      ? session
+      : undefined;
   }
 
   async findPendingAttachment(
     lookup: PptSelectionLookup
   ): Promise<PendingAttachmentSession | undefined> {
-    const liveSessions = (await this.liveSessions())
-      .filter(
-        (session): session is PendingAttachmentSession => session.type === "pending_attachment"
-      )
-      .filter((session) => session.profileName === lookup.profileName)
-      .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) =>
-        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
-      );
-
-    return latestSession(liveSessions);
+    const session = await this.indexedInteractiveSession(lookup);
+    return session?.type === "pending_attachment" ? session : undefined;
   }
 
   async takePendingAttachment(
@@ -142,7 +207,7 @@ export class RedisSessionStore implements SessionStore {
   ): Promise<PendingAttachmentSession | undefined> {
     const selected = await this.findPendingAttachment(lookup);
     if (!selected) return undefined;
-    const raw = await this.options.client.getDel(this.key(selected.id));
+    const raw = await this.consumeIndexedSession(selected, lookup);
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as PendingAttachmentSession) as
       PendingAttachmentSession | undefined;
@@ -151,46 +216,22 @@ export class RedisSessionStore implements SessionStore {
   async findPendingResolution(
     lookup: PptSelectionLookup
   ): Promise<PendingResolutionSession | undefined> {
-    const sessions = (await this.liveSessions())
-      .filter(
-        (session): session is PendingResolutionSession => session.type === "pending_resolution"
-      )
-      .filter((session) => session.profileName === lookup.profileName)
-      .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) =>
-        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
-      );
-    return latestSession(sessions);
+    const session = await this.indexedInteractiveSession(lookup);
+    return session?.type === "pending_resolution" ? session : undefined;
   }
 
   async findPendingCapabilityResolution(
     lookup: PptSelectionLookup
   ): Promise<PendingCapabilityResolutionSession | undefined> {
-    const liveSessions = (await this.liveSessions())
-      .filter(
-        (session): session is PendingCapabilityResolutionSession =>
-          session.type === "pending_capability_resolution"
-      )
-      .filter((session) => session.profileName === lookup.profileName)
-      .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) =>
-        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
-      );
-    return latestSession(liveSessions);
+    const session = await this.indexedInteractiveSession(lookup);
+    return session?.type === "pending_capability_resolution" ? session : undefined;
   }
 
   async takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined> {
-    const sessions = (await this.liveSessions())
-      .filter((session): session is UploadIntentSession => session.type === "upload_intent")
-      .filter((session) => session.profileName === lookup.profileName)
-      .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) =>
-        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
-      );
-    const selected = latestSession(sessions);
+    const candidate = await this.indexedInteractiveSession(lookup);
+    const selected = candidate?.type === "upload_intent" ? candidate : undefined;
     if (!selected) return undefined;
-    const key = this.key(selected.id);
-    const raw = await this.options.client.getDel(key);
+    const raw = await this.consumeIndexedSession(selected, lookup);
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as UploadIntentSession) as
       UploadIntentSession | undefined;
@@ -240,7 +281,11 @@ export class RedisSessionStore implements SessionStore {
   }
 
   async clear(): Promise<number> {
-    const keys = await this.options.client.keys(this.key("*"));
+    const [sessionKeys, indexKeys] = await Promise.all([
+      this.options.client.keys(this.key("*")),
+      this.options.client.keys(`${this.options.keyPrefix}:interactive-session-v1:*`)
+    ]);
+    const keys = [...sessionKeys, ...indexKeys];
     if (keys.length === 0) {
       return 0;
     }
@@ -263,6 +308,71 @@ export class RedisSessionStore implements SessionStore {
     return JSON.parse(raw) as ConversationSession;
   }
 
+  private async indexedInteractiveSession(
+    lookup: PptSelectionLookup
+  ): Promise<ConversationSession | undefined> {
+    if (!this.options.client.eval) {
+      return latestSession(
+        (await this.liveSessions())
+          .filter((session) => isInteractiveSession(session))
+          .filter((session) => session.profileName === lookup.profileName)
+          .filter((session) => sourceMatches(session.source, lookup.source))
+          .filter((session) =>
+            requesterMatchesForSource(
+              lookup.source,
+              session.requesterUserId,
+              lookup.requesterUserId
+            )
+          )
+      );
+    }
+    const indexKey = this.interactiveIndexKey(lookup);
+    if (!indexKey) return undefined;
+    const sessionId = await this.options.client.get(indexKey);
+    if (!sessionId) return undefined;
+    const sessionKey = this.key(sessionId);
+    const session = this.liveSession(await this.readSession(sessionKey));
+    if (
+      !session ||
+      !isInteractiveSession(session) ||
+      session.profileName !== lookup.profileName ||
+      !sourceMatches(session.source, lookup.source) ||
+      !requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+    ) {
+      return undefined;
+    }
+    return session;
+  }
+
+  private async consumeIndexedSession(
+    session: ConversationSession,
+    lookup: PptSelectionLookup
+  ): Promise<string | null> {
+    if (!this.options.client.eval) {
+      return this.options.client.getDel(this.key(session.id));
+    }
+    const indexKey = this.interactiveIndexKey(lookup);
+    if (!indexKey) return null;
+    const raw = await this.options.client.eval(CONSUME_INDEXED_SESSION_SCRIPT, {
+      keys: [indexKey, this.key(session.id)],
+      arguments: [session.id]
+    });
+    return typeof raw === "string" ? raw : null;
+  }
+
+  private async consumeIndexedSessionByKey(
+    indexKey: string,
+    sessionKey: string,
+    sessionId: string
+  ): Promise<string | null> {
+    if (!this.options.client.eval) return null;
+    const raw = await this.options.client.eval(CONSUME_INDEXED_SESSION_SCRIPT, {
+      keys: [indexKey, sessionKey],
+      arguments: [sessionId]
+    });
+    return typeof raw === "string" ? raw : null;
+  }
+
   private liveSession(session: ConversationSession | undefined): ConversationSession | undefined {
     if (!session) {
       return undefined;
@@ -272,6 +382,20 @@ export class RedisSessionStore implements SessionStore {
 
   private key(idOrPattern: string): string {
     return `${this.options.keyPrefix}:session:${idOrPattern}`;
+  }
+
+  private interactiveIndexKey(lookup: PptSelectionLookup): string | undefined {
+    const requesterUserId = lookup.requesterUserId ?? lookup.source.userId;
+    if ((lookup.source.type === "group" || lookup.source.type === "room") && !requesterUserId) {
+      return undefined;
+    }
+    return `${this.options.keyPrefix}:interactive-session-v1:${[
+      lookup.profileName,
+      lineSourceKey(lookup.source),
+      requesterUserId ?? ""
+    ]
+      .map((part) => encodeURIComponent(part))
+      .join(":")}`;
   }
 }
 
@@ -308,5 +432,18 @@ function sourceMatches(expected: LineSource, actual: LineSource): boolean {
       return expected.userId === actual.userId;
     default:
       return false;
+  }
+}
+
+function lineSourceKey(source: LineSource): string {
+  switch (source.type) {
+    case "group":
+      return `group:${source.groupId}`;
+    case "room":
+      return `room:${source.roomId}`;
+    case "user":
+      return `user:${source.userId}`;
+    default:
+      return "unknown";
   }
 }

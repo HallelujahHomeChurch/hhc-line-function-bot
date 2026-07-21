@@ -214,6 +214,7 @@ routers.
 - For controlled routing behavior changes, also run `pnpm eval:agent` when relevant.
 - For controlled-agent candidate/planner/validator/result changes, also run `pnpm eval:agent`.
 - For behavior changes after R3, add or update a versioned Kernel case and run `pnpm eval:kernel`. Diagnose a regression from its failed boundary ID and shared contract; do not patch the example phrase or add function-specific branches to the generic flow.
+- For Redis/PostgreSQL state, lifecycle, migration, or publication changes, also run `pnpm eval:kernel:integration`; it must own and remove its disposable Compose dependencies and may never skip an unavailable dependency.
 - Run `pnpm eval:agent:live` manually when DeepSeek credentials and the configured Ollama endpoint are available; do not add it to CI.
 - For live planner validation, run `pnpm eval:agent:live` manually; do not add it to CI.
 - For admin natural-language routing changes, also run `pnpm eval:admin`.

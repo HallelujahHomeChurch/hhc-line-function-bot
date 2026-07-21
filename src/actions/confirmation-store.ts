@@ -32,8 +32,24 @@ export interface ConfirmationStore {
 
 export interface RedisConfirmationClient {
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
-  getDel(key: string): Promise<string | null>;
+  eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 }
+
+const CONSUME_CONFIRMATION_SCRIPT = `
+local value = redis.call('GET', KEYS[1])
+if not value then
+  return nil
+end
+local ok, decoded = pcall(cjson.decode, value)
+if not ok or type(decoded) ~= 'table' then
+  return nil
+end
+if decoded.profileName ~= ARGV[1] or decoded.actorUserId ~= ARGV[2] then
+  return nil
+end
+redis.call('DEL', KEYS[1])
+return value
+`;
 
 export class InMemoryConfirmationStore implements ConfirmationStore {
   private readonly records = new Map<string, ConfirmationRequest>();
@@ -125,8 +141,11 @@ export class RedisConfirmationStore implements ConfirmationStore {
     actorUserId: string,
     profileName: string
   ): Promise<ConfirmationRequest | null> {
-    const raw = await this.client.getDel(this.key(profileName, id));
-    if (!raw) {
+    const raw = await this.client.eval(CONSUME_CONFIRMATION_SCRIPT, {
+      keys: [this.key(profileName, id)],
+      arguments: [profileName, actorUserId]
+    });
+    if (typeof raw !== "string") {
       return null;
     }
     try {

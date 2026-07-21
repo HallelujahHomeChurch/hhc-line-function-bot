@@ -819,6 +819,18 @@ export interface GraphDriveClient {
   deleteItem?(driveId: string, itemId: string): Promise<void>;
 }
 
+export type GraphReferenceUnavailableReason =
+  "validator_unavailable" | "item_missing" | "item_deleted" | "validation_failed";
+
+export type ValidatedSharingLinkResult =
+  | { status: "available"; item: DriveItem; link: string }
+  | {
+      status: "unavailable";
+      reason: GraphReferenceUnavailableReason;
+      item?: undefined;
+      link?: undefined;
+    };
+
 export interface LineContent {
   data: Uint8Array;
   contentType?: string;

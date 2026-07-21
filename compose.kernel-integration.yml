@@ -1,0 +1,40 @@
+services:
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always"]
+    ports:
+      - "127.0.0.1:${KERNEL_REDIS_PORT}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg16
+    environment:
+      POSTGRES_DB: kernel
+      POSTGRES_USER: kernel
+      POSTGRES_PASSWORD: kernel
+    ports:
+      - "127.0.0.1:${KERNEL_POSTGRES_PORT}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/kernel-integration/init.sql:/docker-entrypoint-initdb.d/10-vector.sql:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'pg_isready -U kernel -d kernel && psql -U kernel -d kernel -tAc "select 1 from pg_extension where extname=''vector''" | grep -q 1'
+        ]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+volumes:
+  redis-data:
+  postgres-data:

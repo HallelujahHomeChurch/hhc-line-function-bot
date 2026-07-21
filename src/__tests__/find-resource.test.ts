@@ -28,6 +28,10 @@ function context(): FunctionHandlerContext {
   };
 }
 
+async function currentItemById(_driveId: string, itemId: string) {
+  return { id: itemId, name: "current-item" };
+}
+
 describe("find_resource", () => {
   it("retrieves the exact catalog item from a trusted handoff id", async () => {
     const catalog = new InMemoryCatalogStore();
@@ -58,6 +62,7 @@ describe("find_resource", () => {
     });
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://example.test/target")
     };
     const handler = createFindResourceHandler({ catalog, graph });
@@ -95,6 +100,7 @@ describe("find_resource", () => {
     });
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
+      getItemById: vi.fn(currentItemById),
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/weekly-report")
     };
     const handler = createFindResourceHandler({

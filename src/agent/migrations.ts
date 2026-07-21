@@ -1,5 +1,13 @@
-export interface Queryable {
+interface MigrationExecutor {
   query(sql: string, values?: unknown[]): Promise<unknown>;
+}
+
+export interface Queryable extends MigrationExecutor {
+  connect?(): Promise<MigrationClient>;
+}
+
+interface MigrationClient extends MigrationExecutor {
+  release(): void;
 }
 
 const migrations = [
@@ -9,7 +17,9 @@ const migrations = [
     profile_name text not null,
     scope_type text not null check (scope_type in ('user', 'group', 'room')),
     scope_id text not null,
-    resource_type text not null check (resource_type in ('ppt_slide', 'sheet_music')),
+    resource_type text not null check (
+      resource_type in ('ppt_slide', 'sheet_music', 'general_resource')
+    ),
     title text not null,
     query_text text,
     storage_provider text not null check (storage_provider in ('graph', 'external_link')),
@@ -26,6 +36,12 @@ const migrations = [
   `,
   `
   alter table agent_resources
+    drop constraint if exists agent_resources_resource_type_check,
+    add constraint agent_resources_resource_type_check
+    check (resource_type in ('ppt_slide', 'sheet_music', 'general_resource'))
+  `,
+  `
+  alter table agent_resources
     alter column drive_id drop not null,
     alter column item_id drop not null
   `,
@@ -37,19 +53,13 @@ const migrations = [
   `,
   `
   alter table agent_resources
-    drop constraint if exists agent_resources_storage_provider_check
-  `,
-  `
-  alter table agent_resources
+    drop constraint if exists agent_resources_storage_provider_check,
     add constraint agent_resources_storage_provider_check
     check (storage_provider in ('graph', 'external_link'))
   `,
   `
   alter table agent_resources
-    drop constraint if exists agent_resources_storage_shape_check
-  `,
-  `
-  alter table agent_resources
+    drop constraint if exists agent_resources_storage_shape_check,
     add constraint agent_resources_storage_shape_check
     check (
       (storage_provider = 'graph' and drive_id is not null and item_id is not null)
@@ -157,35 +167,23 @@ const migrations = [
   `,
   `
   alter table agent_resources
-    drop constraint if exists agent_resources_visibility_check
-  `,
-  `
-  alter table agent_resources
+    drop constraint if exists agent_resources_visibility_check,
     add constraint agent_resources_visibility_check check (visibility in ('private', 'group'))
   `,
   `
   alter table agent_text_memories
-    drop constraint if exists agent_text_memories_visibility_check
-  `,
-  `
-  alter table agent_text_memories
+    drop constraint if exists agent_text_memories_visibility_check,
     add constraint agent_text_memories_visibility_check check (visibility in ('private', 'group'))
   `,
   `
   alter table agent_schedule_memories
-    drop constraint if exists agent_schedule_memories_scope_type_check
-  `,
-  `
-  alter table agent_schedule_memories
+    drop constraint if exists agent_schedule_memories_scope_type_check,
     add constraint agent_schedule_memories_scope_type_check
     check (scope_type in ('user', 'group', 'room', 'profile'))
   `,
   `
   alter table agent_schedule_memories
-    drop constraint if exists agent_schedule_memories_visibility_check
-  `,
-  `
-  alter table agent_schedule_memories
+    drop constraint if exists agent_schedule_memories_visibility_check,
     add constraint agent_schedule_memories_visibility_check
     check (visibility in ('private', 'group', 'profile'))
   `,
@@ -263,7 +261,27 @@ const migrations = [
 ];
 
 export async function runAgentMemoryMigrations(db: Queryable): Promise<void> {
-  for (const migration of migrations) {
-    await db.query(migration);
+  if (!db.connect) {
+    for (const migration of migrations) {
+      await db.query(migration);
+    }
+    return;
+  }
+
+  const client = await db.connect();
+  let began = false;
+  try {
+    await client.query("begin");
+    began = true;
+    await client.query("select pg_advisory_xact_lock(144757, 1)");
+    for (const migration of migrations) {
+      await client.query(migration);
+    }
+    await client.query("commit");
+  } catch (error) {
+    if (began) await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
   }
 }

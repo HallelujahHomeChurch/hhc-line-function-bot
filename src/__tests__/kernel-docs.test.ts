@@ -15,7 +15,13 @@ describe("Kernel v1 operating documentation", () => {
     const content = files.map((file) => readFileSync(resolve(file), "utf8")).join("\n");
 
     expect(content).toContain("pnpm eval:kernel");
+    expect(content).toContain("pnpm eval:kernel:integration");
     expect(content).toContain("artifacts/kernel-v1/report.json");
+    expect(content).toContain("artifacts/kernel-v1/integration-report.json");
+    expect(content).toContain("single-process local development");
+    expect(content).toContain("Redis server restart");
+    expect(content).toContain("live-provider");
+    expect(content).toContain("production observation");
     for (const metric of [
       "schedule_accuracy",
       "core_journey_success",

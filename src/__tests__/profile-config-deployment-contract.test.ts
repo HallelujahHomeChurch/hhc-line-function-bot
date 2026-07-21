@@ -123,7 +123,11 @@ describe("production profile configuration deployment contract", () => {
     expect(ciWorkflow).toContain("pnpm config:validate");
     expect(ciWorkflow).toContain("pnpm eval:agent");
     expect(ciWorkflow).toContain("pnpm eval:kernel");
+    expect(ciWorkflow).toContain("pnpm eval:kernel:integration");
     expect(ciWorkflow.indexOf("pnpm eval:kernel")).toBeLessThan(ciWorkflow.indexOf("pnpm build"));
+    expect(ciWorkflow.indexOf("pnpm eval:kernel:integration")).toBeLessThan(
+      ciWorkflow.indexOf("pnpm build")
+    );
     expect(ciWorkflow).toContain("pnpm build");
 
     expect(releaseWorkflow).toContain("name: Production Release");
@@ -137,6 +141,28 @@ describe("production profile configuration deployment contract", () => {
 
     expect(projectFileExists(".github/workflows/hhc-line-function-bot.yml")).toBe(false);
     expect(projectFileExists("azure-pipelines.yml")).toBe(false);
+  });
+
+  it("owns a loopback-only disposable Redis AOF and pgvector integration stack", () => {
+    const compose = readProjectFile("compose.kernel-integration.yml");
+    const vitestConfig = readProjectFile("vitest.config.ts");
+    const integrationVitestConfig = readProjectFile("vitest.kernel-integration.config.ts");
+    const integrationCli = readProjectFile("src/tools/eval-kernel-integration.ts");
+
+    expect(compose).toContain("redis:7.4.2-alpine");
+    expect(compose).toContain("pgvector/pgvector:0.8.1-pg16");
+    expect(compose).toContain("--appendonly");
+    expect(compose).toContain("--appendfsync");
+    expect(compose).toContain('"127.0.0.1:${KERNEL_REDIS_PORT}:6379"');
+    expect(compose).toContain('"127.0.0.1:${KERNEL_POSTGRES_PORT}:5432"');
+    expect(compose.match(/healthcheck:/g)).toHaveLength(2);
+    expect(compose).toContain("redis-data:");
+    expect(compose).toContain("postgres-data:");
+    expect(vitestConfig).toContain("kernel-redis-integration.test.ts");
+    expect(vitestConfig).toContain("kernel-postgres-integration.test.ts");
+    expect(integrationVitestConfig).toContain("testTimeout: 60_000");
+    expect(integrationCli).toContain("kernel-redis-integration.test.ts");
+    expect(integrationCli).toContain("kernel-postgres-integration.test.ts");
   });
 
   it("defines a scheduled ACA catalog sync job that reuses the app image", () => {

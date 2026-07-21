@@ -30,6 +30,7 @@ describe("retrieval product regression corpus", () => {
         { id: "ppt-a", name: "第一份投影片.pptx" },
         { id: "ppt-b", name: "第二份投影片.pptx" }
       ]),
+      getItemById: vi.fn(async (_driveId, itemId) => ({ id: itemId, name: "current-item" })),
       createSharingLink: vi.fn(async (_driveId, itemId) => `https://download.invalid/${itemId}`)
     };
     const handler = createFindPptSlidesHandler({
