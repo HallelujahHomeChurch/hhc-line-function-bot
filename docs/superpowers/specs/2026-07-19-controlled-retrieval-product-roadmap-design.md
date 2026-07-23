@@ -310,6 +310,60 @@ R0 through R3 form one product milestone. The gate requires:
 - all known recurrence cases for stale replay, alias recall, task-frame misuse,
   and schedule-domain confusion covered by regression tests.
 
+## R3.5 — Modular Monolith Maintainability
+
+### Outcome
+
+The service remains one deployable application while new capabilities, workflow
+stages, and data sources evolve through explicit dependency boundaries,
+purpose-specific dependency injection, and discoverable capability modules.
+
+### Scope
+
+- Add automated dependency rules: only the composition root may construct
+  concrete infrastructure clients; transport adapters may call application
+  use cases but not infrastructure; capability logic depends on declared ports
+  rather than concrete Redis, PostgreSQL, Graph, Notion, or provider clients.
+- Split the Fastify/LINE entrance into focused transport adapters for webhook,
+  access and registration commands, admin commands, postbacks, and health
+  routes, while retaining one application deployment and canonical webhook
+  paths.
+- Split controlled turn orchestration into explicit, independently testable
+  stages and a coordinator that preserves the existing deterministic stage
+  precedence and server-owned workflow state.
+- Replace oversized capability dependency contexts with narrow dependency
+  interfaces owned by each capability. Production composition must not hide
+  in-memory fallbacks; test composition supplies fakes explicitly.
+- Move capability definition, handler, ports, and deterministic eval cases
+  toward vertical slices. The central registry performs discovery and
+  completeness checks only.
+- Split global cross-domain types into bounded contracts for transport, access,
+  agent/kernel, capability, and infrastructure boundaries.
+- Permit naming, file organization, and local duplicate-code cleanup only when
+  directly required by one of these boundary changes.
+
+### Non-goals
+
+- No microservice split, runtime DI container, decorator-based injection, or
+  generic repository framework.
+- No change to user-visible capability behavior, controlled routing authority,
+  access policy, result-envelope safety rules, or deployment topology.
+- No stand-alone formatting, rename-only, or cosmetic rewrite.
+
+### Exit criteria
+
+- CI enforces the declared import/dependency rules.
+- `server.ts` no longer contains the business implementation of access/admin
+  commands or postback workflows, and turn orchestration stages have focused
+  tests.
+- A capability declares only its own dependencies and can be composed with
+  explicit production adapters or test fakes without a shared service-locator
+  context.
+- `query_schedule` is migrated as the reference vertical slice, with its
+  definition, handler, ports, and eval ownership discoverable together.
+- Full tests and the versioned Kernel acceptance gate remain green with no
+  external behavior regression.
+
 ## R4 — Product Experience
 
 ### Outcome
@@ -460,6 +514,7 @@ R0 Observable baseline
   -> R2 Schedule domains
   -> R3 Unified retrieval freshness
   -> Controlled Retrieval Kernel v1
+  -> R3.5 Modular monolith maintainability
   -> R4 Product experience
   -> R5 Production reliability
   -> R6 Repeatable church package
@@ -468,10 +523,12 @@ R0 Observable baseline
 ```
 
 R2 may start after R1 behavior contracts are fixed, but R2 and R3 do not pass
-the kernel gate until the R0 telemetry proves their production behavior. R4 may
-prototype copy and onboarding during R2/R3, but it must not hide unresolved
-freshness or state failures. R6 begins only after R5 establishes backup,
-offboarding, release, and incident controls.
+the kernel gate until the R0 telemetry proves their production behavior. R3.5
+starts only after the Kernel v1 stabilization gate and completes before R4
+implementation; it preserves behavior while making later product work cheaper
+to change. R4 may prototype copy and onboarding during R2/R3, but it must not
+hide unresolved freshness or state failures. R6 begins only after R5 establishes
+backup, offboarding, release, and incident controls.
 
 ## Planning Horizon
 
@@ -479,18 +536,19 @@ These ranges are planning estimates, not delivery commitments. They assume one
 primary implementation stream, test-first delivery, normal pull-request review,
 and production observation between behavior changes.
 
-| Milestone                       |          Indicative range | May overlap with                     |
-| ------------------------------- | ------------------------: | ------------------------------------ |
-| R0 Observable baseline          |                 1–2 weeks | Regression-corpus preparation for R1 |
-| R1 Agent state/cache lifecycle  |                 2–4 weeks | R2 design only                       |
-| R2 Declarative schedule domains |                 4–6 weeks | R3 catalog contract design           |
-| R3 Unified retrieval freshness  |                 3–5 weeks | R4 copy/onboarding prototype         |
-| Kernel v1 stabilization         |                   2 weeks | R4 implementation                    |
-| R4 Product experience           |                 2–3 weeks | Late R3/R5 preparation               |
-| R5 Production reliability       |                 4–6 weeks | R6 tenant-model design               |
-| R6 Repeatable church package    |                6–10 weeks | Pilot onboarding preparation         |
-| R7 Managed pilot                | 8–12 weeks of observation | No R8 decision before evidence       |
-| R8 SaaS scale                   |           Evidence-driven | Begins only after R7 exit criteria   |
+| Milestone                             |          Indicative range | May overlap with                     |
+| ------------------------------------- | ------------------------: | ------------------------------------ |
+| R0 Observable baseline                |                 1–2 weeks | Regression-corpus preparation for R1 |
+| R1 Agent state/cache lifecycle        |                 2–4 weeks | R2 design only                       |
+| R2 Declarative schedule domains       |                 4–6 weeks | R3 catalog contract design           |
+| R3 Unified retrieval freshness        |                 3–5 weeks | R4 copy/onboarding prototype         |
+| Kernel v1 stabilization               |                   2 weeks | R4 implementation                    |
+| R3.5 Modular monolith maintainability |                 2–4 weeks | R4 design only                       |
+| R4 Product experience                 |                 2–3 weeks | Late R3/R5 preparation               |
+| R5 Production reliability             |                 4–6 weeks | R6 tenant-model design               |
+| R6 Repeatable church package          |                6–10 weeks | Pilot onboarding preparation         |
+| R7 Managed pilot                      | 8–12 weeks of observation | No R8 decision before evidence       |
+| R8 SaaS scale                         |           Evidence-driven | Begins only after R7 exit criteria   |
 
 R0 through R3 therefore represent roughly 12 to 19 weeks on a single stream,
 including the stabilization gate. Parallelism may shorten calendar time only
