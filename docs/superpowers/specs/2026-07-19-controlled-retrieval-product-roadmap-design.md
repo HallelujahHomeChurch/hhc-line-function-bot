@@ -294,6 +294,70 @@ resource-memory, freshness, and invalidation lifecycle.
 - Resource memory cannot resurrect a tombstoned or unauthorized item.
 - Restart and two-replica Redis tests produce consistent results.
 
+## R3.1 — Remote Provider Policy and Local Runtime Retirement
+
+### Outcome
+
+The service no longer depends on an office-hosted Ollama endpoint. DeepSeek is
+the only active remote LLM provider, while `text-embedding-3-small` supplies
+cloud embeddings for knowledge retrieval. Both remain configured through
+provider contracts and secret references so a future remote API provider can
+replace either integration without capability-specific changes.
+
+### Scope
+
+- Replace the Ollama-based LLM and embedding runtime with separately configured
+  remote chat and embedding provider contracts. Provider names, API-key env
+  references, base URLs, models, timeouts, and capabilities remain
+  profile-scoped configuration; keys never enter PostgreSQL or profile JSON.
+- Use DeepSeek as the only active LLM provider. When it is unavailable, invalid,
+  or times out, retain only deterministic candidate/validator recovery and
+  fail-closed clarification or unavailable outcomes; do not send the request
+  to a local or second semantic model.
+- Use OpenAI `text-embedding-3-small` at its native 1536 dimensions for the
+  active knowledge index. Keep the existing PostgreSQL/pgvector retrieval and
+  controlled result-envelope architecture rather than delegating knowledge
+  search to a provider-hosted vector store.
+- Preserve knowledge source registration, access policy, lifecycle, audit, and
+  source metadata. Treat existing nodes, chunks, embeddings, routing metadata,
+  and their snapshot revision as derived data: clear them in a controlled
+  migration and rebuild every enabled source before atomic publication of the
+  new 1536-dimensional index.
+- Make embedding model identity and dimension part of the promoted snapshot
+  contract. A query never mixes vectors from different embedding models. If the
+  active embedding provider is unavailable, knowledge search returns an
+  unavailable outcome instead of a cross-model fallback.
+- Remove Ollama configuration, clients, diagnostics, tests, local-services
+  runtime requirements, and deployment references after the remote replacement
+  is live and verified.
+- Add provider usage, timeout, unavailable, and rebuild metrics without raw
+  content, API keys, prompts, source titles, or URLs.
+
+### Non-goals
+
+- No second semantic LLM fallback in this milestone.
+- No provider-hosted file/vector-store product and no local CPU/GPU embedding
+  service.
+- No migration of secrets into PostgreSQL, no raw-text telemetry, and no
+  downgrade of controlled routing, access, or result-envelope rules.
+
+### Exit criteria
+
+- A deployment with no reachable office/Ollama endpoint starts and completes
+  all supported LLM and knowledge flows through remote providers.
+- DeepSeek failure exercises deterministic recovery or a safe unavailable/
+  clarification response; it never attempts a local-model connection.
+- All enabled knowledge sources are re-indexed with `text-embedding-3-small`
+  1536-dimensional vectors and publish atomically only after a complete
+  snapshot is ready.
+- Provider/model/dimension changes fail closed until a complete replacement
+  index has been published.
+- The remote-provider contract supports a future OpenAI-compatible provider
+  through configuration and a provider adapter, without changes in capability
+  handlers or the controlled router.
+- Full tests, remote-provider integration tests, and the versioned Kernel gate
+  pass with the revised lane policy.
+
 ## Controlled Retrieval Kernel v1 Gate
 
 R0 through R3 form one product milestone. The gate requires:
@@ -513,6 +577,7 @@ R0 Observable baseline
   -> R1 Agent state/cache lifecycle
   -> R2 Schedule domains
   -> R3 Unified retrieval freshness
+  -> R3.1 Remote provider policy and local runtime retirement
   -> Controlled Retrieval Kernel v1
   -> R3.5 Modular monolith maintainability
   -> R4 Product experience
@@ -523,12 +588,14 @@ R0 Observable baseline
 ```
 
 R2 may start after R1 behavior contracts are fixed, but R2 and R3 do not pass
-the kernel gate until the R0 telemetry proves their production behavior. R3.5
-starts only after the Kernel v1 stabilization gate and completes before R4
-implementation; it preserves behavior while making later product work cheaper
-to change. R4 may prototype copy and onboarding during R2/R3, but it must not
-hide unresolved freshness or state failures. R6 begins only after R5 establishes
-backup, offboarding, release, and incident controls.
+the kernel gate until the R0 telemetry proves their production behavior. R3.1
+completes before the final Kernel v1 stabilization so the integration and live
+provider checks exercise the remote-only runtime. R3.5 starts only after that
+stabilization gate and completes before R4 implementation; it preserves
+behavior while making later product work cheaper to change. R4 may prototype
+copy and onboarding during R2/R3, but it must not hide unresolved freshness or
+state failures. R6 begins only after R5 establishes backup, offboarding,
+release, and incident controls.
 
 ## Planning Horizon
 
@@ -542,6 +609,7 @@ and production observation between behavior changes.
 | R1 Agent state/cache lifecycle        |                 2–4 weeks | R2 design only                       |
 | R2 Declarative schedule domains       |                 4–6 weeks | R3 catalog contract design           |
 | R3 Unified retrieval freshness        |                 3–5 weeks | R4 copy/onboarding prototype         |
+| R3.1 Remote provider/local retirement |                 1–2 weeks | Kernel integration test design       |
 | Kernel v1 stabilization               |                   2 weeks | R4 implementation                    |
 | R3.5 Modular monolith maintainability |                 2–4 weeks | R4 design only                       |
 | R4 Product experience                 |                 2–3 weeks | Late R3/R5 preparation               |
