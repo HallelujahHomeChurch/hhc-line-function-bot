@@ -25,30 +25,16 @@ properties:
               - triggerParameter: connection
                 secretRef: attachment-scan-queue-connection-string
     secrets:
-      - name: line-helper-channel-secret
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: line-helper-channel-access-token
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
-      - name: line-helper-admin-user-id
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
-      - name: openai-api-key
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: graph-client-secret
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
-      - name: notion-token
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: database-url
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: redis-url
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
-      - name: deepseek-api-key
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
-      - name: observability-hmac-key
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: attachment-scan-queue-connection-string
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
-      - name: attachment-scan-queue-url
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+        value: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING
   template:
     containers:
       - name: attachment-scan
@@ -62,12 +48,8 @@ properties:
             value: Asia/Taipei
           - name: PROFILE_CONFIG_PATH
             value: /app/config/profiles.json
-          - name: LINE_HELPER_CHANNEL_SECRET
-            secretRef: line-helper-channel-secret
           - name: LINE_HELPER_CHANNEL_ACCESS_TOKEN
             secretRef: line-helper-channel-access-token
-          - name: LINE_HELPER_ADMIN_USER_ID
-            secretRef: line-helper-admin-user-id
           - name: DATABASE_URL
             secretRef: database-url
           - name: DATABASE_SSL
@@ -76,30 +58,8 @@ properties:
             secretRef: redis-url
           - name: REDIS_KEY_PREFIX
             value: hhc-line-function-bot
-          - name: OPENAI_API_KEY
-            secretRef: openai-api-key
-          - name: OPENAI_BASE_URL
-            value: https://api.openai.com/v1
-          - name: OPENAI_EMBEDDING_MODEL
-            value: text-embedding-3-small
-          - name: EMBEDDING_BATCH_SIZE
-            value: "16"
-          - name: EMBEDDING_TIMEOUT_MS
-            value: "30000"
-          - name: DEEPSEEK_API_KEY
-            secretRef: deepseek-api-key
-          - name: OBSERVABILITY_HMAC_KEY
-            secretRef: observability-hmac-key
-          - name: DEEPSEEK_BASE_URL
-            value: https://api.deepseek.com
-          - name: DEEPSEEK_MODEL
-            value: deepseek-v4-flash
-          - name: DEEPSEEK_TIMEOUT_MS
-            value: "8000"
           - name: ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING
             secretRef: attachment-scan-queue-connection-string
-          - name: ATTACHMENT_SCAN_QUEUE_URL
-            secretRef: attachment-scan-queue-url
           - name: ATTACHMENT_SCAN_QUEUE_NAME
             value: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
           - name: CLAMAV_DATABASE_DIRECTORY
@@ -112,6 +72,10 @@ properties:
             value: "26214400"
           - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS
             value: "30000"
+          - name: EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS
+            value: "15000"
+          - name: EXTERNAL_RESOURCE_MAX_REDIRECTS
+            value: "3"
           - name: GRAPH_TENANT_ID
             value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_CLIENT_ID
@@ -140,18 +104,6 @@ properties:
             value: view
           - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
             value: pdf,jpg,jpeg,png
-          - name: NOTION_TOKEN
-            secretRef: notion-token
-          - name: NOTION_SERVICE_DATABASE_ID
-            value: PLACEHOLDER_COPY_FROM_BOT_ENV
-          - name: NOTION_DATE_PROPERTY
-            value: PLACEHOLDER_COPY_FROM_BOT_ENV
-          - name: NOTION_MEETING_PROPERTY
-            value: PLACEHOLDER_COPY_FROM_BOT_ENV
-          - name: NOTION_ROLE_PROPERTY
-            value: PLACEHOLDER_COPY_FROM_BOT_ENV
-          - name: NOTION_PERSON_PROPERTY
-            value: PLACEHOLDER_COPY_FROM_BOT_ENV
         volumeMounts:
           - volumeName: clamav-signatures
             mountPath: /var/lib/clamav

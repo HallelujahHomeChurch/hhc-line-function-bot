@@ -244,8 +244,17 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).toContain("queueLength: 1");
     expect(scanJob).toContain("triggerParameter: connection");
     expect(scanJob).toContain("secretRef: attachment-scan-queue-connection-string");
-    expect(scanJob).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
-    expect(scanJob).toContain("secretRef: attachment-scan-queue-url");
+    expect(scanJob).toContain("name: LINE_HELPER_CHANNEL_ACCESS_TOKEN");
+    expect(scanJob).toContain("name: DATABASE_URL");
+    expect(scanJob).toContain("name: REDIS_URL");
+    expect(scanJob).toContain("name: GRAPH_CLIENT_SECRET");
+    expect(scanJob).not.toContain("name: LINE_HELPER_CHANNEL_SECRET");
+    expect(scanJob).not.toContain("name: LINE_HELPER_ADMIN_USER_ID");
+    expect(scanJob).not.toContain("name: OPENAI_API_KEY");
+    expect(scanJob).not.toContain("name: DEEPSEEK_API_KEY");
+    expect(scanJob).not.toContain("name: NOTION_TOKEN");
+    expect(scanJob).not.toContain("name: OBSERVABILITY_HMAC_KEY");
+    expect(scanJob).not.toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
     expect(scanJob).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
     expect(scanJob).toContain("cpu: 1.0");
     expect(scanJob).toContain("memory: 4Gi");
@@ -279,6 +288,8 @@ describe("production profile configuration deployment contract", () => {
     expect(releaseWorkflow).toContain("SCAN_IMAGE_REPOSITORY");
 
     expect(deployment).toContain("az containerapp env storage set");
+    expect(deployment).toContain("az storage account keys list");
+    expect(deployment).not.toContain('secrets.get("clamav-signature-storage-key")');
     expect(deployment).toContain("--storage-name clamav-signatures-readonly");
     expect(deployment).toContain("--access-mode ReadOnly");
     expect(deployment).toContain("--storage-name clamav-signatures-readwrite");

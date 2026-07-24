@@ -1,4 +1,5 @@
 import { buildAgentJobQuickReply, buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
+import { dispatchAttachmentScanWork } from "../attachments/scan-outbox.js";
 import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import type { CatalogSourceRecord, CatalogStore } from "../catalog/store.js";
@@ -221,23 +222,43 @@ async function enqueueAttachmentScan(input: {
     }
 
     try {
-      await input.options.scanQueue.enqueue(workId);
-      return attachmentScanQueued(jobId);
+      const dispatch = await dispatchAttachmentScanWork(workId, {
+        store: input.options.scanWorkStore,
+        queue: input.options.scanQueue
+      });
+      return dispatch === "queued"
+        ? attachmentScanQueued(jobId)
+        : attachmentScanRetryScheduled(jobId);
     } catch {
       let cancelled = false;
       try {
-        cancelled = await input.options.scanWorkStore.cancelConfirmed(workId, "enqueue_failed");
+        cancelled = await input.options.scanWorkStore.cancelPendingEnqueue(
+          workId,
+          "enqueue_failed"
+        );
       } catch {
         // The queue may have accepted the message before its response was lost. Preserve the
         // requester-scoped job unless Redis proves that the unclaimed work was cancelled.
       }
-      if (!cancelled) return attachmentScanQueued(jobId);
+      if (!cancelled && input.options.scanWorkStore.supportsDurableEnqueueRetry) {
+        return attachmentScanRetryScheduled(jobId);
+      }
       await failAgentJobBestEffort(input.options.agentJobStore, jobId);
       return attachmentScanHandoffFailure();
     }
   } finally {
     await input.options.sessionStore.delete(input.pending.id);
   }
+}
+
+function attachmentScanRetryScheduled(jobId: string): FunctionExecutionResult {
+  return {
+    ok: true,
+    executedAction: "save_resource",
+    writePhase: "commit",
+    replyText: "檔案掃描工作已安全保存，系統會自動重試排入掃描佇列。",
+    quickReplies: [buildAgentJobQuickReply(jobId)]
+  };
 }
 
 function attachmentScanQueued(jobId: string): FunctionExecutionResult {

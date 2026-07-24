@@ -1,5 +1,8 @@
 import type { EmbeddingClient } from "./embedding.js";
 
+export const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
+export const OPENAI_EMBEDDING_DIMENSIONS = 1536;
+
 export interface OpenAiEmbeddingOptions {
   apiKey?: string;
   baseUrl: string;
@@ -10,6 +13,13 @@ export interface OpenAiEmbeddingOptions {
 }
 
 export function createOpenAiEmbeddingClient(options: OpenAiEmbeddingOptions): EmbeddingClient {
+  if (!options.apiKey?.trim()) throw new Error("embedding_missing_api_key");
+  if (options.model !== OPENAI_EMBEDDING_MODEL) {
+    throw new Error("embedding_model_unsupported");
+  }
+  if (options.dimensions !== OPENAI_EMBEDDING_DIMENSIONS) {
+    throw new Error("embedding_dimension_unsupported");
+  }
   const baseUrl = options.baseUrl.replace(/\/+$/u, "");
   const fetchImpl = options.fetchImpl ?? fetch;
   return {
@@ -18,7 +28,6 @@ export function createOpenAiEmbeddingClient(options: OpenAiEmbeddingOptions): Em
     dimensions: options.dimensions,
     async embed(input): Promise<number[][]> {
       if (input.length === 0) return [];
-      if (!options.apiKey) throw new Error("embedding_missing_api_key");
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
       try {

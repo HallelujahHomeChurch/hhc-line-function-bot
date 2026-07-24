@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
+import { buildAgentJobQuickReply, buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
+import { dispatchAttachmentScanWork } from "../attachments/scan-outbox.js";
+import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
+import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import {
   catalogSourceAllowsRead,
   type CatalogItemRecord,
@@ -75,6 +79,10 @@ export interface SheetMusicExternalSearchOptions {
 
 export type FindPopSheetMusicTextMessageOptions = FindPopSheetMusicPostbackOptions & {
   externalSearch?: SheetMusicExternalSearchOptions;
+  catalog?: CatalogStore;
+  agentJobStore?: AgentJobStore;
+  scanWorkStore?: AttachmentScanWorkStore;
+  scanQueue?: AttachmentScanQueue;
 };
 
 interface ScoredItem {
@@ -970,8 +978,88 @@ async function continueExternalSheetMusicImport(input: {
   if (!/^(保存|確認|確定|好|yes|y)$/iu.test(input.text.trim())) {
     return { ok: true, replyText: "請回覆「保存」確認，或回覆「取消」。" };
   }
-  await input.options.sessionStore.delete(input.session.id);
-  return { ok: true, replyText: "目前沒有開放匯入歌譜檔案。" };
+  const claimed = await input.options.sessionStore.take(input.session.id);
+  if (!claimed || claimed.type !== "external_sheet_music_import") {
+    return { ok: true, replyText: "這個匯入流程已經在處理或已完成。" };
+  }
+  return enqueueExternalSheetMusicImport({
+    options: input.options,
+    session: claimed,
+    context: input.context
+  });
+}
+
+async function enqueueExternalSheetMusicImport(input: {
+  options: FindPopSheetMusicTextMessageOptions;
+  session: ExternalSheetMusicImportSession;
+  context: TextMessageContext;
+}): Promise<FunctionExecutionResult> {
+  const { catalog, agentJobStore, scanWorkStore, scanQueue } = input.options;
+  const item = input.session.items[input.session.selectedIndex ?? -1];
+  const targetKind = input.session.targetKind;
+  const scope = buildAgentJobScope(input.context.profile.name, input.context.event.source);
+  if (
+    !catalog ||
+    !agentJobStore ||
+    !scanWorkStore ||
+    !scanQueue ||
+    !item ||
+    !targetKind ||
+    !scope
+  ) {
+    return { ok: true, replyText: "目前沒有開放匯入歌譜檔案。" };
+  }
+  const sourceKey = targetKind === "pop_sheet" ? "pop_sheet_music" : "hymn_sheet_music";
+  const sources = await catalog.listSources({
+    profileName: input.context.profile.name,
+    enabled: true,
+    sourceKeys: [sourceKey]
+  });
+  if (!sources.some((source) => source.capabilities.write.length > 0)) {
+    return { ok: true, replyText: "目前沒有保存檔案的權限。" };
+  }
+
+  const ttlMs = (input.context.profile.longRunningJobs?.resultTtlMinutes ?? 30) * 60_000;
+  let jobId: string | undefined;
+  try {
+    const job = await agentJobStore.createPending({ scope, label: "匯入歌譜", ttlMs });
+    jobId = job.id;
+    const work = await scanWorkStore.create({
+      jobId,
+      externalUrl: item.url,
+      scope,
+      target: {
+        sourceKey,
+        itemKind: targetKind,
+        domain: "sheet_music",
+        title: item.title
+      },
+      ttlMs
+    });
+    const dispatch = await dispatchAttachmentScanWork(work.id, {
+      store: scanWorkStore,
+      queue: scanQueue
+    });
+    return {
+      ok: true,
+      executedAction: "save_resource",
+      writePhase: "commit",
+      replyText:
+        dispatch === "queued"
+          ? "我已開始驗證與掃描這份公開歌譜，稍後可以按「查看結果」。"
+          : "歌譜匯入工作已安全保存，系統會自動重試排入掃描佇列。",
+      quickReplies: [buildAgentJobQuickReply(jobId)]
+    };
+  } catch {
+    if (jobId) {
+      try {
+        await agentJobStore.fail(jobId, "external_sheet_music_handoff_failed");
+      } catch {
+        // The requester receives a fail-closed reply; no webhook-side download is attempted.
+      }
+    }
+    return { ok: true, replyText: "建立歌譜匯入工作時遇到問題，請稍後重新選擇。" };
+  }
 }
 
 function externalImportConfirmation(session: ExternalSheetMusicImportSession) {

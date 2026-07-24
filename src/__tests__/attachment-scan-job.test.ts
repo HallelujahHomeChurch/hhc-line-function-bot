@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   readAttachmentScanJobEnvironment,
-  receiveAttachmentScanWork
+  receiveAttachmentScanWork,
+  shouldAcknowledgeAttachmentScanResult
 } from "../tools/run-attachment-scan-job.js";
 
 describe("attachment scan job environment", () => {
@@ -105,5 +106,13 @@ describe("attachment scan job environment", () => {
 
     await expect(receiveAttachmentScanWork(client)).resolves.toBeUndefined();
     expect(client.deleteMessage).toHaveBeenCalledWith("opaque-message", "opaque-receipt");
+  });
+
+  it("acknowledges not-claimed redelivery only after atomic terminal confirmation", () => {
+    const result = { status: "ignored", reason: "not_claimed" } as const;
+
+    expect(shouldAcknowledgeAttachmentScanResult(result, undefined)).toBe(false);
+    expect(shouldAcknowledgeAttachmentScanResult(result, "completed")).toBe(true);
+    expect(shouldAcknowledgeAttachmentScanResult(result, "failed")).toBe(true);
   });
 });

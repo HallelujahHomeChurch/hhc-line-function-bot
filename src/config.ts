@@ -9,6 +9,7 @@ import { normalizeProviderPolicy } from "./llm/provider-policy.js";
 import { FUNCTION_NAMES, MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
 import { DEFAULT_MEETING_WINDOWS } from "./schedules/occurrence-policy.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "./schedules/domain-registry.js";
+import { OPENAI_EMBEDDING_DIMENSIONS, OPENAI_EMBEDDING_MODEL } from "./clients/openai-embedding.js";
 import type {
   AppConfig,
   FunctionName,
@@ -558,6 +559,15 @@ function assertNoRetiredLocalModelRuntimeSettings(env: NodeJS.ProcessEnv): void 
 function readKnowledgeEmbeddingConfig(
   env: NodeJS.ProcessEnv
 ): KnowledgeConfig["embedding"] | undefined {
+  if (env.EMBEDDING_DIMENSIONS !== undefined) {
+    throw new Error("EMBEDDING_DIMENSIONS is not supported");
+  }
+  if (
+    env.OPENAI_EMBEDDING_MODEL !== undefined &&
+    env.OPENAI_EMBEDDING_MODEL.trim() !== OPENAI_EMBEDDING_MODEL
+  ) {
+    throw new Error("OPENAI_EMBEDDING_MODEL must be text-embedding-3-small");
+  }
   if (!env.NOTION_TOKEN) return undefined;
   const apiKey = env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
@@ -567,8 +577,8 @@ function readKnowledgeEmbeddingConfig(
     provider: "openai",
     apiKey,
     baseUrl: env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-    model: env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
-    dimensions: 1536,
+    model: OPENAI_EMBEDDING_MODEL,
+    dimensions: OPENAI_EMBEDDING_DIMENSIONS,
     batchSize: readInt(env.EMBEDDING_BATCH_SIZE, 16),
     timeoutMs: readInt(env.EMBEDDING_TIMEOUT_MS, 30_000)
   };

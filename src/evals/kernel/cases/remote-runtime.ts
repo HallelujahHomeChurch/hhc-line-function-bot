@@ -235,6 +235,7 @@ async function createScanFixture(
     },
     ttlMs: 60_000
   });
+  await workStore.markEnqueued(work.id);
   const catalog = new InMemoryCatalogStore();
   await catalog.upsertSource({
     profileName: "helper",

@@ -27,6 +27,7 @@ import {
   InMemoryAttachmentScanWorkStore,
   RedisAttachmentScanWorkStore
 } from "./attachments/scan-work-store.js";
+import { startAttachmentScanOutboxDispatcher } from "./attachments/scan-outbox.js";
 import { RedisConversationWindowStore } from "./agent/context-manager.js";
 import { RedisAgentTraceStore } from "./agent/trace-store.js";
 import { createCacheStore } from "./cache/create-cache-store.js";
@@ -224,6 +225,12 @@ const attachmentScanWorkStore = redis
 const attachmentScanQueue = config.attachments.scanQueueUrl
   ? createAzureAttachmentScanQueue(config.attachments.scanQueueUrl)
   : undefined;
+if (attachmentScanQueue && attachmentScanWorkStore.supportsDurableEnqueueRetry) {
+  startAttachmentScanOutboxDispatcher({
+    store: attachmentScanWorkStore,
+    queue: attachmentScanQueue
+  });
+}
 const conversationWindowStore = redis
   ? new RedisConversationWindowStore({ client: redis.client, keyPrefix: redis.keyPrefix })
   : undefined;

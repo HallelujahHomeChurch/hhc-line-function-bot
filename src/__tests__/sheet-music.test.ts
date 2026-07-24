@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
+import { InMemoryAttachmentScanQueue } from "../attachments/scan-queue.js";
+import { InMemoryAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
 import {
   createFindPopSheetMusicHandler,
@@ -531,7 +534,7 @@ describe("find_sheet_music", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("does not download or publish a selected direct result in the bot process", async () => {
+  it("queues an authorized selected direct result for worker-side download and publication", async () => {
     const now = new Date("2026-07-04T10:00:00.000Z");
     const sessionStore = new InMemorySessionStore({ now: () => now });
     await sessionStore.set({
@@ -545,17 +548,31 @@ describe("find_sheet_music", () => {
       items: [{ title: "Amazing Grace.pdf", url: "https://example.org/amazing-grace.pdf" }],
       expiresAt: "2026-07-04T10:10:00.000Z"
     });
-    const client = {
-      download: vi.fn().mockResolvedValue({
-        data: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]),
-        finalUrl: "https://example.org/amazing-grace.pdf",
-        fileName: "amazing-grace.pdf",
-        contentType: "application/pdf"
-      })
-    };
+    const catalog = new InMemoryCatalogStore();
+    await catalog.upsertSource({
+      profileName: "main",
+      sourceKey: "pop_sheet_music",
+      adapterType: "onedrive",
+      domain: "sheet_music",
+      defaultItemKind: "pop_sheet",
+      rootLocation: { driveId: "drive-1", folderItemId: "pop-root" },
+      enabled: true,
+      syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
+      capabilities: { read: ["main"], write: ["main:pop_sheet:write"] }
+    });
+    const agentJobStore = new InMemoryAgentJobStore({ now: () => now });
+    const scanWorkStore = new InMemoryAttachmentScanWorkStore({
+      jobStore: agentJobStore,
+      now: () => now
+    });
+    const scanQueue = new InMemoryAttachmentScanQueue();
     const textHandler = createFindPopSheetMusicTextMessageHandler({
       graph: { listFolderChildren: vi.fn(), createSharingLink: vi.fn() },
       sessionStore,
+      catalog,
+      agentJobStore,
+      scanWorkStore,
+      scanQueue,
       now: () => now
     });
     const context = handlerContext();
@@ -569,8 +586,18 @@ describe("find_sheet_music", () => {
     });
     const result = await textHandler.handle({ text: "保存" }, context);
 
-    expect(result?.replyText).toContain("目前沒有開放匯入歌譜檔案");
-    expect(client.download).not.toHaveBeenCalled();
+    expect(result?.replyText).toContain("查看結果");
+    expect(scanQueue.workIds).toHaveLength(1);
+    const work = await scanWorkStore.claim(scanQueue.workIds[0]!);
+    expect(work).toMatchObject({
+      externalUrl: "https://example.org/amazing-grace.pdf",
+      target: {
+        sourceKey: "pop_sheet_music",
+        itemKind: "pop_sheet",
+        domain: "sheet_music",
+        title: "Amazing Grace.pdf"
+      }
+    });
     await expect(
       sessionStore.findExternalSheetMusicImport({
         profileName: "main",

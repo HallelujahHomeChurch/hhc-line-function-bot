@@ -7,12 +7,14 @@ import { QueueServiceClient } from "@azure/storage-queue";
 import { RedisAgentJobStore } from "../agent/jobs.js";
 import { scanWithClamAvCli } from "../attachments/clamav-cli.js";
 import { runAttachmentScanWorker } from "../attachments/scan-worker.js";
+import type { AttachmentScanWorkerResult } from "../attachments/scan-worker.js";
+import { loadAttachmentScanWorkerConfigFromEnv } from "../attachments/scan-worker-config.js";
 import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
+import { createExternalBinaryClient } from "../clients/external-binary.js";
 import { createLineSdkContentClient } from "../clients/line.js";
-import { loadConfigFromEnv } from "../config.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createResourceBinaryPublisher } from "../functions/resource-binary-publisher.js";
 import { createRedisRuntime } from "../redis.js";
@@ -138,10 +140,7 @@ export async function runAttachmentScanJob(
       }
       workId = queueLease.workId;
     }
-    const config = loadConfigFromEnv(env);
-    if (!config.redis) throw new Error("scan_job_redis_required");
-    if (!config.database) throw new Error("scan_job_database_required");
-    if (!config.graph) throw new Error("scan_job_graph_required");
+    const config = loadAttachmentScanWorkerConfigFromEnv(env);
 
     redis = await createRedisRuntime(config.redis, { onError: () => undefined });
     postgres = await createPostgresRuntime(config.database);
@@ -165,6 +164,7 @@ export async function runAttachmentScanJob(
     const result = await runAttachmentScanWorker(workId, {
       workStore,
       lineContent: createLineSdkContentClient(),
+      externalBinary: createExternalBinaryClient(),
       profiles: config.profiles,
       publisher: createResourceBinaryPublisher({ catalog, graph }),
       scanner: {
@@ -174,6 +174,8 @@ export async function runAttachmentScanJob(
       databaseDirectory: jobEnvironment.databaseDirectory,
       maxBytes: config.attachments.maxBytes,
       lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
+      externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
+      externalMaxRedirects: config.externalResources.maxRedirects,
       scanTimeoutMs: jobEnvironment.scanTimeoutMs
     });
 
@@ -182,8 +184,14 @@ export async function runAttachmentScanJob(
       return { exitCode: 0, status: { status: "completed" } };
     }
     if (result.status === "ignored") {
-      await queueLease?.complete();
-      return { exitCode: 0, status: { status: "ignored", reason: result.reason } };
+      const terminalStatus = await workStore.terminalStatus(workId);
+      if (shouldAcknowledgeAttachmentScanResult(result, terminalStatus)) {
+        await queueLease?.complete();
+      }
+      return {
+        exitCode: terminalStatus ? 0 : 1,
+        status: { status: "ignored", reason: result.reason }
+      };
     }
     if (!result.infrastructureFailure) {
       await queueLease?.complete();
@@ -200,6 +208,17 @@ export async function runAttachmentScanJob(
   } finally {
     await closeRuntime(redis, postgres);
   }
+}
+
+export function shouldAcknowledgeAttachmentScanResult(
+  result: AttachmentScanWorkerResult,
+  terminalStatus: "completed" | "failed" | undefined
+): boolean {
+  return (
+    result.status === "completed" ||
+    (result.status === "failed" && !result.infrastructureFailure) ||
+    (result.status === "ignored" && terminalStatus !== undefined)
+  );
 }
 
 function isValidQueueName(value: string): boolean {

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
-import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
+import {
+  InMemoryAttachmentScanWorkStore,
+  RedisAttachmentScanWorkStore
+} from "../attachments/scan-work-store.js";
 
 const now = new Date("2026-07-24T04:00:00.000Z");
 const scope = {
@@ -38,6 +41,7 @@ describe("attachment scan work store", () => {
       },
       ttlMs: 600_000
     });
+    await store.markEnqueued(work.id);
 
     const claimed = await Promise.all([store.claim(work.id), store.claim(work.id)]);
 
@@ -49,7 +53,7 @@ describe("attachment scan work store", () => {
       scope,
       target: { title: "SundayDeck" }
     });
-    expect(client.evalCalls).toHaveLength(2);
+    expect(client.evalCalls).toHaveLength(4);
   });
 
   it("atomically cancels only work that has not already been claimed", async () => {
@@ -76,9 +80,9 @@ describe("attachment scan work store", () => {
       ttlMs: 600_000
     });
 
-    await expect(store.cancelConfirmed(work.id, "enqueue_failed")).resolves.toBe(true);
+    await expect(store.cancelPendingEnqueue(work.id, "enqueue_failed")).resolves.toBe(true);
     await expect(store.claim(work.id)).resolves.toBeUndefined();
-    await expect(store.cancelConfirmed(work.id, "enqueue_failed")).resolves.toBe(false);
+    await expect(store.cancelPendingEnqueue(work.id, "enqueue_failed")).resolves.toBe(false);
   });
 
   it("refuses expired, completed, already-claimed, or foreign work", async () => {
@@ -104,6 +108,7 @@ describe("attachment scan work store", () => {
       },
       ttlMs: 600_000
     });
+    await store.markEnqueued(work.id);
 
     await expect(store.claim(work.id)).resolves.toMatchObject({ status: "claimed" });
     await expect(store.claim(work.id)).resolves.toBeUndefined();
@@ -135,10 +140,82 @@ describe("attachment scan work store", () => {
     );
     await expect(store.claim(work.id)).resolves.toBeUndefined();
   });
+
+  it("reclaims a crashed claim only after its bounded lease expires", async () => {
+    let current = new Date("2026-07-24T04:00:00.000Z");
+    let leaseSequence = 0;
+    const jobStore = new InMemoryAgentJobStore({ now: () => current });
+    const job = await jobStore.createPending({ scope, label: "保存檔案", ttlMs: 600_000 });
+    const store = new InMemoryAttachmentScanWorkStore({
+      jobStore,
+      now: () => current,
+      claimLeaseMs: 60_000,
+      claimIdFactory: () => `lease-${++leaseSequence}`
+    });
+    const work = await store.create({
+      jobId: job.id,
+      lineMessageId: "line-message-opaque-id",
+      scope,
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck"
+      },
+      ttlMs: 600_000
+    });
+    await store.markEnqueued(work.id);
+
+    const first = await store.claim(work.id);
+    expect(first).toMatchObject({
+      status: "claimed",
+      claimId: "lease-1",
+      claimExpiresAt: "2026-07-24T04:01:00.000Z"
+    });
+    await expect(store.claim(work.id)).resolves.toBeUndefined();
+
+    current = new Date("2026-07-24T04:01:00.000Z");
+    const reclaimed = await store.claim(work.id);
+    expect(reclaimed).toMatchObject({
+      status: "claimed",
+      claimId: "lease-2",
+      claimExpiresAt: "2026-07-24T04:02:00.000Z"
+    });
+
+    await expect(store.fail(work.id, first!.claimId!, "worker_failed")).resolves.toBe(false);
+    await expect(store.terminalStatus(work.id)).resolves.toBeUndefined();
+    await expect(store.fail(work.id, reclaimed!.claimId!, "worker_failed")).resolves.toBe(true);
+    await expect(store.terminalStatus(work.id)).resolves.toBe("failed");
+  });
+
+  it("atomically reports terminal work for safe queue redelivery acknowledgement", async () => {
+    const jobStore = new InMemoryAgentJobStore({ now: () => now });
+    const job = await jobStore.createPending({ scope, label: "保存檔案", ttlMs: 600_000 });
+    const store = new InMemoryAttachmentScanWorkStore({ jobStore, now: () => now });
+    const work = await store.create({
+      jobId: job.id,
+      lineMessageId: "line-message-opaque-id",
+      scope,
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck"
+      },
+      ttlMs: 600_000
+    });
+    await store.markEnqueued(work.id);
+    const claim = await store.claim(work.id);
+    await store.fail(work.id, claim!.claimId!, "scan_infected");
+
+    await expect(store.terminalStatus(work.id)).resolves.toBe("failed");
+    await expect(store.claim(work.id)).resolves.toBeUndefined();
+  });
 });
 
 class FakeRedisScanWorkClient {
   readonly values = new Map<string, string>();
+  readonly sets = new Map<string, Set<string>>();
   readonly evalCalls: Array<{
     script: string;
     options: { keys: string[]; arguments: string[] };
@@ -152,13 +229,32 @@ class FakeRedisScanWorkClient {
     this.values.set(key, value);
   }
 
+  async sMembers(key: string): Promise<string[]> {
+    return Array.from(this.sets.get(key) ?? []);
+  }
+
+  async sAdd(key: string, member: string): Promise<void> {
+    const values = this.sets.get(key) ?? new Set<string>();
+    values.add(member);
+    this.sets.set(key, values);
+  }
+
+  async sRem(key: string, member: string): Promise<void> {
+    this.sets.get(key)?.delete(member);
+  }
+
   async eval(
     script: string,
     options: { keys: string[]; arguments: string[] }
   ): Promise<string | null> {
     this.evalCalls.push({ script, options });
     const [key] = options.keys;
-    const [expectedId, currentTime, transitionValue] = options.arguments;
+    if (script.includes('redis.call("SADD"')) {
+      this.values.set(key!, options.arguments[1]!);
+      await this.sAdd(options.keys[1]!, options.arguments[2]!);
+      return options.arguments[1]!;
+    }
+    const [expectedId, currentTime] = options.arguments;
     const raw = this.values.get(key);
     if (!raw) return null;
     const record = JSON.parse(raw) as {
@@ -166,26 +262,49 @@ class FakeRedisScanWorkClient {
       status: string;
       expiresAt: string;
       claimedAt?: string;
+      claimId?: string;
+      claimExpiresAt?: string;
     };
-    const isCancel = script.includes('work.status = "failed"');
-    if (
-      record.id !== expectedId ||
-      record.status !== "confirmed" ||
-      record.expiresAt <= currentTime ||
-      !isValidWork(record)
-    ) {
+    if (record.id !== expectedId || !isValidWork(record)) {
       return null;
     }
-    const transitioned = isCancel
-      ? {
-          ...record,
-          status: "failed",
-          failureCode: transitionValue,
-          completedAt: currentTime
-        }
-      : { ...record, status: "claimed", claimedAt: transitionValue };
+    let transitioned: Record<string, unknown>;
+    if (script.includes('work.status = "queued"')) {
+      if (record.status !== "pending_enqueue" || record.expiresAt <= currentTime) return null;
+      transitioned = { ...record, status: "queued" };
+    } else if (script.includes("local claimable =")) {
+      if (
+        !(
+          record.status === "queued" ||
+          (record.status === "claimed" && record.claimExpiresAt! <= currentTime)
+        ) ||
+        record.expiresAt <= currentTime
+      ) {
+        return null;
+      }
+      transitioned = {
+        ...record,
+        status: "claimed",
+        claimedAt: options.arguments[2],
+        claimId: options.arguments[3],
+        claimExpiresAt: options.arguments[4]
+      };
+    } else if (script.includes('work.status = "failed"')) {
+      if (record.status !== "pending_enqueue" || record.expiresAt <= currentTime) return null;
+      transitioned = {
+        ...record,
+        status: "failed",
+        failureCode: options.arguments[2],
+        completedAt: currentTime
+      };
+    } else {
+      return null;
+    }
     const serialized = JSON.stringify(transitioned);
     this.values.set(key, serialized);
+    if (script.includes('redis.call("SREM"')) {
+      await this.sRem(options.keys[1]!, expectedId!);
+    }
     return serialized;
   }
 }

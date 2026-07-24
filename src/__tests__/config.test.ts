@@ -661,6 +661,25 @@ describe("config", () => {
     });
   });
 
+  it("rejects any embedding dimension override and any unsupported model override", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        ...baseEnv(),
+        ...knowledgeEnv(),
+        OPENAI_API_KEY: "openai-secret",
+        EMBEDDING_DIMENSIONS: "1536"
+      })
+    ).toThrow("EMBEDDING_DIMENSIONS is not supported");
+    expect(() =>
+      loadConfigFromEnv({
+        ...baseEnv(),
+        ...knowledgeEnv(),
+        OPENAI_API_KEY: "openai-secret",
+        OPENAI_EMBEDDING_MODEL: "text-embedding-3-large"
+      })
+    ).toThrow("OPENAI_EMBEDDING_MODEL must be text-embedding-3-small");
+  });
+
   it("loads DeepSeek as the sole LLM provider", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),

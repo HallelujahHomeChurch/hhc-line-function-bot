@@ -7,12 +7,14 @@ import type {
   AttachmentScanWork,
   AttachmentScanWorkStore
 } from "./scan-work-store.js";
+import type { ExternalBinaryClient } from "../clients/external-binary.js";
+import type { AttachmentScanWorkerProfile } from "./scan-worker-config.js";
 import {
   prepareResourceBinary,
   type ResourceBinaryPublisher,
   type ResourcePublishItemKind
 } from "../functions/resource-binary-publisher.js";
-import type { BotProfileConfig, LineContentClient } from "../types.js";
+import type { LineContentClient } from "../types.js";
 
 const DEFAULT_SIGNATURE_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const DEFAULT_SCAN_TIMEOUT_MS = 15_000;
@@ -35,13 +37,16 @@ export interface AttachmentFileScanner {
 export interface AttachmentScanWorkerOptions {
   workStore: AttachmentScanWorkStore;
   lineContent: LineContentClient;
-  profiles: BotProfileConfig[];
+  externalBinary?: ExternalBinaryClient;
+  profiles: AttachmentScanWorkerProfile[];
   publisher: ResourceBinaryPublisher;
   scanner: AttachmentFileScanner;
   readSignatureManifest: () => Promise<unknown>;
   databaseDirectory: string;
   maxBytes: number;
   lineDownloadTimeoutMs: number;
+  externalDownloadTimeoutMs?: number;
+  externalMaxRedirects?: number;
   scanTimeoutMs?: number;
   signatureMaxAgeMs?: number;
   now?: () => Date;
@@ -84,12 +89,38 @@ export async function runAttachmentScanWorker(
       return failWork(options.workStore, work, "validation_failed", false);
     }
 
-    let content: Awaited<ReturnType<LineContentClient["getMessageContent"]>>;
+    let content: {
+      data: Uint8Array;
+      contentType?: string;
+      fileName?: string;
+      sourceKind: "line" | "external";
+    };
     try {
-      content = await options.lineContent.getMessageContent(work.lineMessageId, profile, {
-        maxBytes: options.maxBytes,
-        timeoutMs: options.lineDownloadTimeoutMs
-      });
+      if (work.lineMessageId) {
+        const downloaded = await options.lineContent.getMessageContent(
+          work.lineMessageId,
+          profile,
+          {
+            maxBytes: options.maxBytes,
+            timeoutMs: options.lineDownloadTimeoutMs
+          }
+        );
+        content = { ...downloaded, sourceKind: "line" };
+      } else {
+        if (!options.externalBinary) throw new Error("external_binary_unavailable");
+        const downloaded = await options.externalBinary.download({
+          url: work.externalUrl!,
+          maxBytes: options.maxBytes,
+          timeoutMs: options.externalDownloadTimeoutMs ?? 15_000,
+          maxRedirects: options.externalMaxRedirects ?? 3
+        });
+        content = {
+          data: downloaded.data,
+          contentType: downloaded.contentType,
+          fileName: downloaded.fileName,
+          sourceKind: "external"
+        };
+      }
     } catch {
       return failWork(options.workStore, work, "download_failed", true);
     }
@@ -98,11 +129,11 @@ export async function runAttachmentScanWorker(
     const preparation = prepareResourceBinary({
       binary: {
         data: content.data,
-        declaredFileName: inferredExtension
-          ? `${work.target.title}${inferredExtension}`
-          : undefined,
+        declaredFileName:
+          content.fileName ??
+          (inferredExtension ? `${work.target.title}${inferredExtension}` : undefined),
         declaredContentType: content.contentType,
-        sourceKind: "line"
+        sourceKind: content.sourceKind
       },
       target: {
         profileName: work.scope.profileName,
@@ -171,7 +202,18 @@ export async function runAttachmentScanWorker(
       if (publication.status === "failed") {
         return failWork(options.workStore, work, "publish_failed", true);
       }
-      await options.workStore.complete(work.id, publication.result);
+      const completed = await options.workStore.complete(
+        work.id,
+        work.claimId!,
+        publication.result
+      );
+      if (!completed) {
+        return {
+          status: "failed",
+          failureCode: "worker_failed",
+          infrastructureFailure: true
+        };
+      }
       return { status: "completed" };
     } finally {
       if (ephemeralDirectory) {
@@ -223,7 +265,14 @@ async function failWork(
   failureCode: AttachmentScanFailureCode,
   infrastructureFailure: boolean
 ): Promise<AttachmentScanWorkerResult> {
-  await store.fail(work.id, failureCode);
+  const failed = await store.fail(work.id, work.claimId!, failureCode);
+  if (!failed) {
+    return {
+      status: "failed",
+      failureCode: "worker_failed",
+      infrastructureFailure: true
+    };
+  }
   return { status: "failed", failureCode, infrastructureFailure };
 }
 

@@ -408,7 +408,7 @@ describe("attachment save pipeline", () => {
     expect(results.map((result) => result?.replyText).join("\n")).toContain("已經在處理或已完成");
   });
 
-  it("preserves a live job when an accepted queue message wins the claim before an ambiguous enqueue error", async () => {
+  it("fails closed when an ambiguous queue response has no durable outbox", async () => {
     const { sessionStore, catalog, agentJobStore, scanWorkStore, graph } = await setup();
     const handler = createPendingAttachmentTextMessageHandler({
       sessionStore,
@@ -429,7 +429,39 @@ describe("attachment save pipeline", () => {
 
     const result = await handler.handle({ text: "保存" }, context("保存", "req-confirm"));
 
-    expect(result?.replyText).toContain("查看結果");
+    expect(result?.replyText).toContain("遇到問題");
+    await expect(
+      agentJobStore.get(agentJobStore.lastCreated!.id, {
+        profileName: "helper",
+        sourceKey: "group:C1",
+        requesterUserId: "U1"
+      })
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(graph.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("reports retry scheduling only when the persisted work has a durable dispatcher", async () => {
+    const { sessionStore, catalog, agentJobStore, scanWorkStore, graph } = await setup();
+    const durableStore = Object.assign(scanWorkStore, {
+      supportsDurableEnqueueRetry: true as const
+    });
+    const handler = createPendingAttachmentTextMessageHandler({
+      sessionStore,
+      catalog,
+      agentJobStore,
+      scanWorkStore: durableStore,
+      scanQueue: {
+        enqueue: vi.fn().mockRejectedValue(new Error("queue unavailable before send"))
+      },
+      now: () => new Date("2026-07-11T10:00:00.000Z")
+    });
+    await seedPendingAttachment(sessionStore);
+    await handler.handle({ text: "投影片" }, context("投影片", "req-purpose"));
+    await handler.handle({ text: "SundayDeck" }, context("SundayDeck", "req-preview"));
+
+    const result = await handler.handle({ text: "保存" }, context("保存", "req-confirm"));
+
+    expect(result?.replyText).toContain("自動重試");
     await expect(
       agentJobStore.get(agentJobStore.lastCreated!.id, {
         profileName: "helper",
@@ -497,9 +529,13 @@ describe("attachment save pipeline", () => {
     const { sessionStore, agentJobStore, catalog, graph, lineContent } = await setup();
     const scanQueue = new InMemoryAttachmentScanQueue();
     const scanWorkStore: AttachmentScanWorkStore = {
+      supportsDurableEnqueueRetry: false,
       create: vi.fn().mockRejectedValue(new Error("redis unavailable")),
+      markEnqueued: vi.fn(),
+      listPendingEnqueue: vi.fn(),
       claim: vi.fn(),
-      cancelConfirmed: vi.fn(),
+      cancelPendingEnqueue: vi.fn(),
+      terminalStatus: vi.fn(),
       complete: vi.fn(),
       fail: vi.fn()
     };

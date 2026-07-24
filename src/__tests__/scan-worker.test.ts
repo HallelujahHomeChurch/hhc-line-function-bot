@@ -39,6 +39,7 @@ async function setup(
   options: {
     scanStatus?: "clean" | "infected" | "unavailable";
     signatureManifest?: ClamAvSignatureManifest;
+    externalUrl?: string;
   } = {}
 ) {
   const agentJobStore = new InMemoryAgentJobStore({ now: () => now });
@@ -59,7 +60,9 @@ async function setup(
   });
   const work = await workStore.create({
     jobId: job.id,
-    lineMessageId: "line-message-opaque-id",
+    ...(options.externalUrl
+      ? { externalUrl: options.externalUrl }
+      : { lineMessageId: "line-message-opaque-id" }),
     scope,
     target: {
       sourceKey: "ppt_slides",
@@ -69,6 +72,7 @@ async function setup(
     },
     ttlMs: 600_000
   });
+  await workStore.markEnqueued(work.id);
   const catalog = new InMemoryCatalogStore();
   await catalog.upsertSource({
     profileName: "helper",
@@ -101,6 +105,14 @@ async function setup(
   const scanner: AttachmentFileScanner = {
     scan: vi.fn().mockResolvedValue({ status: options.scanStatus ?? "clean" })
   };
+  const externalBinary = {
+    download: vi.fn().mockResolvedValue({
+      data: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]),
+      finalUrl: options.externalUrl ?? "https://example.org/unused.pdf",
+      fileName: "amazing-grace.pdf",
+      contentType: "application/pdf"
+    })
+  };
   return {
     agentJobStore,
     scope,
@@ -110,10 +122,12 @@ async function setup(
     catalog,
     graph,
     lineContent,
+    externalBinary,
     scanner,
     workerOptions: {
       workStore,
       lineContent,
+      externalBinary,
       profiles: [profile],
       publisher: createResourceBinaryPublisher({ catalog, graph }),
       scanner,
@@ -121,6 +135,8 @@ async function setup(
       databaseDirectory: "/var/lib/clamav/current",
       maxBytes: 25 * 1024 * 1024,
       lineDownloadTimeoutMs: 30_000,
+      externalDownloadTimeoutMs: 15_000,
+      externalMaxRedirects: 3,
       now: () => now
     }
   };
@@ -170,6 +186,25 @@ describe("attachment scan worker", () => {
       status: "failed",
       error: "scan_infected"
     });
+  });
+
+  it("downloads a confirmed direct external file only inside the worker", async () => {
+    const { externalBinary, graph, lineContent, work, workerOptions } = await setup({
+      externalUrl: "https://example.org/amazing-grace.pdf"
+    });
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed"
+    });
+
+    expect(externalBinary.download).toHaveBeenCalledWith({
+      url: "https://example.org/amazing-grace.pdf",
+      maxBytes: 25 * 1024 * 1024,
+      timeoutMs: 15_000,
+      maxRedirects: 3
+    });
+    expect(lineContent.getMessageContent).not.toHaveBeenCalled();
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when ClamAV times out", async () => {

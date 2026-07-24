@@ -560,6 +560,10 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           sheet_music_numeric_selection: createFindPopSheetMusicTextMessageHandler({
             graph: clients.graph,
             sessionStore: clients.sessionStore,
+            catalog: clients.catalog,
+            agentJobStore: clients.agentJobStore,
+            scanQueue: clients.attachmentScanQueue,
+            scanWorkStore: clients.attachmentScanWorkStore,
             externalSearch:
               clients.webSearch && clients.sheetMusicExternalSearchSummarizer
                 ? {

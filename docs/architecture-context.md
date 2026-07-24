@@ -430,10 +430,12 @@ configured internal SearXNG endpoint. That fallback only uses returned
 title/snippet/url fields, passes them to the `web_summarization` provider for
 ranking/summary, and never downloads or saves results automatically. A
 requester with effective `save_resource` permission may explicitly select and
-confirm one direct HTTPS PDF/JPEG/PNG result. Each request and redirect is
-DNS-resolved, checked for private/reserved addresses, and pinned to the
+confirm one direct HTTPS PDF/JPEG/PNG result. Confirmation persists and queues
+only an opaque work ID. Inside the finite scan worker, each request and redirect
+is DNS-resolved, checked for private/reserved addresses, and pinned to the
 validated address; HTML, credentials, cookies, and page crawling are rejected.
-Confirmed bytes enter the same shared binary publisher as LINE attachments.
+Clean confirmed bytes enter the same shared binary publisher as LINE
+attachments.
 
 Catalog-backed lookups are separated from user-facing function names. The
 canonical functions are `find_ppt_slides`, `find_sheet_music`, and
@@ -483,18 +485,27 @@ The later pending-attachment text handler accepts deterministic purposes such as
 slides, pop sheet music, hymn sheet music, or Xiaoha database/church resources.
 Purpose selection verifies the target source has write capability and stores a
 metadata-only confirmation target. It does not download or scan content. On
-explicit confirmation, the handler atomically persists scoped work and queues
-only its opaque ID. An event-driven ACA Job leases one queue item, atomically
-claims the work, and only then performs the bounded LINE Content API download,
+explicit confirmation, the handler atomically persists scoped work in a durable
+enqueue outbox and queues only its opaque ID. A queue send must be durably
+marked before the user sees a queued-success reply; ambiguous Redis/queue
+failures remain pending for bounded retry. An event-driven ACA Job leases one
+queue item, atomically claims the work with a token and expiry, and only then
+performs the bounded LINE Content API or authorized external-file download,
 actual-size, MIME/magic-byte, extension, safe-filename, hash, local ClamAV,
-conflict, upload, and catalog checks. OneDrive upload and catalog upsert form one
-logical commit; catalog failure compensates by deleting the uploaded Graph item.
+conflict, upload, and catalog checks. Expired claims are reclaimable after a
+worker crash, but a stale claim token cannot complete the new claim. Queue
+redelivery without a claim is acknowledged only after a terminal state is
+observed. OneDrive upload and catalog upsert form one logical commit; catalog
+failure compensates by deleting the uploaded Graph item.
 Scanner results other than `clean`, or signatures without a valid at-most-72-hour
 manifest, fail closed. A separate two-day scheduled ACA Job stages and validates
 an immutable versioned database set, then atomically replaces the manifest that
 selects it. Scans retain their selected set and must observe the same manifest
 version immediately before publication. Deployment bootstraps and waits for one
-refresh before it enables the queue scanner. The
+refresh before it enables the queue scanner. The finite scanner has a dedicated
+minimal config surface: LINE access tokens, PostgreSQL, Redis, Graph, bounded
+download settings, queue access, and ClamAV state. It does not load LINE channel
+secrets, admin IDs, LLM/Notion credentials, or observability secrets. The
 `xiaoha_database` manual source is skipped by catalog sync and receives a 90-day
 catalog `expiresAt`; formal synced sources do not. Successful publication
 records opaque drive/item metadata as a recent general resource, so a scoped

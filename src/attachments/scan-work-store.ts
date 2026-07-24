@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { AgentJobScope, AgentJobStore } from "../agent/jobs.js";
 import type { FunctionExecutionResult } from "../types.js";
 
-export type AttachmentScanWorkStatus = "confirmed" | "claimed" | "completed" | "failed";
+export type AttachmentScanWorkStatus =
+  "pending_enqueue" | "queued" | "claimed" | "completed" | "failed";
 
 export type AttachmentScanFailureCode =
   | "enqueue_failed"
@@ -24,7 +25,8 @@ export interface AttachmentScanTarget {
 
 export interface AttachmentScanWorkInput {
   jobId: string;
-  lineMessageId: string;
+  lineMessageId?: string;
+  externalUrl?: string;
   scope: AgentJobScope & { requesterUserId: string };
   target: AttachmentScanTarget;
   ttlMs: number;
@@ -34,30 +36,48 @@ export interface AttachmentScanWork {
   version: 1;
   id: string;
   jobId: string;
-  lineMessageId: string;
+  lineMessageId?: string;
+  externalUrl?: string;
   scope: AgentJobScope & { requesterUserId: string };
   target: AttachmentScanTarget;
   status: AttachmentScanWorkStatus;
   failureCode?: AttachmentScanFailureCode;
   createdAt: string;
   claimedAt?: string;
+  claimId?: string;
+  claimExpiresAt?: string;
   completedAt?: string;
   expiresAt: string;
 }
 
 export interface AttachmentScanWorkStore {
+  readonly supportsDurableEnqueueRetry: boolean;
   create(input: AttachmentScanWorkInput): Promise<AttachmentScanWork>;
+  markEnqueued(id: string): Promise<boolean>;
+  listPendingEnqueue(limit: number): Promise<AttachmentScanWork[]>;
   claim(id: string): Promise<AttachmentScanWork | undefined>;
-  cancelConfirmed(id: string, code: AttachmentScanFailureCode): Promise<boolean>;
-  complete(id: string, result: FunctionExecutionResult): Promise<void>;
-  fail(id: string, code: AttachmentScanFailureCode): Promise<void>;
+  cancelPendingEnqueue(id: string, code: AttachmentScanFailureCode): Promise<boolean>;
+  terminalStatus(
+    id: string
+  ): Promise<Extract<AttachmentScanWorkStatus, "completed" | "failed"> | undefined>;
+  complete(id: string, claimId: string, result: FunctionExecutionResult): Promise<boolean>;
+  fail(id: string, claimId: string, code: AttachmentScanFailureCode): Promise<boolean>;
 }
 
 export interface RedisAttachmentScanWorkClient {
   get(key: string): Promise<string | null>;
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
+  sMembers(key: string): Promise<string[]>;
+  sAdd(key: string, member: string): Promise<unknown>;
+  sRem(key: string, member: string): Promise<unknown>;
   eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 }
+
+const createWorkScript = `
+redis.call("PSETEX", KEYS[1], ARGV[1], ARGV[2])
+redis.call("SADD", KEYS[2], ARGV[3])
+return ARGV[2]
+`;
 
 const workSchemaValidationScript = `
 local function isNonEmptyString(value)
@@ -87,15 +107,24 @@ local valid =
     id = true,
     jobId = true,
     lineMessageId = true,
+    externalUrl = true,
     scope = true,
     target = true,
     status = true,
     createdAt = true,
-    expiresAt = true
+    expiresAt = true,
+    claimedAt = true,
+    claimId = true,
+    claimExpiresAt = true,
+    completedAt = true,
+    failureCode = true
   }) and
   isNonEmptyString(work.id) and
   isNonEmptyString(work.jobId) and
-  isNonEmptyString(work.lineMessageId) and
+  (
+    (isNonEmptyString(work.lineMessageId) and work.externalUrl == nil) or
+    (isNonEmptyString(work.externalUrl) and work.lineMessageId == nil)
+  ) and
   type(work.scope) == "table" and
   hasOnlyKeys(work.scope, {
     profileName = true,
@@ -131,7 +160,14 @@ if not raw then
 end
 local work = cjson.decode(raw)
 ${workSchemaValidationScript}
-if work.id ~= ARGV[1] or work.status ~= "confirmed" or work.expiresAt <= ARGV[2] then
+local claimable =
+  work.status == "queued" or
+  (
+    work.status == "claimed" and
+    isCanonicalTimestamp(work.claimExpiresAt) and
+    work.claimExpiresAt <= ARGV[2]
+  )
+if work.id ~= ARGV[1] or not claimable or work.expiresAt <= ARGV[2] then
   return nil
 end
 local ttl = redis.call("PTTL", KEYS[1])
@@ -140,19 +176,42 @@ if ttl <= 0 then
 end
 work.status = "claimed"
 work.claimedAt = ARGV[3]
+work.claimId = ARGV[4]
+work.claimExpiresAt = ARGV[5]
 local claimed = cjson.encode(work)
 redis.call("PSETEX", KEYS[1], ttl, claimed)
 return claimed
 `;
 
-const cancelConfirmedScript = `
+const markEnqueuedScript = `
 local raw = redis.call("GET", KEYS[1])
 if not raw then
   return nil
 end
 local work = cjson.decode(raw)
 ${workSchemaValidationScript}
-if work.id ~= ARGV[1] or work.status ~= "confirmed" or work.expiresAt <= ARGV[2] then
+if work.id ~= ARGV[1] or work.status ~= "pending_enqueue" or work.expiresAt <= ARGV[2] then
+  return nil
+end
+local ttl = redis.call("PTTL", KEYS[1])
+if ttl <= 0 then
+  return nil
+end
+work.status = "queued"
+local queued = cjson.encode(work)
+redis.call("PSETEX", KEYS[1], ttl, queued)
+redis.call("SREM", KEYS[2], work.id)
+return queued
+`;
+
+const cancelPendingEnqueueScript = `
+local raw = redis.call("GET", KEYS[1])
+if not raw then
+  return nil
+end
+local work = cjson.decode(raw)
+${workSchemaValidationScript}
+if work.id ~= ARGV[1] or work.status ~= "pending_enqueue" or work.expiresAt <= ARGV[2] then
   return nil
 end
 local ttl = redis.call("PTTL", KEYS[1])
@@ -164,40 +223,92 @@ work.failureCode = ARGV[3]
 work.completedAt = ARGV[2]
 local failed = cjson.encode(work)
 redis.call("PSETEX", KEYS[1], ttl, failed)
+redis.call("SREM", KEYS[2], work.id)
 return failed
+`;
+
+const terminalTransitionScript = `
+local raw = redis.call("GET", KEYS[1])
+if not raw then
+  return nil
+end
+local work = cjson.decode(raw)
+${workSchemaValidationScript}
+if work.id ~= ARGV[1] or work.status ~= "claimed" or work.claimId ~= ARGV[2] then
+  return nil
+end
+local ttl = redis.call("PTTL", KEYS[1])
+if ttl <= 0 then
+  return nil
+end
+work.status = ARGV[3]
+work.completedAt = ARGV[4]
+work.claimId = nil
+work.claimExpiresAt = nil
+if ARGV[5] ~= "" then
+  work.failureCode = ARGV[5]
+end
+local terminal = cjson.encode(work)
+redis.call("PSETEX", KEYS[1], ttl, terminal)
+redis.call("SREM", KEYS[2], work.id)
+return terminal
 `;
 
 interface ScanWorkStoreOptions {
   jobStore: AgentJobStore;
   now?: () => Date;
   idFactory?: () => string;
+  claimIdFactory?: () => string;
+  claimLeaseMs?: number;
 }
 
 export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore {
+  readonly supportsDurableEnqueueRetry = false;
   private readonly values = new Map<string, AttachmentScanWork>();
   private readonly now: () => Date;
   private readonly idFactory: () => string;
+  private readonly claimIdFactory: () => string;
+  private readonly claimLeaseMs: number;
 
   constructor(private readonly options: ScanWorkStoreOptions) {
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
+    this.claimIdFactory = options.claimIdFactory ?? randomUUID;
+    this.claimLeaseMs = options.claimLeaseMs ?? 15 * 60 * 1000;
   }
 
   async create(input: AttachmentScanWorkInput): Promise<AttachmentScanWork> {
+    assertValidWorkSource(input);
     const createdAt = this.now();
     const work: AttachmentScanWork = {
       version: 1,
       id: this.idFactory(),
       jobId: input.jobId,
-      lineMessageId: input.lineMessageId,
+      ...(input.lineMessageId ? { lineMessageId: input.lineMessageId } : {}),
+      ...(input.externalUrl ? { externalUrl: input.externalUrl } : {}),
       scope: { ...input.scope },
       target: { ...input.target },
-      status: "confirmed",
+      status: "pending_enqueue",
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(createdAt.getTime() + input.ttlMs).toISOString()
     };
     this.values.set(work.id, work);
     return cloneWork(work);
+  }
+
+  async markEnqueued(id: string): Promise<boolean> {
+    const work = this.live(id);
+    if (!work || work.status !== "pending_enqueue") return false;
+    this.values.set(id, { ...work, status: "queued" });
+    return true;
+  }
+
+  async listPendingEnqueue(limit: number): Promise<AttachmentScanWork[]> {
+    return Array.from(this.values.values())
+      .map((work) => this.live(work.id))
+      .filter((work): work is AttachmentScanWork => work?.status === "pending_enqueue")
+      .slice(0, Math.max(0, limit))
+      .map(cloneWork);
   }
 
   async claim(id: string): Promise<AttachmentScanWork | undefined> {
@@ -206,7 +317,12 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
     if (
       !work ||
       work.id !== id ||
-      work.status !== "confirmed" ||
+      !(
+        work.status === "queued" ||
+        (work.status === "claimed" &&
+          Boolean(work.claimExpiresAt) &&
+          work.claimExpiresAt! <= claimedAt.toISOString())
+      ) ||
       work.expiresAt <= claimedAt.toISOString()
     ) {
       return undefined;
@@ -214,15 +330,17 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
     const claimed: AttachmentScanWork = {
       ...work,
       status: "claimed",
-      claimedAt: claimedAt.toISOString()
+      claimedAt: claimedAt.toISOString(),
+      claimId: this.claimIdFactory(),
+      claimExpiresAt: new Date(claimedAt.getTime() + this.claimLeaseMs).toISOString()
     };
     this.values.set(id, claimed);
     return cloneWork(claimed);
   }
 
-  async cancelConfirmed(id: string, code: AttachmentScanFailureCode): Promise<boolean> {
+  async cancelPendingEnqueue(id: string, code: AttachmentScanFailureCode): Promise<boolean> {
     const work = this.live(id);
-    if (!work || work.status !== "confirmed") return false;
+    if (!work || work.status !== "pending_enqueue") return false;
     this.values.set(id, {
       ...work,
       status: "failed",
@@ -232,27 +350,40 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
     return true;
   }
 
-  async complete(id: string, result: FunctionExecutionResult): Promise<void> {
+  async terminalStatus(
+    id: string
+  ): Promise<Extract<AttachmentScanWorkStatus, "completed" | "failed"> | undefined> {
+    const status = this.live(id)?.status;
+    return status === "completed" || status === "failed" ? status : undefined;
+  }
+
+  async complete(id: string, claimId: string, result: FunctionExecutionResult): Promise<boolean> {
     const work = this.live(id);
-    if (!work || work.status !== "claimed") return;
+    if (!work || work.status !== "claimed" || work.claimId !== claimId) return false;
     await this.options.jobStore.complete(work.jobId, result);
     this.values.set(id, {
       ...work,
       status: "completed",
+      claimId: undefined,
+      claimExpiresAt: undefined,
       completedAt: this.now().toISOString()
     });
+    return true;
   }
 
-  async fail(id: string, code: AttachmentScanFailureCode): Promise<void> {
+  async fail(id: string, claimId: string, code: AttachmentScanFailureCode): Promise<boolean> {
     const work = this.live(id);
-    if (!work || work.status !== "claimed") return;
+    if (!work || work.status !== "claimed" || work.claimId !== claimId) return false;
     await this.options.jobStore.fail(work.jobId, code);
     this.values.set(id, {
       ...work,
       status: "failed",
       failureCode: code,
+      claimId: undefined,
+      claimExpiresAt: undefined,
       completedAt: this.now().toISOString()
     });
+    return true;
   }
 
   private live(id: string): AttachmentScanWork | undefined {
@@ -266,8 +397,11 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
 }
 
 export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
+  readonly supportsDurableEnqueueRetry = true;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
+  private readonly claimIdFactory: () => string;
+  private readonly claimLeaseMs: number;
 
   constructor(
     private readonly options: ScanWorkStoreOptions & {
@@ -277,39 +411,69 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
   ) {
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
+    this.claimIdFactory = options.claimIdFactory ?? randomUUID;
+    this.claimLeaseMs = options.claimLeaseMs ?? 15 * 60 * 1000;
   }
 
   async create(input: AttachmentScanWorkInput): Promise<AttachmentScanWork> {
+    assertValidWorkSource(input);
     const createdAt = this.now();
     const work: AttachmentScanWork = {
       version: 1,
       id: this.idFactory(),
       jobId: input.jobId,
-      lineMessageId: input.lineMessageId,
+      ...(input.lineMessageId ? { lineMessageId: input.lineMessageId } : {}),
+      ...(input.externalUrl ? { externalUrl: input.externalUrl } : {}),
       scope: { ...input.scope },
       target: { ...input.target },
-      status: "confirmed",
+      status: "pending_enqueue",
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(createdAt.getTime() + input.ttlMs).toISOString()
     };
-    await this.write(work);
+    const ttlMs = new Date(work.expiresAt).getTime() - this.now().getTime();
+    await this.options.client.eval(createWorkScript, {
+      keys: [this.key(work.id), this.pendingIndexKey()],
+      arguments: [String(Math.max(1, ttlMs)), JSON.stringify(work), work.id]
+    });
     return cloneWork(work);
   }
 
+  async markEnqueued(id: string): Promise<boolean> {
+    const now = this.now().toISOString();
+    const raw = await this.options.client.eval(markEnqueuedScript, {
+      keys: [this.key(id), this.pendingIndexKey()],
+      arguments: [id, now]
+    });
+    return typeof raw === "string" && parseWork(raw, id)?.status === "queued";
+  }
+
+  async listPendingEnqueue(limit: number): Promise<AttachmentScanWork[]> {
+    // Redis work IDs are opaque and independently expiring. The durable dispatcher keeps
+    // its bounded index through the store implementation added below.
+    return this.readPendingIndex(Math.max(0, limit));
+  }
+
   async claim(id: string): Promise<AttachmentScanWork | undefined> {
-    const claimedAt = this.now().toISOString();
+    const claimedAtDate = this.now();
+    const claimedAt = claimedAtDate.toISOString();
     const raw = await this.options.client.eval(claimScript, {
       keys: [this.key(id)],
-      arguments: [id, claimedAt, claimedAt]
+      arguments: [
+        id,
+        claimedAt,
+        claimedAt,
+        this.claimIdFactory(),
+        new Date(claimedAtDate.getTime() + this.claimLeaseMs).toISOString()
+      ]
     });
     if (typeof raw !== "string") return undefined;
     return parseWork(raw, id);
   }
 
-  async cancelConfirmed(id: string, code: AttachmentScanFailureCode): Promise<boolean> {
+  async cancelPendingEnqueue(id: string, code: AttachmentScanFailureCode): Promise<boolean> {
     const cancelledAt = this.now().toISOString();
-    const raw = await this.options.client.eval(cancelConfirmedScript, {
-      keys: [this.key(id)],
+    const raw = await this.options.client.eval(cancelPendingEnqueueScript, {
+      keys: [this.key(id), this.pendingIndexKey()],
       arguments: [id, cancelledAt, code]
     });
     if (typeof raw !== "string") return false;
@@ -317,27 +481,52 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
     return work?.status === "failed" && work.failureCode === code;
   }
 
-  async complete(id: string, result: FunctionExecutionResult): Promise<void> {
+  async terminalStatus(
+    id: string
+  ): Promise<Extract<AttachmentScanWorkStatus, "completed" | "failed"> | undefined> {
     const work = await this.read(id);
-    if (!work || work.status !== "claimed") return;
-    await this.options.jobStore.complete(work.jobId, result);
-    await this.write({
-      ...work,
-      status: "completed",
-      completedAt: this.now().toISOString()
-    });
+    return work?.status === "completed" || work?.status === "failed" ? work.status : undefined;
   }
 
-  async fail(id: string, code: AttachmentScanFailureCode): Promise<void> {
+  async complete(id: string, claimId: string, result: FunctionExecutionResult): Promise<boolean> {
     const work = await this.read(id);
-    if (!work || work.status !== "claimed") return;
+    if (!work || work.status !== "claimed" || work.claimId !== claimId) return false;
+    await this.options.jobStore.complete(work.jobId, result);
+    return this.transitionTerminal(work, claimId, "completed");
+  }
+
+  async fail(id: string, claimId: string, code: AttachmentScanFailureCode): Promise<boolean> {
+    const work = await this.read(id);
+    if (!work || work.status !== "claimed" || work.claimId !== claimId) return false;
     await this.options.jobStore.fail(work.jobId, code);
-    await this.write({
-      ...work,
-      status: "failed",
-      failureCode: code,
-      completedAt: this.now().toISOString()
+    return this.transitionTerminal(work, claimId, "failed", code);
+  }
+
+  private async transitionTerminal(
+    work: AttachmentScanWork,
+    claimId: string,
+    status: "completed" | "failed",
+    code?: AttachmentScanFailureCode
+  ): Promise<boolean> {
+    const raw = await this.options.client.eval(terminalTransitionScript, {
+      keys: [this.key(work.id), this.pendingIndexKey()],
+      arguments: [work.id, claimId, status, this.now().toISOString(), code ?? ""]
     });
+    return typeof raw === "string" && parseWork(raw, work.id)?.status === status;
+  }
+
+  private async readPendingIndex(limit: number): Promise<AttachmentScanWork[]> {
+    const ids = await this.options.client.sMembers(this.pendingIndexKey());
+    const pending: AttachmentScanWork[] = [];
+    for (const id of ids.slice(0, limit)) {
+      const work = await this.read(id);
+      if (work?.status === "pending_enqueue") {
+        pending.push(work);
+      } else {
+        await this.options.client.sRem(this.pendingIndexKey(), id);
+      }
+    }
+    return pending;
   }
 
   private async read(id: string): Promise<AttachmentScanWork | undefined> {
@@ -355,10 +544,19 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
       Math.max(1, Math.ceil(ttlMs / 1000)),
       JSON.stringify(work)
     );
+    if (work.status === "pending_enqueue") {
+      await this.options.client.sAdd(this.pendingIndexKey(), work.id);
+    } else {
+      await this.options.client.sRem(this.pendingIndexKey(), work.id);
+    }
   }
 
   private key(id: string): string {
     return `${this.options.keyPrefix}:attachment-scan-work:${encodeURIComponent(id)}`;
+  }
+
+  private pendingIndexKey(): string {
+    return `${this.options.keyPrefix}:attachment-scan-outbox`;
   }
 }
 
@@ -369,7 +567,10 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       work.version !== 1 ||
       work.id !== expectedId ||
       !isNonEmptyString(work.jobId) ||
-      !isNonEmptyString(work.lineMessageId) ||
+      !(
+        (isNonEmptyString(work.lineMessageId) && work.externalUrl === undefined) ||
+        (isNonEmptyString(work.externalUrl) && work.lineMessageId === undefined)
+      ) ||
       !work.scope ||
       !isNonEmptyString(work.scope.profileName) ||
       !isNonEmptyString(work.scope.sourceKey) ||
@@ -384,6 +585,8 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       !isTimestamp(work.expiresAt) ||
       (work.failureCode !== undefined && !isFailureCode(work.failureCode)) ||
       (work.claimedAt !== undefined && !isTimestamp(work.claimedAt)) ||
+      (work.claimId !== undefined && !isNonEmptyString(work.claimId)) ||
+      (work.claimExpiresAt !== undefined && !isTimestamp(work.claimExpiresAt)) ||
       (work.completedAt !== undefined && !isTimestamp(work.completedAt))
     ) {
       return undefined;
@@ -392,7 +595,8 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       version: 1,
       id: work.id,
       jobId: work.jobId,
-      lineMessageId: work.lineMessageId,
+      ...(work.lineMessageId ? { lineMessageId: work.lineMessageId } : {}),
+      ...(work.externalUrl ? { externalUrl: work.externalUrl } : {}),
       scope: {
         profileName: work.scope.profileName,
         sourceKey: work.scope.sourceKey,
@@ -409,6 +613,8 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       expiresAt: work.expiresAt,
       ...(work.failureCode ? { failureCode: work.failureCode } : {}),
       ...(work.claimedAt ? { claimedAt: work.claimedAt } : {}),
+      ...(work.claimId ? { claimId: work.claimId } : {}),
+      ...(work.claimExpiresAt ? { claimExpiresAt: work.claimExpiresAt } : {}),
       ...(work.completedAt ? { completedAt: work.completedAt } : {})
     };
   } catch {
@@ -418,7 +624,11 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
 
 function isWorkStatus(value: unknown): value is AttachmentScanWorkStatus {
   return (
-    value === "confirmed" || value === "claimed" || value === "completed" || value === "failed"
+    value === "pending_enqueue" ||
+    value === "queued" ||
+    value === "claimed" ||
+    value === "completed" ||
+    value === "failed"
   );
 }
 
@@ -449,4 +659,16 @@ function cloneWork(work: AttachmentScanWork): AttachmentScanWork {
     scope: { ...work.scope },
     target: { ...work.target }
   };
+}
+
+function assertValidWorkSource(input: AttachmentScanWorkInput): void {
+  if (Boolean(input.lineMessageId?.trim()) === Boolean(input.externalUrl?.trim())) {
+    throw new Error("attachment_scan_work_source_invalid");
+  }
+  if (input.externalUrl) {
+    const url = new URL(input.externalUrl);
+    if (url.protocol !== "https:" || url.username || url.password) {
+      throw new Error("attachment_scan_work_source_invalid");
+    }
+  }
 }

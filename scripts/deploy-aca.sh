@@ -74,17 +74,26 @@ bot_env_json="$(az containerapp show \
   --query "properties.template.containers[0].env" \
   --output json)"
 
-clamav_storage_key="$(BOT_SECRETS_JSON="${bot_secrets_json}" python3 - <<'PY'
-import json
-import os
-
-secrets = {item["name"]: item.get("value") for item in json.loads(os.environ["BOT_SECRETS_JSON"])}
-value = secrets.get("clamav-signature-storage-key")
-if not value:
-    raise SystemExit("Required ACA storage secret is unavailable")
-print(value)
-PY
-)"
+clamav_storage_key="$(az storage account keys list \
+  --resource-group "${RESOURCE_GROUP}" \
+  --account-name "${CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME}" \
+  --query "[0].value" \
+  --output tsv \
+  --only-show-errors)"
+if [[ -z "${clamav_storage_key}" ]]; then
+  echo "Required ClamAV signature storage credential is unavailable" >&2
+  exit 1
+fi
+attachment_scan_queue_connection_string="$(az storage account show-connection-string \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
+  --query connectionString \
+  --output tsv \
+  --only-show-errors)"
+if [[ -z "${attachment_scan_queue_connection_string}" ]]; then
+  echo "Required attachment queue credential is unavailable" >&2
+  exit 1
+fi
 
 az containerapp env storage set \
   --resource-group "${RESOURCE_GROUP}" \
@@ -311,6 +320,20 @@ if [[ -n "${legacy_profile_secret}" ]]; then
     --output none
 fi
 
+legacy_clamav_storage_secret="$(az containerapp secret list \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CONTAINER_APP_NAME}" \
+  --query "[?name=='clamav-signature-storage-key'].name | [0]" \
+  --output tsv)"
+if [[ -n "${legacy_clamav_storage_secret}" ]]; then
+  az containerapp secret remove \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${CONTAINER_APP_NAME}" \
+    --secret-names clamav-signature-storage-key \
+    --only-show-errors \
+    --output none
+fi
+
 render_job_manifest() {
   local template_path="$1"
   local rendered_path="$2"
@@ -327,6 +350,7 @@ render_job_manifest() {
   ATTACHMENT_SCAN_QUEUE_NAME="${ATTACHMENT_SCAN_QUEUE_NAME}" \
   BOT_SECRETS_JSON="${bot_secrets_json}" \
   BOT_ENV_JSON="${bot_env_json}" \
+  ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING="${attachment_scan_queue_connection_string}" \
   python3 - <<'PY'
 from pathlib import Path
 import json
@@ -373,6 +397,9 @@ for placeholder, value in {
         "ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME"
     ],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME": os.environ["ATTACHMENT_SCAN_QUEUE_NAME"],
+    "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": os.environ[
+        "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING"
+    ],
 }.items():
     text = text.replace(placeholder, value)
 if "PLACEHOLDER_" in text:

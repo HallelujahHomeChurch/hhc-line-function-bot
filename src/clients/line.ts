@@ -64,7 +64,7 @@ export function createLineSdkContentClient(): LineContentClient {
   return {
     async getMessageContent(
       messageId: string,
-      profile: BotProfileConfig,
+      profile: Pick<BotProfileConfig, "name" | "channelAccessToken">,
       limits: BinaryReadLimits
     ) {
       let client = clients.get(profile.name);

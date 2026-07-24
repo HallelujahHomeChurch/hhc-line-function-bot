@@ -814,7 +814,7 @@ export interface BinaryReadLimits {
 export interface LineContentClient {
   getMessageContent(
     messageId: string,
-    profile: BotProfileConfig,
+    profile: Pick<BotProfileConfig, "name" | "channelAccessToken">,
     limits: BinaryReadLimits
   ): Promise<LineContent>;
 }
