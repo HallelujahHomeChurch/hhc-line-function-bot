@@ -322,9 +322,14 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain("--storage-name clamav-signatures-readwrite");
     expect(deployment).toContain("--access-mode ReadWrite");
     expect(deployment).toContain("az containerapp secret set");
-    expect(deployment).toContain(
+    expect(deployment).toContain("az storage queue generate-sas");
+    expect(deployment).toContain("--permissions a");
+    expect(deployment).toContain('"attachment-scan-queue-url=${attachment_scan_queue_url}"');
+    expect(deployment).not.toContain(
       '"attachment-scan-queue-url=${attachment_scan_queue_connection_string}"'
     );
+    expect(deployment).toContain('"openai-api-key"');
+    expect(deployment).toContain('"OPENAI_API_KEY=secretref:openai-api-key"');
     expect(deployment).toContain("az containerapp job update");
     expect(deployment).toContain("ATTACHMENT_SCAN_JOB_NAME");
     expect(deployment).toContain("CLAMAV_SIGNATURE_REFRESH_JOB_NAME");
