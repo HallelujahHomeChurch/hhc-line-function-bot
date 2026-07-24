@@ -74,10 +74,23 @@ export function createLineSdkContentClient(): LineContentClient {
       }
       const stream = await client.getMessageContent(messageId);
       return {
-        data: await readableToUint8Array(stream, limits)
+        data: await readableToUint8Array(stream, limits),
+        contentType: contentTypeFromLineStream(stream)
       };
     }
   };
+}
+
+export function contentTypeFromLineStream(stream: Readable): string | undefined {
+  const headers = (stream as Readable & { headers?: unknown }).headers;
+  if (!headers || typeof headers !== "object") return undefined;
+  const raw = (headers as Record<string, unknown>)["content-type"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.split(";", 1)[0]?.trim().toLowerCase();
+  return normalized && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(normalized)
+    ? normalized
+    : undefined;
 }
 
 function nonBlank(value: string | undefined): string | undefined {

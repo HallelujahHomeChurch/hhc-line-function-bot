@@ -33,16 +33,21 @@ export interface RedisRuntime {
 }
 
 export async function createRedisRuntime(
-  config: RedisConfig | undefined
+  config: RedisConfig | undefined,
+  options: { onError?: (error: unknown) => void } = {}
 ): Promise<RedisRuntime | undefined> {
   if (!config) {
     return undefined;
   }
 
   const client = createClient({ url: config.url });
-  client.on("error", (error) => {
-    console.error("Redis client error", error);
-  });
+  client.on(
+    "error",
+    options.onError ??
+      ((error) => {
+        console.error("Redis client error", error);
+      })
+  );
   await client.connect();
 
   return {

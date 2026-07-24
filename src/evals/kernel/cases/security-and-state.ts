@@ -1,6 +1,9 @@
 import type { ActiveTaskContext } from "../../../agent/active-task.js";
 import { InMemoryConversationWindowStore } from "../../../agent/context-manager.js";
+import { InMemoryAgentJobStore } from "../../../agent/jobs.js";
 import type { AgentPlanner } from "../../../agent/planner.js";
+import { InMemoryAttachmentScanWorkStore } from "../../../attachments/scan-work-store.js";
+import { runAttachmentScanWorker } from "../../../attachments/scan-worker.js";
 import { InMemoryCatalogStore } from "../../../catalog/store.js";
 import { isSupportedAttachment } from "../../../functions/pending-attachment.js";
 import { createResourceBinaryPublisher } from "../../../functions/resource-binary-publisher.js";
@@ -10,8 +13,7 @@ import type {
   FunctionName,
   FunctionRegistry,
   GraphDriveClient,
-  TextMessageHandlerRegistry,
-  VirusScanner
+  TextMessageHandlerRegistry
 } from "../../../types.js";
 import type {
   KernelAcceptanceCase,
@@ -171,6 +173,30 @@ async function missingWriteEvidenceDenied(now: Date): Promise<boolean> {
 }
 
 async function scanUnavailableFailsClosed(now: Date): Promise<boolean> {
+  const scope = {
+    profileName: "helper",
+    sourceKey: "user:U_SYNTHETIC_1",
+    requesterUserId: "U_SYNTHETIC_1"
+  };
+  const jobStore = new InMemoryAgentJobStore({ now: () => now });
+  const job = await jobStore.createPending({ scope, label: "scan", ttlMs: 60_000 });
+  const workStore = new InMemoryAttachmentScanWorkStore({
+    jobStore,
+    now: () => now,
+    idFactory: () => "4c03465b-8a87-45a2-9d0d-54f904f4e6ab"
+  });
+  const work = await workStore.create({
+    jobId: job.id,
+    lineMessageId: "opaque-line-message",
+    scope,
+    target: {
+      sourceKey: "synthetic_uploads",
+      itemKind: "ppt_slide",
+      domain: "presentation",
+      title: "synthetic"
+    },
+    ttlMs: 60_000
+  });
   const catalog = new InMemoryCatalogStore();
   await catalog.upsertSource({
     profileName: "helper",
@@ -192,31 +218,31 @@ async function scanUnavailableFailsClosed(now: Date): Promise<boolean> {
       return { id: "item", driveId: "drive", name: "synthetic.pptx", path: "synthetic.pptx" };
     }
   };
-  const scanner: VirusScanner = { scan: async () => ({ status: "unavailable" }) };
-  const publisher = createResourceBinaryPublisher({
-    catalog,
-    graph,
-    scanner,
-    maxBytes: 1024
-  });
-  const result = await publisher.publish({
-    binary: {
-      data: new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]),
-      declaredFileName: "synthetic.pptx",
-      declaredContentType:
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      sourceKind: "line"
+  const profile = kernelProfile(["save_resource"]);
+  const result = await runAttachmentScanWorker(work.id, {
+    workStore,
+    lineContent: {
+      async getMessageContent() {
+        return {
+          data: new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]),
+          contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        };
+      }
     },
-    target: {
-      profileName: "helper",
-      sourceKey: "synthetic_uploads",
-      itemKind: "ppt_slide",
-      domain: "presentation",
-      title: "synthetic"
+    profiles: [profile],
+    publisher: createResourceBinaryPublisher({ catalog, graph }),
+    scanner: { scan: async () => ({ status: "unavailable" }) },
+    signatureManifest: {
+      version: 1,
+      signatureVersion: "synthetic-current",
+      lastSuccessfulAt: now.toISOString()
     },
-    now
+    databaseDirectory: "/synthetic/clamav",
+    maxBytes: 1024,
+    lineDownloadTimeoutMs: 1000,
+    now: () => now
   });
-  return uploads === 0 && result.replyText.includes("掃毒服務目前不可用");
+  return result.status === "failed" && result.failureCode === "scan_unavailable" && uploads === 0;
 }
 
 async function groupWithoutIntentHasNoSession(now: Date): Promise<boolean> {

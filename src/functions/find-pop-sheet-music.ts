@@ -8,7 +8,6 @@ import {
 } from "../catalog/store.js";
 import { searchCatalogWithFreshness } from "../catalog/retrieval.js";
 import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
-import type { ExternalBinaryClient } from "../clients/external-binary.js";
 import {
   findPopSheetMusicArgumentsSchema,
   type FindPopSheetMusicArguments
@@ -23,7 +22,6 @@ import {
   type SessionStore
 } from "../state/session-store.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
-import type { ResourceBinaryPublisher } from "./resource-binary-publisher.js";
 import type {
   DriveItem,
   FunctionExecutionResult,
@@ -77,13 +75,6 @@ export interface SheetMusicExternalSearchOptions {
 
 export type FindPopSheetMusicTextMessageOptions = FindPopSheetMusicPostbackOptions & {
   externalSearch?: SheetMusicExternalSearchOptions;
-  externalImport?: {
-    client: ExternalBinaryClient;
-    publisher: ResourceBinaryPublisher;
-    maxBytes: number;
-    timeoutMs: number;
-    maxRedirects: number;
-  };
 };
 
 interface ScoredItem {
@@ -407,8 +398,7 @@ export function createFindPopSheetMusicTextMessageHandler(
           options,
           session: externalImport,
           text: request.text,
-          context,
-          now: now()
+          context
         });
       }
       const selectedIndex = numericSelectionToIndex(request.text);
@@ -927,7 +917,6 @@ async function continueExternalSheetMusicImport(input: {
   session: ExternalSheetMusicImportSession;
   text: string;
   context: TextMessageContext;
-  now: Date;
 }): Promise<FunctionExecutionResult> {
   if (isExternalSearchCancel(input.text)) {
     await input.options.sessionStore.delete(input.session.id);
@@ -981,47 +970,8 @@ async function continueExternalSheetMusicImport(input: {
   if (!/^(保存|確認|確定|好|yes|y)$/iu.test(input.text.trim())) {
     return { ok: true, replyText: "請回覆「保存」確認，或回覆「取消」。" };
   }
-  if (
-    !input.context.profile.enabledFunctions.includes("save_resource") ||
-    !input.options.externalImport
-  ) {
-    await input.options.sessionStore.delete(input.session.id);
-    return { ok: true, replyText: "目前沒有開放匯入歌譜檔案。" };
-  }
-  const selected = input.session.items[input.session.selectedIndex ?? -1];
-  const targetKind = input.session.targetKind;
-  if (!selected || !targetKind) {
-    await input.options.sessionStore.delete(input.session.id);
-    return { ok: true, replyText: "這個選擇已失效，請重新搜尋。" };
-  }
-  try {
-    const binary = await input.options.externalImport.client.download({
-      url: selected.url,
-      maxBytes: input.options.externalImport.maxBytes,
-      timeoutMs: input.options.externalImport.timeoutMs,
-      maxRedirects: input.options.externalImport.maxRedirects
-    });
-    return await input.options.externalImport.publisher.publish({
-      binary: {
-        data: binary.data,
-        declaredFileName: binary.fileName,
-        declaredContentType: binary.contentType,
-        sourceKind: "external"
-      },
-      target: {
-        profileName: input.context.profile.name,
-        sourceKey: targetKind === "pop_sheet" ? "pop_sheet_music" : "hymn_sheet_music",
-        itemKind: targetKind,
-        domain: "sheet_music",
-        title: safeExternalTitle(selected.title)
-      },
-      now: input.now
-    });
-  } catch {
-    return { ok: true, replyText: "無法下載安全的直接歌譜檔案，請確認結果是 PDF 或圖片。" };
-  } finally {
-    await input.options.sessionStore.delete(input.session.id);
-  }
+  await input.options.sessionStore.delete(input.session.id);
+  return { ok: true, replyText: "目前沒有開放匯入歌譜檔案。" };
 }
 
 function externalImportConfirmation(session: ExternalSheetMusicImportSession) {
@@ -1049,18 +999,6 @@ function inferTargetKindReply(text: string): "pop_sheet" | "hymn_sheet" | undefi
   if (/詩歌|敬拜/u.test(text)) return "hymn_sheet";
   if (/流行/u.test(text)) return "pop_sheet";
   return undefined;
-}
-
-function safeExternalTitle(value: string): string {
-  return (
-    value
-      .normalize("NFKC")
-      .replace(/\.(?:pdf|jpe?g|png)$/iu, "")
-      .replace(/[<>:"/\\|?*]/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 100) || "未命名歌譜"
-  );
 }
 
 function isExternalSearchConfirm(text: string): boolean {

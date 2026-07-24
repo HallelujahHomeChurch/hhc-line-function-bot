@@ -33,11 +33,9 @@ import { createCacheStore } from "./cache/create-cache-store.js";
 import { createCatalogStore } from "./catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "./catalog/source-seeds.js";
 import { createGraphDriveClient } from "./clients/graph.js";
-import { createClamAvScanner } from "./clients/clamav.js";
 import { createNotionDatabaseClient } from "./clients/notion.js";
 import { createNotionKnowledgeClient } from "./clients/notion-knowledge.js";
 import { createSearxngClient } from "./clients/searxng.js";
-import { createHttpVirusScanner } from "./clients/virus-scan.js";
 import { loadConfigFromEnv } from "./config.js";
 import { createDependencyDiagnostics } from "./diagnostics/dependencies.js";
 import { createPostgresRuntime } from "./db/postgres.js";
@@ -116,11 +114,6 @@ const memoryPurgeTimer = setInterval(
 memoryPurgeTimer.unref();
 const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
 const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
-const virusScanner = config.clamAv
-  ? createClamAvScanner(config.clamAv)
-  : config.virusScan
-    ? createHttpVirusScanner(config.virusScan)
-    : undefined;
 const webSearch = config.webSearch?.searxngBaseUrl
   ? createSearxngClient({
       baseUrl: config.webSearch.searxngBaseUrl,
@@ -258,7 +251,6 @@ const registries = createFunctionRegistries(config, {
   knowledgeTextGenerator: smartTalkPrimary,
   memoryStore,
   accessStore,
-  virusScanner,
   agentJobStore,
   attachmentScanWorkStore,
   attachmentScanQueue,

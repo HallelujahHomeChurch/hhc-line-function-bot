@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { CatalogItemRecord, CatalogSourceRecord, CatalogStore } from "../catalog/store.js";
-import type { FunctionExecutionResult, GraphDriveClient, VirusScanner } from "../types.js";
+import type { FunctionExecutionResult, GraphDriveClient } from "../types.js";
 
 const XIAOHA_DATABASE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -24,102 +24,165 @@ export interface ResourceBinaryInput {
 }
 
 export interface ResourceBinaryPublisher {
-  publish(input: {
-    binary: ResourceBinaryInput;
-    target: ResourcePublishTarget;
+  publishVerifiedResource(input: {
+    resource: PreparedResourceBinary;
+    scan: CleanResourceScanProof;
     now: Date;
-  }): Promise<FunctionExecutionResult>;
+  }): Promise<ResourcePublishOutcome>;
 }
 
 export interface ResourceBinaryPublisherOptions {
   catalog: CatalogStore;
   graph: GraphDriveClient;
-  scanner?: VirusScanner;
+}
+
+export interface PreparedResourceBinary {
+  data: Uint8Array;
+  target: ResourcePublishTarget;
+  fileName: string;
+  mimeType: string;
+  extension: string;
+  sizeBytes: number;
+  sha256: string;
+}
+
+export interface CleanResourceScanProof {
+  status: "clean";
+  signatureVersion: string;
+}
+
+export type ResourcePreparationResult =
+  { ok: true; resource: PreparedResourceBinary } | { ok: false; result: FunctionExecutionResult };
+
+export type ResourcePublishOutcome =
+  | { status: "published"; result: FunctionExecutionResult }
+  | { status: "duplicate"; result: FunctionExecutionResult }
+  | { status: "failed"; result: FunctionExecutionResult };
+
+export function prepareResourceBinary(input: {
+  binary: ResourceBinaryInput;
+  target: ResourcePublishTarget;
   maxBytes: number;
+}): ResourcePreparationResult {
+  const sizeBytes = input.binary.data.byteLength;
+  if (sizeBytes === 0) {
+    return { ok: false, result: { ok: true, replyText: "檔案是空的，無法保存。" } };
+  }
+  if (sizeBytes > input.maxBytes) {
+    return { ok: false, result: { ok: true, replyText: "檔案太大，無法保存。" } };
+  }
+
+  const declaredExtension = extensionFromFileName(input.binary.declaredFileName ?? "");
+  const detected = detectContent(
+    input.binary.data,
+    input.binary.declaredContentType,
+    declaredExtension
+  );
+  if (!detected || (declaredExtension && declaredExtension !== detected.extension)) {
+    return {
+      ok: false,
+      result: { ok: true, replyText: "檔案格式不支援或內容與副檔名不符。" }
+    };
+  }
+  const target = resolveTargetForDetectedContent(input.target, detected.extension);
+  if (!allowedExtensions(target.itemKind).includes(detected.extension)) {
+    return {
+      ok: false,
+      result: { ok: true, replyText: "這個用途不支援此檔案格式。" }
+    };
+  }
+
+  const fileName = sanitizeFileName(`${target.title}${detected.extension}`);
+  const sha256 = createHash("sha256").update(input.binary.data).digest("hex");
+  return {
+    ok: true,
+    resource: {
+      data: input.binary.data,
+      target,
+      fileName,
+      mimeType: detected.mimeType,
+      extension: detected.extension,
+      sizeBytes,
+      sha256
+    }
+  };
 }
 
 export function createResourceBinaryPublisher(
   options: ResourceBinaryPublisherOptions
 ): ResourceBinaryPublisher {
   return {
-    async publish(input) {
-      const sizeBytes = input.binary.data.byteLength;
-      if (sizeBytes === 0) {
-        return { ok: true, replyText: "檔案是空的，無法保存。" };
-      }
-      if (sizeBytes > options.maxBytes) {
-        return { ok: true, replyText: "檔案太大，無法保存。" };
-      }
-
-      const declaredExtension = extensionFromFileName(input.binary.declaredFileName ?? "");
-      const detected = detectContent(
-        input.binary.data,
-        input.binary.declaredContentType,
-        declaredExtension
-      );
-      if (!detected || (declaredExtension && declaredExtension !== detected.extension)) {
-        return { ok: true, replyText: "檔案格式不支援或內容與副檔名不符。" };
-      }
-      const target = resolveTargetForDetectedContent(input.target, detected.extension);
-      if (!allowedExtensions(target.itemKind).includes(detected.extension)) {
-        return { ok: true, replyText: "這個用途不支援此檔案格式。" };
+    async publishVerifiedResource(input) {
+      if (
+        input.scan.status !== "clean" ||
+        !input.scan.signatureVersion.trim() ||
+        !/^[A-Za-z0-9._-]{1,120}$/u.test(input.scan.signatureVersion)
+      ) {
+        return {
+          status: "failed",
+          result: { ok: true, replyText: "掃毒驗證無效，為安全起見不保存這個檔案。" }
+        };
       }
 
-      const fileName = sanitizeFileName(`${target.title}${detected.extension}`);
-      const sha256 = createHash("sha256").update(input.binary.data).digest("hex");
-      const scan = options.scanner
-        ? await options.scanner.scan({
-            data: input.binary.data,
-            fileName,
-            contentType: detected.mimeType,
-            sha256
-          })
-        : { status: "unavailable" as const };
-      if (scan.status === "infected") {
-        return { ok: true, replyText: "掃毒未通過，為安全起見不保存這個檔案。" };
-      }
-      if (scan.status !== "clean") {
-        return { ok: true, replyText: "掃毒服務目前不可用，為安全起見不保存這個檔案。" };
-      }
-
-      const sourceGate = await findWritableSource(options.catalog, target);
+      const { resource } = input;
+      const sourceGate = await findWritableSource(options.catalog, resource.target);
       if (!sourceGate.ok) {
-        return { ok: true, replyText: sourceGate.replyText };
+        return {
+          status: "failed",
+          result: { ok: true, replyText: sourceGate.replyText }
+        };
       }
       const driveId = sourceGate.source.rootLocation.driveId;
-      const folderItemId = folderItemIdForTarget(sourceGate.source, target);
+      const folderItemId = folderItemIdForTarget(sourceGate.source, resource.target);
       if (!driveId || !folderItemId || !options.graph.uploadFile) {
-        return { ok: true, replyText: "目前沒有可用的 OneDrive 上傳服務。" };
+        return {
+          status: "failed",
+          result: { ok: true, replyText: "目前沒有可用的 OneDrive 上傳服務。" }
+        };
       }
 
-      const conflict = await findCatalogConflict(options.catalog, target, sha256);
+      const conflict = await findCatalogConflict(options.catalog, resource.target, resource.sha256);
       if (conflict?.kind === "same_hash") {
-        return { ok: true, replyText: `已經有相同檔案：${conflict.item.title}` };
+        return {
+          status: "duplicate",
+          result: { ok: true, replyText: `已經有相同檔案：${conflict.item.title}` }
+        };
       }
       if (conflict?.kind === "same_title") {
-        return { ok: true, replyText: "已經有同名檔案，請換一個名稱後重新上傳。" };
+        return {
+          status: "duplicate",
+          result: { ok: true, replyText: "已經有同名檔案，請換一個名稱後重新上傳。" }
+        };
       }
 
-      const item = await options.graph.uploadFile(
-        driveId,
-        folderItemId,
-        fileName,
-        input.binary.data,
-        detected.mimeType
-      );
+      let item: Awaited<ReturnType<NonNullable<GraphDriveClient["uploadFile"]>>>;
+      try {
+        item = await options.graph.uploadFile(
+          driveId,
+          folderItemId,
+          resource.fileName,
+          resource.data,
+          resource.mimeType
+        );
+      } catch {
+        return {
+          status: "failed",
+          result: { ok: true, replyText: "檔案上傳失敗，這次沒有完成保存，請稍後重試。" }
+        };
+      }
       const uploadedDriveId = item.driveId ?? driveId;
       let catalogItem: CatalogItemRecord;
       try {
         catalogItem = await options.catalog.upsertItem({
           sourceId: sourceGate.source.id,
-          itemKind: target.itemKind,
-          domain: target.domain,
-          title: target.title,
+          itemKind: resource.target.itemKind,
+          domain: resource.target.domain,
+          title: resource.target.title,
           path: item.path ?? item.name,
-          mimeType: detected.mimeType,
-          extension: detected.extension,
-          sizeBytes,
-          sha256,
+          mimeType: resource.mimeType,
+          extension: resource.extension,
+          sizeBytes: resource.sizeBytes,
+          sha256: resource.sha256,
           storageRef: {
             provider: "graph",
             driveId: uploadedDriveId,
@@ -127,7 +190,7 @@ export function createResourceBinaryPublisher(
           },
           externalUpdatedAt: input.now.toISOString(),
           expiresAt:
-            target.sourceKey === "xiaoha_database"
+            resource.target.sourceKey === "xiaoha_database"
               ? new Date(input.now.getTime() + XIAOHA_DATABASE_RETENTION_MS).toISOString()
               : undefined
         });
@@ -139,39 +202,48 @@ export function createResourceBinaryPublisher(
             // A later catalog sync can reconcile an upload that could not be compensated.
           }
         }
-        return { ok: true, replyText: "檔案索引建立失敗，這次沒有完成保存，請稍後重試。" };
+        return {
+          status: "failed",
+          result: {
+            ok: true,
+            replyText: "檔案索引建立失敗，這次沒有完成保存，請稍後重試。"
+          }
+        };
       }
       return {
-        ok: true,
-        writePhase: "commit",
-        replyText: [
-          "已保存檔案：",
-          `名稱：${target.title}`,
-          `檔名：${item.name || fileName}`,
-          `用途：${purposeLabel(target.itemKind)}`,
-          `大小：${formatBytes(sizeBytes)}`
-        ].join("\n"),
-        executedAction: "save_resource",
-        agentResult: {
-          status: "success",
-          replyText: "檔案已保存。",
-          anchors: {
-            resourceId: catalogItem.id,
-            resourceKind:
-              resourceTypeForItemKind(target.itemKind) === "general_resource"
-                ? "resource"
-                : resourceTypeForItemKind(target.itemKind),
-            title: target.title
+        status: "published",
+        result: {
+          ok: true,
+          writePhase: "commit",
+          replyText: [
+            "已保存檔案：",
+            `名稱：${resource.target.title}`,
+            `檔名：${item.name || resource.fileName}`,
+            `用途：${purposeLabel(resource.target.itemKind)}`,
+            `大小：${formatBytes(resource.sizeBytes)}`
+          ].join("\n"),
+          executedAction: "save_resource",
+          agentResult: {
+            status: "success",
+            replyText: "檔案已保存。",
+            anchors: {
+              resourceId: catalogItem.id,
+              resourceKind:
+                resourceTypeForItemKind(resource.target.itemKind) === "general_resource"
+                  ? "resource"
+                  : resourceTypeForItemKind(resource.target.itemKind),
+              title: resource.target.title
+            },
+            entities: [{ type: "resource", key: catalogItem.id, label: "已保存資源" }]
           },
-          entities: [{ type: "resource", key: catalogItem.id, label: "已保存資源" }]
-        },
-        agentResource: {
-          resourceType: resourceTypeForItemKind(target.itemKind),
-          title: target.title,
-          storage: {
-            provider: "graph",
-            driveId: uploadedDriveId,
-            itemId: item.id
+          agentResource: {
+            resourceType: resourceTypeForItemKind(resource.target.itemKind),
+            title: resource.target.title,
+            storage: {
+              provider: "graph",
+              driveId: uploadedDriveId,
+              itemId: item.id
+            }
           }
         }
       };

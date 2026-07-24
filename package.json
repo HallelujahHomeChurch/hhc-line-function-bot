@@ -17,6 +17,7 @@
     "eval:kernel": "tsx src/tools/eval-kernel.ts",
     "eval:retrieval-product": "vitest run src/__tests__/retrieval-product-evals.test.ts",
     "catalog:sync": "tsx src/tools/sync-catalog.ts",
+    "attachment-scan:run": "node dist/tools/run-attachment-scan-job.js",
     "config:validate": "tsx src/tools/check-profile-config.ts",
     "smoke:webhook": "tsx src/tools/smoke-webhook.ts",
     "check:notion": "tsx src/tools/check-notion-service-schedule.ts",

@@ -531,7 +531,7 @@ describe("find_sheet_music", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("imports a selected direct result only after target selection and confirmation", async () => {
+  it("does not download or publish a selected direct result in the bot process", async () => {
     const now = new Date("2026-07-04T10:00:00.000Z");
     const sessionStore = new InMemorySessionStore({ now: () => now });
     await sessionStore.set({
@@ -553,17 +553,9 @@ describe("find_sheet_music", () => {
         contentType: "application/pdf"
       })
     };
-    const publisher = {
-      publish: vi.fn().mockResolvedValue({
-        ok: true,
-        replyText: "已保存：Amazing Grace",
-        executedAction: "save_resource"
-      })
-    };
     const textHandler = createFindPopSheetMusicTextMessageHandler({
       graph: { listFolderChildren: vi.fn(), createSharingLink: vi.fn() },
       sessionStore,
-      externalImport: { client, publisher, maxBytes: 1024, timeoutMs: 1000, maxRedirects: 3 },
       now: () => now
     });
     const context = handlerContext();
@@ -577,9 +569,8 @@ describe("find_sheet_music", () => {
     });
     const result = await textHandler.handle({ text: "保存" }, context);
 
-    expect(result).toMatchObject({ executedAction: "save_resource" });
-    expect(client.download).toHaveBeenCalledTimes(1);
-    expect(publisher.publish).toHaveBeenCalledTimes(1);
+    expect(result?.replyText).toContain("目前沒有開放匯入歌譜檔案");
+    expect(client.download).not.toHaveBeenCalled();
     await expect(
       sessionStore.findExternalSheetMusicImport({
         profileName: "main",
