@@ -115,7 +115,7 @@ properties:
           - volumeName: clamav-signatures
             mountPath: /var/lib/clamav
         resources:
-          cpu: 1.0
+          cpu: 2.0
           memory: 4Gi
     volumes:
       - name: clamav-signatures

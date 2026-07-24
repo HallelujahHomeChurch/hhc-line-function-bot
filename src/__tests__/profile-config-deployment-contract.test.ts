@@ -303,7 +303,7 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).not.toContain("name: OBSERVABILITY_HMAC_KEY");
     expect(scanJob).not.toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
     expect(scanJob).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
-    expect(scanJob).toContain("cpu: 1.0");
+    expect(scanJob).toContain("cpu: 2.0");
     expect(scanJob).toContain("memory: 4Gi");
     expect(scanJob).toContain("mountPath: /var/lib/clamav");
     expect(scanJob).toContain("storageName: clamav-signatures-readonly");
