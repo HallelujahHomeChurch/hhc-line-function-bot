@@ -187,7 +187,7 @@ async function promoteStagedSet(
     }
 
     const previousDatabaseDirectory = await readPreviousDatabaseDirectory(manifestPath);
-    await mkdir(setsDirectory, { mode: 0o700 });
+    await mkdir(setsDirectory, { mode: 0o700, recursive: true });
     await rename(stagingDirectory, promotedDirectory);
     databasePromoted = true;
     await writeFile(manifestTemporaryPath, `${JSON.stringify(manifest)}\n`, {
