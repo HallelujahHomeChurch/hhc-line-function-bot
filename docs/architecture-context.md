@@ -492,10 +492,19 @@ failures remain pending for bounded retry. An event-driven ACA Job leases one
 queue item, atomically claims the work with a token and expiry, and only then
 performs the bounded LINE Content API or authorized external-file download,
 actual-size, MIME/magic-byte, extension, safe-filename, hash, local ClamAV,
-conflict, upload, and catalog checks. Expired claims are reclaimable after a
-worker crash, but a stale claim token cannot complete the new claim. Queue
-redelivery without a claim is acknowledged only after a terminal state is
-observed. OneDrive upload and catalog upsert form one logical commit; catalog
+conflict, upload, and catalog checks. Expired pre-publication claims are
+reclaimable after a worker crash, but immediately before invoking the publisher
+the live token must atomically enter `publishing`. Publishing work is never
+reclaimed for another upload. Its expiry is clamped to the execution's absolute
+900-second ACA replica deadline and may only terminal-fail an abandoned
+publication; stale workers cannot mutate the terminal work state or
+requester-scoped job. Completion and failure commit the Redis work CAS together
+with a bounded pending job update before the job-store write. Queue redelivery
+reconciles that idempotent update before acknowledging terminal work, closing
+the crash window between the two Redis records. Claim disposition distinguishes
+active work from terminal and missing/expired opaque work, so active deliveries
+remain for redelivery while terminal or expired-work deliveries are
+acknowledged. OneDrive upload and catalog upsert form one logical commit; catalog
 failure compensates by deleting the uploaded Graph item.
 Scanner results other than `clean`, or signatures without a valid at-most-72-hour
 manifest, fail closed. A separate two-day scheduled ACA Job stages and validates

@@ -238,6 +238,7 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).toContain("triggerType: Event");
     expect(scanJob).toContain("eventTriggerConfig:");
     expect(scanJob).toContain("minExecutions: 0");
+    expect(scanJob).toContain("replicaTimeout: 900");
     expect(scanJob).toContain("parallelism: 1");
     expect(scanJob).toContain("replicaCompletionCount: 1");
     expect(scanJob).toContain("type: azure-queue");

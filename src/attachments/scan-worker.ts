@@ -50,12 +50,13 @@ export interface AttachmentScanWorkerOptions {
   scanTimeoutMs?: number;
   signatureMaxAgeMs?: number;
   now?: () => Date;
+  publicationDeadline?: Date;
   temporaryRoot?: string;
 }
 
 export type AttachmentScanWorkerResult =
   | { status: "completed" }
-  | { status: "ignored"; reason: "not_claimed" }
+  | { status: "ignored"; reason: "active" | "terminal" | "missing" }
   | {
       status: "failed";
       failureCode: AttachmentScanFailureCode;
@@ -66,10 +67,11 @@ export async function runAttachmentScanWorker(
   workId: string,
   options: AttachmentScanWorkerOptions
 ): Promise<AttachmentScanWorkerResult> {
-  const work = await options.workStore.claim(workId);
-  if (!work) {
-    return { status: "ignored", reason: "not_claimed" };
+  const claim = await options.workStore.claimForProcessing(workId);
+  if (claim.disposition !== "claimed") {
+    return { status: "ignored", reason: claim.disposition };
   }
+  const work = claim.work;
 
   try {
     const signatureManifest = await options.readSignatureManifest();
@@ -191,6 +193,18 @@ export async function runAttachmentScanWorker(
         return failWork(options.workStore, work, "signature_stale", true);
       }
 
+      const publishing = await options.workStore.beginPublishing(
+        work.id,
+        work.claimId!,
+        options.publicationDeadline
+      );
+      if (!publishing) {
+        return {
+          status: "failed",
+          failureCode: "worker_failed",
+          infrastructureFailure: true
+        };
+      }
       const publication = await options.publisher.publishVerifiedResource({
         resource: preparation.resource,
         scan: {

@@ -31,6 +31,11 @@ export const REMOTE_RUNTIME_KERNEL_CASES: KernelAcceptanceCase[] = [
   attachmentCase("kernel-v1/write/signature-missing-no-publish@1", missingSignatureDoesNotPublish),
   attachmentCase("kernel-v1/write/signature-stale-no-publish@1", staleSignatureDoesNotPublish),
   attachmentCase("kernel-v1/write/infected-no-publish@1", infectedAttachmentDoesNotPublish),
+  attachmentCase(
+    "kernel-v1/write/reclaimed-claim-publication-fenced@1",
+    reclaimedClaimCannotPublish
+  ),
+  attachmentCase("kernel-v1/write/expired-scan-work-disposable@1", expiredScanWorkIsDisposable),
   jobCase("kernel-v1/state/clean-job-requester-scope@1", cleanJobResultIsRequesterScoped)
 ];
 
@@ -178,6 +183,77 @@ async function infectedAttachmentDoesNotPublish(now: Date): Promise<boolean> {
   return (
     result.status === "failed" && result.failureCode === "scan_infected" && fixture.uploads() === 0
   );
+}
+
+async function reclaimedClaimCannotPublish(now: Date): Promise<boolean> {
+  let current = now;
+  let claimSequence = 0;
+  const scope = {
+    profileName: "helper",
+    sourceKey: "user:U_SYNTHETIC_1",
+    requesterUserId: "U_SYNTHETIC_1"
+  };
+  const jobStore = new InMemoryAgentJobStore({ now: () => current });
+  const job = await jobStore.createPending({ scope, label: "scan", ttlMs: 600_000 });
+  const workStore = new InMemoryAttachmentScanWorkStore({
+    jobStore,
+    now: () => current,
+    claimLeaseMs: 60_000,
+    publishingLeaseMs: 120_000,
+    claimIdFactory: () => `synthetic-claim-${++claimSequence}`
+  });
+  const work = await workStore.create({
+    jobId: job.id,
+    lineMessageId: "opaque-line-message",
+    scope,
+    target: {
+      sourceKey: "synthetic_uploads",
+      itemKind: "ppt_slide",
+      domain: "presentation",
+      title: "synthetic"
+    },
+    ttlMs: 600_000
+  });
+  await workStore.markEnqueued(work.id);
+  const stale = await workStore.claim(work.id);
+  current = new Date(now.getTime() + 60_000);
+  const replacement = await workStore.claim(work.id);
+  if (!stale?.claimId || !replacement?.claimId) return false;
+
+  const staleFenced = !(await workStore.beginPublishing(work.id, stale.claimId));
+  const replacementFenced = await workStore.beginPublishing(work.id, replacement.claimId);
+  const redelivery = await workStore.claimForProcessing(work.id);
+  return staleFenced && replacementFenced && redelivery.disposition === "active";
+}
+
+async function expiredScanWorkIsDisposable(now: Date): Promise<boolean> {
+  let current = now;
+  const scope = {
+    profileName: "helper",
+    sourceKey: "user:U_SYNTHETIC_1",
+    requesterUserId: "U_SYNTHETIC_1"
+  };
+  const jobStore = new InMemoryAgentJobStore({ now: () => current });
+  const job = await jobStore.createPending({ scope, label: "scan", ttlMs: 1 });
+  const workStore = new InMemoryAttachmentScanWorkStore({
+    jobStore,
+    now: () => current
+  });
+  const work = await workStore.create({
+    jobId: job.id,
+    lineMessageId: "opaque-line-message",
+    scope,
+    target: {
+      sourceKey: "synthetic_uploads",
+      itemKind: "ppt_slide",
+      domain: "presentation",
+      title: "synthetic"
+    },
+    ttlMs: 1
+  });
+  await workStore.markEnqueued(work.id);
+  current = new Date(now.getTime() + 1);
+  return (await workStore.claimForProcessing(work.id)).disposition === "missing";
 }
 
 async function cleanJobResultIsRequesterScoped(now: Date): Promise<boolean> {

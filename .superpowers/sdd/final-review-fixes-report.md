@@ -94,3 +94,83 @@ Kernel corpus pass 6/6 and the fresh full suite pass 110 files and 936 tests.
 - No live DeepSeek, LINE, SearXNG, Azure Container Apps, OneDrive, or EICAR
   deployment check was run from this offline worktree. Those checks remain part
   of post-provisioning/deployment validation; no offline gate was weakened.
+
+## Final Re-review Addendum
+
+The two remaining Important re-review findings are resolved by a stricter
+publication and queue-disposition state machine:
+
+1. A live `claimed` token must win an atomic `beginPublishing` transition
+   immediately before the shared publisher is invoked. `publishing` work is not
+   claimable, so a replacement worker cannot perform a second upload. A bounded
+   abandoned publication transitions only to terminal failure; it is never
+   returned to `queued` or `claimed`. An expired or replaced pre-publication
+   token cannot enter the fence, complete/fail the work, or update
+   `AgentJobStore`.
+2. Both in-memory and Redis terminal transitions now commit the authoritative
+   work CAS, including a bounded pending job-update payload, before calling
+   `AgentJobStore.complete` or `AgentJobStore.fail`. A failed CAS performs no
+   requester-job mutation. A crash between those two operations leaves the
+   terminal update replayable; queue redelivery applies it idempotently and
+   clears the marker before acknowledging the terminal work.
+3. Worker claims now return an explicit `claimed`, `active`, `terminal`, or
+   `missing` disposition. Active work is left for redelivery. Terminal and
+   missing/expired internal opaque work is acknowledged, so an infrastructure
+   outage longer than work retention cannot leave an undeletable queue message.
+
+The focused test-first run was observed RED at 10 failures and 23 passes across
+the scan store, worker, and queue job tests. The failures were the missing
+publication fence/disposition APIs and the old terminal-only acknowledgement
+behavior. The same focused run then passed 33/33. The broader attachment,
+outbox, queue, sheet-music import, and Kernel regression run passed 8 files and
+78/78 tests.
+
+Fresh final verification after the addendum changes:
+
+- `pnpm format:check`, `pnpm typecheck`, `pnpm lint`, and
+  `pnpm config:validate`: passed.
+- `pnpm test`: 110 files and 944 tests passed.
+- `pnpm eval:admin`: 14/14 passed.
+- `pnpm eval:agent`: candidates 19/19 and validated plans 19/19 passed.
+- `pnpm eval:retrieval-product`: 2/2 passed.
+- `pnpm eval:kernel`: 106/106 passed with zero security violations, including
+  the new reclaimed-claim fence and expired-work disposition boundaries.
+- `pnpm build`, `bash -n scripts/deploy-aca.sh`, attachment-scan YAML parsing,
+  `git diff --check`, the deployment-secret diff scan, and the active retired
+  endpoint scan: passed.
+
+### Independent Re-review Follow-up
+
+The first independent re-review found two additional crash-window issues:
+
+1. A crash after the terminal work CAS but before the requester-job write could
+   otherwise leave the job pending until expiry.
+2. A publication lease that began late in the execution could otherwise extend
+   past the queue visibility and ACA replica timeout boundary.
+
+The follow-up tests were observed RED at 5 failures and 31 passes: Redis
+complete/fail reconciliation was missing, an explicit publication deadline was
+ignored, the worker did not forward the deadline, and the job deadline helper
+did not exist. After persisting the pending terminal job update and clamping
+the publication fence to the absolute execution-start-plus-900-second deadline,
+the focused run passed 36/36. The broader attachment and deployment-contract
+run passed 9 files and 76/76 tests.
+
+An independent re-review of both corrected areas reported no Critical or
+Important issues. It specifically confirmed that terminal redelivery replays
+the idempotent requester-job update before terminal acknowledgement and that
+publication authority is clamped to the 900-second runtime/visibility
+boundary.
+
+The final fresh offline gate passed:
+
+- `pnpm format:check`, `pnpm typecheck`, `pnpm lint`, and
+  `pnpm config:validate`.
+- `pnpm test`: 110 files and 947 tests.
+- `pnpm eval:admin`: 14/14.
+- `pnpm eval:agent`: candidates 19/19 and validated plans 19/19.
+- `pnpm eval:retrieval-product`: 2/2.
+- `pnpm eval:kernel`: 106/106 with zero security violations.
+- `pnpm build`, `bash -n scripts/deploy-aca.sh`, attachment-scan YAML parsing,
+  `git diff --check`, the deployment-secret diff scan, and the active retired
+  endpoint scan.

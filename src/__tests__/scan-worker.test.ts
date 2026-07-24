@@ -294,6 +294,25 @@ describe("attachment scan worker", () => {
     expect(graph.uploadFile).not.toHaveBeenCalled();
   });
 
+  it("checks the atomic publication fence immediately before calling the publisher", async () => {
+    const { agentJobStore, scope, job, graph, workStore, work, workerOptions } = await setup();
+    const publicationDeadline = new Date("2026-07-24T04:10:00.000Z");
+    workerOptions.publicationDeadline = publicationDeadline;
+    const beginPublishing = vi.spyOn(workStore, "beginPublishing").mockResolvedValueOnce(false);
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "failed",
+      failureCode: "worker_failed",
+      infrastructureFailure: true
+    });
+
+    expect(graph.uploadFile).not.toHaveBeenCalled();
+    expect(beginPublishing).toHaveBeenCalledWith(work.id, expect.any(String), publicationDeadline);
+    await expect(agentJobStore.get(job.id, scope)).resolves.toMatchObject({
+      status: "pending"
+    });
+  });
+
   it("does not download or publish duplicate claimed work", async () => {
     const { graph, lineContent, work, workerOptions } = await setup();
 
@@ -303,7 +322,7 @@ describe("attachment scan worker", () => {
 
     await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
       status: "ignored",
-      reason: "not_claimed"
+      reason: "terminal"
     });
 
     expect(lineContent.getMessageContent).not.toHaveBeenCalled();

@@ -1,12 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  attachmentScanPublicationDeadline,
   readAttachmentScanJobEnvironment,
   receiveAttachmentScanWork,
   shouldAcknowledgeAttachmentScanResult
 } from "../tools/run-attachment-scan-job.js";
 
 describe("attachment scan job environment", () => {
+  it("bounds publication authority by the 900-second replica deadline", () => {
+    expect(
+      attachmentScanPublicationDeadline(new Date("2026-07-24T04:00:00.000Z")).toISOString()
+    ).toBe("2026-07-24T04:15:00.000Z");
+  });
+
   it("accepts one opaque work id and bounded local scanner settings", () => {
     expect(
       readAttachmentScanJobEnvironment({
@@ -108,11 +115,40 @@ describe("attachment scan job environment", () => {
     expect(client.deleteMessage).toHaveBeenCalledWith("opaque-message", "opaque-receipt");
   });
 
-  it("acknowledges not-claimed redelivery only after atomic terminal confirmation", () => {
-    const result = { status: "ignored", reason: "not_claimed" } as const;
+  it("acknowledges terminal or missing work but leaves active work for redelivery", () => {
+    expect(shouldAcknowledgeAttachmentScanResult({ status: "ignored", reason: "active" })).toBe(
+      false
+    );
+    expect(shouldAcknowledgeAttachmentScanResult({ status: "ignored", reason: "terminal" })).toBe(
+      true
+    );
+    expect(shouldAcknowledgeAttachmentScanResult({ status: "ignored", reason: "missing" })).toBe(
+      true
+    );
+  });
 
-    expect(shouldAcknowledgeAttachmentScanResult(result, undefined)).toBe(false);
-    expect(shouldAcknowledgeAttachmentScanResult(result, "completed")).toBe(true);
-    expect(shouldAcknowledgeAttachmentScanResult(result, "failed")).toBe(true);
+  it("deletes an opaque queue delivery after an outage outlives work retention", async () => {
+    const client = {
+      receiveMessages: vi.fn().mockResolvedValue({
+        receivedMessageItems: [
+          {
+            messageText: JSON.stringify({
+              workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab"
+            }),
+            messageId: "opaque-message",
+            popReceipt: "opaque-receipt"
+          }
+        ]
+      }),
+      deleteMessage: vi.fn().mockResolvedValue(undefined)
+    };
+    const lease = await receiveAttachmentScanWork(client);
+    const result = { status: "ignored", reason: "missing" } as const;
+
+    if (shouldAcknowledgeAttachmentScanResult(result)) {
+      await lease?.complete();
+    }
+
+    expect(client.deleteMessage).toHaveBeenCalledWith("opaque-message", "opaque-receipt");
   });
 });

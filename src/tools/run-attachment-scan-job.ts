@@ -20,6 +20,7 @@ import { createResourceBinaryPublisher } from "../functions/resource-binary-publ
 import { createRedisRuntime } from "../redis.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const ATTACHMENT_SCAN_REPLICA_TIMEOUT_MS = 900_000;
 
 export interface AttachmentScanJobEnvironment {
   workId?: string;
@@ -124,6 +125,7 @@ export async function receiveAttachmentScanWork(
 export async function runAttachmentScanJob(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<{ exitCode: number; status: Record<string, string> }> {
+  const startedAt = new Date();
   let redis: Awaited<ReturnType<typeof createRedisRuntime>>;
   let postgres: Awaited<ReturnType<typeof createPostgresRuntime>>;
   let queueLease: AttachmentScanWorkLease | undefined;
@@ -176,7 +178,8 @@ export async function runAttachmentScanJob(
       lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
       externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
       externalMaxRedirects: config.externalResources.maxRedirects,
-      scanTimeoutMs: jobEnvironment.scanTimeoutMs
+      scanTimeoutMs: jobEnvironment.scanTimeoutMs,
+      publicationDeadline: attachmentScanPublicationDeadline(startedAt)
     });
 
     if (result.status === "completed") {
@@ -184,12 +187,12 @@ export async function runAttachmentScanJob(
       return { exitCode: 0, status: { status: "completed" } };
     }
     if (result.status === "ignored") {
-      const terminalStatus = await workStore.terminalStatus(workId);
-      if (shouldAcknowledgeAttachmentScanResult(result, terminalStatus)) {
+      const acknowledge = shouldAcknowledgeAttachmentScanResult(result);
+      if (acknowledge) {
         await queueLease?.complete();
       }
       return {
-        exitCode: terminalStatus ? 0 : 1,
+        exitCode: acknowledge ? 0 : 1,
         status: { status: "ignored", reason: result.reason }
       };
     }
@@ -210,14 +213,15 @@ export async function runAttachmentScanJob(
   }
 }
 
-export function shouldAcknowledgeAttachmentScanResult(
-  result: AttachmentScanWorkerResult,
-  terminalStatus: "completed" | "failed" | undefined
-): boolean {
+export function attachmentScanPublicationDeadline(startedAt: Date): Date {
+  return new Date(startedAt.getTime() + ATTACHMENT_SCAN_REPLICA_TIMEOUT_MS);
+}
+
+export function shouldAcknowledgeAttachmentScanResult(result: AttachmentScanWorkerResult): boolean {
   return (
     result.status === "completed" ||
     (result.status === "failed" && !result.infrastructureFailure) ||
-    (result.status === "ignored" && terminalStatus !== undefined)
+    (result.status === "ignored" && (result.reason === "terminal" || result.reason === "missing"))
   );
 }
 
