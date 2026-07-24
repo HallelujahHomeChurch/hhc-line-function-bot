@@ -165,6 +165,34 @@ describe("ClamAV signature refresh", () => {
     expect(existsSync(temporaryPath)).toBe(false);
   });
 
+  it("refreshes repeatedly after the current sets directory already exists", async () => {
+    const root = await createSignatureRoot();
+
+    await expect(
+      refreshClamAvSignatures({
+        rootDirectory: root,
+        now: () => fixedNow,
+        execFile: successfulExec()
+      })
+    ).resolves.toMatchObject({ status: "refreshed" });
+    await expect(
+      refreshClamAvSignatures({
+        rootDirectory: root,
+        now: () => new Date("2026-07-24T04:01:00.000Z"),
+        execFile: successfulExec()
+      })
+    ).resolves.toEqual({
+      status: "refreshed",
+      signatureVersion: "clamav-20260724T040100000Z"
+    });
+
+    expect(
+      JSON.parse(await readFile(join(root, "current", "manifest.json"), "utf8"))
+    ).toMatchObject({
+      signatureVersion: "clamav-20260724T040100000Z"
+    });
+  });
+
   it("retains the active set when freshclam fails", async () => {
     const root = await createSignatureRoot();
     const execFile: ClamAvRefreshExecFile = vi.fn((_command, _args, _options, callback) => {
