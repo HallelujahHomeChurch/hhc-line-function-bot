@@ -8,18 +8,6 @@ import type {
 
 export type PartialProviderPolicy = Partial<Record<ModelProviderLane, Partial<ProviderLanePolicy>>>;
 
-const LOCAL_FIRST_LANES = new Set<ModelProviderLane>([
-  "function_routing",
-  "admin_routing",
-  "memory_routing"
-]);
-
-const REMOTE_FIRST_LANES = new Set<ModelProviderLane>([
-  "smart_talk",
-  "general_agent",
-  "context_compression"
-]);
-
 export function normalizeProviderPolicy(input: {
   profileName: string;
   allowedProviders: ModelProviderName[];
@@ -29,37 +17,26 @@ export function normalizeProviderPolicy(input: {
   for (const lane of MODEL_PROVIDER_LANE_NAMES) {
     const defaultPolicy = defaultPolicyForLane(lane, input.allowedProviders);
     const explicit = input.explicitPolicy?.[lane];
-    const primary = explicit?.primary ?? defaultPolicy.primary;
-    const fallback = explicit?.fallback ?? defaultPolicy.fallback;
-    assertAllowed(input.profileName, lane, "primary", primary, input.allowedProviders);
-    if (fallback) {
-      assertAllowed(input.profileName, lane, "fallback", fallback, input.allowedProviders);
+    if (explicit?.fallback) {
+      throw new Error(
+        `Profile ${input.profileName} providerPolicy.${lane} fallback is no longer supported`
+      );
     }
-    normalized[lane] = fallback ? { primary, fallback } : { primary };
+    const primary = explicit?.primary ?? defaultPolicy.primary;
+    assertAllowed(input.profileName, lane, "primary", primary, input.allowedProviders);
+    normalized[lane] = { primary };
   }
   return normalized;
 }
 
 export function defaultPolicyForLane(
-  lane: ModelProviderLane,
+  _lane: ModelProviderLane,
   allowedProviders: ModelProviderName[]
 ): ProviderLanePolicy {
-  const local = preferredLocalProvider(allowedProviders);
-  if (REMOTE_FIRST_LANES.has(lane)) {
-    const primary = allowedProviders.includes("deepseek") ? "deepseek" : local;
-    if (primary !== local && lane !== "context_compression") {
-      return { primary, fallback: local };
-    }
-    return { primary };
+  if (!allowedProviders.includes("deepseek")) {
+    throw new Error("DeepSeek must be listed in allowedProviders");
   }
-  if (LOCAL_FIRST_LANES.has(lane)) {
-    return { primary: local };
-  }
-  return { primary: local };
-}
-
-function preferredLocalProvider(allowedProviders: ModelProviderName[]): ModelProviderName {
-  return allowedProviders.includes("ollama") ? "ollama" : (allowedProviders[0] ?? "ollama");
+  return { primary: "deepseek" };
 }
 
 function assertAllowed(

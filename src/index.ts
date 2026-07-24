@@ -1,4 +1,3 @@
-import { createOllamaProvider } from "./clients/ollama.js";
 import { createOllamaEmbeddingClient } from "./clients/ollama-embedding.js";
 import { createDeepSeekProvider } from "./clients/deepseek.js";
 import { createAdminActionRouter } from "./admin-action-router.js";
@@ -59,14 +58,7 @@ const config = loadConfigFromEnv(process.env);
 const redis = await createRedisRuntime(config.redis);
 const postgres = await createPostgresRuntime(config.database);
 
-const ollama = createOllamaProvider({
-  baseUrl: config.llm.ollamaBaseUrl,
-  model: config.llm.ollamaModel,
-  timeoutMs: config.llm.timeoutMs,
-  keepAlive: config.llm.ollamaKeepAlive
-});
 const providers = {
-  ollama,
   deepseek: createDeepSeekProvider({
     apiKey: config.llm.deepseekApiKey,
     baseUrl: config.llm.deepseekBaseUrl,
@@ -82,26 +74,13 @@ const functionRoutingPrimary = createProfileAwareProvider({
   role: "primary",
   lane: "function_routing"
 });
-const functionRoutingFallback = createProfileAwareProvider({
-  config,
-  providers,
-  role: "fallback",
-  lane: "function_routing"
-});
 const agentPlanner = createAgentPlanner({
-  primary: functionRoutingPrimary,
-  fallback: functionRoutingFallback
+  primary: functionRoutingPrimary
 });
 const adminRoutingPrimary = createProfileAwareProvider({
   config,
   providers,
   role: "primary",
-  lane: "admin_routing"
-});
-const adminRoutingFallback = createProfileAwareProvider({
-  config,
-  providers,
-  role: "fallback",
   lane: "admin_routing"
 });
 const smartTalkPrimary = createProfileAwareProvider({
@@ -110,27 +89,14 @@ const smartTalkPrimary = createProfileAwareProvider({
   role: "primary",
   lane: "smart_talk"
 });
-const smartTalkFallback = createProfileAwareProvider({
-  config,
-  providers,
-  role: "fallback",
-  lane: "smart_talk"
-});
 const wikipediaSummaryPrimary = createProfileAwareProvider({
   config,
   providers,
   role: "primary",
   lane: "web_summarization"
 });
-const wikipediaSummaryFallback = createProfileAwareProvider({
-  config,
-  providers,
-  role: "fallback",
-  lane: "web_summarization"
-});
 const adminActionRouter = createAdminActionRouter({
   primary: adminRoutingPrimary,
-  modelFallback: adminRoutingFallback,
   lane: "admin_routing"
 });
 const accessStore = await createAccessStore({ db: postgres?.pool });
@@ -280,12 +246,10 @@ const registries = createFunctionRegistries(config, {
   virusScanner,
   webSearch,
   sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
-    primary: wikipediaSummaryPrimary,
-    fallback: wikipediaSummaryFallback
+    primary: wikipediaSummaryPrimary
   }),
   wikipediaSummarizer: createWikipediaSummarizer({
-    primary: wikipediaSummaryPrimary,
-    fallback: wikipediaSummaryFallback
+    primary: wikipediaSummaryPrimary
   })
 });
 const app = createApp(config, {
@@ -309,7 +273,6 @@ const app = createApp(config, {
   conversationWindowStore,
   controlledAgentRouter,
   textGenerator: smartTalkPrimary,
-  textFallbackGenerator: smartTalkFallback,
   agentRuntime: createAgentRuntime({ memoryStore, graph, accessStore }),
   diagnostics: createDependencyDiagnostics({
     config,

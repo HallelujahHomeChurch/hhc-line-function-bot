@@ -211,6 +211,7 @@ const profileSchema = z.object({
 });
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
+  assertNoRetiredOllamaRuntimeSettings(env);
   const profilesJson = readProfilesJson(env);
   const parsedProfiles = JSON.parse(profilesJson) as unknown;
   if (!Array.isArray(parsedProfiles)) {
@@ -230,10 +231,9 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   );
   assertCompleteGroup(env, graphRequiredKeys, "Incomplete Graph configuration");
   assertCompleteGroup(env, notionRequiredKeys, "Incomplete Notion configuration");
-  const llmProvider = readModelProvider(env.LLM_PROVIDER, "ollama");
-  const llmFallbackProvider = readModelProvider(env.LLM_FALLBACK_PROVIDER, "ollama");
+  const llmProvider = readModelProvider(env.LLM_PROVIDER, "deepseek");
   const normalizedProfiles = profiles.map((profile) => normalizeProfile(profile, env));
-  validateProviderPolicy(normalizedProfiles, llmProvider, llmFallbackProvider);
+  validateProviderPolicy(normalizedProfiles, llmProvider);
   validateAccessConfig(normalizedProfiles, env);
   const observabilityHmacKey = env.OBSERVABILITY_HMAC_KEY?.trim();
   if (observabilityHmacKey && observabilityHmacKey.length < 32) {
@@ -265,7 +265,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     })),
     llm: {
       provider: llmProvider,
-      fallbackProvider: llmFallbackProvider,
+      fallbackProvider: undefined,
       ollamaBaseUrl,
       ollamaModel: env.OLLAMA_MODEL || "qwen3:4b-instruct",
       ollamaKeepAlive: readOllamaKeepAlive(env.OLLAMA_KEEP_ALIVE),
@@ -411,7 +411,7 @@ type NormalizedProfile = Omit<
 };
 
 function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): NormalizedProfile {
-  const allowedProviders = uniqueProviders(profile.allowedProviders ?? ["ollama"]);
+  const allowedProviders = uniqueProviders(profile.allowedProviders ?? ["deepseek"]);
   const channelSecret = resolveRequiredProfileValue(
     profile.name,
     "channelSecret",
@@ -520,8 +520,7 @@ function uniqueProviders(providers: ModelProviderName[]): ModelProviderName[] {
 
 function validateProviderPolicy(
   profiles: NormalizedProfile[],
-  defaultProvider: ModelProviderName,
-  fallbackProvider: ModelProviderName
+  defaultProvider: ModelProviderName
 ): void {
   for (const profile of profiles) {
     for (const provider of profile.allowedProviders) {
@@ -534,11 +533,17 @@ function validateProviderPolicy(
         `Profile ${profile.name} default provider ${defaultProvider} must be listed in allowedProviders`
       );
     }
-    if (!profile.allowedProviders.includes(fallbackProvider)) {
-      throw new Error(
-        `Profile ${profile.name} fallback provider ${fallbackProvider} must be listed in allowedProviders`
-      );
-    }
+  }
+}
+
+function assertNoRetiredOllamaRuntimeSettings(env: NodeJS.ProcessEnv): void {
+  const retired = ["OLLAMA_BASE_URL", "OLLAMA_MODEL", "OLLAMA_KEEP_ALIVE", "OLLAMA_TIMEOUT_MS"];
+  if (
+    env.LLM_PROVIDER === "ollama" ||
+    env.LLM_FALLBACK_PROVIDER?.trim() ||
+    retired.some((name) => Boolean(env[name]?.trim()))
+  ) {
+    throw new Error("Ollama runtime settings are no longer supported");
   }
 }
 
@@ -727,8 +732,8 @@ function readModelProvider(
   if (value === "openai_codex_oauth" || value === "codex_app_server" || value === "codex") {
     throw new Error(`${value} is no longer supported`);
   }
-  if (value === "ollama" || value === "deepseek") {
-    return value;
+  if (value === "deepseek") {
+    return "deepseek";
   }
   return fallback;
 }

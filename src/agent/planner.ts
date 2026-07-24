@@ -107,7 +107,7 @@ export interface AgentPlanner {
 
 export interface CreateAgentPlannerOptions {
   primary: ChatProvider;
-  fallback: ChatProvider;
+  fallback?: ChatProvider;
   timeoutMs?: number;
 }
 
@@ -174,8 +174,10 @@ export function createAgentPlanner(options: CreateAgentPlannerOptions): AgentPla
         return proposed(primaryAttempt.proposal, primaryName, attempts);
       }
 
-      const fallbackName = providerName(options.fallback, input.profileName, "ollama");
-      if (fallbackName !== primaryName) {
+      const fallbackName = options.fallback
+        ? providerName(options.fallback, input.profileName, "deepseek")
+        : undefined;
+      if (options.fallback && fallbackName && fallbackName !== primaryName) {
         const fallbackAttempt = await attemptProvider({
           provider: options.fallback,
           providerName: fallbackName,

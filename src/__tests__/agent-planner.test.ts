@@ -195,7 +195,7 @@ describe("constrained semantic planner", () => {
     expect(prompt).not.toContain("前攝影");
   });
 
-  it("falls back from a bounded primary timeout to Ollama exactly once", async () => {
+  it("returns no plan after a bounded DeepSeek timeout without invoking a semantic fallback", async () => {
     let primarySignal: AbortSignal | undefined;
     let fallbackObservedAbort = false;
     const primary = provider(
@@ -214,7 +214,7 @@ describe("constrained semantic planner", () => {
       fallbackObservedAbort = primarySignal?.aborted === true;
       return response({ disposition: "refine" });
     });
-    const planner = createAgentPlanner({ primary, fallback, timeoutMs: 5 });
+    const planner = createAgentPlanner({ primary, timeoutMs: 5 });
 
     await expect(
       planner.propose({
@@ -224,23 +224,14 @@ describe("constrained semantic planner", () => {
         activeTask: scheduleTask
       })
     ).resolves.toMatchObject({
-      status: "proposed",
-      disposition: "refine",
-      provider: "ollama",
-      attempts: [
-        { provider: "deepseek", status: "timeout", reason: "timeout", candidateCount: 1 },
-        {
-          provider: "ollama",
-          status: "accepted",
-          reason: "valid_proposal",
-          candidateCount: 1
-        }
-      ]
+      status: "no_plan",
+      reasonCode: "providers_unavailable",
+      attempts: [{ provider: "deepseek", status: "timeout", reason: "timeout", candidateCount: 1 }]
     });
     expect(primary.completeJson).toHaveBeenCalledOnce();
-    expect(fallback.completeJson).toHaveBeenCalledOnce();
+    expect(fallback.completeJson).not.toHaveBeenCalled();
     expect(primarySignal?.aborted).toBe(true);
-    expect(fallbackObservedAbort).toBe(true);
+    expect(fallbackObservedAbort).toBe(false);
   });
 
   it("keeps every bounded candidate and active-task summary complete within the prompt limit", async () => {

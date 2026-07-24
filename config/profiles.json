@@ -90,32 +90,28 @@
         { "key": "sunday", "aliases": ["主日"], "weekdays": [0], "start": "09:00", "end": "12:00" }
       ]
     },
-    "allowedProviders": ["ollama", "deepseek"],
+    "allowedProviders": ["deepseek"],
     "providerPolicy": {
       "function_routing": {
-        "primary": "deepseek",
-        "fallback": "ollama"
+        "primary": "deepseek"
       },
       "admin_routing": {
-        "primary": "ollama"
+        "primary": "deepseek"
       },
       "memory_routing": {
-        "primary": "ollama"
+        "primary": "deepseek"
       },
       "smart_talk": {
-        "primary": "deepseek",
-        "fallback": "ollama"
+        "primary": "deepseek"
       },
       "general_agent": {
-        "primary": "deepseek",
-        "fallback": "ollama"
+        "primary": "deepseek"
       },
       "context_compression": {
         "primary": "deepseek"
       },
       "web_summarization": {
-        "primary": "deepseek",
-        "fallback": "ollama"
+        "primary": "deepseek"
       }
     },
     "allowSubscriptionProviders": false

@@ -2,29 +2,23 @@ import { pathToFileURL } from "node:url";
 
 import { createAgentPlanner } from "../agent/planner.js";
 import { buildCapabilityCandidates } from "../agent/capability-candidates.js";
-import { validateAgentPlan } from "../agent/plan-validator.js";
 import { createDeepSeekProvider } from "../clients/deepseek.js";
-import { createOllamaProvider } from "../clients/ollama.js";
 import { loadConfigFromEnv } from "../config.js";
 import { createProfileAwareProvider, resolveProviderNameForLane } from "../llm/provider-runtime.js";
 import type { ProviderRegistry } from "../llm/provider-runtime.js";
-import type { ChatProvider } from "../types.js";
 import { AGENT_PLANNER_EVAL_CASES, evaluateAgentPlannerCases } from "./eval-agent-planner.js";
 
-export interface ForcedFallbackResult {
-  provider: "ollama";
+export interface ForcedUnavailableResult {
+  provider: "deepseek";
   primaryStatus: "unavailable";
-  finalDisposition: "execute";
-  finalCapability: "query_schedule";
+  status: "no_plan";
+  reasonCode: "providers_unavailable";
+  attempts: 1;
 }
 
-export async function evaluateForcedOllamaFallback(
-  ollamaFallback: ChatProvider,
+export async function evaluateForcedDeepSeekUnavailable(
   profileName: string
-): Promise<ForcedFallbackResult> {
-  const fallbackName =
-    ollamaFallback.providerNameForProfile?.(profileName) ?? ollamaFallback.providerName;
-  if (fallbackName !== "ollama") throw new Error("eval_agent_forced_fallback_must_be_ollama");
+): Promise<ForcedUnavailableResult> {
   const entry = AGENT_PLANNER_EVAL_CASES.find(
     ({ name }) => name === "acceptance-1-focused-schedule-role"
   );
@@ -44,8 +38,7 @@ export async function evaluateForcedOllamaFallback(
       completeJson: async () => {
         throw new Error("forced_primary_failure");
       }
-    },
-    fallback: ollamaFallback
+    }
   });
   const proposal = await planner.propose({
     profileName,
@@ -54,41 +47,20 @@ export async function evaluateForcedOllamaFallback(
     activeTask: entry.activeTask
   });
   if (
-    proposal.status === "no_plan" ||
-    proposal.provider !== "ollama" ||
-    proposal.attempts[0]?.status !== "unavailable" ||
-    proposal.attempts[1]?.provider !== "ollama" ||
-    proposal.attempts[1]?.status !== "accepted"
+    proposal.status !== "no_plan" ||
+    proposal.reasonCode !== "providers_unavailable" ||
+    proposal.attempts.length !== 1 ||
+    proposal.attempts[0]?.provider !== "deepseek" ||
+    proposal.attempts[0]?.status !== "unavailable"
   ) {
-    throw new Error("eval_agent_forced_ollama_fallback_failed");
-  }
-  const finalPlan = validateAgentPlan({
-    text: entry.text,
-    enabledFunctions: entry.enabledFunctions,
-    candidates,
-    proposal,
-    activeTask: entry.activeTask,
-    minConfidence: 0.65,
-    sourceType: "group",
-    now: new Date("2026-07-14T00:00:00.000Z")
-  });
-  if (finalPlan.disposition !== "execute" || finalPlan.capability !== "query_schedule") {
-    const finalCapability = "capability" in finalPlan ? finalPlan.capability : undefined;
-    throw new Error(
-      "eval_agent_forced_fallback_validation_failed:" +
-        `disposition=${finalPlan.disposition},` +
-        `capability=${finalCapability ?? "none"},` +
-        `reason=${finalPlan.reasonCode},` +
-        `provider=${proposal.provider},` +
-        `proposal=${proposal.disposition},` +
-        `confidence=${proposal.confidence}`
-    );
+    throw new Error("eval_agent_forced_deepseek_unavailable_failed");
   }
   return {
-    provider: "ollama",
+    provider: "deepseek",
     primaryStatus: "unavailable",
-    finalDisposition: "execute",
-    finalCapability: "query_schedule"
+    status: "no_plan",
+    reasonCode: "providers_unavailable",
+    attempts: 1
   };
 }
 
@@ -104,26 +76,10 @@ async function main(): Promise<void> {
     "function_routing",
     "primary"
   );
-  const fallbackName = resolveProviderNameForLane(
-    config,
-    profileName,
-    "function_routing",
-    "fallback"
-  );
   if (primaryName !== "deepseek") {
     throw new Error(`eval_agent_primary_must_be_deepseek:${primaryName}`);
   }
-  if (fallbackName !== "ollama") {
-    throw new Error(`eval_agent_fallback_must_be_ollama:${fallbackName}`);
-  }
-
   const providers: ProviderRegistry = {
-    ollama: createOllamaProvider({
-      baseUrl: config.llm.ollamaBaseUrl,
-      model: config.llm.ollamaModel,
-      timeoutMs: config.llm.timeoutMs,
-      keepAlive: config.llm.ollamaKeepAlive
-    }),
     deepseek: createDeepSeekProvider({
       apiKey: config.llm.deepseekApiKey,
       baseUrl: config.llm.deepseekBaseUrl,
@@ -139,12 +95,6 @@ async function main(): Promise<void> {
       providers,
       role: "primary",
       lane: "function_routing"
-    }),
-    fallback: createProfileAwareProvider({
-      config,
-      providers,
-      role: "fallback",
-      lane: "function_routing"
     })
   });
   const liveCases = AGENT_PLANNER_EVAL_CASES.filter(({ offlineOnly }) => !offlineOnly);
@@ -158,14 +108,14 @@ async function main(): Promise<void> {
       }),
     liveCases
   );
-  const forcedFallback = await evaluateForcedOllamaFallback(providers.ollama, profileName);
+  const forcedUnavailable = await evaluateForcedDeepSeekUnavailable(profileName);
 
-  console.log(`Agent planner live providers: primary=${primaryName} fallback=${fallbackName}`);
+  console.log(`Agent planner live provider: primary=${primaryName}`);
   console.log(`Candidate accuracy: ${report.candidatePassed}/${report.candidateAttempted}`);
   console.log(`Proposal accuracy: ${report.proposalPassed}/${report.proposalAttempted}`);
   console.log(`Final validated accuracy: ${report.validatedPassed}/${report.validatedAttempted}`);
   console.log(
-    `Forced fallback: provider=${forcedFallback.provider} primary=${forcedFallback.primaryStatus} final=${forcedFallback.finalDisposition}`
+    `Forced unavailable: provider=${forcedUnavailable.provider} primary=${forcedUnavailable.primaryStatus} status=${forcedUnavailable.status}`
   );
   for (const failure of report.candidateFailures) console.error(`candidate: ${failure}`);
   for (const failure of report.proposalFailures) console.error(`proposal: ${failure}`);

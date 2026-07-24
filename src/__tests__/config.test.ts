@@ -561,22 +561,20 @@ describe("config", () => {
     ).toThrow("registration.inviteCodeRequired is no longer supported");
   });
 
-  it("coerces numeric Ollama keep_alive values from environment strings", () => {
-    const config = loadConfigFromEnv({
-      ...baseEnv(),
+  it("rejects retired Ollama runtime settings", () => {
+    for (const [name, value] of Object.entries({
+      LLM_PROVIDER: "ollama",
+      LLM_FALLBACK_PROVIDER: "ollama",
+      OLLAMA_BASE_URL: "http://127.0.0.1:11434",
       OLLAMA_KEEP_ALIVE: "-1"
-    });
-
-    expect(config.llm.ollamaKeepAlive).toBe(-1);
+    })) {
+      expect(() => loadConfigFromEnv({ ...baseEnv(), [name]: value })).toThrow(
+        "Ollama runtime settings are no longer supported"
+      );
+    }
   });
 
-  it("omits Ollama keep_alive when it is not explicitly configured", () => {
-    const config = loadConfigFromEnv(baseEnv());
-
-    expect(config.llm.ollamaKeepAlive).toBeUndefined();
-  });
-
-  it("loads DeepSeek as a pluggable LLM provider", () => {
+  it("loads DeepSeek as the sole LLM provider", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),
       ...profilesEnv([
@@ -585,11 +583,10 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"]
+          allowedProviders: ["deepseek"]
         }
       ]),
       LLM_PROVIDER: "deepseek",
-      LLM_FALLBACK_PROVIDER: "ollama",
       DEEPSEEK_API_KEY: "sk-test",
       DEEPSEEK_BASE_URL: "https://api.deepseek.com",
       DEEPSEEK_MODEL: "deepseek-v4-flash",
@@ -598,7 +595,7 @@ describe("config", () => {
 
     expect(config.llm).toMatchObject({
       provider: "deepseek",
-      fallbackProvider: "ollama",
+      fallbackProvider: undefined,
       deepseekApiKey: "sk-test",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
@@ -626,7 +623,7 @@ describe("config", () => {
     const config = loadConfigFromEnv(baseEnv());
 
     expect(config.profiles[0]).toMatchObject({
-      allowedProviders: ["ollama"],
+      allowedProviders: ["deepseek"],
       allowSubscriptionProviders: false
     });
   });
@@ -662,7 +659,7 @@ describe("config", () => {
     ).toThrow(field);
   });
 
-  it("allows a DeepSeek-primary controlled planner", async () => {
+  it("allows a DeepSeek-only controlled planner", async () => {
     await withProfileFile(
       [
         {
@@ -670,9 +667,9 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"],
+          allowedProviders: ["deepseek"],
           providerPolicy: {
-            function_routing: { primary: "deepseek", fallback: "ollama" }
+            function_routing: { primary: "deepseek" }
           },
           controlledAgent: {
             maxCandidates: 3,
@@ -684,8 +681,7 @@ describe("config", () => {
         const config = loadConfigFromEnv({ PROFILE_CONFIG_PATH: path });
 
         expect(config.profiles[0]!.providerPolicy!.function_routing).toEqual({
-          primary: "deepseek",
-          fallback: "ollama"
+          primary: "deepseek"
         });
       }
     );
@@ -727,7 +723,7 @@ describe("config", () => {
     expect(config.profiles[0]).not.toHaveProperty("llmProvider");
   });
 
-  it("loads lane provider policy for cost-aware routing", () => {
+  it("uses DeepSeek for every lane", () => {
     const config = loadConfigFromEnv({
       ...profilesEnv([
         {
@@ -735,30 +731,22 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"],
-          providerPolicy: {
-            function_routing: { primary: "ollama" },
-            admin_routing: { primary: "ollama" },
-            memory_routing: { primary: "ollama" },
-            smart_talk: { primary: "deepseek", fallback: "ollama" },
-            general_agent: { primary: "deepseek", fallback: "ollama" },
-            context_compression: { primary: "deepseek" }
-          }
+          allowedProviders: ["deepseek"]
         }
       ])
     });
 
     expect(config.profiles[0].providerPolicy).toMatchObject({
-      function_routing: { primary: "ollama" },
-      admin_routing: { primary: "ollama" },
-      memory_routing: { primary: "ollama" },
-      smart_talk: { primary: "deepseek", fallback: "ollama" },
-      general_agent: { primary: "deepseek", fallback: "ollama" },
+      function_routing: { primary: "deepseek" },
+      admin_routing: { primary: "deepseek" },
+      memory_routing: { primary: "deepseek" },
+      smart_talk: { primary: "deepseek" },
+      general_agent: { primary: "deepseek" },
       context_compression: { primary: "deepseek" }
     });
   });
 
-  it("rejects lane provider policy outside the profile allowed provider list", () => {
+  it("rejects a profile that does not allow DeepSeek", () => {
     expect(() =>
       loadConfigFromEnv({
         ...profilesEnv([
@@ -774,7 +762,7 @@ describe("config", () => {
           }
         ])
       })
-    ).toThrow("Profile helper providerPolicy.smart_talk primary provider deepseek is not allowed");
+    ).toThrow("DeepSeek must be listed in allowedProviders");
   });
 
   it("rejects unsupported provider names in profile policy", () => {
@@ -794,7 +782,7 @@ describe("config", () => {
     ).toThrow();
   });
 
-  it("rejects fallback providers outside the profile provider policy", () => {
+  it("rejects semantic lane fallbacks", () => {
     expect(() =>
       loadConfigFromEnv({
         ...profilesEnv([
@@ -803,13 +791,14 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/helper",
             channelSecret: "secret",
             channelAccessToken: "token",
-            allowedProviders: ["deepseek"]
+            allowedProviders: ["deepseek"],
+            providerPolicy: {
+              function_routing: { primary: "deepseek", fallback: "deepseek" }
+            }
           }
-        ]),
-        LLM_PROVIDER: "deepseek",
-        LLM_FALLBACK_PROVIDER: "ollama"
+        ])
       })
-    ).toThrow("Profile helper fallback provider ollama must be listed in allowedProviders");
+    ).toThrow("Profile helper providerPolicy.function_routing fallback is no longer supported");
   });
 
   it("defaults profile small talk to template mode with an 80 character limit", () => {

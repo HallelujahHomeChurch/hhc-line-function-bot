@@ -95,8 +95,7 @@ describe("production profile configuration deployment contract", () => {
       minPlannerConfidence: 0.65
     });
     expect(helper?.providerPolicy?.function_routing).toEqual({
-      primary: "deepseek",
-      fallback: "ollama"
+      primary: "deepseek"
     });
     expect(readProjectFile("README.md")).toContain("sole complete");
     expect(readProjectFile("README.md")).not.toContain("Example shape:");
