@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryKnowledgeStore } from "../knowledge/store.js";
 import { syncKnowledgeSource } from "../knowledge/sync-service.js";
+import { rebuildFailed } from "../tools/rebuild-knowledge-embeddings.js";
 
 describe("knowledge sync", () => {
   it("publishes lexical content when embedding is unavailable and marks it pending", async () => {
@@ -46,6 +47,21 @@ describe("knowledge sync", () => {
       embedded: 0,
       status: "embedding_pending"
     });
+    expect(
+      rebuildFailed(
+        {
+          sources: 1,
+          synced: 1,
+          failed: 0,
+          stale: 0,
+          embeddingPending: 1,
+          documents: result.documents,
+          chunks: result.chunks,
+          embedded: result.embedded
+        },
+        false
+      )
+    ).toBe(true);
     await expect(store.search({ profileName: "helper", query: "關閉設備" })).resolves.toHaveLength(
       1
     );

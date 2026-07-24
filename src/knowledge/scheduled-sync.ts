@@ -8,6 +8,7 @@ export interface ScheduledKnowledgeSyncResult {
   synced: number;
   failed: number;
   stale: number;
+  embeddingPending: number;
   documents: number;
   chunks: number;
   embedded: number;
@@ -25,6 +26,7 @@ export async function syncScheduledKnowledgeSources(input: {
     synced: 0,
     failed: 0,
     stale: 0,
+    embeddingPending: 0,
     documents: 0,
     chunks: 0,
     embedded: 0
@@ -39,6 +41,7 @@ export async function syncScheduledKnowledgeSources(input: {
         batchSize: input.batchSize
       });
       result.synced += 1;
+      if (synced.status === "embedding_pending") result.embeddingPending += 1;
       result.documents += synced.documents;
       result.chunks += synced.chunks;
       result.embedded += synced.embedded;

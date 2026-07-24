@@ -55,6 +55,7 @@ describe("scheduled knowledge synchronization", () => {
       synced: 0,
       failed: 0,
       stale: 1,
+      embeddingPending: 0,
       documents: 0,
       chunks: 0,
       embedded: 0

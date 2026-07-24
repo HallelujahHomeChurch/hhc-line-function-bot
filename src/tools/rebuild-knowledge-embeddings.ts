@@ -1,9 +1,15 @@
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { createOpenAiEmbeddingClient } from "../clients/openai-embedding.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { loadConfigFromEnv } from "../config.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createKnowledgeStore } from "../knowledge/create-store.js";
-import { syncScheduledKnowledgeSources } from "../knowledge/scheduled-sync.js";
+import {
+  syncScheduledKnowledgeSources,
+  type ScheduledKnowledgeSyncResult
+} from "../knowledge/scheduled-sync.js";
 
 interface RebuildReport {
   sources: number;
@@ -17,6 +23,13 @@ function report(value: RebuildReport): void {
 
 function requestedSourceKeys(argv: readonly string[]): Set<string> {
   return new Set(argv.map((value) => value.trim()).filter(Boolean));
+}
+
+export function rebuildFailed(
+  result: Pick<ScheduledKnowledgeSyncResult, "failed" | "embeddingPending">,
+  missingRequested: boolean
+): boolean {
+  return missingRequested || result.failed > 0 || result.embeddingPending > 0;
 }
 
 async function main(): Promise<void> {
@@ -58,7 +71,7 @@ async function main(): Promise<void> {
       embedding,
       batchSize: config.knowledge.embedding.batchSize
     });
-    const failed = missingRequested || result.failed > 0;
+    const failed = rebuildFailed(result, missingRequested);
     report({
       sources: result.sources,
       status: failed ? "failed" : "complete",
@@ -73,4 +86,6 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void main();
+}
