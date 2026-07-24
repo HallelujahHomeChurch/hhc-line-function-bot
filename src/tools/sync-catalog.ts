@@ -4,7 +4,7 @@ import { syncCatalogSources } from "../catalog/sync-service.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
-import { createOpenAiEmbeddingClient } from "../clients/openai-embedding.js";
+import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
 import { loadConfigFromEnv } from "../config.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createScheduleStore } from "../schedules/create-schedule-store.js";
@@ -50,9 +50,11 @@ try {
   };
   if (config.knowledge) {
     const notionKnowledge = createNotionKnowledgeClient(config.knowledge.notionToken);
-    const embedding = createOpenAiEmbeddingClient({
+    const embedding = createAzureOpenAiEmbeddingClient({
       apiKey: config.knowledge.embedding.apiKey,
-      baseUrl: config.knowledge.embedding.baseUrl,
+      endpoint: config.knowledge.embedding.endpoint,
+      deployment: config.knowledge.embedding.deployment,
+      apiVersion: config.knowledge.embedding.apiVersion,
       model: config.knowledge.embedding.model,
       dimensions: config.knowledge.embedding.dimensions,
       timeoutMs: config.knowledge.embedding.timeoutMs

@@ -1,29 +1,44 @@
 import type { EmbeddingClient } from "./embedding.js";
 
-export const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
-export const OPENAI_EMBEDDING_DIMENSIONS = 1536;
+export const AZURE_OPENAI_EMBEDDING_DEPLOYMENT = "text-embedding-3-small";
+export const AZURE_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
+export const AZURE_OPENAI_EMBEDDING_API_VERSION = "2024-10-21";
+export const AZURE_OPENAI_EMBEDDING_DIMENSIONS = 1536;
 
-export interface OpenAiEmbeddingOptions {
+export interface AzureOpenAiEmbeddingOptions {
   apiKey?: string;
-  baseUrl: string;
+  endpoint: string;
+  deployment: string;
+  apiVersion: string;
   model: string;
   dimensions: number;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
 }
 
-export function createOpenAiEmbeddingClient(options: OpenAiEmbeddingOptions): EmbeddingClient {
+export function createAzureOpenAiEmbeddingClient(
+  options: AzureOpenAiEmbeddingOptions
+): EmbeddingClient {
   if (!options.apiKey?.trim()) throw new Error("embedding_missing_api_key");
-  if (options.model !== OPENAI_EMBEDDING_MODEL) {
+  const endpoint = parseAzureEndpoint(options.endpoint);
+  if (options.deployment !== AZURE_OPENAI_EMBEDDING_DEPLOYMENT) {
+    throw new Error("embedding_deployment_unsupported");
+  }
+  if (options.apiVersion !== AZURE_OPENAI_EMBEDDING_API_VERSION) {
+    throw new Error("embedding_api_version_unsupported");
+  }
+  if (options.model !== AZURE_OPENAI_EMBEDDING_MODEL) {
     throw new Error("embedding_model_unsupported");
   }
-  if (options.dimensions !== OPENAI_EMBEDDING_DIMENSIONS) {
+  if (options.dimensions !== AZURE_OPENAI_EMBEDDING_DIMENSIONS) {
     throw new Error("embedding_dimension_unsupported");
   }
-  const baseUrl = options.baseUrl.replace(/\/+$/u, "");
+  const deployment = encodeURIComponent(options.deployment);
+  const requestUrl = new URL(`/openai/deployments/${deployment}/embeddings`, endpoint);
+  requestUrl.search = new URLSearchParams({ "api-version": options.apiVersion }).toString();
   const fetchImpl = options.fetchImpl ?? fetch;
   return {
-    provider: "openai",
+    provider: "azure_openai",
     model: options.model,
     dimensions: options.dimensions,
     async embed(input): Promise<number[][]> {
@@ -31,15 +46,14 @@ export function createOpenAiEmbeddingClient(options: OpenAiEmbeddingOptions): Em
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
       try {
-        const response = await fetchImpl(`${baseUrl}/embeddings`, {
+        const response = await fetchImpl(requestUrl.toString(), {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            authorization: `Bearer ${options.apiKey}`
+            "api-key": options.apiKey!
           },
           signal: controller.signal,
           body: JSON.stringify({
-            model: options.model,
             input,
             encoding_format: "float"
           })
@@ -77,6 +91,27 @@ export function createOpenAiEmbeddingClient(options: OpenAiEmbeddingOptions): Em
       }
     }
   };
+}
+
+function parseAzureEndpoint(value: string): URL {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw new Error("embedding_endpoint_unsupported");
+  }
+  const hostname = endpoint.hostname.toLowerCase();
+  if (
+    endpoint.protocol !== "https:" ||
+    (!hostname.endsWith(".cognitiveservices.azure.com") &&
+      !hostname.endsWith(".openai.azure.com"))
+  ) {
+    throw new Error("embedding_endpoint_unsupported");
+  }
+  endpoint.pathname = "/";
+  endpoint.search = "";
+  endpoint.hash = "";
+  return endpoint;
 }
 
 function isEmbeddingEntry(value: unknown): value is { index: number; embedding: number[] } {

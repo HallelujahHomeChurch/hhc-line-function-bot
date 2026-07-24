@@ -1,4 +1,4 @@
-import { createOpenAiEmbeddingClient } from "./clients/openai-embedding.js";
+import { createAzureOpenAiEmbeddingClient } from "./clients/azure-openai-embedding.js";
 import { createDeepSeekProvider } from "./clients/deepseek.js";
 import { createAdminActionRouter } from "./admin-action-router.js";
 import { RedisConfirmationStore } from "./actions/confirmation-store.js";
@@ -180,9 +180,11 @@ const knowledgePurgeTimer = setInterval(
 );
 knowledgePurgeTimer.unref();
 const knowledgeEmbedding = config.knowledge
-  ? createOpenAiEmbeddingClient({
+  ? createAzureOpenAiEmbeddingClient({
       apiKey: config.knowledge.embedding.apiKey,
-      baseUrl: config.knowledge.embedding.baseUrl,
+      endpoint: config.knowledge.embedding.endpoint,
+      deployment: config.knowledge.embedding.deployment,
+      apiVersion: config.knowledge.embedding.apiVersion,
       model: config.knowledge.embedding.model,
       dimensions: config.knowledge.embedding.dimensions,
       timeoutMs: config.knowledge.embedding.timeoutMs

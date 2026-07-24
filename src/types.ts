@@ -338,10 +338,12 @@ export interface ObservabilityConfig {
 export interface KnowledgeConfig {
   notionToken: string;
   embedding: {
-    provider: "openai";
+    provider: "azure_openai";
     apiKey: string;
-    baseUrl: string;
-    model: string;
+    endpoint: string;
+    deployment: "text-embedding-3-small";
+    apiVersion: "2024-10-21";
+    model: "text-embedding-3-small";
     dimensions: 1536;
     batchSize: number;
     timeoutMs: number;

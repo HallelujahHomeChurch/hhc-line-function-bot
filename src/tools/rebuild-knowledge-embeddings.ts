@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createOpenAiEmbeddingClient } from "../clients/openai-embedding.js";
+import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { loadConfigFromEnv } from "../config.js";
 import { createPostgresRuntime } from "../db/postgres.js";
@@ -57,9 +57,11 @@ async function main(): Promise<void> {
     );
     const foundRequested = new Set(sources.map((source) => source.sourceKey));
     const missingRequested = [...requested].some((sourceKey) => !foundRequested.has(sourceKey));
-    const embedding = createOpenAiEmbeddingClient({
+    const embedding = createAzureOpenAiEmbeddingClient({
       apiKey: config.knowledge.embedding.apiKey,
-      baseUrl: config.knowledge.embedding.baseUrl,
+      endpoint: config.knowledge.embedding.endpoint,
+      deployment: config.knowledge.embedding.deployment,
+      apiVersion: config.knowledge.embedding.apiVersion,
       model: config.knowledge.embedding.model,
       dimensions: config.knowledge.embedding.dimensions,
       timeoutMs: config.knowledge.embedding.timeoutMs

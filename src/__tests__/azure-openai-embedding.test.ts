@@ -1,34 +1,54 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createOpenAiEmbeddingClient } from "../clients/openai-embedding.js";
+import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
 
 const vector = (value: number) => Array.from({ length: 1536 }, () => value);
 
-describe("OpenAI embedding client", () => {
+describe("Azure OpenAI embedding client", () => {
   const options = (fetchImpl?: typeof fetch) => ({
-    apiKey: "test-key",
-    baseUrl: "https://api.openai.com/v1",
+    apiKey: "azure-test-key",
+    endpoint: "https://bible-text-embedding-resource.cognitiveservices.azure.com/",
+    deployment: "text-embedding-3-small",
+    apiVersion: "2024-10-21",
     model: "text-embedding-3-small",
-    dimensions: 1536,
+    dimensions: 1536 as const,
     timeoutMs: 1000,
     ...(fetchImpl ? { fetchImpl } : {})
   });
 
-  it("rejects a missing API key and unsupported model or dimension at construction", () => {
-    expect(() => createOpenAiEmbeddingClient({ ...options(), apiKey: undefined })).toThrow(
+  it("rejects invalid provider configuration at construction", () => {
+    expect(() => createAzureOpenAiEmbeddingClient({ ...options(), apiKey: undefined })).toThrow(
       "embedding_missing_api_key"
     );
     expect(() =>
-      createOpenAiEmbeddingClient({ ...options(), model: "text-embedding-3-large" })
+      createAzureOpenAiEmbeddingClient({
+        ...options(),
+        endpoint: "https://api.openai.com/v1"
+      })
+    ).toThrow("embedding_endpoint_unsupported");
+    expect(() =>
+      createAzureOpenAiEmbeddingClient({
+        ...options(),
+        endpoint: "http://bible-text-embedding-resource.cognitiveservices.azure.com"
+      })
+    ).toThrow("embedding_endpoint_unsupported");
+    expect(() =>
+      createAzureOpenAiEmbeddingClient({ ...options(), deployment: "other-deployment" })
+    ).toThrow("embedding_deployment_unsupported");
+    expect(() =>
+      createAzureOpenAiEmbeddingClient({ ...options(), apiVersion: "preview" })
+    ).toThrow("embedding_api_version_unsupported");
+    expect(() =>
+      createAzureOpenAiEmbeddingClient({ ...options(), model: "text-embedding-3-large" })
     ).toThrow("embedding_model_unsupported");
-    expect(() => createOpenAiEmbeddingClient({ ...options(), dimensions: 1535 })).toThrow(
-      "embedding_dimension_unsupported"
-    );
+    expect(() =>
+      createAzureOpenAiEmbeddingClient({ ...options(), dimensions: 1535 as 1536 })
+    ).toThrow("embedding_dimension_unsupported");
   });
 
-  it("returns immediately for empty input without calling OpenAI", async () => {
+  it("returns immediately for empty input without calling Azure", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
-    const client = createOpenAiEmbeddingClient(options(fetchImpl));
+    const client = createAzureOpenAiEmbeddingClient(options(fetchImpl));
 
     await expect(client.embed([])).resolves.toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -46,23 +66,18 @@ describe("OpenAI embedding client", () => {
         { status: 200 }
       )
     );
-    const client = createOpenAiEmbeddingClient({
-      apiKey: "test-key",
-      baseUrl: "https://api.openai.com/v1/",
-      model: "text-embedding-3-small",
-      dimensions: 1536,
-      timeoutMs: 1000,
-      fetchImpl
-    });
+    const client = createAzureOpenAiEmbeddingClient(options(fetchImpl));
 
     await expect(client.embed(["first", "second"])).resolves.toEqual([vector(0.1), vector(0.2)]);
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/embeddings",
+      "https://bible-text-embedding-resource.cognitiveservices.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2024-10-21",
       expect.objectContaining({
         method: "POST",
-        headers: expect.objectContaining({ authorization: "Bearer test-key" }),
+        headers: {
+          "content-type": "application/json",
+          "api-key": "azure-test-key"
+        },
         body: JSON.stringify({
-          model: "text-embedding-3-small",
           input: ["first", "second"],
           encoding_format: "float"
         })
@@ -71,12 +86,8 @@ describe("OpenAI embedding client", () => {
   });
 
   it("rejects a response with an unexpected vector dimension", async () => {
-    const client = createOpenAiEmbeddingClient({
-      apiKey: "test-key",
-      baseUrl: "https://api.openai.com/v1",
-      model: "text-embedding-3-small",
-      dimensions: 1536,
-      timeoutMs: 1000,
+    const client = createAzureOpenAiEmbeddingClient({
+      ...options(),
       fetchImpl: vi
         .fn<typeof fetch>()
         .mockResolvedValue(
@@ -88,7 +99,7 @@ describe("OpenAI embedding client", () => {
   });
 
   it.each([1535, 1537])("rejects a %i-dimensional response vector", async (dimensions) => {
-    const client = createOpenAiEmbeddingClient(
+    const client = createAzureOpenAiEmbeddingClient(
       options(
         vi
           .fn<typeof fetch>()
@@ -104,8 +115,8 @@ describe("OpenAI embedding client", () => {
     await expect(client.embed(["first"])).rejects.toThrow("embedding_dimension_mismatch");
   });
 
-  it.each([401, 429, 500, 503])("maps OpenAI HTTP %i to a bounded error", async (status) => {
-    const client = createOpenAiEmbeddingClient(
+  it.each([401, 429, 500, 503])("maps Azure HTTP %i to a bounded error", async (status) => {
+    const client = createAzureOpenAiEmbeddingClient(
       options(vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status })))
     );
 
@@ -123,7 +134,7 @@ describe("OpenAI embedding client", () => {
           });
         })
     );
-    const client = createOpenAiEmbeddingClient({ ...options(fetchImpl), timeoutMs: 5 });
+    const client = createAzureOpenAiEmbeddingClient({ ...options(fetchImpl), timeoutMs: 5 });
 
     await expect(client.embed(["first"])).rejects.toThrow("embedding_timeout");
   });
@@ -148,7 +159,7 @@ describe("OpenAI embedding client", () => {
       ]
     }
   ])("rejects $name", async ({ data }) => {
-    const client = createOpenAiEmbeddingClient(
+    const client = createAzureOpenAiEmbeddingClient(
       options(
         vi.fn<typeof fetch>().mockResolvedValue(
           new Response(JSON.stringify({ data }), {
@@ -169,7 +180,7 @@ describe("OpenAI embedding client", () => {
       status: 200,
       json: async () => ({ data: [{ index: 0, embedding }] })
     } as Response);
-    const client = createOpenAiEmbeddingClient(options(fetchImpl));
+    const client = createAzureOpenAiEmbeddingClient(options(fetchImpl));
 
     await expect(client.embed(["first"])).rejects.toThrow("embedding_dimension_mismatch");
   });

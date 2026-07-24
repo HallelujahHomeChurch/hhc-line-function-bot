@@ -9,7 +9,12 @@ import { normalizeProviderPolicy } from "./llm/provider-policy.js";
 import { FUNCTION_NAMES, MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
 import { DEFAULT_MEETING_WINDOWS } from "./schedules/occurrence-policy.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "./schedules/domain-registry.js";
-import { OPENAI_EMBEDDING_DIMENSIONS, OPENAI_EMBEDDING_MODEL } from "./clients/openai-embedding.js";
+import {
+  AZURE_OPENAI_EMBEDDING_API_VERSION,
+  AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
+  AZURE_OPENAI_EMBEDDING_DIMENSIONS,
+  AZURE_OPENAI_EMBEDDING_MODEL
+} from "./clients/azure-openai-embedding.js";
 import type {
   AppConfig,
   FunctionName,
@@ -559,29 +564,70 @@ function assertNoRetiredLocalModelRuntimeSettings(env: NodeJS.ProcessEnv): void 
 function readKnowledgeEmbeddingConfig(
   env: NodeJS.ProcessEnv
 ): KnowledgeConfig["embedding"] | undefined {
+  if (
+    ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_EMBEDDING_MODEL"].some(
+      (name) => env[name] !== undefined
+    )
+  ) {
+    throw new Error("Direct OpenAI embedding settings are no longer supported");
+  }
   if (env.EMBEDDING_DIMENSIONS !== undefined) {
     throw new Error("EMBEDDING_DIMENSIONS is not supported");
   }
-  if (
-    env.OPENAI_EMBEDDING_MODEL !== undefined &&
-    env.OPENAI_EMBEDDING_MODEL.trim() !== OPENAI_EMBEDDING_MODEL
-  ) {
-    throw new Error("OPENAI_EMBEDDING_MODEL must be text-embedding-3-small");
-  }
   if (!env.NOTION_TOKEN) return undefined;
-  const apiKey = env.OPENAI_API_KEY?.trim();
+  if (env.EMBEDDING_PROVIDER?.trim() !== "azure_openai") {
+    throw new Error("EMBEDDING_PROVIDER must be azure_openai");
+  }
+  const apiKey = env.AZURE_OPENAI_EMBEDDING_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is required when knowledge embeddings are enabled");
+    throw new Error(
+      "AZURE_OPENAI_EMBEDDING_API_KEY is required when knowledge embeddings are enabled"
+    );
+  }
+  const endpoint = readAzureEmbeddingEndpoint(env.AZURE_OPENAI_EMBEDDING_ENDPOINT);
+  if (env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT?.trim() !== AZURE_OPENAI_EMBEDDING_DEPLOYMENT) {
+    throw new Error(
+      "AZURE_OPENAI_EMBEDDING_DEPLOYMENT must be text-embedding-3-small"
+    );
+  }
+  if (env.AZURE_OPENAI_EMBEDDING_API_VERSION?.trim() !== AZURE_OPENAI_EMBEDDING_API_VERSION) {
+    throw new Error("AZURE_OPENAI_EMBEDDING_API_VERSION must be 2024-10-21");
+  }
+  if (env.EMBEDDING_MODEL?.trim() !== AZURE_OPENAI_EMBEDDING_MODEL) {
+    throw new Error("EMBEDDING_MODEL must be text-embedding-3-small");
   }
   return {
-    provider: "openai",
+    provider: "azure_openai",
     apiKey,
-    baseUrl: env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-    model: OPENAI_EMBEDDING_MODEL,
-    dimensions: OPENAI_EMBEDDING_DIMENSIONS,
+    endpoint,
+    deployment: AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
+    apiVersion: AZURE_OPENAI_EMBEDDING_API_VERSION,
+    model: AZURE_OPENAI_EMBEDDING_MODEL,
+    dimensions: AZURE_OPENAI_EMBEDDING_DIMENSIONS,
     batchSize: readInt(env.EMBEDDING_BATCH_SIZE, 16),
     timeoutMs: readInt(env.EMBEDDING_TIMEOUT_MS, 30_000)
   };
+}
+
+function readAzureEmbeddingEndpoint(value: string | undefined): string {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(value ?? "");
+  } catch {
+    throw new Error("AZURE_OPENAI_EMBEDDING_ENDPOINT must be an Azure HTTPS endpoint");
+  }
+  const hostname = endpoint.hostname.toLowerCase();
+  if (
+    endpoint.protocol !== "https:" ||
+    (!hostname.endsWith(".cognitiveservices.azure.com") &&
+      !hostname.endsWith(".openai.azure.com"))
+  ) {
+    throw new Error("AZURE_OPENAI_EMBEDDING_ENDPOINT must be an Azure HTTPS endpoint");
+  }
+  endpoint.pathname = "/";
+  endpoint.search = "";
+  endpoint.hash = "";
+  return endpoint.toString();
 }
 
 function assertNoLegacyProfileFields(parsedProfiles: unknown): void {

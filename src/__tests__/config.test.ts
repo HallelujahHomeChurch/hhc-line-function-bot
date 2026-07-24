@@ -32,6 +32,18 @@ function knowledgeEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function azureEmbeddingEnv(): NodeJS.ProcessEnv {
+  return {
+    EMBEDDING_PROVIDER: "azure_openai",
+    AZURE_OPENAI_EMBEDDING_API_KEY: "azure-secret",
+    AZURE_OPENAI_EMBEDDING_ENDPOINT:
+      "https://bible-text-embedding-resource.cognitiveservices.azure.com/",
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT: "text-embedding-3-small",
+    AZURE_OPENAI_EMBEDDING_API_VERSION: "2024-10-21",
+    EMBEDDING_MODEL: "text-embedding-3-small"
+  };
+}
+
 function profilesEnv(profiles: unknown): NodeJS.ProcessEnv {
   const directory = mkdtempSync(join(tmpdir(), "hhc-line-function-bot-profile-sync-"));
   const path = join(directory, "profiles.json");
@@ -634,26 +646,30 @@ describe("config", () => {
     }
   });
 
-  it("requires an OpenAI API key when Notion knowledge embeddings are enabled", () => {
+  it("requires an Azure OpenAI API key when Notion knowledge embeddings are enabled", () => {
     expect(() =>
       loadConfigFromEnv({
         ...baseEnv(),
-        ...knowledgeEnv()
+        ...knowledgeEnv(),
+        ...azureEmbeddingEnv(),
+        AZURE_OPENAI_EMBEDDING_API_KEY: ""
       })
-    ).toThrow("OPENAI_API_KEY is required when knowledge embeddings are enabled");
+    ).toThrow("AZURE_OPENAI_EMBEDDING_API_KEY is required when knowledge embeddings are enabled");
   });
 
-  it("uses OpenAI text-embedding-3-small at its native 1536 dimensions", () => {
+  it("uses Azure OpenAI text-embedding-3-small at its native 1536 dimensions", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),
       ...knowledgeEnv(),
-      OPENAI_API_KEY: "openai-secret"
+      ...azureEmbeddingEnv()
     });
 
     expect(config.knowledge?.embedding).toEqual({
-      provider: "openai",
-      apiKey: "openai-secret",
-      baseUrl: "https://api.openai.com/v1",
+      provider: "azure_openai",
+      apiKey: "azure-secret",
+      endpoint: "https://bible-text-embedding-resource.cognitiveservices.azure.com/",
+      deployment: "text-embedding-3-small",
+      apiVersion: "2024-10-21",
       model: "text-embedding-3-small",
       dimensions: 1536,
       batchSize: 16,
@@ -661,23 +677,67 @@ describe("config", () => {
     });
   });
 
-  it("rejects any embedding dimension override and any unsupported model override", () => {
+  it("rejects unsupported Azure embedding overrides", () => {
     expect(() =>
       loadConfigFromEnv({
         ...baseEnv(),
         ...knowledgeEnv(),
-        OPENAI_API_KEY: "openai-secret",
+        ...azureEmbeddingEnv(),
         EMBEDDING_DIMENSIONS: "1536"
       })
     ).toThrow("EMBEDDING_DIMENSIONS is not supported");
+    for (const [name, value, message] of [
+      ["EMBEDDING_PROVIDER", "openai", "EMBEDDING_PROVIDER must be azure_openai"],
+      [
+        "AZURE_OPENAI_EMBEDDING_ENDPOINT",
+        "https://api.openai.com/v1",
+        "AZURE_OPENAI_EMBEDDING_ENDPOINT must be an Azure HTTPS endpoint"
+      ],
+      [
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+        "other-deployment",
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT must be text-embedding-3-small"
+      ],
+      [
+        "AZURE_OPENAI_EMBEDDING_API_VERSION",
+        "preview",
+        "AZURE_OPENAI_EMBEDDING_API_VERSION must be 2024-10-21"
+      ],
+      ["EMBEDDING_MODEL", "text-embedding-3-large", "EMBEDDING_MODEL must be text-embedding-3-small"]
+    ] as const) {
+      expect(() =>
+        loadConfigFromEnv({
+          ...baseEnv(),
+          ...knowledgeEnv(),
+          ...azureEmbeddingEnv(),
+          [name]: value
+        })
+      ).toThrow(message);
+    }
+  });
+
+  it.each(["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_EMBEDDING_MODEL"])(
+    "rejects retired direct OpenAI setting %s",
+    (name) => {
+      expect(() =>
+        loadConfigFromEnv({
+          ...baseEnv(),
+          [name]: "retired-value"
+        })
+      ).toThrow("Direct OpenAI embedding settings are no longer supported");
+    }
+  );
+
+  it("rejects an Azure embedding endpoint that is not HTTPS", () => {
     expect(() =>
       loadConfigFromEnv({
         ...baseEnv(),
         ...knowledgeEnv(),
-        OPENAI_API_KEY: "openai-secret",
-        OPENAI_EMBEDDING_MODEL: "text-embedding-3-large"
+        ...azureEmbeddingEnv(),
+        AZURE_OPENAI_EMBEDDING_ENDPOINT:
+          "http://bible-text-embedding-resource.cognitiveservices.azure.com"
       })
-    ).toThrow("OPENAI_EMBEDDING_MODEL must be text-embedding-3-small");
+    ).toThrow("AZURE_OPENAI_EMBEDDING_ENDPOINT must be an Azure HTTPS endpoint");
   });
 
   it("loads DeepSeek as the sole LLM provider", () => {
