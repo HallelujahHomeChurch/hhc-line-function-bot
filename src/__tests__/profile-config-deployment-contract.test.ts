@@ -319,6 +319,7 @@ describe("production profile configuration deployment contract", () => {
     expect(refreshJob).toContain("storageName: clamav-signatures-readwrite");
     expect(refreshJob).not.toContain("ingress:");
     expect(dockerfile).toContain('"clamav-freshclam=${CLAMAV_VERSION}"');
+    expect(dockerfile).toContain("ca-certificates");
     expect(dockerfile).toContain("UpdateLogFile /tmp/hhc-line-bot-freshclam.log");
     expect(dockerfile.indexOf("clamav-freshclam")).toBeLessThan(
       dockerfile.indexOf("FROM gcr.io/distroless")

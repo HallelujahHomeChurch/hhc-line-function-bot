@@ -23,6 +23,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+      ca-certificates \
       "clamav=${CLAMAV_VERSION}" \
       "clamav-base=${CLAMAV_VERSION}" \
       "clamav-freshclam=${CLAMAV_VERSION}" \
