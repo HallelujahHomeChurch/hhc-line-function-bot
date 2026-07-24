@@ -367,7 +367,7 @@ function kernelProfile(enabledFunctions: FunctionName[]): BotProfileConfig {
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions,
-    allowedProviders: ["deepseek", "ollama"],
+    allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
     schedulePolicy: { meetingWindows: [], domains: [] }

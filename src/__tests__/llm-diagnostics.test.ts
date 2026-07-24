@@ -19,7 +19,8 @@ function providerPolicy(): ProviderPolicy {
     memory_routing: { primary: "deepseek" },
     smart_talk: { primary: "deepseek" },
     general_agent: { primary: "deepseek" },
-    context_compression: { primary: "deepseek" }
+    context_compression: { primary: "deepseek" },
+    web_summarization: { primary: "deepseek" }
   };
 }
 

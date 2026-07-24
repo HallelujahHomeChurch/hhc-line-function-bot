@@ -82,16 +82,16 @@ describe("knowledge store", () => {
     });
     await store.upsertEmbedding({
       chunkId: document.chunks[0]!.id,
-      provider: "ollama",
-      model: "bge-m3",
+      provider: "openai",
+      model: "text-embedding-3-small",
       dimensions: 3,
       embedding: [0, 1, 0],
       contentHash: "h1"
     });
     await store.upsertEmbedding({
       chunkId: document.chunks[1]!.id,
-      provider: "ollama",
-      model: "bge-m3",
+      provider: "openai",
+      model: "text-embedding-3-small",
       dimensions: 3,
       embedding: [1, 0, 0],
       contentHash: "h2"
@@ -168,8 +168,8 @@ describe("knowledge store", () => {
           {
             documentExternalId: "doc-a",
             contentHash: "new",
-            provider: "ollama",
-            model: "bge-m3",
+            provider: "openai",
+            model: "text-embedding-3-small",
             dimensions: 3,
             embedding: [1, 0]
           }
@@ -253,8 +253,8 @@ describe("knowledge store", () => {
       });
       await store.upsertEmbedding({
         chunkId: document.chunks[0]!.id,
-        provider: "ollama",
-        model: "bge-m3",
+        provider: "openai",
+        model: "text-embedding-3-small",
         dimensions: 3,
         embedding: [1, 0, 0],
         contentHash: sourceKey

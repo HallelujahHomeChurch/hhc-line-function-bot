@@ -5,6 +5,8 @@ import {
   resolvePrimaryProviderName,
   resolveProviderNameForLane
 } from "../llm/provider-runtime.js";
+import { providerCapabilities } from "../llm/provider-metadata.js";
+import { MODEL_PROVIDER_NAMES } from "../types.js";
 import type {
   AppConfig,
   BotProfileConfig,
@@ -45,13 +47,9 @@ function config(
     profiles,
     llm: {
       provider: "deepseek",
-      fallbackProvider: undefined,
-      ollamaBaseUrl: "http://127.0.0.1:11434",
-      ollamaModel: "qwen3:4b-instruct",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
       deepseekTimeoutMs: 8000,
-      timeoutMs: 8000,
 
       ...llmOverrides
     }
@@ -66,6 +64,11 @@ function provider(raw: string): ChatProvider & TextGenerationProvider {
 }
 
 describe("provider runtime", () => {
+  it("exposes DeepSeek as the only model provider", () => {
+    expect(MODEL_PROVIDER_NAMES).toEqual(["deepseek"]);
+    expect(Object.keys(providerCapabilities)).toEqual(["deepseek"]);
+  });
+
   it("selects DeepSeek as the global primary provider when no lane is requested", async () => {
     const appConfig = config([profile()]);
     const deepseek = provider("deepseek");
@@ -130,19 +133,23 @@ describe("provider runtime", () => {
     );
   });
 
-  it("rejects providers outside the profile allowed provider list", () => {
-    const appConfig = config(
-      [
-        profile({
-          allowedProviders: ["deepseek"],
-          allowSubscriptionProviders: false
-        })
-      ],
-      { provider: "ollama" }
-    );
+  it("fails only when the configured primary provider client is absent", async () => {
+    const appConfig = config([profile()]);
+    const runtime = createProfileAwareProvider({
+      config: appConfig,
+      providers: {},
+      role: "primary",
+      lane: "function_routing"
+    });
 
-    expect(() => resolvePrimaryProviderName(appConfig, appConfig.profiles[0])).toThrow(
-      "Provider ollama is not allowed for profile helper"
-    );
+    await expect(
+      runtime.completeJson({
+        profileName: "helper",
+        prompt: "route",
+        text: "hello",
+        enabledFunctions: []
+      })
+    ).rejects.toThrow("provider_not_configured:deepseek");
+    expect(resolvePrimaryProviderName(appConfig, appConfig.profiles[0])).toBe("deepseek");
   });
 });

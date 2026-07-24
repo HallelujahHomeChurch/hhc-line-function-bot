@@ -87,8 +87,7 @@ function response(overrides: Record<string, unknown> = {}): string {
 describe("constrained semantic planner", () => {
   it("accepts one strict DeepSeek proposal and sends only bounded sanitized context", async () => {
     const primary = provider("deepseek", async () => response());
-    const fallback = provider("ollama", async () => response());
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
     const sensitiveTask: ActiveTaskContext = {
       ...scheduleTask,
       anchors: { sourceValue: "notion-source-raw", result: "prior-result-value" },
@@ -135,7 +134,6 @@ describe("constrained semantic planner", () => {
       ]
     });
     expect(primary.completeJson).toHaveBeenCalledOnce();
-    expect(fallback.completeJson).not.toHaveBeenCalled();
 
     const request = vi.mocked(primary.completeJson).mock.calls[0]?.[0];
     expect(request?.enabledFunctions).toEqual(["query_schedule"]);
@@ -177,8 +175,7 @@ describe("constrained semantic planner", () => {
 
   it("omits active-task entities and operations when the candidate has no declarations", async () => {
     const primary = provider("deepseek", async () => response());
-    const fallback = provider("ollama", async () => response());
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
 
     await planner.propose({
       profileName: "helper",
@@ -210,7 +207,7 @@ describe("constrained semantic planner", () => {
           );
         })
     );
-    const fallback = provider("ollama", async () => {
+    const fallback = provider("deepseek", async () => {
       fallbackObservedAbort = primarySignal?.aborted === true;
       return response({ disposition: "refine" });
     });
@@ -236,8 +233,7 @@ describe("constrained semantic planner", () => {
 
   it("keeps every bounded candidate and active-task summary complete within the prompt limit", async () => {
     const primary = provider("deepseek", async () => response());
-    const fallback = provider("ollama", async () => response());
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
     const longValues = Array.from(
       { length: 12 },
       (_, index) => `${index}-${"metadata".repeat(20)}`
@@ -294,10 +290,9 @@ describe("constrained semantic planner", () => {
     `${response()} trailing`,
     response({ version: 2 }),
     response({ unexpected: true })
-  ])("falls back once when DeepSeek returns non-strict JSON: %s", async (raw) => {
+  ])("returns no plan when DeepSeek returns non-strict JSON: %s", async (raw) => {
     const primary = provider("deepseek", async () => raw);
-    const fallback = provider("ollama", async () => response());
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
 
     const result = await planner.propose({
       profileName: "helper",
@@ -307,25 +302,18 @@ describe("constrained semantic planner", () => {
     });
 
     expect(result).toMatchObject({
-      status: "proposed",
-      provider: "ollama",
-      attempts: [
-        { provider: "deepseek", status: "invalid_output" },
-        { provider: "ollama", status: "accepted" }
-      ]
+      status: "no_plan",
+      reasonCode: "invalid_output",
+      attempts: [{ provider: "deepseek", status: "invalid_output" }]
     });
     expect(primary.completeJson).toHaveBeenCalledOnce();
-    expect(fallback.completeJson).toHaveBeenCalledOnce();
   });
 
-  it("rejects an unknown capability and confines the fallback to supplied candidates", async () => {
+  it("rejects an unknown capability without invoking a second semantic model", async () => {
     const primary = provider("deepseek", async () =>
       response({ capability: "save_resource", disposition: "switch" })
     );
-    const fallback = provider("ollama", async () =>
-      response({ capability: "query_schedule", disposition: "continue" })
-    );
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
 
     await expect(
       planner.propose({
@@ -335,20 +323,17 @@ describe("constrained semantic planner", () => {
         activeTask: scheduleTask
       })
     ).resolves.toMatchObject({
-      status: "proposed",
-      capability: "query_schedule",
-      provider: "ollama",
+      status: "no_plan",
+      reasonCode: "invalid_output",
       attempts: [
         {
           provider: "deepseek",
           status: "invalid_output",
           reason: "candidate_not_allowed"
-        },
-        { provider: "ollama", status: "accepted" }
+        }
       ]
     });
     expect(primary.completeJson).toHaveBeenCalledOnce();
-    expect(fallback.completeJson).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -365,8 +350,7 @@ describe("constrained semantic planner", () => {
     '{"version":1,"disposition":"continue","arguments":{},"confidence":Infinity}'
   ])("rejects oversized, nested, non-finite, or out-of-range proposal data", async (raw) => {
     const primary = provider("deepseek", async () => raw);
-    const fallback = provider("ollama", async () => "invalid too");
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
 
     await expect(
       planner.propose({
@@ -378,13 +362,9 @@ describe("constrained semantic planner", () => {
     ).resolves.toMatchObject({
       status: "no_plan",
       reasonCode: "invalid_output",
-      attempts: [
-        { provider: "deepseek", status: "invalid_output" },
-        { provider: "ollama", status: "invalid_output" }
-      ]
+      attempts: [{ provider: "deepseek", status: "invalid_output" }]
     });
     expect(primary.completeJson).toHaveBeenCalledOnce();
-    expect(fallback.completeJson).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -399,8 +379,7 @@ describe("constrained semantic planner", () => {
       async () =>
         `{"version":1,"disposition":"continue","capability":"query_schedule","arguments":${argumentsJson}${referencesJson},"confidence":0.95}`
     );
-    const fallback = provider("ollama", async () => response());
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
 
     await expect(
       planner.propose({
@@ -409,21 +388,17 @@ describe("constrained semantic planner", () => {
         candidates: [scheduleCandidate]
       })
     ).resolves.toMatchObject({
-      status: "proposed",
-      provider: "ollama",
-      attempts: [
-        { provider: "deepseek", status: "invalid_output", reason: "invalid_schema" },
-        { provider: "ollama", status: "accepted" }
-      ]
+      status: "no_plan",
+      reasonCode: "invalid_output",
+      attempts: [{ provider: "deepseek", status: "invalid_output", reason: "invalid_schema" }]
     });
   });
 
-  it("returns a proposed clarification without invoking the fallback", async () => {
+  it("returns a proposed clarification", async () => {
     const primary = provider("deepseek", async () =>
       response({ disposition: "clarify", capability: undefined, arguments: {} })
     );
-    const fallback = provider("ollama", async () => response());
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
 
     await expect(
       planner.propose({
@@ -436,29 +411,26 @@ describe("constrained semantic planner", () => {
       disposition: "clarify",
       provider: "deepseek"
     });
-    expect(fallback.completeJson).not.toHaveBeenCalled();
   });
 
   it("returns no_plan without calling a provider when there are no candidates", async () => {
     const primary = provider("deepseek", async () => response());
-    const fallback = provider("ollama", async () => response());
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
 
     await expect(
       planner.propose({ profileName: "helper", text: "今天天氣如何", candidates: [] })
     ).resolves.toEqual({ status: "no_plan", reasonCode: "no_candidates", attempts: [] });
     expect(primary.completeJson).not.toHaveBeenCalled();
-    expect(fallback.completeJson).not.toHaveBeenCalled();
   });
 
-  it("returns sanitized no_plan diagnostics when both providers are unavailable", async () => {
+  it("returns one sanitized diagnostic when DeepSeek is unavailable", async () => {
     const primary = provider("deepseek", async () => {
       throw new Error("secret query and raw provider body");
     });
-    const fallback = provider("ollama", async () => {
+    const fallback = provider("deepseek", async () => {
       throw new Error("https://private.example.test/output");
     });
-    const planner = createAgentPlanner({ primary, fallback });
+    const planner = createAgentPlanner({ primary });
 
     const result = await planner.propose({
       profileName: "helper",
@@ -475,12 +447,6 @@ describe("constrained semantic planner", () => {
           status: "unavailable",
           reason: "provider_unavailable",
           candidateCount: 1
-        },
-        {
-          provider: "ollama",
-          status: "unavailable",
-          reason: "provider_unavailable",
-          candidateCount: 1
         }
       ]
     });
@@ -488,12 +454,12 @@ describe("constrained semantic planner", () => {
     expect(JSON.stringify(result)).not.toContain("secret query");
     expect(JSON.stringify(result)).not.toContain("private.example.test");
     expect(primary.completeJson).toHaveBeenCalledOnce();
-    expect(fallback.completeJson).toHaveBeenCalledOnce();
+    expect(fallback.completeJson).not.toHaveBeenCalled();
   });
 
   it("does not call the same resolved provider twice", async () => {
-    const primary = provider("ollama", async () => "invalid");
-    const fallback = provider("ollama", async () => response());
+    const primary = provider("deepseek", async () => "invalid");
+    const fallback = provider("deepseek", async () => response());
     const planner = createAgentPlanner({ primary, fallback });
 
     await expect(

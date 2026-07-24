@@ -35,12 +35,10 @@ function config(): AppConfig {
     maxBodyBytes: 262_144,
     profiles: [profile()],
     llm: {
-      ollamaBaseUrl: "http://127.0.0.1:11434",
-      ollamaModel: "qwen3:4b-instruct",
+      deepseekApiKey: "test-key",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
-      deepseekTimeoutMs: 8000,
-      timeoutMs: 8000
+      deepseekTimeoutMs: 8000
     },
     graph: {
       tenantId: "tenant",
@@ -90,18 +88,11 @@ describe("function registry", () => {
       listFolderFilesRecursive: vi.fn(),
       createSharingLink: vi.fn()
     };
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ models: [{ name: "qwen3:4b-instruct" }] }), {
-          status: 200
-        })
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ message: { content: '{"action":"deny"}' } }), {
-          status: 200
-        })
-      );
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+        status: 200
+      })
+    );
     const cache = new MemoryCacheStore();
     const sessionStore = new InMemorySessionStore();
     await cache.set("sheet-music-index:drive-id:sheet-folder", [{ id: "1", name: "A.pdf" }], 1000);
@@ -159,7 +150,8 @@ describe("function registry", () => {
     expect(sessionsResult.replyText).toContain("- pending_function: 1");
     expect(cacheResult.replyText).toBe("Cache\nentries: 1");
     expect(llmStatusResult.replyText).toContain("LLM status");
-    expect(llmStatusResult.replyText).toContain("tags: ok");
+    expect(llmStatusResult.replyText).toContain("provider: deepseek");
+    expect(llmStatusResult.replyText).toContain("fallback: none");
     expect(llmStatusResult.replyText).toContain("chat: ok");
     expect(clearResult.replyText).toBe("已清除 session（1 筆）。");
     expect(sessionsAfterClear.replyText).toContain("total: 0");

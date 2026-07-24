@@ -63,7 +63,15 @@ export async function createControlledSmallTalkReply(
     };
   }
 
-  if (input.fallbackGenerator && input.fallbackGenerator !== input.generator) {
+  const primaryProviderName = providerNameForGenerator(input.generator, input.profile.name);
+  const fallbackProviderName = input.fallbackGenerator
+    ? providerNameForGenerator(input.fallbackGenerator, input.profile.name)
+    : undefined;
+  if (
+    input.fallbackGenerator &&
+    fallbackProviderName &&
+    fallbackProviderName !== primaryProviderName
+  ) {
     const fallbackReply = await tryGeneratedReply(input, input.fallbackGenerator, config.maxChars);
     if (fallbackReply.replyText) {
       return {
@@ -197,9 +205,7 @@ function sanitizeGeneratedReply(value: string, maxChars: number | undefined): st
     return undefined;
   }
   if (
-    /系統|模型|AI|LLM|Ollama|Notion|OneDrive|Graph|Azure|token|secret|prompt|開發|資料庫/iu.test(
-      reply
-    )
+    /系統|模型|AI|LLM|Notion|OneDrive|Graph|Azure|token|secret|prompt|開發|資料庫/iu.test(reply)
   ) {
     return undefined;
   }

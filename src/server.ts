@@ -1614,7 +1614,7 @@ async function handleLlmUseCommand(
     const availableProviders = allowedProvidersForProfile(profile);
     const active = profile.providerPolicy?.smart_talk
       ? formatLanePolicy(profile.providerPolicy.smart_talk)
-      : (availableProviders[0] ?? "ollama");
+      : (availableProviders[0] ?? "deepseek");
     const available = availableProviders.join(", ") || "(none)";
     return {
       ok: true,
@@ -1644,16 +1644,13 @@ function resolveProviderArg(
   value: string | undefined,
   profile: BotProfileConfig
 ): ModelProviderName | undefined {
-  if (value === "ollama") {
-    return "ollama";
-  }
   if (value === "deepseek") {
     return "deepseek";
   }
   if (value) {
     return undefined;
   }
-  return profile.providerPolicy?.smart_talk.primary ?? "ollama";
+  return profile.providerPolicy?.smart_talk.primary ?? "deepseek";
 }
 
 function formatLanePolicy(policy: {

@@ -6,7 +6,7 @@
 - The bot is a restricted church helper, not an open-ended chat bot.
 - It should feel smart inside explicitly enabled functions, but deny or clarify requests outside those functions.
 - Runtime behavior is controlled by bot profiles, function toggles, access control, and state stores.
-- The helper controlled planner uses DeepSeek as primary `function_routing` with Ollama fallback; other profiles may remain Ollama-only. Remote DeepSeek access uses `DEEPSEEK_API_KEY`.
+- Every semantic lane uses DeepSeek as its sole provider. Remote DeepSeek access uses `DEEPSEEK_API_KEY`.
 - Group follow-up context is requester-scoped and short-lived; never feed raw whole-group chat into the model.
 - Slow tasks may be stored as long-running jobs and returned through a LINE postback button; do not use LINE push quota for those results.
 - Public `/healthz` is minimal liveness. Public `/readyz` checks only Postgres and Redis.
@@ -117,7 +117,7 @@ planner returns chat, clarify, low confidence, or no plan. Keep this behavior
 definition-driven and do not add function-specific collection branches to
 routers.
 
-- `src/clients/*`: external service clients for LINE, Ollama, DeepSeek, Graph, and Notion.
+- `src/clients/*`: external service clients for LINE, DeepSeek, OpenAI embeddings, Graph, and Notion.
 - `src/access/*`: access principals, Redis-backed registration invite codes, audit events, and stores.
 - `src/state/*`: short-lived user sessions and selection state.
 - `src/cache/*`: shared cache abstractions, including Redis-backed cache.
@@ -184,7 +184,7 @@ routers.
 - Recent resource recall is requester-scoped. Resource aliases and explicit text memories are scoped to the current profile and LINE source.
 - Legacy automatic resource aliases are retired and must never execute before a function handler. A new explicit lookup always searches; only a validator-authorized active-task refinement may replay a prior opaque reference. Resource memory is deduplicated candidate metadata, not an authoritative response cache. Catalog full and delta syncs publish items, tombstones, cursor, source revision, and health atomically. Retrieval must distinguish fresh, stale-but-allowed, unavailable, and genuine not-found. Resource memory may only rank currently authorized catalog/provider candidates, and Graph items must be validated immediately before creating a sharing link. Do not add unversioned resource-query or negative caches.
 - Structured schedules are profile-shared, not requester/source-scoped. The same helper schedule can be queried from managed direct chats and groups.
-- Dynamic knowledge sources are profile-shared. They default to permanent; an explicit expiry disables search immediately and schedules purge after 30 days. The private Ollama host owns `bge-m3`; PostgreSQL stores embeddings, not model files.
+- Dynamic knowledge sources are profile-shared. They default to permanent; an explicit expiry disables search immediately and schedules purge after 30 days. OpenAI `text-embedding-3-small` produces 1536-dimensional embeddings; PostgreSQL stores vectors, not model files.
 - Dynamic knowledge core/lifecycle fields and routing metadata are staged and promoted only by a successful atomic snapshot publication after fetch, chunk, and embedding preparation. Document/node/chunk replacement, tombstones, embeddings, promoted routing metadata, live core/lifecycle fields, sync health, and a rotated staging revision become visible in one memory operation or PostgreSQL transaction; failure health updates require the invocation's expected revision, so stale admin/scheduled sync failures do not overwrite a newer ready snapshot. The staging migration marker must preserve a later staged permanent (`NULL`) expiry across restarts. A failed sync preserves the prior live snapshot, and re-adding a disabled/expired source does not reactivate it before promotion. Never-successfully-synced sources cannot route, anchor, or search. Never expose display names, aliases, titles, headings, chunks, URLs, answer content, or person values through knowledge result/active-task envelopes or the controlled planner; use opaque source/document/hashed-section IDs and generic labels. A body-only pre-planner retrieval probe must remain declarative, read-only, profile-scoped, and capped at 20 eligible sources. Every non-explicit knowledge-evidence path (active-task entity, metadata, knowledge hint, and retrieval evidence) must use the same engagement small-talk classifier and centralized write-intent guard; explicit knowledge intent remains authoritative. Follow-ups fall back section to document to source, never profile-wide, and switch only on one unique match from the same capped eligible metadata provider used for candidates. Initial body-only queries compare one top result per capped eligible source with the same ordinal boost as final retrieval before applying the answer-context limit; answer unique top-source evidence and use the existing requester-scoped numeric/postback selection state for genuine cross-source ties.
 - Structured schedule replacement and entry add/update/delete require preview and confirmation. The same schedule type and month has one active canonical record.
 - Schedule domains belong in the profile-scoped `schedulePolicy.domains` registry. Add an existing-schema domain by changing registry/binding data; do not add domain-specific router or `query_schedule`/`save_schedule` branches. Multiple domain matches must clarify. Write previews are bound to the domain revision and canonical schedule-source refreshes publish atomically.
@@ -214,7 +214,7 @@ routers.
 - For controlled routing behavior changes, also run `pnpm eval:agent` when relevant.
 - For controlled-agent candidate/planner/validator/result changes, also run `pnpm eval:agent`.
 - For behavior changes after R3, add or update a versioned Kernel case and run `pnpm eval:kernel`. Diagnose a regression from its failed boundary ID and shared contract; do not patch the example phrase or add function-specific branches to the generic flow.
-- Run `pnpm eval:agent:live` manually when DeepSeek credentials and the configured Ollama endpoint are available; do not add it to CI.
+- Run `pnpm eval:agent:live` manually when DeepSeek credentials are available; do not add it to CI.
 - For live planner validation, run `pnpm eval:agent:live` manually; do not add it to CI.
 - For admin natural-language routing changes, also run `pnpm eval:admin`.
 - For webhook entrance changes, consider `pnpm smoke:webhook` against a local dev server or deployed URL.
@@ -240,7 +240,7 @@ Testing map:
 - Treat merging a deploy-triggering pull request as a production deployment action. Do not enable auto-merge for deploy-triggering changes unless the user asked to deploy or confirmed that deploying is acceptable.
 - If the user asks for code changes but not deployment, leave the verified branch/PR unmerged and report that production release is intentionally pending.
 - GitHub Actions is the sole CI/CD system. Do not restore Azure DevOps or add a second automatic deployment path.
-- Controlled routing is always authoritative. Do not reintroduce runtime switches, shadow routing, or a second router; roll back through a reviewed application deployment while retaining the DeepSeek-primary/Ollama-fallback lane policy.
+- Controlled routing is always authoritative. Do not reintroduce runtime switches, shadow routing, a second router, or a semantic fallback provider; roll back through a reviewed application deployment while retaining the DeepSeek-only lane policy.
 
 ## Deployment Context
 

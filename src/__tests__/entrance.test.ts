@@ -67,12 +67,9 @@ function testConfig(): AppConfig {
       }
     ],
     llm: {
-      ollamaBaseUrl: "http://127.0.0.1:11434",
-      ollamaModel: "qwen3:4b-instruct",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
-      deepseekTimeoutMs: 8000,
-      timeoutMs: 8000
+      deepseekTimeoutMs: 8000
     }
   };
 }
@@ -207,12 +204,9 @@ function accessConfig(): AppConfig {
       }
     ],
     llm: {
-      ollamaBaseUrl: "http://127.0.0.1:11434",
-      ollamaModel: "qwen3:4b-instruct",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
-      deepseekTimeoutMs: 8000,
-      timeoutMs: 8000
+      deepseekTimeoutMs: 8000
     },
     access: { registrationInviteCodeTtlMinutes: 60 }
   };
@@ -246,7 +240,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
@@ -284,7 +278,7 @@ describe("LINE entrance", () => {
       action: "find_ppt_slides",
       arguments: { query: "奇異恩典" },
       confidence: 0.94,
-      provider: "ollama"
+      provider: "deepseek"
     });
     const findPptSlides = vi.fn().mockResolvedValue({
       ok: true,
@@ -348,7 +342,7 @@ describe("LINE entrance", () => {
       type: "execute",
       action: "find_ppt_slides",
       arguments: { query: "奇異恩典" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     let resolveFirst: (result: FunctionExecutionResult) => void = () => undefined;
     const firstResult = new Promise<FunctionExecutionResult>((resolve) => {
@@ -427,7 +421,7 @@ describe("LINE entrance", () => {
       type: "execute",
       action: "find_ppt_slides",
       arguments: { query: "" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
@@ -484,7 +478,7 @@ describe("LINE entrance", () => {
       type: "execute",
       action: "find_ppt_slides",
       arguments: { query: "奇異恩典" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const findPptSlides = vi.fn().mockResolvedValue({ ok: true, replyText: "result" });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -530,7 +524,7 @@ describe("LINE entrance", () => {
       type: "execute",
       action: "find_ppt_slides",
       arguments: { query: "" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn().mockResolvedValue([{ id: "1", name: "奇異恩典.pptx" }]),
@@ -600,8 +594,8 @@ describe("LINE entrance", () => {
       action: "query_schedule",
       arguments: { query: "服事表" },
       provider: "keyword",
-      fallbackProvider: "ollama",
-      fallbackReason: "ollama_unreachable"
+      fallbackProvider: "deepseek",
+      fallbackReason: "provider_unavailable"
     });
     const queryServiceSchedule = vi.fn().mockResolvedValue({
       ok: true,
@@ -666,7 +660,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
@@ -697,7 +691,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const routeObserver = vi.fn().mockResolvedValue(undefined);
@@ -786,7 +780,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const app = createTestApp(testConfig(), {
       router: { route },
@@ -1110,7 +1104,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const accessStore = defaultAccessStore();
@@ -1198,7 +1192,7 @@ describe("LINE entrance", () => {
       const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
         type: "deny",
         reason: "not_matched",
-        provider: "ollama"
+        provider: "deepseek"
       });
       const accessStore = defaultAccessStore();
       await accessStore.addUserFunctionGrant({
@@ -1340,7 +1334,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
@@ -1376,7 +1370,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
@@ -1412,7 +1406,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const accessStore = defaultAccessStore();
@@ -1456,7 +1450,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const accessStore = defaultAccessStore();
@@ -1511,7 +1505,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
@@ -1547,7 +1541,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const accessStore = new InMemoryAccessStore({
@@ -1703,7 +1697,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "respond",
       action: "small_talk",
-      provider: "ollama",
+      provider: "deepseek",
       confidence: 0.92,
       arguments: { category: "greeting" }
     });
@@ -2076,7 +2070,7 @@ describe("LINE entrance", () => {
       type: "execute",
       action: "find_ppt_slides",
       arguments: { query: "奇異恩典" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
@@ -2127,7 +2121,7 @@ describe("LINE entrance", () => {
       type: "execute",
       action: "find_ppt_slides",
       arguments: { query: "Amazing Grace", fileType: "ppt" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
@@ -2192,7 +2186,7 @@ describe("LINE entrance", () => {
         {
           phase: "route",
           outcome: "execute",
-          provider: "ollama",
+          provider: "deepseek",
           action: "find_ppt_slides",
           query: "present"
         },
@@ -2240,7 +2234,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
@@ -2590,7 +2584,7 @@ describe("LINE entrance", () => {
       type: "execute",
       action: "invite_code_create",
       arguments: {},
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const accessStore = new InMemoryAccessStore();
@@ -2643,7 +2637,7 @@ describe("LINE entrance", () => {
       type: "execute",
       action: "function_scope_grant",
       arguments: { functionName: "find_ppt_slides" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const accessStore = defaultAccessStore();
@@ -2683,7 +2677,7 @@ describe("LINE entrance", () => {
       action: "invite_code_create",
       arguments: {},
       confidence: 0.93,
-      provider: "ollama"
+      provider: "deepseek"
     });
     const routeObserver = vi.fn().mockResolvedValue(undefined);
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -2734,7 +2728,7 @@ describe("LINE entrance", () => {
     expect(routeObserver).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "admin_action_route",
-        provider: "ollama",
+        provider: "deepseek",
         outcome: "execute",
         action: "invite_code_create"
       })
@@ -2751,7 +2745,7 @@ describe("LINE entrance", () => {
     expect(lastRoutes).toContain("phase=admin_route");
     expect(lastRoutes).toContain("phase=admin_action");
     expect(lastRoutes).toContain("invite_code_create");
-    expect(lastRoutes).toContain("provider=ollama");
+    expect(lastRoutes).toContain("provider=deepseek");
     expect(lastRoutes).toContain("ok=true");
     expect(lastRoutes).not.toContain("please create an invite code for Ray");
     expect(lastRoutes).not.toContain("ADMINOBS");
@@ -2761,7 +2755,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const adminRoute = vi.fn();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -2796,7 +2790,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const adminRoute = vi.fn();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -2970,7 +2964,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const app = createTestApp(accessConfig(), {
       router: { route },
@@ -3628,7 +3622,7 @@ describe("LINE entrance", () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
       reason: "not_matched",
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const conversationWindowStore = new InMemoryConversationWindowStore({

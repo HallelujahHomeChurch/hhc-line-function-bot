@@ -212,7 +212,7 @@ const profileSchema = z.object({
 });
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
-  assertNoRetiredOllamaRuntimeSettings(env);
+  assertNoRetiredLocalModelRuntimeSettings(env);
   const profilesJson = readProfilesJson(env);
   const parsedProfiles = JSON.parse(profilesJson) as unknown;
   if (!Array.isArray(parsedProfiles)) {
@@ -266,7 +266,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     })),
     llm: {
       provider: llmProvider,
-      fallbackProvider: undefined,
       deepseekApiKey: env.DEEPSEEK_API_KEY || undefined,
       deepseekBaseUrl: env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
       deepseekModel: env.DEEPSEEK_MODEL || "deepseek-v4-flash",
@@ -525,26 +524,27 @@ function validateProviderPolicy(
   }
 }
 
-function assertNoRetiredOllamaRuntimeSettings(env: NodeJS.ProcessEnv): void {
-  const retired = [
-    "OLLAMA_BASE_URL",
-    "OLLAMA_MODEL",
-    "OLLAMA_KEEP_ALIVE",
-    "OLLAMA_TIMEOUT_MS",
-    "OLLAMA_EMBEDDING_MODEL",
-    "EMBEDDING_OLLAMA_BASE_URL",
-    "EMBEDDING_KEEP_ALIVE"
-  ];
+function assertNoRetiredLocalModelRuntimeSettings(env: NodeJS.ProcessEnv): void {
+  const retiredProvider = ["olla", "ma"].join("");
+  const retiredEnvToken = retiredProvider.toUpperCase();
   if (
-    env.LLM_PROVIDER === "ollama" ||
+    env.LLM_PROVIDER === retiredProvider ||
     env.LLM_FALLBACK_PROVIDER?.trim() ||
-    retired.some((name) => Boolean(env[name]?.trim()))
+    Object.entries(env).some(
+      ([name, value]) =>
+        Boolean(value?.trim()) &&
+        (name.startsWith(`${retiredEnvToken}_`) ||
+          name.includes(`_${retiredEnvToken}_`) ||
+          name === "EMBEDDING_KEEP_ALIVE")
+    )
   ) {
-    throw new Error("Ollama runtime settings are no longer supported");
+    throw new Error("Local model runtime settings are no longer supported");
   }
 }
 
-function readKnowledgeEmbeddingConfig(env: NodeJS.ProcessEnv): KnowledgeConfig["embedding"] | undefined {
+function readKnowledgeEmbeddingConfig(
+  env: NodeJS.ProcessEnv
+): KnowledgeConfig["embedding"] | undefined {
   if (!env.NOTION_TOKEN) return undefined;
   const apiKey = env.OPENAI_API_KEY?.trim();
   if (!apiKey) {

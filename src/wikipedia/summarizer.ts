@@ -24,12 +24,29 @@ export function createWikipediaSummarizer(options: {
     try {
       return sanitizeSummary(await options.primary.completeText(request));
     } catch {
-      if (!options.fallback || options.fallback === options.primary) {
+      if (!hasDistinctFallback(options, input.profileName)) {
         throw new Error("wikipedia_summary_unavailable");
       }
       return sanitizeSummary(await options.fallback.completeText(request));
     }
   };
+}
+
+function hasDistinctFallback(
+  options: {
+    primary: TextGenerationProvider;
+    fallback?: TextGenerationProvider;
+  },
+  profileName: string
+): options is {
+  primary: TextGenerationProvider;
+  fallback: TextGenerationProvider;
+} {
+  const primaryName =
+    options.primary.providerNameForProfile?.(profileName) ?? options.primary.providerName;
+  const fallbackName =
+    options.fallback?.providerNameForProfile?.(profileName) ?? options.fallback?.providerName;
+  return Boolean(options.fallback && fallbackName && fallbackName !== primaryName);
 }
 
 function sanitizeSummary(value: string): string {

@@ -79,7 +79,7 @@ describe("Wikipedia lookup handler", () => {
       wakeKeywords: ["小哈"],
       acceptMention: true,
       enabledFunctions: ["find_ppt_slides"],
-      allowedProviders: ["ollama"],
+      allowedProviders: ["deepseek"],
       allowSubscriptionProviders: false
     },
     event: { type: "message", source: { type: "user", userId: "U1" } }
@@ -189,5 +189,26 @@ describe("Wikipedia summarizer", () => {
         prompt: expect.stringContaining("只可依據提供的維基百科來源")
       })
     );
+  });
+
+  it("does not invoke a second semantic generator with the same provider name", async () => {
+    const primaryCompleteText = vi.fn().mockRejectedValue(new Error("provider unavailable"));
+    const fallbackCompleteText = vi.fn().mockResolvedValue("不應使用的第二次結果");
+    const summarize = createWikipediaSummarizer({
+      primary: { completeText: primaryCompleteText, providerName: "deepseek" },
+      fallback: { completeText: fallbackCompleteText, providerName: "deepseek" }
+    });
+
+    await expect(
+      summarize({
+        profileName: "helper",
+        query: "馬丁路德是誰",
+        title: "馬丁・路德",
+        language: "zh",
+        extract: "來源內容"
+      })
+    ).rejects.toThrow("wikipedia_summary_unavailable");
+    expect(primaryCompleteText).toHaveBeenCalledOnce();
+    expect(fallbackCompleteText).not.toHaveBeenCalled();
   });
 });

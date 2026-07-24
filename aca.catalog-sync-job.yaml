@@ -26,7 +26,7 @@ properties:
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
       - name: redis-url
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
-      - name: ollama-base-url
+      - name: openai-api-key
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
   template:
     containers:
@@ -55,16 +55,16 @@ properties:
             secretRef: redis-url
           - name: REDIS_KEY_PREFIX
             value: hhc-line-function-bot
-          - name: OLLAMA_BASE_URL
-            secretRef: ollama-base-url
-          - name: OLLAMA_EMBEDDING_MODEL
-            value: bge-m3
+          - name: OPENAI_API_KEY
+            secretRef: openai-api-key
+          - name: OPENAI_BASE_URL
+            value: https://api.openai.com/v1
+          - name: OPENAI_EMBEDDING_MODEL
+            value: text-embedding-3-small
           - name: EMBEDDING_BATCH_SIZE
             value: "16"
           - name: EMBEDDING_TIMEOUT_MS
             value: "30000"
-          - name: EMBEDDING_KEEP_ALIVE
-            value: 1m
           - name: GRAPH_TENANT_ID
             value: PLACEHOLDER_GRAPH_TENANT_ID
           - name: GRAPH_CLIENT_ID

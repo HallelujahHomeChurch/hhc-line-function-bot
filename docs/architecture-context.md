@@ -13,11 +13,8 @@ functions, and admin gates.
 
 The service is lane-based and authority-first for controlled routing:
 
-- The helper profile uses DeepSeek as the primary `function_routing` planner
-  with Ollama fallback. Admin and memory routing remain local Ollama lanes.
-- DeepSeek can also be enabled per profile for `smart_talk`, `general_agent`,
-  and `context_compression`, with Ollama fallback where configured.
-- `deepseek` is an optional remote API provider that uses `DEEPSEEK_API_KEY`.
+- Every semantic lane uses DeepSeek as its sole provider.
+- `deepseek` uses `DEEPSEEK_API_KEY`.
 - Provider runtimes may reason and generate text, but this bot owns authority:
   profile policy, function toggles, tool execution, memory writes, and deny or
   clarify flows remain server-side.
@@ -68,7 +65,7 @@ For normal LINE webhook messages, read the flow in this order:
     requester-scoped version-2 task frame and generates at most the configured number of
     candidates from declarative function contracts.
 11. `src/agent/planner.ts` asks the `function_routing` provider for a bounded
-    semantic proposal. DeepSeek is primary for helper and Ollama is fallback.
+    semantic proposal. DeepSeek is the only semantic provider.
 12. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
     rechecks current-message evidence, task-frame authority, effective function
     policy, side effects, source, confidence, schema, and required slots.
@@ -232,7 +229,7 @@ The generic turn contract is:
 
 1. Generate a bounded candidate set only from effective enabled functions and
    each definition's `agentCapability` metadata.
-2. Let DeepSeek (primary) or Ollama (fallback) propose semantics over that set.
+2. Let DeepSeek propose semantics over that set.
    The planner receives bounded contracts and safe task-frame summaries, not
    arbitrary source content or execution authority.
 3. Deterministically validate capability choice, source, side effects,
@@ -285,8 +282,8 @@ Dynamic knowledge uses a separate `knowledge_*` read model rather than catalog
 items or schedule rows. Admin direct-chat actions register Notion roots, the sync
 service recursively reads blocks and prepares the complete chunk/vector set before publication, and
 `query_knowledge` combines lexical and pgvector retrieval before a grounded LLM
-answer. The dedicated `bge-m3` model runs on the private Ollama host; PostgreSQL
-stores only vectors and version metadata. Bounded routing summaries come only
+answer. OpenAI `text-embedding-3-small` produces 1536-dimensional vectors;
+PostgreSQL stores only vectors and version metadata. Bounded routing summaries come only
 from the promoted last-known-good snapshot: staged administrator fields plus
 document titles and headings from the latest successful sync. Failed syncs
 preserve the previous live content, core/lifecycle fields, and routing snapshot, and never-successfully-synced rows remain visible
@@ -511,8 +508,8 @@ Function dependencies are intentionally behind ports/clients:
 - LINE: `src/clients/line.ts`
 - Virus scanner: `src/clients/virus-scan.ts`
 - SearXNG web search: `src/clients/searxng.ts`
-- Ollama: `src/clients/ollama.ts`
 - DeepSeek provider: `src/clients/deepseek.ts`
+- OpenAI embeddings: `src/clients/openai-embedding.ts`
 - Microsoft Graph: `src/clients/graph.ts`
 - Notion: `src/clients/notion.ts`
 - Catalog source/item store abstraction: `src/catalog/*`
@@ -577,8 +574,8 @@ pnpm eval:retrieval-product
 pnpm build
 ```
 
-Run `pnpm eval:agent:live` manually when DeepSeek credentials and the configured
-Ollama endpoint are available. It is an acceptance check, not a CI dependency.
+Run `pnpm eval:agent:live` manually when DeepSeek credentials are available. It
+is an acceptance check, not a CI dependency.
 
 For docs-only changes, `pnpm format:check` is usually enough.
 

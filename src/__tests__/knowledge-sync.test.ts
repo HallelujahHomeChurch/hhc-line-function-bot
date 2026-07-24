@@ -32,8 +32,8 @@ describe("knowledge sync", () => {
         ])
       },
       embedding: {
-        provider: "ollama",
-        model: "bge-m3",
+        provider: "openai",
+        model: "text-embedding-3-small",
         dimensions: 3,
         embed: vi.fn().mockRejectedValue(new Error("offline"))
       },

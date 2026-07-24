@@ -84,14 +84,14 @@ class AdminActionRouter implements AdminActionRouterPort {
     if (profileName && this.options.primary.providerNameForProfile) {
       return this.options.primary.providerNameForProfile(profileName);
     }
-    return this.options.primary.providerName ?? "ollama";
+    return this.options.primary.providerName ?? "deepseek";
   }
 
   private modelFallbackProviderName(profileName?: string): ModelProviderName {
     if (profileName && this.options.modelFallback?.providerNameForProfile) {
       return this.options.modelFallback.providerNameForProfile(profileName);
     }
-    return this.options.modelFallback?.providerName ?? "ollama";
+    return this.options.modelFallback?.providerName ?? "deepseek";
   }
 
   private withLane(result: AdminActionRouteResult): AdminActionRouteResult {

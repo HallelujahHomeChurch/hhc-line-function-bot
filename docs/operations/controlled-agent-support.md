@@ -41,7 +41,7 @@ pnpm eval:agent
 pnpm eval:kernel
 ```
 
-All three commands are deterministic and do not call DeepSeek or Ollama. The Kernel report is written to `artifacts/kernel-v1/report.json` and `.md`; reports contain case IDs, metric counts, and boundary classifications but no synthetic turn text. `case_execution_failed` means the evaluator itself could not complete a case. The retrieval corpus includes sequential PPT lookup, legacy-alias retirement, active-task continuation, schedule ambiguity, explicit schedule domain, not-found, unavailable, and write-confirmation precedence.
+All three commands are deterministic and do not call external model providers. The Kernel report is written to `artifacts/kernel-v1/report.json` and `.md`; reports contain case IDs, metric counts, and boundary classifications but no synthetic turn text. `case_execution_failed` means the evaluator itself could not complete a case. The retrieval corpus includes sequential PPT lookup, legacy-alias retirement, active-task continuation, schedule ambiguity, explicit schedule domain, not-found, unavailable, and write-confirmation precedence.
 
 ## Azure Monitor baseline queries
 

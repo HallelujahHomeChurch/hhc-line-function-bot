@@ -51,7 +51,7 @@ export type ActionName = FunctionName | SystemActionName | AdminActionName;
 
 export type JsonRecord = Record<string, unknown>;
 
-export const MODEL_PROVIDER_NAMES = ["ollama", "deepseek"] as const;
+export const MODEL_PROVIDER_NAMES = ["deepseek"] as const;
 
 export type ModelProviderName = (typeof MODEL_PROVIDER_NAMES)[number];
 export type RouteProviderName = ModelProviderName | "keyword" | "router";
@@ -261,7 +261,6 @@ export interface BotProfileConfig {
 
 export interface LlmConfig {
   provider?: ModelProviderName;
-  fallbackProvider?: ModelProviderName;
   deepseekApiKey?: string;
   deepseekBaseUrl: string;
   deepseekModel: string;

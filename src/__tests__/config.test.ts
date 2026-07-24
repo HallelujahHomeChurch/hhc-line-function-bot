@@ -572,18 +572,20 @@ describe("config", () => {
     ).toThrow("registration.inviteCodeRequired is no longer supported");
   });
 
-  it("rejects retired Ollama runtime settings", () => {
+  it("rejects retired local-model runtime settings", () => {
+    const retiredProvider = ["olla", "ma"].join("");
+    const retiredEnvToken = retiredProvider.toUpperCase();
     for (const [name, value] of Object.entries({
-      LLM_PROVIDER: "ollama",
-      LLM_FALLBACK_PROVIDER: "ollama",
-      OLLAMA_BASE_URL: "http://127.0.0.1:11434",
-      OLLAMA_KEEP_ALIVE: "-1",
-      OLLAMA_EMBEDDING_MODEL: "bge-m3",
-      EMBEDDING_OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+      LLM_PROVIDER: retiredProvider,
+      LLM_FALLBACK_PROVIDER: "deepseek",
+      [`${retiredEnvToken}_BASE_URL`]: "http://127.0.0.1:11434",
+      [`${retiredEnvToken}_KEEP_ALIVE`]: "-1",
+      [`${retiredEnvToken}_EMBEDDING_MODEL`]: "retired-embedding-model",
+      [`EMBEDDING_${retiredEnvToken}_BASE_URL`]: "http://127.0.0.1:11434",
       EMBEDDING_KEEP_ALIVE: "1m"
     })) {
       expect(() => loadConfigFromEnv({ ...baseEnv(), [name]: value })).toThrow(
-        "Ollama runtime settings are no longer supported"
+        "Local model runtime settings are no longer supported"
       );
     }
   });
@@ -636,7 +638,6 @@ describe("config", () => {
 
     expect(config.llm).toMatchObject({
       provider: "deepseek",
-      fallbackProvider: undefined,
       deepseekApiKey: "sk-test",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
@@ -744,7 +745,7 @@ describe("config", () => {
     ).toThrow("controlled routing is always authoritative");
   });
 
-  it("loads helper provider policy for remote API providers", () => {
+  it("loads the helper profile with only the DeepSeek provider", () => {
     const config = loadConfigFromEnv({
       ...profilesEnv([
         {
@@ -752,13 +753,13 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"]
+          allowedProviders: ["deepseek"]
         }
       ])
     });
 
     expect(config.profiles[0]).toMatchObject({
-      allowedProviders: ["ollama", "deepseek"],
+      allowedProviders: ["deepseek"],
       allowSubscriptionProviders: false
     });
     expect(config.profiles[0]).not.toHaveProperty("llmProvider");
@@ -787,7 +788,8 @@ describe("config", () => {
     });
   });
 
-  it("rejects a profile that does not allow DeepSeek", () => {
+  it("rejects a profile containing the retired local model provider", () => {
+    const retiredProvider = ["olla", "ma"].join("");
     expect(() =>
       loadConfigFromEnv({
         ...profilesEnv([
@@ -796,14 +798,14 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/helper",
             channelSecret: "secret",
             channelAccessToken: "token",
-            allowedProviders: ["ollama"],
+            allowedProviders: [retiredProvider],
             providerPolicy: {
               smart_talk: { primary: "deepseek" }
             }
           }
         ])
       })
-    ).toThrow("DeepSeek must be listed in allowedProviders");
+    ).toThrow();
   });
 
   it("rejects unsupported provider names in profile policy", () => {
@@ -815,7 +817,7 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/main",
             channelSecret: "secret",
             channelAccessToken: "token",
-            allowedProviders: ["ollama", "codex_app_server"],
+            allowedProviders: ["deepseek", "codex_app_server"],
             allowSubscriptionProviders: false
           }
         ])

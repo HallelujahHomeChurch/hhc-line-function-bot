@@ -184,13 +184,12 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: GRAPH_CLIENT_SECRET");
     expect(job).toContain("name: NOTION_TOKEN");
     expect(job).toContain("name: NOTION_SERVICE_DATABASE_ID");
-    expect(job).toContain("name: OLLAMA_BASE_URL");
-    expect(job).toContain("secretRef: ollama-base-url");
-    expect(job).toContain("name: OLLAMA_EMBEDDING_MODEL");
-    expect(job).toContain("value: bge-m3");
+    expect(job).toContain("name: OPENAI_API_KEY");
+    expect(job).toContain("secretRef: openai-api-key");
+    expect(job).toContain("name: OPENAI_EMBEDDING_MODEL");
+    expect(job).toContain("value: text-embedding-3-small");
     expect(job).toContain("name: EMBEDDING_BATCH_SIZE");
     expect(job).toContain("name: EMBEDDING_TIMEOUT_MS");
-    expect(job).toContain("name: EMBEDDING_KEEP_ALIVE");
     expect(job).not.toContain("ingress:");
     expect(releaseWorkflow).toContain("- aca.catalog-sync-job.yaml");
     expect(readme).toContain("aca.catalog-sync-job.yaml");
