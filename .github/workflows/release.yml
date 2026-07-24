@@ -17,7 +17,9 @@ on:
       - src/**
       - config/**
       - aca.containerapp.yaml
+      - aca.searxng.containerapp.yaml
       - aca.catalog-sync-job.yaml
+      - infra/searxng/**
   workflow_dispatch:
 
 permissions:

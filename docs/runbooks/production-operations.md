@@ -216,12 +216,14 @@ The webhook entrance still only creates a short-lived pending attachment session
 
 If the scanner is missing, times out, returns a non-2xx response, or returns any status other than `clean`, publishing fails closed. The bot should not bypass this for production.
 
-## Office Local Services
+## Office Local Scanner
 
-SearXNG and ClamAV run on the office Windows workstation from
+ClamAV runs on the office Windows workstation from
 [`infra/local-services/docker-compose.yml`](../../infra/local-services/docker-compose.yml).
-Both containers use `restart: unless-stopped`, persistent volumes, bounded logs,
-and health checks. Run the reconciler manually with:
+It uses `restart: unless-stopped`, a persistent volume, bounded logs, and a health
+check. SearXNG is instead deployed as the internal `hhc-searxng` ACA app by the
+production release script; do not expose or relay a workstation SearXNG port.
+Run the scanner reconciler manually with:
 
 ```powershell
 .\scripts\start-local-services.ps1
@@ -236,5 +238,5 @@ Install the logon startup entry with:
 The installer prefers an ONLOGON Scheduled Task and falls back to the current
 user Startup folder when Task Scheduler registration is not permitted. The
 startup script launches Docker Desktop when needed, waits for the engine, and
-runs `docker compose up -d`. The bastion relays ports 8888 and 3310 only across
-the private VNet/Tailscale path; do not expose either service publicly.
+runs `docker compose up -d`. The bastion relays port 3310 only across the
+private VNet/Tailscale path; do not expose it publicly.

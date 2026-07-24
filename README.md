@@ -60,6 +60,8 @@ Provider auth callbacks are not exposed by this service. LINE webhook traffic sh
 
 In production, the public API Gateway forwards those webhook paths through Dapr service invocation to app id `hhc-line-function-bot`. The bot Container App therefore keeps Dapr enabled on HTTP app port 3000 while its own ingress remains internal.
 
+The consent-only sheet-music fallback uses the separate `hhc-searxng` Container App. Its ingress is internal-only; the release script deploys it before the bot and supplies `SEARXNG_BASE_URL` from its ACA internal FQDN. Do not configure production with an office-network or public SearXNG endpoint.
+
 Health and readiness:
 
 ```text

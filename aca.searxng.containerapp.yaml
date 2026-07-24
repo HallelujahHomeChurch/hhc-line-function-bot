@@ -8,6 +8,10 @@ properties:
       external: false
       targetPort: 8080
       transport: http
+    secrets:
+      - name: searxng-settings
+        value: |
+          PLACEHOLDER_SEARXNG_SETTINGS
   template:
     scale:
       minReplicas: 1
@@ -15,6 +19,9 @@ properties:
     containers:
       - name: searxng
         image: docker.io/searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de
+        volumeMounts:
+          - volumeName: searxng-settings
+            mountPath: /etc/searxng
         env:
           - name: SEARXNG_BIND_ADDRESS
             value: 0.0.0.0
@@ -24,3 +31,9 @@ properties:
             value: "false"
           - name: SEARXNG_PUBLIC_INSTANCE
             value: "false"
+    volumes:
+      - name: searxng-settings
+        storageType: Secret
+        secrets:
+          - secretRef: searxng-settings
+            path: settings.yml

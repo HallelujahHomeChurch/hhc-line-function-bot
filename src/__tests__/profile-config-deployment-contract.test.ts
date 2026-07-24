@@ -24,8 +24,28 @@ describe("production profile configuration deployment contract", () => {
     expect(searxng).toContain("targetPort: 8080");
     expect(searxng).toContain("minReplicas: 1");
     expect(searxng).toContain("searxng/searxng@sha256:");
-    expect(bot).not.toContain("172.16.65.5");
-    expect(deployment).not.toContain("172.16.65.5");
+    expect(searxng).toContain("storageType: Secret");
+    expect(searxng).toContain("mountPath: /etc/searxng");
+    expect(searxng).toContain("secretRef: searxng-settings");
+    expect(searxng).not.toContain("storageType: AzureFile");
+    expect(bot).not.toContain("SEARXNG_BASE_URL\n            value: http://");
+
+    for (const path of [
+      "aca.containerapp.yaml",
+      "aca.searxng.containerapp.yaml",
+      "scripts/deploy-aca.sh"
+    ]) {
+      expect(readProjectFile(path)).not.toContain("172.16.65.5");
+    }
+
+    expect(deployment).toContain("SEARXNG_CONTAINER_APP_NAME:=hhc-searxng");
+    expect(deployment).toContain("properties.configuration.ingress.fqdn");
+    expect(deployment).toContain('searxng_base_url="https://${searxng_fqdn}"');
+    expect(deployment).toContain('"SEARXNG_BASE_URL=${searxng_base_url}"');
+    expect(deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"')).toBeLessThan(
+      deployment.indexOf('az containerapp update "${update_args[@]}"')
+    );
+    expect(projectFileExists("infra/searxng/settings.yml")).toBe(true);
   });
 
   it("ships file-backed profiles and does not deploy an ACA profile secret", () => {
@@ -90,7 +110,7 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain('--dapr-app-id "hhc-line-function-bot"');
     expect(deployment).toContain("--dapr-app-port 3000");
     expect(deployment).not.toContain("az containerapp dapr disable");
-    expect(deployment).toContain("SEARXNG_BASE_URL=http://hhc-searxng");
+    expect(deployment).toContain('"SEARXNG_BASE_URL=${searxng_base_url}"');
     expect(deployment).not.toContain("CLAMAV_HOST=");
     expect(deployment).toContain("MAX_ATTACHMENT_BYTES=26214400");
     expect(deployment).toContain("LINE_CONTENT_DOWNLOAD_TIMEOUT_MS=30000");
@@ -196,17 +216,18 @@ describe("production profile configuration deployment contract", () => {
     expect(readme).toContain("node dist/tools/sync-catalog.js");
   });
 
-  it("defines private restartable workstation search and scanner services", () => {
+  it("keeps only the scanner in workstation local services", () => {
     const compose = readProjectFile("infra/local-services/docker-compose.yml");
     const startup = readProjectFile("scripts/start-local-services.ps1");
     const installer = readProjectFile("scripts/install-local-services-autostart.ps1");
 
-    expect(compose).toContain("searxng/searxng@sha256:");
     expect(compose).toContain("clamav/clamav@sha256:");
-    expect(compose.match(/restart: unless-stopped/g)).toHaveLength(2);
-    expect(compose.match(/healthcheck:/g)).toHaveLength(2);
-    expect(compose).toContain('"8888:8080"');
+    expect(compose).not.toContain("searxng");
+    expect(compose.match(/restart: unless-stopped/g)).toHaveLength(1);
+    expect(compose.match(/healthcheck:/g)).toHaveLength(1);
     expect(compose).toContain('"3310:3310"');
+    expect(startup).not.toContain("SEARXNG_SECRET");
+    expect(projectFileExists("infra/local-services/searxng/settings.yml")).toBe(false);
     expect(startup).toContain("Docker Desktop.exe");
     expect(startup).toContain("docker compose --project-directory");
     expect(installer).toContain("/SC ONLOGON");

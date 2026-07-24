@@ -150,7 +150,7 @@ properties:
           - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
             value: pdf,jpg,jpeg,png
           - name: SEARXNG_BASE_URL
-            value: http://hhc-searxng
+            value: PLACEHOLDER_SET_BY_DEPLOY_SCRIPT
           - name: SEARXNG_TIMEOUT_MS
             value: "8000"
           - name: NOTION_TOKEN
