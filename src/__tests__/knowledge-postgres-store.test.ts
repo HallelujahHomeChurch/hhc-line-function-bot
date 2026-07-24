@@ -64,7 +64,7 @@ describe("PostgresKnowledgeStore routing parity", () => {
       sourceId: "11111111-1111-4111-8111-111111111111",
       sectionKey: "a".repeat(64),
       embeddingDimensions: 1536,
-      embeddingProvider: "openai",
+      embeddingProvider: "azure_openai",
       embeddingModel: "text-embedding-3-small"
     });
 

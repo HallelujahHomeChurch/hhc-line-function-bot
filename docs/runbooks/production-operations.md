@@ -22,7 +22,7 @@ Direct-message admin commands:
 /help admin all
 ```
 
-`/diag` may show dependency status for DeepSeek, OpenAI embeddings, Redis, Postgres, Graph, and Notion, but must not print tenant IDs, database IDs, folder IDs, LINE IDs, tokens, secrets, credential URLs, raw user messages, or invite codes.
+`/diag` may show dependency status for DeepSeek, Azure OpenAI embeddings, Redis, Postgres, Graph, and Notion, but must not print tenant IDs, database IDs, folder IDs, LINE IDs, tokens, secrets, credential URLs, raw user messages, or invite codes.
 
 `/llm-use` and `/llm-status` are bootstrap superadmin direct-chat only. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes. `/llm-status` lists the current profile's DeepSeek-only lane policy. DeepSeek uses `DEEPSEEK_API_KEY` from ACA secrets or local `.env`.
 
@@ -139,9 +139,12 @@ Required job settings:
 - `GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID`
 - `NOTION_TOKEN`
 - `NOTION_SERVICE_DATABASE_ID`
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL=https://api.openai.com/v1`
-- `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`
+- `EMBEDDING_PROVIDER=azure_openai`
+- `AZURE_OPENAI_EMBEDDING_API_KEY`
+- `AZURE_OPENAI_EMBEDDING_ENDPOINT=https://bible-text-embedding-resource.cognitiveservices.azure.com/`
+- `AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small`
+- `AZURE_OPENAI_EMBEDDING_API_VERSION=2024-10-21`
+- `EMBEDDING_MODEL=text-embedding-3-small`
 - `EMBEDDING_BATCH_SIZE=16`, `EMBEDDING_TIMEOUT_MS=30000`
 
 Manual run after deployment:
@@ -163,7 +166,7 @@ az containerapp job execution list `
 
 The sync output is JSON and includes catalog/schedule counters plus a `knowledge` summary with source, document, chunk, embedding, and failure counts. Knowledge sources use content hashes so unchanged chunks retain their embeddings. An embedding outage leaves lexical content searchable and marks the source pending for the next run. OneDrive sources persist the final Graph delta link after successful writes; later runs apply only changes and tombstone deleted items. A `410 Gone` clears the stale cursor and re-enumerates the source, while sources that cannot use delta fall back to the full crawl. If a source page disappears, the next successful sync tombstones its read-model rows.
 
-Before enabling `query_knowledge`, confirm `select extversion from pg_extension where extname='vector'`, configure the OpenAI embedding credentials, and verify `/diag` reports `embedding: ok`. Bulk knowledge synchronization is single-threaded in batches of 16 and should be scheduled off peak.
+Before enabling `query_knowledge`, confirm `select extversion from pg_extension where extname='vector'`, verify the existing `bible-text-embedding-resource` deployment is healthy, and verify `/diag` reports `embedding: ok`. The release copies an Azure account key directly into the workload-scoped `azure-openai-embedding-key` ACA secret without printing or rotating it. Bulk knowledge synchronization is single-threaded in batches of 16 and should be scheduled off peak.
 
 ## Rollback
 

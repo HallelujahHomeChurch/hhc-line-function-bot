@@ -286,7 +286,8 @@ Dynamic knowledge uses a separate `knowledge_*` read model rather than catalog
 items or schedule rows. Admin direct-chat actions register Notion roots, the sync
 service recursively reads blocks and prepares the complete chunk/vector set before publication, and
 `query_knowledge` combines lexical and pgvector retrieval before a grounded LLM
-answer. OpenAI `text-embedding-3-small` produces 1536-dimensional vectors;
+answer. The existing Bible Azure AI Services `text-embedding-3-small`
+deployment produces 1536-dimensional vectors;
 PostgreSQL stores only vectors and version metadata. Bounded routing summaries come only
 from the promoted last-known-good snapshot: staged administrator fields plus
 document titles and headings from the latest successful sync. Failed syncs
@@ -540,7 +541,7 @@ Function dependencies are intentionally behind ports/clients:
   `src/tools/refresh-clamav-signatures.ts`
 - SearXNG web search: `src/clients/searxng.ts`
 - DeepSeek provider: `src/clients/deepseek.ts`
-- OpenAI embeddings: `src/clients/openai-embedding.ts`
+- Azure OpenAI embeddings: `src/clients/azure-openai-embedding.ts`
 - Microsoft Graph: `src/clients/graph.ts`
 - Notion: `src/clients/notion.ts`
 - Catalog source/item store abstraction: `src/catalog/*`

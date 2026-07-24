@@ -299,12 +299,12 @@ resource-memory, freshness, and invalidation lifecycle.
 ### Outcome
 
 The service no longer depends on an office-hosted runtime. DeepSeek is the only
-active remote LLM provider, while `text-embedding-3-small` supplies cloud
-embeddings for knowledge retrieval. SearXNG runs as an internal, always-on ACA
-service and ClamAV runs as bounded ACA Jobs. Provider and workload contracts
-remain configuration-backed so a future remote API provider or infrastructure
-implementation can replace either integration without capability-specific
-changes.
+active remote LLM provider, while the existing Bible Azure AI Services
+`text-embedding-3-small` deployment supplies cloud embeddings for knowledge
+retrieval. SearXNG runs as an internal, always-on ACA service and ClamAV runs as
+bounded ACA Jobs. Provider and workload contracts remain configuration-backed
+so a future remote API provider or infrastructure implementation can replace
+either integration without capability-specific changes.
 
 ### Scope
 
@@ -316,10 +316,11 @@ changes.
   or times out, retain only deterministic candidate/validator recovery and
   fail-closed clarification or unavailable outcomes; do not send the request
   to a local or second semantic model.
-- Use OpenAI `text-embedding-3-small` at its native 1536 dimensions for the
-  active knowledge index. Keep the existing PostgreSQL/pgvector retrieval and
-  controlled result-envelope architecture rather than delegating knowledge
-  search to a provider-hosted vector store.
+- Use the existing Bible Azure AI Services `text-embedding-3-small` deployment
+  at its native 1536 dimensions for the active knowledge index. Keep the
+  existing PostgreSQL/pgvector retrieval and controlled result-envelope
+  architecture rather than delegating knowledge search to a provider-hosted
+  vector store.
 - Preserve knowledge source registration, access policy, lifecycle, audit, and
   source metadata. Treat existing nodes, chunks, embeddings, routing metadata,
   and their snapshot revision as derived data: clear them in a controlled

@@ -141,7 +141,7 @@ describe("query_knowledge", () => {
     const embed = vi.fn().mockResolvedValue([[1, 0, 0]]);
     await store.upsertEmbedding({
       chunkId: document.chunks[0]!.id,
-      provider: "openai",
+      provider: "azure_openai",
       model: "text-embedding-3-small",
       dimensions: 3,
       embedding: [1, 0, 0],
@@ -156,7 +156,12 @@ describe("query_knowledge", () => {
     const completeText = vi.fn().mockResolvedValue("第一個地點是日月潭。");
     const handler = createQueryKnowledgeHandler({
       store,
-      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 3, embed },
+      embedding: {
+        provider: "azure_openai",
+        model: "text-embedding-3-small",
+        dimensions: 3,
+        embed
+      },
       textGenerator: { completeText }
     });
 
@@ -239,7 +244,7 @@ describe("query_knowledge", () => {
     const handler = createQueryKnowledgeHandler({
       store,
       embedding: {
-        provider: "openai",
+        provider: "azure_openai",
         model: "text-embedding-3-small",
         dimensions: 3,
         embed: vi.fn().mockRejectedValue(new Error("offline"))

@@ -32,7 +32,7 @@ describe("knowledge sync", () => {
         ])
       },
       embedding: {
-        provider: "openai",
+        provider: "azure_openai",
         model: "text-embedding-3-small",
         dimensions: 3,
         embed: vi.fn().mockRejectedValue(new Error("offline"))

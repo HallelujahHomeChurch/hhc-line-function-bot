@@ -4,7 +4,8 @@
 
 Approved on 2026-07-24. This design defines roadmap milestone R3.1. It follows
 R3 Unified Retrieval and Catalog Freshness and precedes final Kernel v1
-stabilization.
+stabilization. The embedding-provider and secret-provisioning decisions are
+superseded by `2026-07-24-r3-1-azure-embedding-correction-design.md`.
 
 ## Goal
 
@@ -20,8 +21,8 @@ provider replaceability.
   candidate/validator recovery only when it has sufficient current-message
   evidence; otherwise it returns a controlled clarification or unavailable
   result.
-- OpenAI `text-embedding-3-small` is the sole active embedding model and uses
-  its native 1536-dimensional output.
+- The existing Bible Azure AI Services `text-embedding-3-small` deployment is
+  the sole active embedding model and uses its native 1536-dimensional output.
 - Existing knowledge retrieval data is disposable derived state. Source
   registrations, access policy, lifecycle state, and audit remain intact;
   derived knowledge nodes, chunks, embeddings, routing metadata, and snapshot
@@ -47,7 +48,7 @@ structured-output capability. An embedding provider declares its endpoint,
 API-key reference, model, dimensions, timeout, and snapshot identity.
 
 The initial configuration activates only `deepseek` for chat and only
-`openai` with `text-embedding-3-small` for embeddings. The provider registry
+`azure_openai` with `text-embedding-3-small` for embeddings. The provider registry
 and profile policy must permit a future named remote provider adapter without
 changing function handlers, planner logic, or capability contracts. A provider
 change is a configuration plus adapter change, not a database-stored secret or
@@ -86,7 +87,7 @@ queue duration, memory, and signature-load telemetry.
 ## Knowledge Index Migration
 
 The existing 1024-dimensional BGE-M3 index is not compatible with the new
-1536-dimensional OpenAI vector space. The migration deletes derived knowledge
+1536-dimensional Azure-hosted vector space. The migration deletes derived knowledge
 snapshot tables or their rows, alters the pgvector dimension contract to 1536,
 and then performs a full source resynchronization. It retains source records,
 access state, lifecycle/expiry policy, and audit history.

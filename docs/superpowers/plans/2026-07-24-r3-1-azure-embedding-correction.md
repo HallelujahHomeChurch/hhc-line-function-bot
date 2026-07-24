@@ -192,7 +192,7 @@ embedding: {
   dimensions: 1536;
   batchSize: number;
   timeoutMs: number;
-};
+}
 ```
 
 Make `readKnowledgeEmbeddingConfig` reject retired direct-OpenAI variables and
@@ -243,19 +243,15 @@ git commit -m "feat: use Azure OpenAI embeddings"
 Require `scripts/deploy-aca.sh` to contain:
 
 ```ts
-expect(deployment).toContain(
-  'AZURE_OPENAI_EMBEDDING_RESOURCE_NAME:=bible-text-embedding-resource'
-);
+expect(deployment).toContain("AZURE_OPENAI_EMBEDDING_RESOURCE_NAME:=bible-text-embedding-resource");
 expect(deployment).toContain("az cognitiveservices account deployment list");
 expect(deployment).toContain("az cognitiveservices account keys list");
-expect(deployment).toContain(
-  '"azure-openai-embedding-key=${azure_openai_embedding_key}"'
-);
+expect(deployment).toContain('"azure-openai-embedding-key=${azure_openai_embedding_key}"');
 expect(deployment).toContain(
   '"AZURE_OPENAI_EMBEDDING_API_KEY=secretref:azure-openai-embedding-key"'
 );
 expect(deployment).not.toContain("https://api.openai.com");
-expect(deployment).not.toContain('"openai-api-key"');
+expect(deployment).toContain("legacy_openai_embedding_secret");
 ```
 
 Require both ACA manifests to use the Task 1 Azure settings and prohibit
