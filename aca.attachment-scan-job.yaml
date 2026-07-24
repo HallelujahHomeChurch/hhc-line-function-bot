@@ -1,0 +1,116 @@
+name: hhc-line-bot-attachment-scan
+type: Microsoft.App/jobs
+location: PLACEHOLDER_AZURE_REGION
+properties:
+  environmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
+  configuration:
+    triggerType: Event
+    replicaTimeout: 900
+    replicaRetryLimit: 1
+    eventTriggerConfig:
+      parallelism: 1
+      replicaCompletionCount: 1
+      scale:
+        pollingInterval: 30
+        minExecutions: 0
+        maxExecutions: 1
+        rules:
+          - name: attachment-scan-queue
+            type: azure-queue
+            metadata:
+              accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
+              queueName: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
+              queueLength: 1
+            auth:
+              - triggerParameter: connection
+                secretRef: attachment-scan-queue-connection-string
+    secrets:
+      - name: line-helper-channel-access-token
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: graph-client-secret
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: database-url
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: redis-url
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: attachment-scan-queue-connection-string
+        value: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING
+  template:
+    containers:
+      - name: attachment-scan
+        image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest
+        args:
+          - dist/tools/run-attachment-scan-job.js
+        env:
+          - name: SERVICE_NAME
+            value: hhc-line-bot-attachment-scan
+          - name: TIME_ZONE
+            value: Asia/Taipei
+          - name: PROFILE_CONFIG_PATH
+            value: /app/config/profiles.json
+          - name: LINE_HELPER_CHANNEL_ACCESS_TOKEN
+            secretRef: line-helper-channel-access-token
+          - name: DATABASE_URL
+            secretRef: database-url
+          - name: DATABASE_SSL
+            value: "true"
+          - name: REDIS_URL
+            secretRef: redis-url
+          - name: REDIS_KEY_PREFIX
+            value: hhc-line-function-bot
+          - name: ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING
+            secretRef: attachment-scan-queue-connection-string
+          - name: ATTACHMENT_SCAN_QUEUE_NAME
+            value: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
+          - name: CLAMAV_DATABASE_DIRECTORY
+            value: /var/lib/clamav/current
+          - name: CLAMAV_SIGNATURE_MANIFEST_PATH
+            value: /var/lib/clamav/current/manifest.json
+          - name: CLAMAV_SCAN_TIMEOUT_MS
+            value: "30000"
+          - name: MAX_ATTACHMENT_BYTES
+            value: "26214400"
+          - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS
+            value: "30000"
+          - name: EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS
+            value: "15000"
+          - name: EXTERNAL_RESOURCE_MAX_REDIRECTS
+            value: "3"
+          - name: GRAPH_TENANT_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_CLIENT_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_CLIENT_SECRET
+            secretRef: graph-client-secret
+          - name: GRAPH_DRIVE_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_PPT_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_POP_SHEET_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_POP_SHEET_DRIVE_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_HYMN_SHEET_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_LINK_SCOPE
+            value: anonymous
+          - name: GRAPH_LINK_TYPE
+            value: view
+          - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
+            value: pdf,jpg,jpeg,png
+        volumeMounts:
+          - volumeName: clamav-signatures
+            mountPath: /var/lib/clamav
+        resources:
+          cpu: 1.0
+          memory: 4Gi
+    volumes:
+      - name: clamav-signatures
+        storageType: AzureFile
+        storageName: clamav-signatures-readonly

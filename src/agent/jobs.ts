@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import type { FunctionExecutionResult } from "../types.js";
+import { buildPostbackQuickReply } from "../line-reply.js";
+import type { FunctionExecutionResult, LineSource, QuickReplyItem } from "../types.js";
 
 export interface AgentJobScope {
   profileName: string;
@@ -179,4 +180,39 @@ export function scopeMatches(expected: AgentJobScope, actual: AgentJobScope): bo
     expected.sourceKey === actual.sourceKey &&
     expected.requesterUserId === actual.requesterUserId
   );
+}
+
+export function buildAgentJobScope(
+  profileName: string,
+  source: LineSource
+): (AgentJobScope & { requesterUserId: string }) | undefined {
+  if (!source.userId) return undefined;
+  const sourceKey = sourceKeyForJob(source);
+  if (!sourceKey) return undefined;
+  return {
+    profileName,
+    sourceKey,
+    requesterUserId: source.userId
+  };
+}
+
+export function buildAgentJobQuickReply(jobId: string): QuickReplyItem {
+  return buildPostbackQuickReply(
+    "查看結果",
+    `action=agent_job_result&jobId=${encodeURIComponent(jobId)}`,
+    "查看結果"
+  );
+}
+
+function sourceKeyForJob(source: LineSource): string | undefined {
+  switch (source.type) {
+    case "group":
+      return source.groupId ? `group:${source.groupId}` : undefined;
+    case "room":
+      return source.roomId ? `room:${source.roomId}` : undefined;
+    case "user":
+      return source.userId ? `user:${source.userId}` : undefined;
+    default:
+      return undefined;
+  }
 }

@@ -62,12 +62,16 @@ describe("PostgresKnowledgeStore routing parity", () => {
       profileName: "helper",
       query: "集合",
       sourceId: "11111111-1111-4111-8111-111111111111",
-      sectionKey: "a".repeat(64)
+      sectionKey: "a".repeat(64),
+      embeddingDimensions: 1536,
+      embeddingProvider: "openai",
+      embeddingModel: "text-embedding-3-small"
     });
 
     const sql = query.mock.calls.map(([statement]) => String(statement)).join("\n");
     expect(sql.match(/last_synced_at\s+is\s+not\s+null/giu)).toHaveLength(2);
     expect(sql).toMatch(/section_key\s*=\s*\$\d+/iu);
+    expect(sql).toMatch(/e\.dimensions\s*=\s*\$9/iu);
     expect(sql).not.toMatch(/any\s*\(c\.heading_path\)/iu);
   });
 
@@ -181,6 +185,7 @@ describe("PostgresKnowledgeStore routing parity", () => {
       profileName: "helper",
       query: "共同暗號",
       ordinal: 1,
+      embeddingDimensions: 1536,
       sourceIds
     });
 
@@ -189,8 +194,9 @@ describe("PostgresKnowledgeStore routing parity", () => {
     expect(String(sql)).toMatch(/row_number\(\)\s+over\s*\(\s*partition\s+by\s+source_id/iu);
     expect(String(sql)).toMatch(/source_rank\s*=\s*1/iu);
     expect(String(sql)).toMatch(/ordinal_score/iu);
-    expect(String(sql)).toMatch(/c\.ordinal\s*=\s*\$6/iu);
-    expect(values).toEqual(["helper", "共同暗號", null, null, null, 1, sourceIds]);
+    expect(String(sql)).toMatch(/c\.ordinal\s*=\s*\$7/iu);
+    expect(String(sql)).toMatch(/e\.dimensions\s*=\s*\$4/iu);
+    expect(values).toEqual(["helper", "共同暗號", null, 1536, null, null, 1, sourceIds]);
     await expect(
       store.searchTopPerSource({
         profileName: "helper",

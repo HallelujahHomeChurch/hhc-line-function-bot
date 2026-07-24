@@ -39,6 +39,13 @@ export function validateProductionProfileConfig(path: string): ProductionProfile
       env.DATABASE_URL = "postgres://placeholder";
       env.REDIS_URL = "redis://placeholder";
     }
+    if (
+      Array.isArray(record.enabledFunctions) &&
+      record.enabledFunctions.includes("save_resource")
+    ) {
+      env.ATTACHMENT_SCAN_QUEUE_URL =
+        "https://storage.example.test/attachment-scan?sv=validation-placeholder";
+    }
   }
 
   const config = loadConfigFromEnv(env);

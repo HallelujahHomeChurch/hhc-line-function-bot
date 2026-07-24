@@ -1,13 +1,13 @@
 # hhc-line-function-bot
 
-LINE webhook service for routing selected church bot requests to local-first functions.
+LINE webhook service for routing selected church bot requests to controlled functions.
 
 ## What It Does
 
 - Fastify webhook server with LINE signature validation.
 - Multiple bot profiles in one service, each on its own webhook path.
 - Per-profile access policy, wake words, message type filtering, and function toggles.
-- Controlled semantic planner that uses DeepSeek as the helper profile's primary function-routing provider and Ollama as its fallback.
+- Controlled semantic planner that uses DeepSeek as the sole LLM provider.
 - Action catalog that separates user functions, admin actions, and system actions.
 - Policy gate and admin action registry for natural-language admin operations.
 - Deterministic candidate generation and validation when model providers fail, without a second legacy router.
@@ -58,7 +58,13 @@ Set the LINE webhook URL per bot profile, for example:
 
 Provider auth callbacks are not exposed by this service. LINE webhook traffic should only use the canonical profile paths above.
 
+Local development starts only the webhook service. Semantic generation and
+embeddings use the configured remote providers; external search and attachment
+scanning are production ACA workloads, not workstation services.
+
 In production, the public API Gateway forwards those webhook paths through Dapr service invocation to app id `hhc-line-function-bot`. The bot Container App therefore keeps Dapr enabled on HTTP app port 3000 while its own ingress remains internal.
+
+The consent-only sheet-music fallback uses the separate `hhc-searxng` Container App. Its ingress is internal-only; the release script deploys it before the bot and supplies `SEARXNG_BASE_URL` from its ACA internal FQDN. Do not configure production with an office-network or public SearXNG endpoint.
 
 Health and readiness:
 
@@ -143,31 +149,30 @@ Function toggles are profile-scoped:
 
 ## Routing
 
-Provider selection is lane-based. Admin routing and memory routing default to local Ollama so routine JSON classification stays cheap. The helper production profile configures DeepSeek as the primary `function_routing` provider with Ollama fallback. Smart talk and future higher-value generation lanes such as `general_agent` and `context_compression` default to DeepSeek when the current profile explicitly allows `deepseek`; otherwise they stay on Ollama.
+Provider selection is lane-based. Every semantic lane uses DeepSeek as its sole provider, including function routing, admin routing, memory routing, smart talk, general-agent generation, context compression, and web summarization.
 
 The DeepSeek provider calls the OpenAI-compatible `/chat/completions` API with `DEEPSEEK_API_KEY`; it does not require provider login routes, mounted auth state, or PostgreSQL token storage.
 
-Provider access is profile-scoped. Internal helper profiles may explicitly list `deepseek` in `allowedProviders`. Future official `main` profiles can stay on `ollama` or define their own allowed providers.
+Provider access is profile-scoped. Every LLM-enabled profile must list `deepseek` in `allowedProviders`.
 
-Each profile can override lane policy with `providerPolicy`. The internal helper profile uses `deepseek -> ollama` for `function_routing`, `smart_talk`, and `general_agent`, while keeping `admin_routing` and `memory_routing` on Ollama.
+Each profile declares lane policy with `providerPolicy`. Every lane has `primary: "deepseek"` and semantic fallbacks are rejected during configuration validation.
 
 The helper profile enables the controlled agent with at most three candidates and a minimum planner confidence of `0.65`. Candidate generation is deterministic and considers only effective, enabled functions with a declarative `agentCapability` contract. Each contract declares semantic scope, required slots, allowed operations, safe evidence providers, output fields, ambiguity behavior, and successful write-to-read handoffs. Evidence can come from explicit current-message intent, declared argument patterns, a live requester-scoped task frame, promoted dynamic-knowledge metadata, or a bounded read-only retrieval probe. No provider may invent a capability or expand the effective function set.
 
 Write capabilities use a narrower path: they enter the candidate set only from explicit, unnegated current-message intent after requester grants are resolved. Natural shorthand such as `幫我記服事表` and `記服事表` is write intent; passive recall such as `你記得服事表嗎` is not. Domain writes such as `save_schedule` suppress both read candidates and the generic `save_memory` fallback when both match. The validator grounds the payload in the current message, and the handler still requires requester-scoped preview and confirmation.
 
-DeepSeek is the primary `function_routing` planner and Ollama is the configured fallback. The model proposes only semantics over a bounded candidate set; it does not own workflow state or execute tools. The server then revalidates the proposal against the candidate set, source policy, function toggle, side-effect policy, current-message evidence, active-task authority, required slots, argument schema, and the `0.65` threshold. A missing required slot becomes the deterministic `collect` state even if the model proposed execute, clarify, chat, low confidence, or no plan. Unsupported or ungrounded values are discarded, ambiguity becomes clarification, and disabled or unauthorized capabilities are denied. When providers are unavailable, an unambiguous explicit request may still use the deterministic definition contract; unresolved evidence fails closed to clarification rather than guessing.
+DeepSeek is the sole `function_routing` planner. The model proposes only semantics over a bounded candidate set; it does not own workflow state or execute tools. The server then revalidates the proposal against the candidate set, source policy, function toggle, side-effect policy, current-message evidence, active-task authority, required slots, argument schema, and the `0.65` threshold. A missing required slot becomes the deterministic `collect` state even if the model proposed execute, clarify, chat, low confidence, or no plan. Unsupported or ungrounded values are discarded, ambiguity becomes clarification, and disabled or unauthorized capabilities are denied. When DeepSeek is unavailable, an unambiguous explicit request may still use the deterministic definition contract; unresolved evidence fails closed to clarification rather than guessing.
 
 Read capabilities may declaratively opt into a bounded retrieval-evidence provider. Before probing, the contract removes only declared wake words, request wrappers, and capability nouns while preserving the user's identity, date, and topic conditions. The knowledge provider probes at most 20 promoted sources in the current profile and returns only a candidate reason to the planner—never source IDs/names, titles, URLs, or content. Provider failure is distinct from no-match and returns a temporary-unavailable reply instead of pretending the request was unclear. Every non-explicit knowledge-evidence path—task-frame entities, routing metadata, knowledge capability hints, and retrieval evidence—uses the same conservative small-talk and write-intent guard. Explicit knowledge queries remain eligible. DeepSeek proposals remain advisory: they never bypass deterministic profile policy, function toggles, argument validation, clarification, access control, or registered handler execution.
 
-Controlled routing is always authoritative. The removed `controlledAgent.enabled` and `controlledAgent.shadow` fields are rejected during configuration validation so production cannot silently return to a second routing flow. Keep `function_routing` on `deepseek -> ollama` unless a separately reviewed provider-policy change is intended.
+Controlled routing is always authoritative. The removed `controlledAgent.enabled` and `controlledAgent.shadow` fields are rejected during configuration validation so production cannot silently return to a second routing flow. Keep every semantic lane on DeepSeek-only policy.
 
-If a lane's primary provider returns invalid JSON, times out, or is unavailable, the lane can fall back to its configured fallback provider. If all planner providers fail, only one unambiguous, revalidated high-confidence capability may be recovered from the same declarative contract; unresolved evidence fails closed. Remote API small talk is bounded by `LLM_GENERAL_MAX_OUTPUT_TOKENS` rather than the local Ollama 80-character fallback limit.
+If DeepSeek returns invalid JSON, times out, or is unavailable, the runtime does not invoke a second semantic model. Only one unambiguous, revalidated high-confidence capability may be recovered from the same declarative contract; unresolved evidence fails closed. Small talk generation is bounded by `LLM_GENERAL_MAX_OUTPUT_TOKENS`.
 
 Relevant env vars:
 
 ```text
-LLM_PROVIDER=ollama
-LLM_FALLBACK_PROVIDER=ollama
+LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=...
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
@@ -199,11 +204,11 @@ Candidate generation does not treat `詩歌` or `流行歌` alone as PPT request
 
 For sheet music requests, the planner can extract the song title, optional artist, requested file type, and fuzzy/exact match preference. Candidate generation stays conservative and only offers this capability when current-message evidence supports it.
 
-Sheet music lookup remains catalog/local-first. If no local sheet music matches and `SEARXNG_BASE_URL` is configured, the bot asks the requester whether to search public web results. It calls SearXNG only after explicit consent, sends only the query to SearXNG, and passes only returned title/snippet/url fields to the `web_summarization` provider. Results are never fetched or saved automatically. An authorized requester with effective `save_resource` permission may explicitly select and confirm one direct HTTPS PDF/JPEG/PNG result for import into the shared pop or hymn catalog. HTML pages, authenticated downloads, and crawling remain prohibited.
+Sheet music lookup remains catalog/local-first. If no local sheet music matches and `SEARXNG_BASE_URL` is configured, the bot asks the requester whether to search public web results. It calls SearXNG only after explicit consent, sends only the query to SearXNG, and passes only returned title/snippet/url fields to the `web_summarization` provider. Results are never fetched or saved automatically. An authorized requester with effective `save_resource` permission may explicitly select and confirm one direct HTTPS PDF/JPEG/PNG result for import into the shared pop or hymn catalog. Confirmation queues an opaque work ID; only the finite scan worker performs the SSRF-safe download, ClamAV scan, and shared binary publication. HTML pages, authenticated downloads, and crawling remain prohibited.
 
 The candidate generator and validator guard model output when the user names an explicit domain. For example, `查維基百科` with no topic asks for the missing topic instead of letting a model invent one, and `查週報音檔` resolves to internal catalog search rather than Wikipedia when `find_resource` is enabled.
 
-The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:kernel` runs the deterministic R0-R3 product gate through the real controlled turn runtime and writes privacy-safe reports to `artifacts/kernel-v1/report.json` and `artifacts/kernel-v1/report.md`; exit code `0` means every required metric passed, while a non-zero exit means at least one metric, case, or corpus-completeness rule failed. `pnpm eval:kernel:integration` owns a disposable loopback-only Redis AOF and pgvector PostgreSQL Compose project, exercises two real clients, restarts the actual Redis server, and writes the allowlisted result to `artifacts/kernel-v1/integration-report.json`. It fails rather than skipping when Docker, a dependency, restart, or cleanup is unavailable. `case_execution_failed` identifies a case whose evaluator could not complete, not a user-facing result. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) `function_routing` policy, requires DeepSeek as primary, allows its configured Ollama fallback, and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
+The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:kernel` runs the deterministic R0-R3 product gate through the real controlled turn runtime and writes privacy-safe reports to `artifacts/kernel-v1/report.json` and `artifacts/kernel-v1/report.md`; exit code `0` means every required metric passed, while a non-zero exit means at least one metric, case, or corpus-completeness rule failed. `pnpm eval:kernel:integration` owns a disposable loopback-only Redis AOF and pgvector PostgreSQL Compose project, exercises two real clients, restarts the actual Redis server, and writes the allowlisted result to `artifacts/kernel-v1/integration-report.json`. It fails rather than skipping when Docker, a dependency, restart, or cleanup is unavailable. `case_execution_failed` identifies a case whose evaluator could not complete, not a user-facing result. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) DeepSeek-only `function_routing` policy and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
 
 ## Time Zone
 
@@ -283,7 +288,7 @@ The memory layer adds controlled memory without making the bot an unrestricted c
 - Resource aliases are scope-scoped ranking hints. They never bypass a current catalog/provider search or reference validation.
 - Text memories are saved only when the user clearly asks the bot to remember, save, or store content. Normal group chatter is not saved.
 - The helper profile enables `retrieve_memory` for registered users and keeps `save_memory` admin/explicit-user-grant only. In a registered group, a granted requester may explicitly choose group sharing; otherwise the memory stays private to that requester in that group.
-- Explicit text-memory retrieval reuses the private Ollama `bge-m3` model and PostgreSQL `vector(1024)`. Profile/source/requester visibility, deletion, and expiry are filtered before lexical/semantic ranking. Embedding failure falls back to lexical search, answer generation receives only authorized results, and a bounded non-blocking startup batch fills vectors for older records.
+- Explicit text-memory retrieval uses OpenAI `text-embedding-3-small` and PostgreSQL `vector(1536)`. Profile/source/requester visibility, deletion, and expiry are filtered before lexical/semantic ranking. Embedding failure falls back to lexical search, answer generation receives only authorized results, and a bounded non-blocking startup batch fills vectors for older records.
 - Text-memory previews state the private/group visibility and 30-day retention before confirmation. Direct-chat memories are always private, and group memories never cross into direct chat or another group.
 - Structured schedule memories are separate from plain text memories. They store a schedule header plus date-based entries, are shared across the helper profile, and expire after one year.
 - Saving another schedule of the same type and month replaces the previous canonical schedule after confirmation. Entry add, update, delete, and whole-schedule delete use the same preview-and-confirm flow.
@@ -406,9 +411,9 @@ Schedule lookup combines validated planner arguments with a storage-neutral fiel
 
 `query_knowledge` answers from profile-shared pages or databases registered by an admin. An admin adds a shared page by saying `加入知識來源 <page URL> 名稱 <display name>` in direct chat; optional bounded `aliases`, `topics`, and `sampleQueries` improve routing, while `expiresAt` makes it temporary. Administrator core, lifecycle, and routing fields are staged separately from the promoted last-known-good snapshot. A one-time schema marker preserves an intentionally staged permanent (`NULL`) expiry across later startup migrations. Remote fetch, chunking, and embedding preparation finish before one atomic publication replaces documents, chunks, embeddings, lifecycle/core fields, routing metadata, sync health, and the staging revision. A failed synchronization therefore preserves the complete previous live snapshot, and a failure from an older revision cannot mark a newer ready publication failed. Re-adding a disabled or expired source does not reactivate it before successful publication. A source that has never synchronized successfully is never routed or searched. Sources default to permanent, can be listed/synchronized/enabled/disabled, and destructive removal requires `/confirm <code>`. The page must first be shared with the configured integration.
 
-Knowledge synchronization preserves page hierarchy, tables, lists, properties, and order in PostgreSQL. It chunks by heading, stores full-text data, and uses pgvector plus a dedicated Ollama `bge-m3` embedding model for hybrid retrieval. Exact title/date/ordinal evidence outranks semantic similarity. Embedding failure atomically publishes the complete lexical snapshot as `embedding_pending`; answer generation failure returns a controlled source excerpt. A body-only question may create a controlled candidate through the content-free retrieval probe, then searches only the deterministic capped eligible source set. Retrieval first keeps one top result per eligible source, using the same ordinal boost as final retrieval, before applying the eight-chunk answer-context limit. A unique highest-evidence source is answered directly; a genuine top-score cross-source tie creates a requester-scoped numeric/postback selection whose persisted mapping contains opaque source IDs. Expired temporary sources leave search immediately and are purged after 30 days.
+Knowledge synchronization preserves page hierarchy, tables, lists, properties, and order in PostgreSQL. It chunks by heading, stores full-text data, and uses pgvector plus OpenAI `text-embedding-3-small` embeddings for hybrid retrieval. Exact title/date/ordinal evidence outranks semantic similarity. Embedding failure atomically publishes the complete lexical snapshot as `embedding_pending`; answer generation failure returns a controlled source excerpt. A body-only question may create a controlled candidate through the content-free retrieval probe, then searches only the deterministic capped eligible source set. Retrieval first keeps one top result per eligible source, using the same ordinal boost as final retrieval, before applying the eight-chunk answer-context limit. A unique highest-evidence source is answered directly; a genuine top-score cross-source tie creates a requester-scoped numeric/postback selection whose persisted mapping contains opaque source IDs. Expired temporary sources leave search immediately and are purged after 30 days.
 
-The model is installed on the existing private Ollama host, not in the ACA image or PostgreSQL. Configure `OLLAMA_EMBEDDING_MODEL=bge-m3`, `EMBEDDING_BATCH_SIZE=16`, `EMBEDDING_TIMEOUT_MS=30000`, and `EMBEDDING_KEEP_ALIVE=1m`; `EMBEDDING_OLLAMA_BASE_URL` is optional and otherwise reuses `OLLAMA_BASE_URL`. PostgreSQL must already have the `vector` extension; the app validates it but never installs extensions.
+Configure `OPENAI_API_KEY`, `OPENAI_BASE_URL=https://api.openai.com/v1`, `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`, `EMBEDDING_BATCH_SIZE=16`, and `EMBEDDING_TIMEOUT_MS=30000`. The embedding model and its 1536 dimensions are a fixed contract; `EMBEDDING_DIMENSIONS` is rejected instead of acting as an override. PostgreSQL must already have the `vector` extension; the app validates it but never installs extensions.
 
 Requester-scoped task-frame state records the last successful capability plus canonical anchors, declared entities, safe references, supported operations, and available response fields returned by the handler. `currentCapability` is the single authority field; the deprecated duplicate capability field and version-1 behavior are removed. Schedule follow-ups therefore keep the confirmed date, meeting, source, and role evidence from read-model, saved-schedule, or live Notion results. Short role questions such as `導播` or `音控是誰` are resolved against those entities instead of being treated as small talk, and unlisted roles do not require a hard-coded vocabulary. A focused single-meeting role answer is compact (`直播：銹姐、家睿`); multiple matching meetings retain date and meeting context per line. Only current-message evidence or declaratively bound task-frame evidence may fill arguments. `那下一場呢` advances after the returned date, while a complete request such as `下一場服事表的前攝影是誰` resolves from now. Knowledge follow-ups search the opaque section key first, then the same document, then the same source; missing or stale sources fail closed. Task frames have the profile-configured independent absolute expiry (600 seconds in helper), and group state is isolated by profile, group, and requester.
 
@@ -416,9 +421,11 @@ Requester-scoped task-frame state records the last successful capability plus ca
 
 Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. Direct chat stores a requester/source-scoped pending attachment session and asks `要我幫忙保存這個檔案嗎？` with `是` and `否` quick replies. Groups first require the requester-scoped two-minute upload activation described above; without it the attachment is ignored without a reply or session.
 
-After opt-in, the bot offers exactly four purposes: `投影片`, `流行歌譜`, `詩歌歌譜`, and `小哈資料庫`. It checks the selected target's write capability, asks the requester to enter a title, and then creates a metadata-only preview with `保存` and `取消`. It does not download or scan the binary during these stages. Only after the requester replies `保存` does the bot atomically claim the pending attachment, download the LINE content once with `MAX_ATTACHMENT_BYTES` (default 25 MiB) and `LINE_CONTENT_DOWNLOAD_TIMEOUT_MS` (default 30 seconds), then check actual size, MIME/magic bytes, extension, safe filename, hash, and virus scan status. Concurrent duplicate confirmations cannot publish the same session twice. If the scanner is missing, times out, or returns anything other than `clean`, the save fails closed. OneDrive upload and catalog upsert form one logical commit: catalog failure compensates by deleting the uploaded Graph item. A successful commit returns the exact catalog item reference so immediate follow-up lookup does not depend on fuzzy title search.
+After opt-in, the bot offers exactly four purposes: `投影片`, `流行歌譜`, `詩歌歌譜`, and `小哈資料庫`. It checks the selected target's write capability, asks the requester to enter a title, and then creates a metadata-only preview with `保存` and `取消`. It does not download or scan the binary during these stages. Only after the requester replies `保存` does the bot atomically claim the pending attachment and persist one opaque work ID in a Redis-backed enqueue outbox. A successful queue send advances that record to `queued`; an ambiguous queue/Redis failure is reported as a scheduled retry, never as a successful queue handoff. The event-driven `aca.attachment-scan-job.yaml` execution leases one queue message and claims the work with a bounded token lease. A crashed pre-publication claim becomes reclaimable after expiry. Immediately before calling the shared publisher, the worker must atomically advance its live claim to the fenced `publishing` state. That state is never reclaimed for another upload; its expiry is clamped to the execution's absolute 900-second replica deadline, after which redelivery terminal-fails an abandoned publication or safely discards a work ID whose retention has expired.
 
-The attachment binary is fetched outbound from the bot through the LINE Content API; it is not part of the inbound webhook JSON. API Gateway, Dapr, and Fastify webhook body limits therefore remain unchanged.
+The worker downloads the LINE content once with `MAX_ATTACHMENT_BYTES` (default 25 MiB) and `LINE_CONTENT_DOWNLOAD_TIMEOUT_MS` (default 30 seconds), checks actual size, MIME/magic bytes, extension, safe filename, and hash, then publishes only after a local ClamAV `clean` result with a current signature manifest. Each execution has one replica, bounded runtime, 1 vCPU/4 GiB, no ingress, and a read-only signature mount. Concurrent duplicate confirmations cannot publish the same session twice. If the worker, scanner, or signatures are unavailable or stale, the save fails closed. Work completion/failure first wins the fenced terminal state transition and atomically records the bounded requester-job update to apply. It then updates the requester-scoped result job and clears that marker; a crash between those writes is reconciled idempotently on queue redelivery before acknowledgement. Queue claims distinguish active, terminal, and missing/expired work: active deliveries remain for redelivery, while terminal or retained-work-expired opaque deliveries are acknowledged so an outage longer than work retention cannot poison the queue. OneDrive upload and catalog upsert form one logical commit: catalog failure compensates by deleting the uploaded Graph item. A successful commit returns the exact catalog item reference so immediate follow-up lookup does not depend on fuzzy title search.
+
+The attachment binary is fetched outbound from the finite scan worker through the LINE Content API; it is not part of the inbound webhook JSON. API Gateway, Dapr, and Fastify webhook body limits therefore remain unchanged.
 
 Supported attachment targets in this flow:
 
@@ -427,21 +434,24 @@ Supported attachment targets in this flow:
 - `詩歌歌譜`: writes to the `hymn_sheet_music` OneDrive root and indexes `hymn_sheet`.
 - `小哈資料庫` / `教會資料`: writes to `xiaoha_database` subfolders and indexes `church_document`, `church_image`, or `church_other` with 90-day retention.
 
-Set `CLAMAV_HOST` to use a native ClamAV `clamd` scanner for attachment publishing. The app streams bytes with ClamAV's `INSTREAM` protocol and publishes only a `clean` result. `VIRUS_SCAN_ENDPOINT` remains an optional HTTP-compatible fallback when native ClamAV is not configured. If neither scanner is configured, attachment publishing is intentionally unavailable.
+The always-on bot process has no TCP or HTTP scanner endpoint configuration. The finite attachment-scan worker uses a dedicated minimal configuration loader: profile name and LINE access token, PostgreSQL, Redis, Graph publication, bounded download limits, queue access, and ClamAV paths only. It does not require LINE channel secrets, bootstrap admin IDs, LLM keys, Notion credentials, or observability secrets. The worker runs local ClamAV and requires `CLAMAV_DATABASE_DIRECTORY` plus `CLAMAV_SIGNATURE_MANIFEST_PATH` (defaulting to `manifest.json` in that directory). The manifest selects an immutable versioned database directory beneath the configured root, so a refresh cannot create a reader-visible gap. `CLAMAV_SCAN_TIMEOUT_MS` controls its bounded scan duration. It revalidates the same signature version immediately before publication and fails closed when the manifest is missing, malformed, changed during the scan, from the future, or more than 72 hours old.
+
+`aca.clamav-signature-refresh-job.yaml` runs at `10 19 */2 * *` UTC. It mounts the same Azure Files share through a separate read/write environment storage definition, downloads into a private staging directory, requires `main`, `daily`, and `bytecode` databases, validates each with ClamAV tooling, moves the set into an immutable versioned directory, and atomically replaces the sanitized manifest last. Deployment also starts and waits for one refresh execution before enabling the queue scanner, so a newly provisioned share is never left empty until the first scheduled run. Any download, completeness, validation, or promotion failure exits non-zero and retains the prior active set.
 
 ## Runtime Secrets
 
 Do not commit real `.env` files. In Azure Container Apps, store only real credentials in ACA secrets:
 
 - `LINE_HELPER_CHANNEL_SECRET`, `LINE_HELPER_CHANNEL_ACCESS_TOKEN`, and `LINE_HELPER_ADMIN_USER_ID`
-- `OLLAMA_BASE_URL`
-- `EMBEDDING_OLLAMA_BASE_URL` only when embedding uses a different private Ollama endpoint
 - `DEEPSEEK_API_KEY`
+- `OPENAI_API_KEY`
 - `DATABASE_URL` and `REDIS_URL`
 - `NOTION_TOKEN`
 - `GRAPH_CLIENT_SECRET`
-- `VIRUS_SCAN_API_KEY` if the configured scanner endpoint requires one
-- `CLAMAV_HOST`, `CLAMAV_PORT`, and `CLAMAV_TIMEOUT_MS` for the preferred native scanner
+- `ATTACHMENT_SCAN_QUEUE_URL` as the queue-scoped bot producer secret
+- the attachment queue connection string used only by the finite scan job
+
+The release script obtains the ClamAV Azure Files account key directly from the storage account while provisioning the Container Apps environment storage, then discards it. It is never copied into the bot app or the scan-job secret set.
 
 `config/profiles.json` is intentionally non-sensitive and is packaged in the image. Do not set `BOT_PROFILES_JSON` or `BOT_PROFILES_BASE64_JSON`; the runtime rejects both.
 
@@ -477,9 +487,11 @@ Operational details are in `docs/runbooks/production-operations.md`.
 ```text
 alive.azurecr.io/alive/hhc-line-function-bot:<branch>-<githubRunId>
 alive.azurecr.io/alive/hhc-line-function-bot:latest
+alive.azurecr.io/alive/hhc-line-function-bot-scan:<branch>-<githubRunId>
+alive.azurecr.io/alive/hhc-line-function-bot-scan:latest
 ```
 
-`scripts/deploy-aca.sh` updates the bot and catalog-sync job, restores the required Dapr configuration, and waits for the new bot revision to be healthy. Azure Container Apps runtime secrets remain preconfigured in Azure.
+`scripts/deploy-aca.sh` deploys internal SearXNG first, updates the bot, restores the required Dapr configuration, waits for the new bot revision to be healthy, and then updates the signature-refresh, attachment-scan, and catalog-sync jobs. The script binds the same Azure Files share read/write for refresh and read-only for scanning, provisions the storage key and scan queue connection directly from their Azure resources, and copies only the exact preconfigured ACA secrets needed by each job.
 
 Documentation-only merges do not trigger `Production Release`. GitHub Actions is the sole CI/CD system for this repository; the former Azure DevOps pipeline and its YAML definition have been removed.
 
@@ -501,7 +513,7 @@ pnpm eval:kernel:integration
 pnpm build
 ```
 
-Optional live local-model check:
+Optional live DeepSeek planner check:
 
 ```powershell
 pnpm eval:agent:live

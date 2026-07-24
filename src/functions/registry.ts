@@ -1,9 +1,8 @@
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createLineSdkContentClient } from "../clients/line.js";
-import {
-  createExternalBinaryClient,
-  type ExternalBinaryClient
-} from "../clients/external-binary.js";
+import type { AgentJobStore } from "../agent/jobs.js";
+import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
+import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createWikipediaClient, type WikipediaClient } from "../wikipedia/client.js";
 import type { AccessStore } from "../access/types.js";
@@ -13,7 +12,7 @@ import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-e
 import { InMemoryAgentMemoryStore, type AgentMemoryStore } from "../agent/memory-store.js";
 import { MemoryCacheStore, type CacheStore } from "../cache/cache-store.js";
 import { InMemoryCatalogStore, type CatalogStore } from "../catalog/store.js";
-import type { EmbeddingClient } from "../clients/ollama-embedding.js";
+import type { EmbeddingClient } from "../clients/embedding.js";
 import { InMemoryKnowledgeStore, type KnowledgeStore } from "../knowledge/store.js";
 import { createLlmStatusAdminHandler } from "../llm-diagnostics.js";
 import { InMemoryScheduleStore, type ScheduleStore } from "../schedules/store.js";
@@ -28,7 +27,6 @@ import type {
   PostbackHandlerRegistry,
   TextGenerationProvider,
   TextMessageHandlerRegistry,
-  VirusScanner,
   WebSearchClient
 } from "../types.js";
 import { FUNCTION_MODULES } from "./modules.js";
@@ -44,8 +42,6 @@ export interface RegistryClients {
   catalog?: CatalogStore;
   scheduleStore?: ScheduleStore;
   lineContent?: LineContentClient;
-  externalBinary?: ExternalBinaryClient;
-  virusScanner?: VirusScanner;
   wikipedia?: WikipediaClient;
   wikipediaSummarizer?: WikipediaSummarizer;
   webSearch?: WebSearchClient;
@@ -54,6 +50,9 @@ export interface RegistryClients {
   embedding?: EmbeddingClient;
   knowledgeTextGenerator?: TextGenerationProvider;
   accessStore?: AccessStore;
+  agentJobStore?: AgentJobStore;
+  attachmentScanQueue?: AttachmentScanQueue;
+  attachmentScanWorkStore?: AttachmentScanWorkStore;
   now?: () => Date;
   requestIdFactory?: () => string;
   fetchImpl?: typeof fetch;
@@ -104,8 +103,9 @@ export function createFunctionRegistries(
       knowledgeTextGenerator: clients.knowledgeTextGenerator,
       scheduleStore,
       lineContent,
-      externalBinary: clients.externalBinary ?? createExternalBinaryClient(),
-      virusScanner: clients.virusScanner,
+      agentJobStore: clients.agentJobStore,
+      attachmentScanQueue: clients.attachmentScanQueue,
+      attachmentScanWorkStore: clients.attachmentScanWorkStore,
       now: clients.now,
       requestIdFactory: clients.requestIdFactory
     }

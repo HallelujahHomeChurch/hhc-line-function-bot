@@ -59,6 +59,12 @@ export function createPendingFunctionTextMessageHandler(
     turnStage: "pending_function",
     matches: async (request, context) => {
       if (!request.text.trim()) return false;
+      const pendingAttachment = await options.sessionStore.findPendingAttachment({
+        profileName: context.profile.name,
+        source: context.event.source,
+        requesterUserId: context.event.source.userId
+      });
+      if (pendingAttachment) return false;
       const pending = await findPendingFunction(options.sessionStore, context);
       if (!pending) return false;
       if (isPendingFunctionControlAnswer(request.text)) return true;

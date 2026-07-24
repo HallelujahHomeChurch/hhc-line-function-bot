@@ -4,7 +4,7 @@ import type { FunctionHandler } from "../types.js";
 import type { SessionStore } from "../state/session-store.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
 import { randomUUID } from "node:crypto";
-import type { EmbeddingClient } from "../clients/ollama-embedding.js";
+import type { EmbeddingClient } from "../clients/embedding.js";
 import type { TextGenerationProvider } from "../types.js";
 
 const TEXT_MEMORY_TTL_MS = 30 * 24 * 60 * 60 * 1000;

@@ -13,21 +13,23 @@ properties:
       replicaCompletionCount: 1
     secrets:
       - name: line-helper-channel-secret
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: line-helper-channel-access-token
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: line-helper-admin-user-id
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: graph-client-secret
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: notion-token
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: database-url
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: redis-url
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
-      - name: ollama-base-url
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_JOB_SECRETS
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: openai-api-key
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: attachment-scan-queue-url
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
   template:
     containers:
       - name: catalog-sync
@@ -55,38 +57,40 @@ properties:
             secretRef: redis-url
           - name: REDIS_KEY_PREFIX
             value: hhc-line-function-bot
-          - name: OLLAMA_BASE_URL
-            secretRef: ollama-base-url
-          - name: OLLAMA_EMBEDDING_MODEL
-            value: bge-m3
+          - name: ATTACHMENT_SCAN_QUEUE_URL
+            secretRef: attachment-scan-queue-url
+          - name: OPENAI_API_KEY
+            secretRef: openai-api-key
+          - name: OPENAI_BASE_URL
+            value: https://api.openai.com/v1
+          - name: OPENAI_EMBEDDING_MODEL
+            value: text-embedding-3-small
           - name: EMBEDDING_BATCH_SIZE
             value: "16"
           - name: EMBEDDING_TIMEOUT_MS
             value: "30000"
-          - name: EMBEDDING_KEEP_ALIVE
-            value: 1m
           - name: GRAPH_TENANT_ID
-            value: PLACEHOLDER_GRAPH_TENANT_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_CLIENT_ID
-            value: PLACEHOLDER_GRAPH_CLIENT_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_CLIENT_SECRET
             secretRef: graph-client-secret
           - name: GRAPH_DRIVE_ID
-            value: PLACEHOLDER_GRAPH_DRIVE_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_PPT_FOLDER_ITEM_ID
-            value: PLACEHOLDER_GRAPH_PPT_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_POP_SHEET_FOLDER_ITEM_ID
-            value: PLACEHOLDER_GRAPH_POP_SHEET_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_POP_SHEET_DRIVE_ID
-            value: PLACEHOLDER_GRAPH_POP_SHEET_DRIVE_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_HYMN_SHEET_FOLDER_ITEM_ID
-            value: PLACEHOLDER_GRAPH_HYMN_SHEET_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID
-            value: PLACEHOLDER_GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID
-            value: PLACEHOLDER_GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID
-            value: PLACEHOLDER_GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_LINK_SCOPE
             value: anonymous
           - name: GRAPH_LINK_TYPE
@@ -96,15 +100,15 @@ properties:
           - name: NOTION_TOKEN
             secretRef: notion-token
           - name: NOTION_SERVICE_DATABASE_ID
-            value: PLACEHOLDER_NOTION_SERVICE_DATABASE_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: NOTION_DATE_PROPERTY
-            value: PLACEHOLDER_NOTION_DATE_PROPERTY
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: NOTION_MEETING_PROPERTY
-            value: PLACEHOLDER_NOTION_MEETING_PROPERTY
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: NOTION_ROLE_PROPERTY
-            value: PLACEHOLDER_NOTION_ROLE_PROPERTY
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: NOTION_PERSON_PROPERTY
-            value: PLACEHOLDER_NOTION_PERSON_PROPERTY
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
         resources:
           cpu: 0.5
           memory: 1Gi

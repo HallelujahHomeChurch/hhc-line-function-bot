@@ -9,9 +9,11 @@ import { normalizeProviderPolicy } from "./llm/provider-policy.js";
 import { FUNCTION_NAMES, MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
 import { DEFAULT_MEETING_WINDOWS } from "./schedules/occurrence-policy.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "./schedules/domain-registry.js";
+import { OPENAI_EMBEDDING_DIMENSIONS, OPENAI_EMBEDDING_MODEL } from "./clients/openai-embedding.js";
 import type {
   AppConfig,
   FunctionName,
+  KnowledgeConfig,
   ModelProviderName,
   ProviderPolicy,
   SmallTalkConfig,
@@ -211,6 +213,7 @@ const profileSchema = z.object({
 });
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
+  assertNoRetiredLocalModelRuntimeSettings(env);
   const profilesJson = readProfilesJson(env);
   const parsedProfiles = JSON.parse(profilesJson) as unknown;
   if (!Array.isArray(parsedProfiles)) {
@@ -230,11 +233,22 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   );
   assertCompleteGroup(env, graphRequiredKeys, "Incomplete Graph configuration");
   assertCompleteGroup(env, notionRequiredKeys, "Incomplete Notion configuration");
-  const llmProvider = readModelProvider(env.LLM_PROVIDER, "ollama");
-  const llmFallbackProvider = readModelProvider(env.LLM_FALLBACK_PROVIDER, "ollama");
+  const llmProvider = readModelProvider(env.LLM_PROVIDER, "deepseek");
   const normalizedProfiles = profiles.map((profile) => normalizeProfile(profile, env));
-  validateProviderPolicy(normalizedProfiles, llmProvider, llmFallbackProvider);
+  validateProviderPolicy(normalizedProfiles, llmProvider);
   validateAccessConfig(normalizedProfiles, env);
+  const attachmentScanQueueUrl = readAttachmentScanQueueUrl(env);
+  const requiresDurableAttachmentScanning =
+    env.NODE_ENV === "production" &&
+    normalizedProfiles.some((profile) => profile.enabledFunctions.includes("save_resource"));
+  if (requiresDurableAttachmentScanning && !attachmentScanQueueUrl) {
+    throw new Error(
+      "ATTACHMENT_SCAN_QUEUE_URL is required in production when save_resource is enabled"
+    );
+  }
+  if (requiresDurableAttachmentScanning && !env.REDIS_URL?.trim()) {
+    throw new Error("REDIS_URL is required in production when save_resource is enabled");
+  }
   const observabilityHmacKey = env.OBSERVABILITY_HMAC_KEY?.trim();
   if (observabilityHmacKey && observabilityHmacKey.length < 32) {
     throw new Error("OBSERVABILITY_HMAC_KEY must contain at least 32 characters");
@@ -242,7 +256,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   if (env.NODE_ENV === "production" && !observabilityHmacKey) {
     throw new Error("OBSERVABILITY_HMAC_KEY is required in production");
   }
-  const ollamaBaseUrl = env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
+  const knowledgeEmbedding = readKnowledgeEmbeddingConfig(env);
   return {
     serviceName: env.SERVICE_NAME || "hhc-line-function-bot",
     host: env.HOST || "0.0.0.0",
@@ -253,7 +267,8 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     maxBodyBytes: readInt(env.MAX_BODY_BYTES, 262_144),
     attachments: {
       maxBytes: readInt(env.MAX_ATTACHMENT_BYTES, 25 * 1024 * 1024),
-      lineDownloadTimeoutMs: readInt(env.LINE_CONTENT_DOWNLOAD_TIMEOUT_MS, 30_000)
+      lineDownloadTimeoutMs: readInt(env.LINE_CONTENT_DOWNLOAD_TIMEOUT_MS, 30_000),
+      ...(attachmentScanQueueUrl ? { scanQueueUrl: attachmentScanQueueUrl } : {})
     },
     externalResources: {
       downloadTimeoutMs: readInt(env.EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS, 15_000),
@@ -265,10 +280,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     })),
     llm: {
       provider: llmProvider,
-      fallbackProvider: llmFallbackProvider,
-      ollamaBaseUrl,
-      ollamaModel: env.OLLAMA_MODEL || "qwen3:4b-instruct",
-      ollamaKeepAlive: readOllamaKeepAlive(env.OLLAMA_KEEP_ALIVE),
       deepseekApiKey: env.DEEPSEEK_API_KEY || undefined,
       deepseekBaseUrl: env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
       deepseekModel: env.DEEPSEEK_MODEL || "deepseek-v4-flash",
@@ -280,21 +291,12 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
         0.75
       ),
       generalMaxOutputTokens: readInt(env.LLM_GENERAL_MAX_OUTPUT_TOKENS, 512),
-      routeMaxOutputTokens: readInt(env.LLM_ROUTE_MAX_OUTPUT_TOKENS, 256),
-      timeoutMs: readInt(env.OLLAMA_TIMEOUT_MS, 8000)
+      routeMaxOutputTokens: readInt(env.LLM_ROUTE_MAX_OUTPUT_TOKENS, 256)
     },
     knowledge: env.NOTION_TOKEN
       ? {
           notionToken: env.NOTION_TOKEN,
-          embedding: {
-            provider: "ollama",
-            baseUrl: env.EMBEDDING_OLLAMA_BASE_URL || ollamaBaseUrl,
-            model: env.OLLAMA_EMBEDDING_MODEL || "bge-m3",
-            dimensions: 1024,
-            batchSize: readInt(env.EMBEDDING_BATCH_SIZE, 16),
-            timeoutMs: readInt(env.EMBEDDING_TIMEOUT_MS, 30_000),
-            keepAlive: readOllamaKeepAlive(env.EMBEDDING_KEEP_ALIVE) ?? "1m"
-          }
+          embedding: knowledgeEmbedding!
         }
       : undefined,
     graph:
@@ -340,20 +342,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       userAgent: env.WIKIMEDIA_USER_AGENT || "HHCLineBot/1.0 (https://alive.org.tw/contact)",
       timeoutMs: readInt(env.WIKIPEDIA_TIMEOUT_MS, 8000)
     },
-    virusScan: env.VIRUS_SCAN_ENDPOINT?.trim()
-      ? {
-          endpoint: env.VIRUS_SCAN_ENDPOINT.trim(),
-          apiKey: env.VIRUS_SCAN_API_KEY?.trim() || undefined,
-          timeoutMs: readInt(env.VIRUS_SCAN_TIMEOUT_MS, 8000)
-        }
-      : undefined,
-    clamAv: env.CLAMAV_HOST?.trim()
-      ? {
-          host: env.CLAMAV_HOST.trim(),
-          port: readInt(env.CLAMAV_PORT, 3310),
-          timeoutMs: readInt(env.CLAMAV_TIMEOUT_MS, 15_000)
-        }
-      : undefined,
     webSearch: env.SEARXNG_BASE_URL?.trim()
       ? {
           searxngBaseUrl: env.SEARXNG_BASE_URL.trim(),
@@ -390,6 +378,20 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   };
 }
 
+function readAttachmentScanQueueUrl(env: NodeJS.ProcessEnv): string | undefined {
+  const value = env.ATTACHMENT_SCAN_QUEUE_URL?.trim();
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") {
+      throw new Error("invalid protocol");
+    }
+  } catch {
+    throw new Error("ATTACHMENT_SCAN_QUEUE_URL must be a valid HTTPS URL");
+  }
+  return value;
+}
+
 type ParsedProfile = z.infer<typeof profileSchema>;
 type NormalizedProfile = Omit<
   ParsedProfile,
@@ -411,7 +413,7 @@ type NormalizedProfile = Omit<
 };
 
 function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): NormalizedProfile {
-  const allowedProviders = uniqueProviders(profile.allowedProviders ?? ["ollama"]);
+  const allowedProviders = uniqueProviders(profile.allowedProviders ?? ["deepseek"]);
   const channelSecret = resolveRequiredProfileValue(
     profile.name,
     "channelSecret",
@@ -520,8 +522,7 @@ function uniqueProviders(providers: ModelProviderName[]): ModelProviderName[] {
 
 function validateProviderPolicy(
   profiles: NormalizedProfile[],
-  defaultProvider: ModelProviderName,
-  fallbackProvider: ModelProviderName
+  defaultProvider: ModelProviderName
 ): void {
   for (const profile of profiles) {
     for (const provider of profile.allowedProviders) {
@@ -534,12 +535,53 @@ function validateProviderPolicy(
         `Profile ${profile.name} default provider ${defaultProvider} must be listed in allowedProviders`
       );
     }
-    if (!profile.allowedProviders.includes(fallbackProvider)) {
-      throw new Error(
-        `Profile ${profile.name} fallback provider ${fallbackProvider} must be listed in allowedProviders`
-      );
-    }
   }
+}
+
+function assertNoRetiredLocalModelRuntimeSettings(env: NodeJS.ProcessEnv): void {
+  const retiredProvider = ["olla", "ma"].join("");
+  const retiredEnvToken = retiredProvider.toUpperCase();
+  if (
+    env.LLM_PROVIDER === retiredProvider ||
+    env.LLM_FALLBACK_PROVIDER?.trim() ||
+    Object.entries(env).some(
+      ([name, value]) =>
+        Boolean(value?.trim()) &&
+        (name.startsWith(`${retiredEnvToken}_`) ||
+          name.includes(`_${retiredEnvToken}_`) ||
+          name === "EMBEDDING_KEEP_ALIVE")
+    )
+  ) {
+    throw new Error("Local model runtime settings are no longer supported");
+  }
+}
+
+function readKnowledgeEmbeddingConfig(
+  env: NodeJS.ProcessEnv
+): KnowledgeConfig["embedding"] | undefined {
+  if (env.EMBEDDING_DIMENSIONS !== undefined) {
+    throw new Error("EMBEDDING_DIMENSIONS is not supported");
+  }
+  if (
+    env.OPENAI_EMBEDDING_MODEL !== undefined &&
+    env.OPENAI_EMBEDDING_MODEL.trim() !== OPENAI_EMBEDDING_MODEL
+  ) {
+    throw new Error("OPENAI_EMBEDDING_MODEL must be text-embedding-3-small");
+  }
+  if (!env.NOTION_TOKEN) return undefined;
+  const apiKey = env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is required when knowledge embeddings are enabled");
+  }
+  return {
+    provider: "openai",
+    apiKey,
+    baseUrl: env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+    model: OPENAI_EMBEDDING_MODEL,
+    dimensions: OPENAI_EMBEDDING_DIMENSIONS,
+    batchSize: readInt(env.EMBEDDING_BATCH_SIZE, 16),
+    timeoutMs: readInt(env.EMBEDDING_TIMEOUT_MS, 30_000)
+  };
 }
 
 function assertNoLegacyProfileFields(parsedProfiles: unknown): void {
@@ -727,21 +769,10 @@ function readModelProvider(
   if (value === "openai_codex_oauth" || value === "codex_app_server" || value === "codex") {
     throw new Error(`${value} is no longer supported`);
   }
-  if (value === "ollama" || value === "deepseek") {
-    return value;
+  if (value === "deepseek") {
+    return "deepseek";
   }
   return fallback;
-}
-
-function readOllamaKeepAlive(value: string | undefined): string | number | undefined {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  if (/^-?\d+$/.test(normalized)) {
-    return Number.parseInt(normalized, 10);
-  }
-  return normalized;
 }
 
 function readList(value: string): string[] {

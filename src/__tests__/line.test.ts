@@ -2,9 +2,22 @@ import { Readable } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
-import { readableToUint8Array } from "../clients/line.js";
+import { contentTypeFromLineStream, readableToUint8Array } from "../clients/line.js";
 
 describe("LINE content streaming", () => {
+  it("retains a safe response content type for worker-side extension validation", () => {
+    const stream = Readable.from([]);
+    Object.assign(stream, {
+      headers: {
+        "content-type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+      }
+    });
+
+    expect(contentTypeFromLineStream(stream)).toBe(
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    );
+  });
+
   it("accepts content at the exact byte limit", async () => {
     await expect(
       readableToUint8Array(Readable.from([Buffer.from([1, 2, 3, 4])]), {

@@ -8,7 +8,7 @@ import {
   createSaveMemoryHandler
 } from "../functions/agent-memory-functions.js";
 import type { BotProfileConfig, FunctionHandlerContext } from "../types.js";
-import type { EmbeddingClient } from "../clients/ollama-embedding.js";
+import type { EmbeddingClient } from "../clients/embedding.js";
 import type { TextGenerationProvider } from "../types.js";
 import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
 

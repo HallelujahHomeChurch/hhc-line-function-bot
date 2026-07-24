@@ -1,4 +1,4 @@
-import type { EmbeddingClient } from "../clients/ollama-embedding.js";
+import type { EmbeddingClient } from "../clients/embedding.js";
 import type { AgentMemoryStore } from "./memory-store.js";
 
 export interface AgentTextMemoryEmbeddingBackfillResult {

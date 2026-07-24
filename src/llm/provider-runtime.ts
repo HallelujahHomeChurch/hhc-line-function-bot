@@ -10,7 +10,9 @@ import type {
 } from "../types.js";
 import { defaultPolicyForLane } from "./provider-policy.js";
 
-export type ProviderRegistry = Record<ModelProviderName, ChatProvider & TextGenerationProvider>;
+export type ProviderRegistry = Partial<
+  Record<ModelProviderName, ChatProvider & TextGenerationProvider>
+>;
 
 export function providerIsAllowedForProfile(
   profile: Pick<BotProfileConfig, "allowedProviders" | "allowSubscriptionProviders">,
@@ -42,7 +44,7 @@ export function resolvePrimaryProviderName(
   config: AppConfig,
   profile: BotProfileConfig
 ): ModelProviderName {
-  const provider = config.llm.provider ?? "ollama";
+  const provider = config.llm.provider ?? "deepseek";
   assertProviderAllowedForProfile(profile, provider);
   return provider;
 }
@@ -51,9 +53,7 @@ export function resolveFallbackProviderName(
   config: AppConfig,
   profile: BotProfileConfig
 ): ModelProviderName {
-  const provider = config.llm.fallbackProvider ?? "ollama";
-  assertProviderAllowedForProfile(profile, provider);
-  return provider;
+  return resolvePrimaryProviderName(config, profile);
 }
 
 export function createProfileAwareProvider(options: {

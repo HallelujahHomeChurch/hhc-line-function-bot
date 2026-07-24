@@ -291,7 +291,6 @@ const REASONS = new Set([
   "no_capability_evidence",
   "not_matched",
   "operation_not_allowed",
-  "ollama_unreachable",
   "planner_clarification",
   "planner_denied",
   "planner_unavailable",

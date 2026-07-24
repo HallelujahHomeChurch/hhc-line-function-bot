@@ -18,6 +18,7 @@
     "eval:kernel:integration": "tsx src/tools/eval-kernel-integration.ts",
     "eval:retrieval-product": "vitest run src/__tests__/retrieval-product-evals.test.ts",
     "catalog:sync": "tsx src/tools/sync-catalog.ts",
+    "attachment-scan:run": "node dist/tools/run-attachment-scan-job.js",
     "config:validate": "tsx src/tools/check-profile-config.ts",
     "smoke:webhook": "tsx src/tools/smoke-webhook.ts",
     "check:notion": "tsx src/tools/check-notion-service-schedule.ts",
@@ -25,6 +26,7 @@
   },
   "dependencies": {
     "@azure/identity": "^4.13.0",
+    "@azure/storage-queue": "^12.31.0",
     "@line/bot-sdk": "^10.1.1",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@notionhq/client": "^5.1.0",

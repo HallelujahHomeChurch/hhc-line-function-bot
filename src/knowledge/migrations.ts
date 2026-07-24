@@ -123,8 +123,8 @@ const migrations = [
     chunk_id uuid not null references knowledge_chunks(id) on delete cascade,
     provider text not null,
     model text not null,
-    dimensions integer not null check (dimensions = 1024),
-    embedding vector(1024) not null,
+    dimensions integer not null check (dimensions = 1536),
+    embedding vector(1536) not null,
     content_hash text not null,
     embedded_at timestamptz not null default now(),
     primary key (chunk_id, provider, model)
@@ -132,7 +132,31 @@ const migrations = [
   `,
   `create index if not exists knowledge_sources_active_idx on knowledge_sources (profile_name, source_key) where enabled = true`,
   `create index if not exists knowledge_chunks_search_idx on knowledge_chunks using gin (search_vector) where active = true`,
-  `create index if not exists knowledge_embeddings_cosine_idx on knowledge_embeddings using hnsw (embedding vector_cosine_ops)`
+  `create index if not exists knowledge_embeddings_cosine_idx on knowledge_embeddings using hnsw (embedding vector_cosine_ops)`,
+  `
+  do $$
+  begin
+    if exists (
+      select 1 from pg_attribute a
+      join pg_class c on c.oid=a.attrelid
+      where c.relname='knowledge_embeddings' and a.attname='embedding'
+        and format_type(a.atttypid,a.atttypmod)='vector(1024)'
+    ) then
+      delete from knowledge_embeddings;
+      delete from knowledge_chunks;
+      delete from knowledge_documents;
+      drop index if exists knowledge_embeddings_cosine_idx;
+      alter table knowledge_embeddings drop constraint if exists knowledge_embeddings_dimensions_check;
+      alter table knowledge_embeddings alter column embedding type vector(1536);
+      alter table knowledge_embeddings add constraint knowledge_embeddings_dimensions_check
+        check (dimensions = 1536);
+      create index knowledge_embeddings_cosine_idx
+        on knowledge_embeddings using hnsw (embedding vector_cosine_ops);
+      update knowledge_sources set last_synced_at=null, sync_status='pending',
+        sync_error_code=null, routing_display_name=null;
+    end if;
+  end $$
+  `
 ];
 
 export async function runKnowledgeMigrations(db: KnowledgeQueryable): Promise<void> {

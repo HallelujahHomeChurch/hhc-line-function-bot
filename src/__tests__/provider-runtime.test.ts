@@ -5,6 +5,8 @@ import {
   resolvePrimaryProviderName,
   resolveProviderNameForLane
 } from "../llm/provider-runtime.js";
+import { providerCapabilities } from "../llm/provider-metadata.js";
+import { MODEL_PROVIDER_NAMES } from "../types.js";
 import type {
   AppConfig,
   BotProfileConfig,
@@ -25,7 +27,7 @@ function profile(overrides: Partial<BotProfileConfig> = {}): BotProfileConfig {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["query_schedule"],
-    allowedProviders: ["ollama"],
+    allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     ...overrides
   };
@@ -44,14 +46,10 @@ function config(
     maxBodyBytes: 32_768,
     profiles,
     llm: {
-      provider: "ollama",
-      fallbackProvider: "ollama",
-      ollamaBaseUrl: "http://127.0.0.1:11434",
-      ollamaModel: "qwen3:4b-instruct",
+      provider: "deepseek",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
       deepseekTimeoutMs: 8000,
-      timeoutMs: 8000,
 
       ...llmOverrides
     }
@@ -66,20 +64,17 @@ function provider(raw: string): ChatProvider & TextGenerationProvider {
 }
 
 describe("provider runtime", () => {
-  it("selects the global primary provider when no lane is requested", async () => {
-    const appConfig = config(
-      [
-        profile({
-          allowedProviders: ["ollama", "deepseek"]
-        })
-      ],
-      { provider: "deepseek" }
-    );
+  it("exposes DeepSeek as the only model provider", () => {
+    expect(MODEL_PROVIDER_NAMES).toEqual(["deepseek"]);
+    expect(Object.keys(providerCapabilities)).toEqual(["deepseek"]);
+  });
+
+  it("selects DeepSeek as the global primary provider when no lane is requested", async () => {
+    const appConfig = config([profile()]);
     const deepseek = provider("deepseek");
-    const ollama = provider("ollama");
     const runtime = createProfileAwareProvider({
       config: appConfig,
-      providers: { ollama, deepseek },
+      providers: { deepseek },
       role: "primary"
     });
     const controller = new AbortController();
@@ -96,31 +91,25 @@ describe("provider runtime", () => {
     expect(deepseek.completeJson).toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal })
     );
-    expect(ollama.completeJson).not.toHaveBeenCalled();
   });
 
-  it("uses local routing lanes while using DeepSeek for smart talk when allowed", async () => {
-    const appConfig = config([
-      profile({
-        allowedProviders: ["ollama", "deepseek"]
-      })
-    ]);
+  it("uses DeepSeek for every configured lane without a fallback provider", async () => {
+    const appConfig = config([profile()]);
     const deepseek = provider("deepseek");
-    const ollama = provider("ollama");
 
     expect(resolveProviderNameForLane(appConfig, "helper", "function_routing", "primary")).toBe(
-      "ollama"
+      "deepseek"
     );
     expect(resolveProviderNameForLane(appConfig, "helper", "smart_talk", "primary")).toBe(
       "deepseek"
     );
     expect(resolveProviderNameForLane(appConfig, "helper", "smart_talk", "fallback")).toBe(
-      "ollama"
+      "deepseek"
     );
 
     const smartTalkRuntime = createProfileAwareProvider({
       config: appConfig,
-      providers: { ollama, deepseek },
+      providers: { deepseek },
       role: "primary",
       lane: "smart_talk"
     });
@@ -134,58 +123,33 @@ describe("provider runtime", () => {
       })
     ).resolves.toBe("deepseek");
     expect(deepseek.completeText).toHaveBeenCalledOnce();
-    expect(ollama.completeText).not.toHaveBeenCalled();
+  });
 
-    const routingRuntime = createProfileAwareProvider({
+  it("resolves an omitted fallback role to the DeepSeek primary provider", () => {
+    const appConfig = config([profile()]);
+
+    expect(resolveProviderNameForLane(appConfig, "helper", "general_agent", "fallback")).toBe(
+      "deepseek"
+    );
+  });
+
+  it("fails only when the configured primary provider client is absent", async () => {
+    const appConfig = config([profile()]);
+    const runtime = createProfileAwareProvider({
       config: appConfig,
-      providers: { ollama, deepseek },
+      providers: {},
       role: "primary",
       lane: "function_routing"
     });
+
     await expect(
-      routingRuntime.completeJson({
+      runtime.completeJson({
         profileName: "helper",
         prompt: "route",
-        text: "查服事表",
-        enabledFunctions: ["query_schedule"]
+        text: "hello",
+        enabledFunctions: []
       })
-    ).resolves.toBe("ollama");
-    expect(ollama.completeJson).toHaveBeenCalledOnce();
-  });
-
-  it("honors explicit lane provider policy overrides", () => {
-    const appConfig = config([
-      profile({
-        allowedProviders: ["ollama", "deepseek"],
-        providerPolicy: {
-          smart_talk: { primary: "ollama" },
-          general_agent: { primary: "deepseek", fallback: "ollama" }
-        }
-      })
-    ]);
-
-    expect(resolveProviderNameForLane(appConfig, "helper", "smart_talk", "primary")).toBe("ollama");
-    expect(resolveProviderNameForLane(appConfig, "helper", "general_agent", "primary")).toBe(
-      "deepseek"
-    );
-    expect(resolveProviderNameForLane(appConfig, "helper", "general_agent", "fallback")).toBe(
-      "ollama"
-    );
-  });
-
-  it("rejects providers outside the profile allowed provider list", () => {
-    const appConfig = config(
-      [
-        profile({
-          allowedProviders: ["ollama"],
-          allowSubscriptionProviders: false
-        })
-      ],
-      { provider: "deepseek" }
-    );
-
-    expect(() => resolvePrimaryProviderName(appConfig, appConfig.profiles[0])).toThrow(
-      "Provider deepseek is not allowed for profile helper"
-    );
+    ).rejects.toThrow("provider_not_configured:deepseek");
+    expect(resolvePrimaryProviderName(appConfig, appConfig.profiles[0])).toBe("deepseek");
   });
 });

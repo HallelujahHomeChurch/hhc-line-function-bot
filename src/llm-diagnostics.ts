@@ -15,8 +15,6 @@ interface ProbeResult {
   httpStatus?: number;
   latencyMs?: number;
   detail?: string;
-  modelCount?: number;
-  modelPresent?: boolean;
 }
 
 export function createLlmStatusAdminHandler(
@@ -24,36 +22,8 @@ export function createLlmStatusAdminHandler(
   options: LlmStatusAdminHandlerOptions = {}
 ): AdminHandler {
   const fetchImpl = options.fetchImpl ?? fetch;
-
-  return async (context): Promise<FunctionExecutionResult> => {
-    if (config.provider === "deepseek") {
-      return probeDeepSeekStatus(fetchImpl, config, context.profile);
-    }
-    const baseUrl = normalizeBaseUrl(config.ollamaBaseUrl);
-    const endpoint = describeEndpoint(baseUrl);
-    const tags = await probeTags(fetchImpl, baseUrl, config);
-    const chat =
-      tags.status === "ok"
-        ? await probeChat(fetchImpl, baseUrl, config)
-        : skippedProbe("tags failed");
-
-    return {
-      ok: true,
-      replyText: [
-        "LLM status",
-        `provider: ${config.provider ?? "ollama"}`,
-        `endpoint: ${endpoint.scheme}:${endpoint.port}`,
-        `host: ${endpoint.hostClass}`,
-        `model: ${config.ollamaModel}`,
-        `fallbackProvider: ${config.fallbackProvider ?? config.provider ?? "ollama"}`,
-        ...formatProfileProviderPolicy(context.profile),
-        formatTags(tags),
-        `modelPresent: ${tags.modelPresent ?? "unknown"}`,
-        `modelCount: ${tags.modelCount ?? "unknown"}`,
-        formatChat(chat)
-      ].join("\n")
-    };
-  };
+  return async (context): Promise<FunctionExecutionResult> =>
+    probeDeepSeekStatus(fetchImpl, config, context.profile);
 }
 
 async function probeDeepSeekStatus(
@@ -77,9 +47,9 @@ async function probeDeepSeekStatus(
       `host: ${endpoint.hostClass}`,
       `model: ${config.deepseekModel}`,
       `apiKey: ${configured ? "configured" : "missing"}`,
-      `fallback: ${config.fallbackProvider ?? "ollama"}`,
+      "fallback: none",
       ...formatProfileProviderPolicy(profile),
-      formatChat(chat)
+      formatProbe("chat", chat)
     ].join("\n")
   };
 }
@@ -87,21 +57,13 @@ async function probeDeepSeekStatus(
 function formatProfileProviderPolicy(profile: BotProfileConfig): string[] {
   const lines = [`profile: ${profile.name}`];
   const policy = profile.providerPolicy;
-  if (!policy) {
-    return [...lines, "lanes: not configured"];
-  }
+  if (!policy) return [...lines, "lanes: not configured"];
   return [
     ...lines,
     "lanes:",
     ...MODEL_PROVIDER_LANE_NAMES.map((lane) => {
       const lanePolicy = policy[lane];
-      if (!lanePolicy) {
-        return `- ${lane}: not configured`;
-      }
-      const route = lanePolicy.fallback
-        ? `${lanePolicy.primary} -> ${lanePolicy.fallback}`
-        : lanePolicy.primary;
-      return `- ${lane}: ${route}`;
+      return `- ${lane}: ${lanePolicy?.primary ?? "not configured"}`;
     })
   ];
 }
@@ -156,96 +118,6 @@ async function probeDeepSeekChat(
   }
 }
 
-async function probeTags(
-  fetchImpl: typeof fetch,
-  baseUrl: string,
-  config: LlmConfig
-): Promise<ProbeResult> {
-  const startedAt = Date.now();
-  try {
-    const response = await fetchWithTimeout(fetchImpl, `${baseUrl}/api/tags`, {}, config.timeoutMs);
-    const latencyMs = elapsedMs(startedAt);
-    if (!response.ok) {
-      return {
-        status: "error",
-        httpStatus: response.status,
-        latencyMs,
-        detail: `http_${response.status}`
-      };
-    }
-    const payload = (await response.json()) as { models?: Array<{ name?: string }> };
-    const models = Array.isArray(payload.models) ? payload.models : [];
-    return {
-      status: "ok",
-      httpStatus: response.status,
-      latencyMs,
-      modelCount: models.length,
-      modelPresent: models.some((model) => model.name === config.ollamaModel)
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      latencyMs: elapsedMs(startedAt),
-      detail: safeErrorMessage(error, baseUrl)
-    };
-  }
-}
-
-async function probeChat(
-  fetchImpl: typeof fetch,
-  baseUrl: string,
-  config: LlmConfig
-): Promise<ProbeResult> {
-  const startedAt = Date.now();
-  const body: Record<string, unknown> = {
-    model: config.ollamaModel,
-    stream: false,
-    think: false,
-    options: {
-      temperature: 0,
-      num_predict: 32
-    },
-    messages: [
-      { role: "system", content: "Return exactly one JSON object and no markdown." },
-      { role: "user", content: 'Return {"action":"deny","reason":"diagnostic"}.' }
-    ],
-    format: "json"
-  };
-  if (config.ollamaKeepAlive !== undefined) {
-    body.keep_alive = config.ollamaKeepAlive;
-  }
-
-  try {
-    const response = await fetchWithTimeout(
-      fetchImpl,
-      `${baseUrl}/api/chat`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body)
-      },
-      config.timeoutMs
-    );
-    const latencyMs = elapsedMs(startedAt);
-    if (!response.ok) {
-      return {
-        status: "error",
-        httpStatus: response.status,
-        latencyMs,
-        detail: `http_${response.status}`
-      };
-    }
-    await response.json();
-    return { status: "ok", httpStatus: response.status, latencyMs };
-  } catch (error) {
-    return {
-      status: "error",
-      latencyMs: elapsedMs(startedAt),
-      detail: safeErrorMessage(error, baseUrl)
-    };
-  }
-}
-
 async function fetchWithTimeout(
   fetchImpl: typeof fetch,
   url: string,
@@ -261,18 +133,8 @@ async function fetchWithTimeout(
   }
 }
 
-function formatTags(result: ProbeResult): string {
-  return formatProbe("tags", result);
-}
-
-function formatChat(result: ProbeResult): string {
-  return formatProbe("chat", result);
-}
-
 function formatProbe(label: string, result: ProbeResult): string {
-  if (result.status === "skipped") {
-    return `${label}: skipped (${result.detail ?? "not run"})`;
-  }
+  if (result.status === "skipped") return `${label}: skipped (${result.detail ?? "not run"})`;
   const meta = [
     result.httpStatus ? `http ${result.httpStatus}` : undefined,
     typeof result.latencyMs === "number" ? `${result.latencyMs}ms` : undefined,
@@ -285,39 +147,20 @@ function skippedProbe(detail: string): ProbeResult {
   return { status: "skipped", detail };
 }
 
-function describeEndpoint(baseUrl: string): { scheme: string; hostClass: string; port: string } {
-  const url = new URL(baseUrl);
-  return {
-    scheme: url.protocol.replace(":", ""),
-    hostClass: classifyHost(url.hostname),
-    port: url.port || defaultPort(url.protocol)
-  };
-}
-
-function classifyHost(host: string): string {
-  if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
-    return "loopback";
-  }
-  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) {
-    return "private-ip";
-  }
-  return "dns-or-public";
-}
-
-function defaultPort(protocol: string): string {
-  if (protocol === "https:") {
-    return "443";
-  }
-  return "80";
-}
-
 function normalizeBaseUrl(value: string): string {
-  return value.replace(/\/+$/, "");
+  return value.replace(/\/$/u, "");
+}
+
+function describeEndpoint(baseUrl: string): { scheme: string; port: string; hostClass: string } {
+  const url = new URL(baseUrl);
+  const scheme = url.protocol.replace(/:$/u, "");
+  const port = url.port || (scheme === "https" ? "443" : "80");
+  return { scheme, port, hostClass: url.hostname.includes(".") ? "remote" : "local" };
 }
 
 function safeErrorMessage(error: unknown, baseUrl: string): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return raw.replaceAll(baseUrl, "[ollama-base-url]").slice(0, 160);
+  const raw = error instanceof Error ? error.message : "error";
+  return raw.replaceAll(baseUrl, "[deepseek-base-url]").slice(0, 160);
 }
 
 function elapsedMs(startedAt: number): number {

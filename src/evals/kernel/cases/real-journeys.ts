@@ -1,5 +1,8 @@
 import { InMemoryAgentMemoryStore } from "../../../agent/memory-store.js";
+import { InMemoryAgentJobStore } from "../../../agent/jobs.js";
 import type { AgentPlanner } from "../../../agent/planner.js";
+import { InMemoryAttachmentScanQueue } from "../../../attachments/scan-queue.js";
+import { InMemoryAttachmentScanWorkStore } from "../../../attachments/scan-work-store.js";
 import { InMemoryCatalogStore, type CatalogDomain } from "../../../catalog/store.js";
 import {
   createRetrieveMemoryHandler,
@@ -20,9 +23,7 @@ import type {
   BotProfileConfig,
   FunctionName,
   FunctionRegistry,
-  GraphDriveClient,
-  LineContentClient,
-  VirusScanner
+  GraphDriveClient
 } from "../../../types.js";
 import type {
   KernelAcceptanceCase,
@@ -311,34 +312,18 @@ function realAttachmentJourney(): KernelAcceptanceCase {
       syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
       capabilities: { read: ["helper", "find_ppt_slides"], write: ["helper:ppt_slide:write"] }
     });
-    let uploads = 0;
-    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]);
-    const graph: GraphDriveClient = {
-      listFolderChildren: async () => [],
-      getItemById: async (_driveId, itemId) => ({
-        id: itemId,
-        driveId: "drive",
-        name: "SundayDeck.pptx"
-      }),
-      createSharingLink: async () => "https://example.test/retrieved",
-      uploadFile: async (_driveId, _folderId, name) => {
-        uploads += 1;
-        return { id: "uploaded", driveId: "drive", name };
-      }
-    };
-    const lineContent: LineContentClient = {
-      getMessageContent: async () => ({
-        data: bytes,
-        contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-      })
-    };
-    const scanner: VirusScanner = { scan: async () => ({ status: "clean" }) };
+    const agentJobStore = new InMemoryAgentJobStore({ now: context.now });
+    const scanWorkStore = new InMemoryAttachmentScanWorkStore({
+      jobStore: agentJobStore,
+      now: context.now
+    });
+    const scanQueue = new InMemoryAttachmentScanQueue();
     const pendingAttachment = createPendingAttachmentTextMessageHandler({
       sessionStore,
       catalog,
-      lineContent,
-      graph,
-      scanner,
+      agentJobStore,
+      scanWorkStore,
+      scanQueue,
       now: context.now
     });
     const activation = createUploadIntentTextMessageHandler({
@@ -385,42 +370,19 @@ function realAttachmentJourney(): KernelAcceptanceCase {
       { text: "SundayDeck", requesterUserId: "U_SYNTHETIC_1", requestId: `${id}-title` },
       { text: "保存", requesterUserId: "U_SYNTHETIC_1", requestId: `${id}-confirm` }
     ]);
-    const retrievalFunctions: FunctionRegistry = {
-      find_ppt_slides: createFindPptSlidesHandler({
-        graph,
-        catalog,
-        driveId: "drive",
-        folderItemId: "folder",
-        allowedExtensions: ["pptx"],
-        defaultIncludePdf: false,
-        now: context.now
-      })
-    };
-    const retrievalHarness = createKernelRuntimeHarness({
-      now: context.now,
-      profile: profile(["find_ppt_slides"]),
-      functionRegistry: retrievalFunctions,
-      planner: planner("find_ppt_slides", { query: "SundayDeck" })
-    });
-    const [retrieved] = await retrievalHarness.runTurns([
-      {
-        text: "查投影片 SundayDeck",
-        requesterUserId: "U_SYNTHETIC_1",
-        requestId: `${id}-retrieve`
-      }
-    ]);
+    const work = scanQueue.workIds[0] ? await scanWorkStore.claim(scanQueue.workIds[0]) : undefined;
     return {
       passed:
         activated?.replyText?.includes("兩分鐘") === true &&
         otherRequester === undefined &&
         accepted?.replyText.includes("要我幫忙保存") === true &&
-        uploads === 1 &&
-        writeResults[3]?.replyText?.includes("已保存檔案") === true &&
-        retrieved?.resultStatus === "success",
+        scanQueue.workIds.length === 1 &&
+        writeResults[3]?.replyText?.includes("查看結果") === true &&
+        work?.scope.requesterUserId === "U_SYNTHETIC_1" &&
+        work?.lineMessageId === "synthetic-file",
       elapsedMs:
         (activated?.elapsedMs ?? 0) +
-        writeResults.reduce((sum, result) => sum + result.elapsedMs, 0) +
-        (retrieved?.elapsedMs ?? 0)
+        writeResults.reduce((sum, result) => sum + result.elapsedMs, 0)
     };
   });
 }
@@ -524,7 +486,7 @@ function profile(enabledFunctions: FunctionName[]): BotProfileConfig {
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions,
-    allowedProviders: ["deepseek", "ollama"],
+    allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
     schedulePolicy: { meetingWindows: [], domains: [] }

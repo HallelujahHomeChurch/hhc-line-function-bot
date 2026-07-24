@@ -12,14 +12,14 @@ function provider(raw: string): ChatProvider {
 
 describe("admin action router", () => {
   it("routes invite-code requests to invite_code_create", async () => {
-    const qwen = provider(
+    const deepseek = provider(
       JSON.stringify({
         action: "invite_code_create",
         confidence: 0.94,
         arguments: {}
       })
     );
-    const router = createAdminActionRouter({ primary: qwen });
+    const router = createAdminActionRouter({ primary: deepseek });
 
     const result = await router.route({
       profileName: "helper",
@@ -33,7 +33,7 @@ describe("admin action router", () => {
       action: "invite_code_create",
       arguments: {},
       confidence: 0.94,
-      provider: "ollama"
+      provider: "deepseek"
     });
   });
 
@@ -69,17 +69,17 @@ describe("admin action router", () => {
       type: "deny",
       reason: "invalid_json",
       provider: "router",
-      fallbackProvider: "ollama"
+      fallbackProvider: "deepseek"
     });
   });
 
   it("does not retry the same provider as an admin action fallback", async () => {
     const primary: ChatProvider = {
-      providerName: "ollama",
+      providerName: "deepseek",
       completeJson: vi.fn().mockRejectedValue(new ProviderResponseError("invalid_json"))
     };
     const modelFallback: ChatProvider = {
-      providerName: "ollama",
+      providerName: "deepseek",
       completeJson: vi
         .fn()
         .mockResolvedValue(JSON.stringify({ action: "invite_code_create", arguments: {} }))
@@ -97,7 +97,7 @@ describe("admin action router", () => {
       type: "deny",
       reason: "invalid_json",
       provider: "router",
-      fallbackProvider: "ollama"
+      fallbackProvider: "deepseek"
     });
     expect(modelFallback.completeJson).not.toHaveBeenCalled();
   });

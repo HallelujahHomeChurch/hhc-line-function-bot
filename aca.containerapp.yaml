@@ -22,7 +22,7 @@ properties:
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
       - name: line-helper-admin-user-id
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: ollama-base-url
+      - name: openai-api-key
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
       - name: graph-client-secret
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
@@ -35,6 +35,12 @@ properties:
       - name: deepseek-api-key
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
       - name: observability-hmac-key
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+      - name: attachment-scan-queue-url
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+      - name: attachment-scan-queue-connection-string
+        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
+      - name: clamav-signature-storage-key
         value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
   template:
     containers:
@@ -59,6 +65,8 @@ properties:
             value: "26214400"
           - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS
             value: "30000"
+          - name: ATTACHMENT_SCAN_QUEUE_URL
+            secretRef: attachment-scan-queue-url
           - name: EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS
             value: "15000"
           - name: EXTERNAL_RESOURCE_MAX_REDIRECTS
@@ -71,24 +79,16 @@ properties:
             secretRef: line-helper-channel-access-token
           - name: LINE_HELPER_ADMIN_USER_ID
             secretRef: line-helper-admin-user-id
-          - name: LLM_PROVIDER
-            value: ollama
-          - name: LLM_FALLBACK_PROVIDER
-            value: ollama
-          - name: OLLAMA_BASE_URL
-            secretRef: ollama-base-url
-          - name: OLLAMA_MODEL
-            value: qwen3:4b-instruct
-          - name: OLLAMA_EMBEDDING_MODEL
-            value: bge-m3
+          - name: OPENAI_API_KEY
+            secretRef: openai-api-key
+          - name: OPENAI_BASE_URL
+            value: https://api.openai.com/v1
+          - name: OPENAI_EMBEDDING_MODEL
+            value: text-embedding-3-small
           - name: EMBEDDING_BATCH_SIZE
             value: "16"
           - name: EMBEDDING_TIMEOUT_MS
             value: "30000"
-          - name: EMBEDDING_KEEP_ALIVE
-            value: 1m
-          - name: OLLAMA_TIMEOUT_MS
-            value: "8000"
           - name: DEEPSEEK_API_KEY
             secretRef: deepseek-api-key
           - name: OBSERVABILITY_HMAC_KEY
@@ -158,15 +158,9 @@ properties:
           - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
             value: pdf,jpg,jpeg,png
           - name: SEARXNG_BASE_URL
-            value: http://172.16.65.5:8888
+            value: PLACEHOLDER_SET_BY_DEPLOY_SCRIPT
           - name: SEARXNG_TIMEOUT_MS
             value: "8000"
-          - name: CLAMAV_HOST
-            value: 172.16.65.5
-          - name: CLAMAV_PORT
-            value: "3310"
-          - name: CLAMAV_TIMEOUT_MS
-            value: "15000"
           - name: NOTION_TOKEN
             secretRef: notion-token
           - name: NOTION_SERVICE_DATABASE_ID

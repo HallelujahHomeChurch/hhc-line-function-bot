@@ -294,6 +294,97 @@ resource-memory, freshness, and invalidation lifecycle.
 - Resource memory cannot resurrect a tombstoned or unauthorized item.
 - Restart and two-replica Redis tests produce consistent results.
 
+## R3.1 — Remote Provider Policy and Local Runtime Retirement
+
+### Outcome
+
+The service no longer depends on an office-hosted runtime. DeepSeek is the only
+active remote LLM provider, while `text-embedding-3-small` supplies cloud
+embeddings for knowledge retrieval. SearXNG runs as an internal, always-on ACA
+service and ClamAV runs as bounded ACA Jobs. Provider and workload contracts
+remain configuration-backed so a future remote API provider or infrastructure
+implementation can replace either integration without capability-specific
+changes.
+
+### Scope
+
+- Replace the Ollama-based LLM and embedding runtime with separately configured
+  remote chat and embedding provider contracts. Provider names, API-key env
+  references, base URLs, models, timeouts, and capabilities remain
+  profile-scoped configuration; keys never enter PostgreSQL or profile JSON.
+- Use DeepSeek as the only active LLM provider. When it is unavailable, invalid,
+  or times out, retain only deterministic candidate/validator recovery and
+  fail-closed clarification or unavailable outcomes; do not send the request
+  to a local or second semantic model.
+- Use OpenAI `text-embedding-3-small` at its native 1536 dimensions for the
+  active knowledge index. Keep the existing PostgreSQL/pgvector retrieval and
+  controlled result-envelope architecture rather than delegating knowledge
+  search to a provider-hosted vector store.
+- Preserve knowledge source registration, access policy, lifecycle, audit, and
+  source metadata. Treat existing nodes, chunks, embeddings, routing metadata,
+  and their snapshot revision as derived data: clear them in a controlled
+  migration and rebuild every enabled source before atomic publication of the
+  new 1536-dimensional index.
+- Make embedding model identity and dimension part of the promoted snapshot
+  contract. A query never mixes vectors from different embedding models. If the
+  active embedding provider is unavailable, knowledge search returns an
+  unavailable outcome instead of a cross-model fallback.
+- Remove Ollama configuration, clients, diagnostics, tests, local-services
+  runtime requirements, and deployment references after the remote replacement
+  is live and verified.
+- Move the consent-only sheet-music SearXNG fallback to an internal-only ACA
+  Container App that remains available rather than scaling to zero. Preserve
+  its existing limited purpose: it is not a general web-browsing capability and
+  it never saves a result automatically.
+- Move attachment scanning and publication to an event-driven ACA Job. The
+  confirmed attachment workflow queues only an opaque work identifier; the job
+  performs the existing validation, antivirus scan, OneDrive publication, and
+  catalog upsert through the sole binary-publisher path. It reports through
+  requester-scoped long-running job retrieval/postback rather than LINE push.
+- Use an Azure Files share for ClamAV signature data. A scheduled ACA Job
+  refreshes and validates signatures every two days; scan jobs mount the share
+  read-only and fail closed when signatures are absent, older than 72 hours,
+  stale, or unhealthy. No attachment bytes, file names, raw messages, or
+  secrets enter queues or telemetry.
+- Remove office-hosted SearXNG and ClamAV endpoint configuration, local-service
+  startup requirements, and deployment references once their ACA workloads
+  pass the replacement contract.
+- Add provider usage, timeout, unavailable, and rebuild metrics without raw
+  content, API keys, prompts, source titles, or URLs.
+
+### Non-goals
+
+- No second semantic LLM fallback in this milestone.
+- No provider-hosted file/vector-store product and no local CPU/GPU embedding
+  service.
+- No public SearXNG ingress, no general web-search function, and no always-on
+  ClamAV daemon.
+- No migration of secrets into PostgreSQL, no raw-text telemetry, and no
+  downgrade of controlled routing, access, or result-envelope rules.
+
+### Exit criteria
+
+- A deployment with no reachable office endpoint starts and completes all
+  supported LLM, knowledge, external-sheet-search, and attachment-publication
+  flows through ACA and remote providers.
+- DeepSeek failure exercises deterministic recovery or a safe unavailable/
+  clarification response; it never attempts a local-model connection.
+- All enabled knowledge sources are re-indexed with `text-embedding-3-small`
+  1536-dimensional vectors and publish atomically only after a complete
+  snapshot is ready.
+- Provider/model/dimension changes fail closed until a complete replacement
+  index has been published.
+- The remote-provider contract supports a future OpenAI-compatible provider
+  through configuration and a provider adapter, without changes in capability
+  handlers or the controlled router.
+- SearXNG has internal ingress only and remains limited to the existing
+  requester-consented sheet-music fallback.
+- Clean attachments complete through the event-driven scan job; infected,
+  timed-out, unavailable, duplicate, or stale-signature jobs publish nothing
+  and return a requester-scoped failed result.
+- Full tests, remote-provider integration tests, and the versioned Kernel gate
+  pass with the revised lane policy.
+
 ## Controlled Retrieval Kernel v1 Gate
 
 R0 through R3 form one product milestone. The gate requires:
@@ -309,6 +400,60 @@ R0 through R3 form one product milestone. The gate requires:
   a retrievable job result;
 - all known recurrence cases for stale replay, alias recall, task-frame misuse,
   and schedule-domain confusion covered by regression tests.
+
+## R3.5 — Modular Monolith Maintainability
+
+### Outcome
+
+The service remains one deployable application while new capabilities, workflow
+stages, and data sources evolve through explicit dependency boundaries,
+purpose-specific dependency injection, and discoverable capability modules.
+
+### Scope
+
+- Add automated dependency rules: only the composition root may construct
+  concrete infrastructure clients; transport adapters may call application
+  use cases but not infrastructure; capability logic depends on declared ports
+  rather than concrete Redis, PostgreSQL, Graph, Notion, or provider clients.
+- Split the Fastify/LINE entrance into focused transport adapters for webhook,
+  access and registration commands, admin commands, postbacks, and health
+  routes, while retaining one application deployment and canonical webhook
+  paths.
+- Split controlled turn orchestration into explicit, independently testable
+  stages and a coordinator that preserves the existing deterministic stage
+  precedence and server-owned workflow state.
+- Replace oversized capability dependency contexts with narrow dependency
+  interfaces owned by each capability. Production composition must not hide
+  in-memory fallbacks; test composition supplies fakes explicitly.
+- Move capability definition, handler, ports, and deterministic eval cases
+  toward vertical slices. The central registry performs discovery and
+  completeness checks only.
+- Split global cross-domain types into bounded contracts for transport, access,
+  agent/kernel, capability, and infrastructure boundaries.
+- Permit naming, file organization, and local duplicate-code cleanup only when
+  directly required by one of these boundary changes.
+
+### Non-goals
+
+- No microservice split, runtime DI container, decorator-based injection, or
+  generic repository framework.
+- No change to user-visible capability behavior, controlled routing authority,
+  access policy, result-envelope safety rules, or deployment topology.
+- No stand-alone formatting, rename-only, or cosmetic rewrite.
+
+### Exit criteria
+
+- CI enforces the declared import/dependency rules.
+- `server.ts` no longer contains the business implementation of access/admin
+  commands or postback workflows, and turn orchestration stages have focused
+  tests.
+- A capability declares only its own dependencies and can be composed with
+  explicit production adapters or test fakes without a shared service-locator
+  context.
+- `query_schedule` is migrated as the reference vertical slice, with its
+  definition, handler, ports, and eval ownership discoverable together.
+- Full tests and the versioned Kernel acceptance gate remain green with no
+  external behavior regression.
 
 ## R4 — Product Experience
 
@@ -354,7 +499,7 @@ availability target.
 - SBOM, image vulnerability policy, and pinned workflow dependencies.
 - PostgreSQL PITR, OneDrive retention validation, and quarterly restore drills.
 - ClamAV signature/reachability monitoring and explicit degraded behavior for
-  local Ollama and SearXNG dependencies.
+  remote-provider, ACA SearXNG, and ACA Job dependencies.
 - Data inventory, retention, export, deletion, source ownership, offboarding,
   incident response, and secret rotation runbooks.
 - Provider data-classification policy, including a local-only lane for private
@@ -459,7 +604,9 @@ R0 Observable baseline
   -> R1 Agent state/cache lifecycle
   -> R2 Schedule domains
   -> R3 Unified retrieval freshness
+  -> R3.1 Remote provider policy and local runtime retirement
   -> Controlled Retrieval Kernel v1
+  -> R3.5 Modular monolith maintainability
   -> R4 Product experience
   -> R5 Production reliability
   -> R6 Repeatable church package
@@ -468,10 +615,14 @@ R0 Observable baseline
 ```
 
 R2 may start after R1 behavior contracts are fixed, but R2 and R3 do not pass
-the kernel gate until the R0 telemetry proves their production behavior. R4 may
-prototype copy and onboarding during R2/R3, but it must not hide unresolved
-freshness or state failures. R6 begins only after R5 establishes backup,
-offboarding, release, and incident controls.
+the kernel gate until the R0 telemetry proves their production behavior. R3.1
+completes before the final Kernel v1 stabilization so the integration and live
+provider checks exercise the remote-only runtime. R3.5 starts only after that
+stabilization gate and completes before R4 implementation; it preserves
+behavior while making later product work cheaper to change. R4 may prototype
+copy and onboarding during R2/R3, but it must not hide unresolved freshness or
+state failures. R6 begins only after R5 establishes backup, offboarding,
+release, and incident controls.
 
 ## Planning Horizon
 
@@ -479,18 +630,20 @@ These ranges are planning estimates, not delivery commitments. They assume one
 primary implementation stream, test-first delivery, normal pull-request review,
 and production observation between behavior changes.
 
-| Milestone                       |          Indicative range | May overlap with                     |
-| ------------------------------- | ------------------------: | ------------------------------------ |
-| R0 Observable baseline          |                 1–2 weeks | Regression-corpus preparation for R1 |
-| R1 Agent state/cache lifecycle  |                 2–4 weeks | R2 design only                       |
-| R2 Declarative schedule domains |                 4–6 weeks | R3 catalog contract design           |
-| R3 Unified retrieval freshness  |                 3–5 weeks | R4 copy/onboarding prototype         |
-| Kernel v1 stabilization         |                   2 weeks | R4 implementation                    |
-| R4 Product experience           |                 2–3 weeks | Late R3/R5 preparation               |
-| R5 Production reliability       |                 4–6 weeks | R6 tenant-model design               |
-| R6 Repeatable church package    |                6–10 weeks | Pilot onboarding preparation         |
-| R7 Managed pilot                | 8–12 weeks of observation | No R8 decision before evidence       |
-| R8 SaaS scale                   |           Evidence-driven | Begins only after R7 exit criteria   |
+| Milestone                             |          Indicative range | May overlap with                     |
+| ------------------------------------- | ------------------------: | ------------------------------------ |
+| R0 Observable baseline                |                 1–2 weeks | Regression-corpus preparation for R1 |
+| R1 Agent state/cache lifecycle        |                 2–4 weeks | R2 design only                       |
+| R2 Declarative schedule domains       |                 4–6 weeks | R3 catalog contract design           |
+| R3 Unified retrieval freshness        |                 3–5 weeks | R4 copy/onboarding prototype         |
+| R3.1 Remote provider/local retirement |                 1–2 weeks | Kernel integration test design       |
+| Kernel v1 stabilization               |                   2 weeks | R4 implementation                    |
+| R3.5 Modular monolith maintainability |                 2–4 weeks | R4 design only                       |
+| R4 Product experience                 |                 2–3 weeks | Late R3/R5 preparation               |
+| R5 Production reliability             |                 4–6 weeks | R6 tenant-model design               |
+| R6 Repeatable church package          |                6–10 weeks | Pilot onboarding preparation         |
+| R7 Managed pilot                      | 8–12 weeks of observation | No R8 decision before evidence       |
+| R8 SaaS scale                         |           Evidence-driven | Begins only after R7 exit criteria   |
 
 R0 through R3 therefore represent roughly 12 to 19 weeks on a single stream,
 including the stabilization gate. Parallelism may shorten calendar time only

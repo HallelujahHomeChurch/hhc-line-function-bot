@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
+import { buildAgentJobQuickReply, buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
+import { dispatchAttachmentScanWork } from "../attachments/scan-outbox.js";
+import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
+import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import {
   catalogSourceAllowsRead,
   type CatalogItemRecord,
@@ -8,7 +12,6 @@ import {
 } from "../catalog/store.js";
 import { searchCatalogWithFreshness } from "../catalog/retrieval.js";
 import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
-import type { ExternalBinaryClient } from "../clients/external-binary.js";
 import {
   findPopSheetMusicArgumentsSchema,
   type FindPopSheetMusicArguments
@@ -23,7 +26,6 @@ import {
   type SessionStore
 } from "../state/session-store.js";
 import { storePendingFunctionQuery } from "./pending-function.js";
-import type { ResourceBinaryPublisher } from "./resource-binary-publisher.js";
 import type {
   DriveItem,
   FunctionExecutionResult,
@@ -77,13 +79,10 @@ export interface SheetMusicExternalSearchOptions {
 
 export type FindPopSheetMusicTextMessageOptions = FindPopSheetMusicPostbackOptions & {
   externalSearch?: SheetMusicExternalSearchOptions;
-  externalImport?: {
-    client: ExternalBinaryClient;
-    publisher: ResourceBinaryPublisher;
-    maxBytes: number;
-    timeoutMs: number;
-    maxRedirects: number;
-  };
+  catalog?: CatalogStore;
+  agentJobStore?: AgentJobStore;
+  scanWorkStore?: AttachmentScanWorkStore;
+  scanQueue?: AttachmentScanQueue;
 };
 
 interface ScoredItem {
@@ -407,8 +406,7 @@ export function createFindPopSheetMusicTextMessageHandler(
           options,
           session: externalImport,
           text: request.text,
-          context,
-          now: now()
+          context
         });
       }
       const selectedIndex = numericSelectionToIndex(request.text);
@@ -927,7 +925,6 @@ async function continueExternalSheetMusicImport(input: {
   session: ExternalSheetMusicImportSession;
   text: string;
   context: TextMessageContext;
-  now: Date;
 }): Promise<FunctionExecutionResult> {
   if (isExternalSearchCancel(input.text)) {
     await input.options.sessionStore.delete(input.session.id);
@@ -981,46 +978,87 @@ async function continueExternalSheetMusicImport(input: {
   if (!/^(保存|確認|確定|好|yes|y)$/iu.test(input.text.trim())) {
     return { ok: true, replyText: "請回覆「保存」確認，或回覆「取消」。" };
   }
+  const claimed = await input.options.sessionStore.take(input.session.id);
+  if (!claimed || claimed.type !== "external_sheet_music_import") {
+    return { ok: true, replyText: "這個匯入流程已經在處理或已完成。" };
+  }
+  return enqueueExternalSheetMusicImport({
+    options: input.options,
+    session: claimed,
+    context: input.context
+  });
+}
+
+async function enqueueExternalSheetMusicImport(input: {
+  options: FindPopSheetMusicTextMessageOptions;
+  session: ExternalSheetMusicImportSession;
+  context: TextMessageContext;
+}): Promise<FunctionExecutionResult> {
+  const { catalog, agentJobStore, scanWorkStore, scanQueue } = input.options;
+  const item = input.session.items[input.session.selectedIndex ?? -1];
+  const targetKind = input.session.targetKind;
+  const scope = buildAgentJobScope(input.context.profile.name, input.context.event.source);
   if (
-    !input.context.profile.enabledFunctions.includes("save_resource") ||
-    !input.options.externalImport
+    !catalog ||
+    !agentJobStore ||
+    !scanWorkStore ||
+    !scanQueue ||
+    !item ||
+    !targetKind ||
+    !scope
   ) {
-    await input.options.sessionStore.delete(input.session.id);
     return { ok: true, replyText: "目前沒有開放匯入歌譜檔案。" };
   }
-  const selected = input.session.items[input.session.selectedIndex ?? -1];
-  const targetKind = input.session.targetKind;
-  if (!selected || !targetKind) {
-    await input.options.sessionStore.delete(input.session.id);
-    return { ok: true, replyText: "這個選擇已失效，請重新搜尋。" };
+  const sourceKey = targetKind === "pop_sheet" ? "pop_sheet_music" : "hymn_sheet_music";
+  const sources = await catalog.listSources({
+    profileName: input.context.profile.name,
+    enabled: true,
+    sourceKeys: [sourceKey]
+  });
+  if (!sources.some((source) => source.capabilities.write.length > 0)) {
+    return { ok: true, replyText: "目前沒有保存檔案的權限。" };
   }
+
+  const ttlMs = (input.context.profile.longRunningJobs?.resultTtlMinutes ?? 30) * 60_000;
+  let jobId: string | undefined;
   try {
-    const binary = await input.options.externalImport.client.download({
-      url: selected.url,
-      maxBytes: input.options.externalImport.maxBytes,
-      timeoutMs: input.options.externalImport.timeoutMs,
-      maxRedirects: input.options.externalImport.maxRedirects
-    });
-    return await input.options.externalImport.publisher.publish({
-      binary: {
-        data: binary.data,
-        declaredFileName: binary.fileName,
-        declaredContentType: binary.contentType,
-        sourceKind: "external"
-      },
+    const job = await agentJobStore.createPending({ scope, label: "匯入歌譜", ttlMs });
+    jobId = job.id;
+    const work = await scanWorkStore.create({
+      jobId,
+      externalUrl: item.url,
+      scope,
       target: {
-        profileName: input.context.profile.name,
-        sourceKey: targetKind === "pop_sheet" ? "pop_sheet_music" : "hymn_sheet_music",
+        sourceKey,
         itemKind: targetKind,
         domain: "sheet_music",
-        title: safeExternalTitle(selected.title)
+        title: item.title
       },
-      now: input.now
+      ttlMs
     });
+    const dispatch = await dispatchAttachmentScanWork(work.id, {
+      store: scanWorkStore,
+      queue: scanQueue
+    });
+    return {
+      ok: true,
+      executedAction: "save_resource",
+      writePhase: "commit",
+      replyText:
+        dispatch === "queued"
+          ? "我已開始驗證與掃描這份公開歌譜，稍後可以按「查看結果」。"
+          : "歌譜匯入工作已安全保存，系統會自動重試排入掃描佇列。",
+      quickReplies: [buildAgentJobQuickReply(jobId)]
+    };
   } catch {
-    return { ok: true, replyText: "無法下載安全的直接歌譜檔案，請確認結果是 PDF 或圖片。" };
-  } finally {
-    await input.options.sessionStore.delete(input.session.id);
+    if (jobId) {
+      try {
+        await agentJobStore.fail(jobId, "external_sheet_music_handoff_failed");
+      } catch {
+        // The requester receives a fail-closed reply; no webhook-side download is attempted.
+      }
+    }
+    return { ok: true, replyText: "建立歌譜匯入工作時遇到問題，請稍後重新選擇。" };
   }
 }
 
@@ -1049,18 +1087,6 @@ function inferTargetKindReply(text: string): "pop_sheet" | "hymn_sheet" | undefi
   if (/詩歌|敬拜/u.test(text)) return "hymn_sheet";
   if (/流行/u.test(text)) return "pop_sheet";
   return undefined;
-}
-
-function safeExternalTitle(value: string): string {
-  return (
-    value
-      .normalize("NFKC")
-      .replace(/\.(?:pdf|jpe?g|png)$/iu, "")
-      .replace(/[<>:"/\\|?*]/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 100) || "未命名歌譜"
-  );
 }
 
 function isExternalSearchConfirm(text: string): boolean {

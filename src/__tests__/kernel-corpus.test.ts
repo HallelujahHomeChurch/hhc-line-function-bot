@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { RECURRENCE_FAMILIES } from "../evals/kernel/contracts.js";
 import { KERNEL_ACCEPTANCE_CASES, validateKernelCorpus } from "../evals/kernel/corpus.js";
+import { REMOTE_RUNTIME_KERNEL_CASES } from "../evals/kernel/cases/remote-runtime.js";
 import { SCHEDULE_KERNEL_CASES } from "../evals/kernel/cases/schedule.js";
 
 describe("Kernel v1 versioned acceptance corpus", () => {
@@ -66,7 +67,13 @@ describe("Kernel v1 versioned acceptance corpus", () => {
         "kernel-v1/write/group-requester-cannot-complete-other-upload@1",
         "kernel-v1/resource/unavailable-not-not-found@1",
         "kernel-v1/state/group-requester-isolation@1",
-        "kernel-v1/state/expired-active-task-not-used@1"
+        "kernel-v1/state/expired-active-task-not-used@1",
+        "kernel-v1/resource/deepseek-unavailable-explicit@1",
+        "kernel-v1/resource/deepseek-unavailable-ambiguous@1",
+        "kernel-v1/write/signature-missing-no-publish@1",
+        "kernel-v1/write/signature-stale-no-publish@1",
+        "kernel-v1/write/infected-no-publish@1",
+        "kernel-v1/state/clean-job-requester-scope@1"
       ])
     );
     expect(
@@ -95,5 +102,17 @@ describe("Kernel v1 versioned acceptance corpus", () => {
           recurrenceFamily === "replica_state_divergence"
       ).length
     ).toBeGreaterThanOrEqual(10);
+  });
+
+  it("passes the remote-provider and attachment-job boundaries at the gate clock", async () => {
+    const observations = await Promise.all(
+      REMOTE_RUNTIME_KERNEL_CASES.map((entry) =>
+        entry.run({ now: () => new Date("2026-07-21T00:00:00.000Z") })
+      )
+    );
+
+    expect(observations.map(({ caseId, passed }) => ({ caseId, passed }))).toEqual(
+      REMOTE_RUNTIME_KERNEL_CASES.map(({ id }) => ({ caseId: id, passed: true }))
+    );
   });
 });

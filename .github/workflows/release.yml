@@ -17,7 +17,11 @@ on:
       - src/**
       - config/**
       - aca.containerapp.yaml
+      - aca.searxng.containerapp.yaml
       - aca.catalog-sync-job.yaml
+      - aca.attachment-scan-job.yaml
+      - aca.clamav-signature-refresh-job.yaml
+      - infra/searxng/**
   workflow_dispatch:
 
 permissions:
@@ -36,10 +40,17 @@ jobs:
       ACR_NAME: alive
       ACR_LOGIN_SERVER: alive.azurecr.io
       IMAGE_REPOSITORY: alive/hhc-line-function-bot
+      SCAN_IMAGE_REPOSITORY: alive/hhc-line-function-bot-scan
       IMAGE_TAG: main-${{ github.run_id }}
       RESOURCE_GROUP: alive
       CONTAINER_APP_NAME: hhc-line-function-bot
       CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
+      ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-scan
+      CLAMAV_SIGNATURE_REFRESH_JOB_NAME: hhc-line-bot-clamav-refresh
+      ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME: ${{ vars.ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME }}
+      ATTACHMENT_SCAN_QUEUE_NAME: ${{ vars.ATTACHMENT_SCAN_QUEUE_NAME }}
+      CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME: ${{ vars.CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME }}
+      CLAMAV_SIGNATURE_FILE_SHARE_NAME: ${{ vars.CLAMAV_SIGNATURE_FILE_SHARE_NAME }}
     steps:
       - uses: actions/checkout@v4
       - name: Sign in to Azure with OIDC
@@ -56,6 +67,13 @@ jobs:
             --registry "${ACR_NAME}" \
             --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
             --image "${IMAGE_REPOSITORY}:latest" \
+            --file Dockerfile \
+            .
+          az acr build \
+            --registry "${ACR_NAME}" \
+            --image "${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+            --image "${SCAN_IMAGE_REPOSITORY}:latest" \
+            --target attachment-scan-worker \
             --file Dockerfile \
             .
       - name: Deploy image and wait for healthy revision

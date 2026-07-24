@@ -1,5 +1,4 @@
-import { createOllamaProvider } from "./clients/ollama.js";
-import { createOllamaEmbeddingClient } from "./clients/ollama-embedding.js";
+import { createOpenAiEmbeddingClient } from "./clients/openai-embedding.js";
 import { createDeepSeekProvider } from "./clients/deepseek.js";
 import { createAdminActionRouter } from "./admin-action-router.js";
 import { RedisConfirmationStore } from "./actions/confirmation-store.js";
@@ -22,18 +21,22 @@ import {
   createScheduleEvidenceProvider
 } from "./agent/evidence/providers.js";
 import { createWikipediaSummarizer } from "./wikipedia/summarizer.js";
-import { RedisAgentJobStore } from "./agent/jobs.js";
+import { InMemoryAgentJobStore, RedisAgentJobStore } from "./agent/jobs.js";
+import { createAzureAttachmentScanQueue } from "./attachments/scan-queue.js";
+import {
+  InMemoryAttachmentScanWorkStore,
+  RedisAttachmentScanWorkStore
+} from "./attachments/scan-work-store.js";
+import { startAttachmentScanOutboxDispatcher } from "./attachments/scan-outbox.js";
 import { RedisConversationWindowStore } from "./agent/context-manager.js";
 import { RedisAgentTraceStore } from "./agent/trace-store.js";
 import { createCacheStore } from "./cache/create-cache-store.js";
 import { createCatalogStore } from "./catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "./catalog/source-seeds.js";
 import { createGraphDriveClient } from "./clients/graph.js";
-import { createClamAvScanner } from "./clients/clamav.js";
 import { createNotionDatabaseClient } from "./clients/notion.js";
 import { createNotionKnowledgeClient } from "./clients/notion-knowledge.js";
 import { createSearxngClient } from "./clients/searxng.js";
-import { createHttpVirusScanner } from "./clients/virus-scan.js";
 import { loadConfigFromEnv } from "./config.js";
 import { createDependencyDiagnostics } from "./diagnostics/dependencies.js";
 import { createPostgresRuntime } from "./db/postgres.js";
@@ -59,14 +62,7 @@ const config = loadConfigFromEnv(process.env);
 const redis = await createRedisRuntime(config.redis);
 const postgres = await createPostgresRuntime(config.database);
 
-const ollama = createOllamaProvider({
-  baseUrl: config.llm.ollamaBaseUrl,
-  model: config.llm.ollamaModel,
-  timeoutMs: config.llm.timeoutMs,
-  keepAlive: config.llm.ollamaKeepAlive
-});
 const providers = {
-  ollama,
   deepseek: createDeepSeekProvider({
     apiKey: config.llm.deepseekApiKey,
     baseUrl: config.llm.deepseekBaseUrl,
@@ -82,26 +78,13 @@ const functionRoutingPrimary = createProfileAwareProvider({
   role: "primary",
   lane: "function_routing"
 });
-const functionRoutingFallback = createProfileAwareProvider({
-  config,
-  providers,
-  role: "fallback",
-  lane: "function_routing"
-});
 const agentPlanner = createAgentPlanner({
-  primary: functionRoutingPrimary,
-  fallback: functionRoutingFallback
+  primary: functionRoutingPrimary
 });
 const adminRoutingPrimary = createProfileAwareProvider({
   config,
   providers,
   role: "primary",
-  lane: "admin_routing"
-});
-const adminRoutingFallback = createProfileAwareProvider({
-  config,
-  providers,
-  role: "fallback",
   lane: "admin_routing"
 });
 const smartTalkPrimary = createProfileAwareProvider({
@@ -110,27 +93,14 @@ const smartTalkPrimary = createProfileAwareProvider({
   role: "primary",
   lane: "smart_talk"
 });
-const smartTalkFallback = createProfileAwareProvider({
-  config,
-  providers,
-  role: "fallback",
-  lane: "smart_talk"
-});
 const wikipediaSummaryPrimary = createProfileAwareProvider({
   config,
   providers,
   role: "primary",
   lane: "web_summarization"
 });
-const wikipediaSummaryFallback = createProfileAwareProvider({
-  config,
-  providers,
-  role: "fallback",
-  lane: "web_summarization"
-});
 const adminActionRouter = createAdminActionRouter({
   primary: adminRoutingPrimary,
-  modelFallback: adminRoutingFallback,
   lane: "admin_routing"
 });
 const accessStore = await createAccessStore({ db: postgres?.pool });
@@ -145,11 +115,6 @@ const memoryPurgeTimer = setInterval(
 memoryPurgeTimer.unref();
 const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
 const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
-const virusScanner = config.clamAv
-  ? createClamAvScanner(config.clamAv)
-  : config.virusScan
-    ? createHttpVirusScanner(config.virusScan)
-    : undefined;
 const webSearch = config.webSearch?.searxngBaseUrl
   ? createSearxngClient({
       baseUrl: config.webSearch.searxngBaseUrl,
@@ -215,12 +180,12 @@ const knowledgePurgeTimer = setInterval(
 );
 knowledgePurgeTimer.unref();
 const knowledgeEmbedding = config.knowledge
-  ? createOllamaEmbeddingClient({
+  ? createOpenAiEmbeddingClient({
+      apiKey: config.knowledge.embedding.apiKey,
       baseUrl: config.knowledge.embedding.baseUrl,
       model: config.knowledge.embedding.model,
       dimensions: config.knowledge.embedding.dimensions,
-      timeoutMs: config.knowledge.embedding.timeoutMs,
-      keepAlive: config.knowledge.embedding.keepAlive
+      timeoutMs: config.knowledge.embedding.timeoutMs
     })
   : undefined;
 if (knowledgeEmbedding) {
@@ -249,7 +214,23 @@ const inFlightStore = createInFlightStore({ redis });
 const webhookEventStore = createWebhookEventStore(redis);
 const agentJobStore = redis
   ? new RedisAgentJobStore({ client: redis.client, keyPrefix: redis.keyPrefix })
+  : new InMemoryAgentJobStore();
+const attachmentScanWorkStore = redis
+  ? new RedisAttachmentScanWorkStore({
+      client: redis.client,
+      keyPrefix: redis.keyPrefix,
+      jobStore: agentJobStore
+    })
+  : new InMemoryAttachmentScanWorkStore({ jobStore: agentJobStore });
+const attachmentScanQueue = config.attachments.scanQueueUrl
+  ? createAzureAttachmentScanQueue(config.attachments.scanQueueUrl)
   : undefined;
+if (attachmentScanQueue && attachmentScanWorkStore.supportsDurableEnqueueRetry) {
+  startAttachmentScanOutboxDispatcher({
+    store: attachmentScanWorkStore,
+    queue: attachmentScanQueue
+  });
+}
 const conversationWindowStore = redis
   ? new RedisConversationWindowStore({ client: redis.client, keyPrefix: redis.keyPrefix })
   : undefined;
@@ -277,15 +258,15 @@ const registries = createFunctionRegistries(config, {
   knowledgeTextGenerator: smartTalkPrimary,
   memoryStore,
   accessStore,
-  virusScanner,
+  agentJobStore,
+  attachmentScanWorkStore,
+  attachmentScanQueue,
   webSearch,
   sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
-    primary: wikipediaSummaryPrimary,
-    fallback: wikipediaSummaryFallback
+    primary: wikipediaSummaryPrimary
   }),
   wikipediaSummarizer: createWikipediaSummarizer({
-    primary: wikipediaSummaryPrimary,
-    fallback: wikipediaSummaryFallback
+    primary: wikipediaSummaryPrimary
   })
 });
 const app = createApp(config, {
@@ -309,7 +290,6 @@ const app = createApp(config, {
   conversationWindowStore,
   controlledAgentRouter,
   textGenerator: smartTalkPrimary,
-  textFallbackGenerator: smartTalkFallback,
   agentRuntime: createAgentRuntime({ memoryStore, graph, accessStore }),
   diagnostics: createDependencyDiagnostics({
     config,

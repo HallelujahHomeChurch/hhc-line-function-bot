@@ -1,0 +1,36 @@
+name: hhc-line-bot-clamav-refresh
+type: Microsoft.App/jobs
+location: PLACEHOLDER_AZURE_REGION
+properties:
+  environmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
+  configuration:
+    triggerType: Schedule
+    replicaTimeout: 900
+    replicaRetryLimit: 1
+    scheduleTriggerConfig:
+      cronExpression: "10 19 */2 * *"
+      parallelism: 1
+      replicaCompletionCount: 1
+  template:
+    containers:
+      - name: clamav-signature-refresh
+        image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest
+        args:
+          - dist/tools/refresh-clamav-signatures.js
+        env:
+          - name: CLAMAV_SIGNATURE_ROOT
+            value: /var/lib/clamav
+          - name: CLAMAV_SIGNATURE_REFRESH_TIMEOUT_MS
+            value: "600000"
+          - name: CLAMAV_SIGNATURE_VALIDATION_TIMEOUT_MS
+            value: "60000"
+        volumeMounts:
+          - volumeName: clamav-signatures
+            mountPath: /var/lib/clamav
+        resources:
+          cpu: 0.5
+          memory: 1Gi
+    volumes:
+      - name: clamav-signatures
+        storageType: AzureFile
+        storageName: clamav-signatures-readwrite

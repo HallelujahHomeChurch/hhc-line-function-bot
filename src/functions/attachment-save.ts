@@ -1,18 +1,13 @@
+import { buildAgentJobQuickReply, buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
+import { dispatchAttachmentScanWork } from "../attachments/scan-outbox.js";
+import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
+import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import type { CatalogSourceRecord, CatalogStore } from "../catalog/store.js";
 import type { PendingAttachmentSession, SessionStore } from "../state/session-store.js";
-import type {
-  BotProfileConfig,
-  FunctionExecutionResult,
-  GraphDriveClient,
-  LineContentClient,
-  TextMessageHandler,
-  VirusScanner
-} from "../types.js";
-import { createResourceBinaryPublisher } from "./resource-binary-publisher.js";
+import type { FunctionExecutionResult, TextMessageHandler } from "../types.js";
 
 const ATTACHMENT_SESSION_TTL_MS = 10 * 60 * 1000;
-const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-const DEFAULT_LINE_DOWNLOAD_TIMEOUT_MS = 30_000;
+const DEFAULT_SCAN_JOB_TTL_MS = 30 * 60 * 1000;
 
 type AttachmentTargetKind =
   "ppt_slide" | "pop_sheet" | "hymn_sheet" | "church_document" | "church_image" | "church_other";
@@ -29,11 +24,9 @@ type AttachmentDestination = Omit<AttachmentTarget, "title">;
 export interface PendingAttachmentTextMessageOptions {
   sessionStore: SessionStore;
   catalog: CatalogStore;
-  lineContent: LineContentClient;
-  graph: GraphDriveClient;
-  scanner?: VirusScanner;
-  maxBytes?: number;
-  lineDownloadTimeoutMs?: number;
+  agentJobStore: AgentJobStore;
+  scanWorkStore: AttachmentScanWorkStore;
+  scanQueue: AttachmentScanQueue;
   now?: () => Date;
 }
 
@@ -41,13 +34,6 @@ export function createPendingAttachmentTextMessageHandler(
   options: PendingAttachmentTextMessageOptions
 ): TextMessageHandler {
   const now = options.now ?? (() => new Date());
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
-  const publisher = createResourceBinaryPublisher({
-    catalog: options.catalog,
-    graph: options.graph,
-    scanner: options.scanner,
-    maxBytes
-  });
 
   return {
     turnStage: "attachment",
@@ -109,13 +95,10 @@ export function createPendingAttachmentTextMessageHandler(
         if (!claimed) {
           return { ok: true, replyText: "這個檔案保存流程已經在處理或已完成。" };
         }
-        return publishAttachment({
+        return enqueueAttachmentScan({
           options,
           pending: claimed,
-          maxBytes,
-          now: now(),
-          profile: context.profile,
-          publisher
+          resultTtlMs: (context.profile.longRunningJobs?.resultTtlMinutes ?? 30) * 60_000
         });
       }
 
@@ -171,13 +154,10 @@ export function createPendingAttachmentTextMessageHandler(
   };
 }
 
-async function publishAttachment(input: {
+async function enqueueAttachmentScan(input: {
   options: PendingAttachmentTextMessageOptions;
   pending: PendingAttachmentSession;
-  maxBytes: number;
-  now: Date;
-  profile: BotProfileConfig;
-  publisher: ReturnType<typeof createResourceBinaryPublisher>;
+  resultTtlMs?: number;
 }): Promise<FunctionExecutionResult> {
   const sessionTarget = input.pending.target;
   if (!sessionTarget || !isAttachmentTargetKind(sessionTarget.itemKind)) {
@@ -199,45 +179,107 @@ async function publishAttachment(input: {
     await input.options.sessionStore.delete(input.pending.id);
     return { ok: true, replyText: sourceGate.replyText };
   }
+
+  const scope = buildAgentJobScope(input.pending.profileName, input.pending.source);
+  if (!scope) {
+    await input.options.sessionStore.delete(input.pending.id);
+    return { ok: true, replyText: "保存流程已失效，請重新上傳檔案。" };
+  }
+
   try {
-    const content = await input.options.lineContent.getMessageContent(
-      input.pending.attachment.messageId,
-      input.profile,
-      {
-        maxBytes: input.maxBytes,
-        timeoutMs: input.options.lineDownloadTimeoutMs ?? DEFAULT_LINE_DOWNLOAD_TIMEOUT_MS
+    let jobId: string;
+    try {
+      const ttlMs = input.resultTtlMs ?? DEFAULT_SCAN_JOB_TTL_MS;
+      const job = await input.options.agentJobStore.createPending({
+        scope,
+        label: "保存檔案",
+        ttlMs
+      });
+      jobId = job.id;
+    } catch {
+      return attachmentScanHandoffFailure();
+    }
+
+    let workId: string;
+    try {
+      const ttlMs = input.resultTtlMs ?? DEFAULT_SCAN_JOB_TTL_MS;
+      const work = await input.options.scanWorkStore.create({
+        jobId,
+        lineMessageId: input.pending.attachment.messageId,
+        scope,
+        target: {
+          sourceKey: target.sourceKey,
+          itemKind: target.itemKind,
+          domain: target.domain,
+          title: target.title
+        },
+        ttlMs
+      });
+      workId = work.id;
+    } catch {
+      await failAgentJobBestEffort(input.options.agentJobStore, jobId);
+      return attachmentScanHandoffFailure();
+    }
+
+    try {
+      const dispatch = await dispatchAttachmentScanWork(workId, {
+        store: input.options.scanWorkStore,
+        queue: input.options.scanQueue
+      });
+      return dispatch === "queued"
+        ? attachmentScanQueued(jobId)
+        : attachmentScanRetryScheduled(jobId);
+    } catch {
+      let cancelled = false;
+      try {
+        cancelled = await input.options.scanWorkStore.cancelPendingEnqueue(
+          workId,
+          "enqueue_failed"
+        );
+      } catch {
+        // The queue may have accepted the message before its response was lost. Preserve the
+        // requester-scoped job unless Redis proves that the unclaimed work was cancelled.
       }
-    );
-    return await input.publisher.publish({
-      binary: {
-        data: content.data,
-        declaredFileName: input.pending.attachment.fileName,
-        declaredContentType: content.contentType,
-        sourceKind: "line"
-      },
-      target: {
-        profileName: input.pending.profileName,
-        sourceKey: target.sourceKey,
-        itemKind: target.itemKind,
-        domain: target.domain,
-        title: target.title
-      },
-      now: input.now
-    });
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? String(error.code) : "";
-    if (code === "line_content_too_large") {
-      return { ok: true, replyText: "檔案太大，無法保存。" };
+      if (!cancelled && input.options.scanWorkStore.supportsDurableEnqueueRetry) {
+        return attachmentScanRetryScheduled(jobId);
+      }
+      await failAgentJobBestEffort(input.options.agentJobStore, jobId);
+      return attachmentScanHandoffFailure();
     }
-    if (code === "line_content_timeout") {
-      return { ok: true, replyText: "下載檔案逾時，請重新上傳後再試。" };
-    }
-    if (code === "line_content_empty") {
-      return { ok: true, replyText: "檔案是空的，無法保存。" };
-    }
-    throw error;
   } finally {
     await input.options.sessionStore.delete(input.pending.id);
+  }
+}
+
+function attachmentScanRetryScheduled(jobId: string): FunctionExecutionResult {
+  return {
+    ok: true,
+    executedAction: "save_resource",
+    writePhase: "commit",
+    replyText: "檔案掃描工作已安全保存，系統會自動重試排入掃描佇列。",
+    quickReplies: [buildAgentJobQuickReply(jobId)]
+  };
+}
+
+function attachmentScanQueued(jobId: string): FunctionExecutionResult {
+  return {
+    ok: true,
+    executedAction: "save_resource",
+    writePhase: "commit",
+    replyText: "我已開始驗證與掃描這個檔案，稍後可以按「查看結果」。",
+    quickReplies: [buildAgentJobQuickReply(jobId)]
+  };
+}
+
+function attachmentScanHandoffFailure(): FunctionExecutionResult {
+  return { ok: true, replyText: "剛剛建立檔案掃描工作時遇到問題，請重新上傳後再試。" };
+}
+
+async function failAgentJobBestEffort(jobStore: AgentJobStore, jobId: string): Promise<void> {
+  try {
+    await jobStore.fail(jobId, "attachment_scan_handoff_failed");
+  } catch {
+    // Work cancellation is authoritative; the failed job update is best-effort.
   }
 }
 

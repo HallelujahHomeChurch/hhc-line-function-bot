@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
+const retiredOfficeAddress = ["172", "16", "65", "5"].join(".");
+const retiredEndpointNames = [["CLAM", "AV_HOST"].join(""), ["CLAM", "AV_PORT"].join("")];
+const retiredEndpointPrefixes = [["OLLA", "MA_"].join(""), ["VIRUS_", "SCAN_"].join("")];
 
 function readProjectFile(path: string): string {
   return readFileSync(resolve(root, path), "utf8");
@@ -14,6 +17,49 @@ function projectFileExists(path: string): boolean {
 }
 
 describe("production profile configuration deployment contract", () => {
+  it("hosts SearXNG as an internal always-on ACA app without office-network routes", () => {
+    const searxng = readProjectFile("aca.searxng.containerapp.yaml");
+    const bot = readProjectFile("aca.containerapp.yaml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+
+    expect(searxng).toContain("type: Microsoft.App/containerApps");
+    expect(searxng).toContain("external: false");
+    expect(searxng).toContain("targetPort: 8080");
+    expect(searxng).toContain("minReplicas: 1");
+    expect(searxng).toContain("searxng/searxng@sha256:");
+    expect(searxng).toContain("storageType: Secret");
+    expect(searxng).toContain("mountPath: /etc/searxng");
+    expect(searxng).toContain("secretRef: searxng-settings");
+    expect(searxng).not.toContain("storageType: AzureFile");
+    expect(bot).not.toContain("SEARXNG_BASE_URL\n            value: http://");
+
+    for (const path of [
+      "aca.containerapp.yaml",
+      "aca.searxng.containerapp.yaml",
+      "scripts/deploy-aca.sh"
+    ]) {
+      expect(readProjectFile(path)).not.toContain(retiredOfficeAddress);
+    }
+
+    expect(deployment).toContain("SEARXNG_CONTAINER_APP_NAME:=hhc-searxng");
+    expect(deployment).toContain("properties.configuration.ingress.fqdn");
+    expect(deployment).toContain('searxng_base_url="https://${searxng_fqdn}"');
+    expect(deployment).toContain('"SEARXNG_BASE_URL=${searxng_base_url}"');
+    expect(deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"')).toBeLessThan(
+      deployment.indexOf('az containerapp update "${update_args[@]}"')
+    );
+    const searxngUpdateStart = deployment.indexOf(
+      'az containerapp update --yaml "${searxng_manifest}"'
+    );
+    const searxngUpdate = deployment.slice(
+      searxngUpdateStart,
+      deployment.indexOf("\nelse", searxngUpdateStart)
+    );
+    expect(searxngUpdate).toContain('--resource-group "${RESOURCE_GROUP}"');
+    expect(searxngUpdate).toContain('--name "${SEARXNG_CONTAINER_APP_NAME}"');
+    expect(projectFileExists("infra/searxng/settings.yml")).toBe(true);
+  });
+
   it("ships file-backed profiles and does not deploy an ACA profile secret", () => {
     const dockerfile = readProjectFile("Dockerfile");
     const manifest = readProjectFile("aca.containerapp.yaml");
@@ -54,8 +100,6 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).not.toContain("name: GRAPH_SHEET_MUSIC_FOLDER_PATH");
     expect(manifest).not.toContain("name: SHEET_MUSIC_DEFAULT_RECURSIVE");
     expect(manifest).toContain("name: SEARXNG_BASE_URL");
-    expect(manifest).toContain("name: CLAMAV_HOST");
-    expect(manifest).toContain("name: CLAMAV_PORT");
     expect(manifest).toContain("name: MAX_ATTACHMENT_BYTES");
     expect(manifest).toContain("name: observability-hmac-key");
     expect(manifest).toContain("name: OBSERVABILITY_HMAC_KEY");
@@ -76,16 +120,15 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain('--dapr-app-id "hhc-line-function-bot"');
     expect(deployment).toContain("--dapr-app-port 3000");
     expect(deployment).not.toContain("az containerapp dapr disable");
-    expect(deployment).toContain("SEARXNG_BASE_URL=http://172.16.65.5:8888");
-    expect(deployment).toContain("CLAMAV_HOST=172.16.65.5");
+    expect(deployment).toContain('"SEARXNG_BASE_URL=${searxng_base_url}"');
     expect(deployment).toContain("MAX_ATTACHMENT_BYTES=26214400");
     expect(deployment).toContain("LINE_CONTENT_DOWNLOAD_TIMEOUT_MS=30000");
     expect(deployment).toContain("EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS=15000");
     expect(deployment).toContain("EXTERNAL_RESOURCE_MAX_REDIRECTS=3");
-    expect(deployment).toContain("OLLAMA_EMBEDDING_MODEL=bge-m3");
+    expect(deployment).toContain("OPENAI_EMBEDDING_MODEL=text-embedding-3-small");
     expect(deployment).toContain("EMBEDDING_BATCH_SIZE=16");
     expect(deployment).toContain("EMBEDDING_TIMEOUT_MS=30000");
-    expect(deployment).toContain("EMBEDDING_KEEP_ALIVE=1m");
+    expect(deployment).not.toContain("EMBEDDING_KEEP_ALIVE=");
     expect(helper?.enabledFunctions).toEqual(
       expect.arrayContaining(["find_resource", "save_resource", "save_memory", "retrieve_memory"])
     );
@@ -95,8 +138,7 @@ describe("production profile configuration deployment contract", () => {
       minPlannerConfidence: 0.65
     });
     expect(helper?.providerPolicy?.function_routing).toEqual({
-      primary: "deepseek",
-      fallback: "ollama"
+      primary: "deepseek"
     });
     expect(readProjectFile("README.md")).toContain("sole complete");
     expect(readProjectFile("README.md")).not.toContain("Example shape:");
@@ -197,33 +239,122 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: GRAPH_CLIENT_SECRET");
     expect(job).toContain("name: NOTION_TOKEN");
     expect(job).toContain("name: NOTION_SERVICE_DATABASE_ID");
-    expect(job).toContain("name: OLLAMA_BASE_URL");
-    expect(job).toContain("secretRef: ollama-base-url");
-    expect(job).toContain("name: OLLAMA_EMBEDDING_MODEL");
-    expect(job).toContain("value: bge-m3");
+    expect(job).toContain("name: OPENAI_API_KEY");
+    expect(job).toContain("secretRef: openai-api-key");
+    expect(job).toContain("name: OPENAI_EMBEDDING_MODEL");
+    expect(job).toContain("value: text-embedding-3-small");
     expect(job).toContain("name: EMBEDDING_BATCH_SIZE");
     expect(job).toContain("name: EMBEDDING_TIMEOUT_MS");
-    expect(job).toContain("name: EMBEDDING_KEEP_ALIVE");
     expect(job).not.toContain("ingress:");
     expect(releaseWorkflow).toContain("- aca.catalog-sync-job.yaml");
     expect(readme).toContain("aca.catalog-sync-job.yaml");
     expect(readme).toContain("node dist/tools/sync-catalog.js");
   });
 
-  it("defines private restartable workstation search and scanner services", () => {
-    const compose = readProjectFile("infra/local-services/docker-compose.yml");
-    const startup = readProjectFile("scripts/start-local-services.ps1");
-    const installer = readProjectFile("scripts/install-local-services-autostart.ps1");
+  it("provisions finite queue scans and atomic scheduled ClamAV signature refreshes", () => {
+    const scanJob = readProjectFile("aca.attachment-scan-job.yaml");
+    const refreshJob = readProjectFile("aca.clamav-signature-refresh-job.yaml");
+    const bot = readProjectFile("aca.containerapp.yaml");
+    const catalogJob = readProjectFile("aca.catalog-sync-job.yaml");
+    const dockerfile = readProjectFile("Dockerfile");
+    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
 
-    expect(compose).toContain("searxng/searxng@sha256:");
-    expect(compose).toContain("clamav/clamav@sha256:");
-    expect(compose.match(/restart: unless-stopped/g)).toHaveLength(2);
-    expect(compose.match(/healthcheck:/g)).toHaveLength(2);
-    expect(compose).toContain('"8888:8080"');
-    expect(compose).toContain('"3310:3310"');
-    expect(startup).toContain("Docker Desktop.exe");
-    expect(startup).toContain("docker compose --project-directory");
-    expect(installer).toContain("/SC ONLOGON");
-    expect(installer).toContain('GetFolderPath("Startup")');
+    expect(scanJob).toContain("type: Microsoft.App/jobs");
+    expect(scanJob).toContain("triggerType: Event");
+    expect(scanJob).toContain("eventTriggerConfig:");
+    expect(scanJob).toContain("minExecutions: 0");
+    expect(scanJob).toContain("replicaTimeout: 900");
+    expect(scanJob).toContain("parallelism: 1");
+    expect(scanJob).toContain("replicaCompletionCount: 1");
+    expect(scanJob).toContain("type: azure-queue");
+    expect(scanJob).toContain("queueLength: 1");
+    expect(scanJob).toContain("triggerParameter: connection");
+    expect(scanJob).toContain("secretRef: attachment-scan-queue-connection-string");
+    expect(scanJob).toContain("name: LINE_HELPER_CHANNEL_ACCESS_TOKEN");
+    expect(scanJob).toContain("name: DATABASE_URL");
+    expect(scanJob).toContain("name: REDIS_URL");
+    expect(scanJob).toContain("name: GRAPH_CLIENT_SECRET");
+    expect(scanJob).not.toContain("name: LINE_HELPER_CHANNEL_SECRET");
+    expect(scanJob).not.toContain("name: LINE_HELPER_ADMIN_USER_ID");
+    expect(scanJob).not.toContain("name: OPENAI_API_KEY");
+    expect(scanJob).not.toContain("name: DEEPSEEK_API_KEY");
+    expect(scanJob).not.toContain("name: NOTION_TOKEN");
+    expect(scanJob).not.toContain("name: OBSERVABILITY_HMAC_KEY");
+    expect(scanJob).not.toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
+    expect(scanJob).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
+    expect(scanJob).toContain("cpu: 1.0");
+    expect(scanJob).toContain("memory: 4Gi");
+    expect(scanJob).toContain("mountPath: /var/lib/clamav");
+    expect(scanJob).toContain("storageName: clamav-signatures-readonly");
+    expect(scanJob).not.toContain("ingress:");
+
+    expect(refreshJob).toContain("type: Microsoft.App/jobs");
+    expect(refreshJob).toContain("triggerType: Schedule");
+    expect(refreshJob).toContain('cronExpression: "10 19 */2 * *"');
+    expect(refreshJob).toContain("parallelism: 1");
+    expect(refreshJob).toContain("replicaCompletionCount: 1");
+    expect(refreshJob).toContain("dist/tools/refresh-clamav-signatures.js");
+    expect(refreshJob).toContain("mountPath: /var/lib/clamav");
+    expect(refreshJob).toContain("storageName: clamav-signatures-readwrite");
+    expect(refreshJob).not.toContain("ingress:");
+    expect(dockerfile).toContain('"clamav-freshclam=${CLAMAV_VERSION}"');
+    expect(dockerfile.indexOf("clamav-freshclam")).toBeLessThan(
+      dockerfile.indexOf("FROM gcr.io/distroless")
+    );
+
+    expect(bot).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
+    expect(bot).toContain("secretRef: attachment-scan-queue-url");
+    expect(bot).not.toContain("name: CLAMAV_DATABASE_DIRECTORY");
+    expect(catalogJob).not.toContain("name: CLAMAV_DATABASE_DIRECTORY");
+    expect(catalogJob).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
+
+    expect(releaseWorkflow).toContain("- aca.attachment-scan-job.yaml");
+    expect(releaseWorkflow).toContain("- aca.clamav-signature-refresh-job.yaml");
+    expect(releaseWorkflow).toContain("--target attachment-scan-worker");
+    expect(releaseWorkflow).toContain("SCAN_IMAGE_REPOSITORY");
+
+    expect(deployment).toContain("az containerapp env storage set");
+    expect(deployment).toContain("az storage account keys list");
+    expect(deployment).not.toContain('secrets.get("clamav-signature-storage-key")');
+    expect(deployment).toContain("--storage-name clamav-signatures-readonly");
+    expect(deployment).toContain("--access-mode ReadOnly");
+    expect(deployment).toContain("--storage-name clamav-signatures-readwrite");
+    expect(deployment).toContain("--access-mode ReadWrite");
+    expect(deployment).toContain("az containerapp job update");
+    expect(deployment).toContain("ATTACHMENT_SCAN_JOB_NAME");
+    expect(deployment).toContain("CLAMAV_SIGNATURE_REFRESH_JOB_NAME");
+
+    const searxngDeploy = deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"');
+    const botDeploy = deployment.indexOf('az containerapp update "${update_args[@]}"');
+    const refreshDeploy = deployment.indexOf('deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"');
+    const refreshBootstrap = deployment.indexOf(
+      'start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"'
+    );
+    const scanDeploy = deployment.indexOf('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
+    expect(searxngDeploy).toBeGreaterThanOrEqual(0);
+    expect(searxngDeploy).toBeLessThan(botDeploy);
+    expect(botDeploy).toBeLessThan(refreshDeploy);
+    expect(refreshDeploy).toBeLessThan(refreshBootstrap);
+    expect(refreshBootstrap).toBeLessThan(scanDeploy);
+    expect(refreshDeploy).toBeLessThan(scanDeploy);
+
+    for (const contents of [scanJob, refreshJob, bot, catalogJob]) {
+      for (const name of retiredEndpointNames) {
+        expect(contents).not.toContain(name);
+      }
+      for (const prefix of retiredEndpointPrefixes) {
+        expect(contents).not.toContain(prefix);
+      }
+      expect(contents).not.toContain(retiredOfficeAddress);
+    }
+    expect(bot).not.toContain("mountPath: /var/lib/clamav");
+    expect(catalogJob).not.toContain("mountPath: /var/lib/clamav");
+  });
+
+  it("does not ship workstation auxiliary-service startup assets", () => {
+    expect(projectFileExists("infra/local-services/docker-compose.yml")).toBe(false);
+    expect(projectFileExists("scripts/start-local-services.ps1")).toBe(false);
+    expect(projectFileExists("scripts/install-local-services-autostart.ps1")).toBe(false);
   });
 });

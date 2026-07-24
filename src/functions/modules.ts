@@ -1,5 +1,8 @@
 import type { CacheStore } from "../cache/cache-store.js";
+import type { AgentJobStore } from "../agent/jobs.js";
 import type { AgentMemoryStore } from "../agent/memory-store.js";
+import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
+import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
 import type { SessionStore } from "../state/session-store.js";
 import { FUNCTION_NAMES } from "../types.js";
@@ -15,7 +18,6 @@ import type {
   TextMessageHandlerRegistry,
   AdminHandlerRegistry,
   TextGenerationProvider,
-  VirusScanner,
   WebSearchClient
 } from "../types.js";
 import { getFunctionDefinition, type FunctionDefinition } from "./definitions.js";
@@ -38,10 +40,8 @@ import { createUploadIntentTextMessageHandler } from "./upload-intent.js";
 import { createFindResourceHandler } from "./find-resource.js";
 import type { CatalogStore } from "../catalog/store.js";
 import type { ScheduleStore } from "../schedules/store.js";
-import type { ExternalBinaryClient } from "../clients/external-binary.js";
-import type { EmbeddingClient } from "../clients/ollama-embedding.js";
+import type { EmbeddingClient } from "../clients/embedding.js";
 import type { KnowledgeStore } from "../knowledge/store.js";
-import { createResourceBinaryPublisher } from "./resource-binary-publisher.js";
 import { createSaveResourceHandler } from "./save-resource.js";
 import {
   createQueryKnowledgeHandler,
@@ -61,8 +61,6 @@ export interface FunctionModuleContext {
     catalog?: CatalogStore;
     scheduleStore?: ScheduleStore;
     lineContent?: LineContentClient;
-    externalBinary?: ExternalBinaryClient;
-    virusScanner?: VirusScanner;
     wikipedia?: WikipediaClient;
     wikipediaSummarizer?: WikipediaSummarizer;
     webSearch?: WebSearchClient;
@@ -70,6 +68,9 @@ export interface FunctionModuleContext {
     knowledgeStore?: KnowledgeStore;
     embedding?: EmbeddingClient;
     knowledgeTextGenerator?: TextGenerationProvider;
+    agentJobStore?: AgentJobStore;
+    attachmentScanQueue?: AttachmentScanQueue;
+    attachmentScanWorkStore?: AttachmentScanWorkStore;
     now?: () => Date;
     requestIdFactory?: () => string;
   };
@@ -559,26 +560,15 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           sheet_music_numeric_selection: createFindPopSheetMusicTextMessageHandler({
             graph: clients.graph,
             sessionStore: clients.sessionStore,
+            catalog: clients.catalog,
+            agentJobStore: clients.agentJobStore,
+            scanQueue: clients.attachmentScanQueue,
+            scanWorkStore: clients.attachmentScanWorkStore,
             externalSearch:
               clients.webSearch && clients.sheetMusicExternalSearchSummarizer
                 ? {
                     webSearch: clients.webSearch,
                     summarize: clients.sheetMusicExternalSearchSummarizer
-                  }
-                : undefined,
-            externalImport:
-              clients.externalBinary && clients.catalog && clients.virusScanner
-                ? {
-                    client: clients.externalBinary,
-                    publisher: createResourceBinaryPublisher({
-                      catalog: clients.catalog,
-                      graph: clients.graph,
-                      scanner: clients.virusScanner,
-                      maxBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024
-                    }),
-                    maxBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
-                    timeoutMs: config.externalResources?.downloadTimeoutMs ?? 15_000,
-                    maxRedirects: config.externalResources?.maxRedirects ?? 3
                   }
                 : undefined,
             now: clients.now
@@ -845,7 +835,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
         }
       }
     ],
-    register: ({ config, clients }) => {
+    register: ({ clients }) => {
       if (!clients.memoryStore) {
         return {};
       }
@@ -859,7 +849,12 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           })
         }
       };
-      if (clients.catalog && clients.graph && clients.lineContent) {
+      if (
+        clients.catalog &&
+        clients.agentJobStore &&
+        clients.attachmentScanQueue &&
+        clients.attachmentScanWorkStore
+      ) {
         registrations.textMessages = {
           upload_intent_activation: createUploadIntentTextMessageHandler({
             sessionStore: clients.sessionStore,
@@ -869,11 +864,9 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           pending_attachment_answer: createPendingAttachmentTextMessageHandler({
             sessionStore: clients.sessionStore,
             catalog: clients.catalog,
-            lineContent: clients.lineContent,
-            graph: clients.graph,
-            scanner: clients.virusScanner,
-            maxBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
-            lineDownloadTimeoutMs: config.attachments?.lineDownloadTimeoutMs ?? 30_000,
+            agentJobStore: clients.agentJobStore,
+            scanQueue: clients.attachmentScanQueue,
+            scanWorkStore: clients.attachmentScanWorkStore,
             now: clients.now
           })
         };

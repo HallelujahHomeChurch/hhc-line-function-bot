@@ -141,8 +141,8 @@ describe("query_knowledge", () => {
     const embed = vi.fn().mockResolvedValue([[1, 0, 0]]);
     await store.upsertEmbedding({
       chunkId: document.chunks[0]!.id,
-      provider: "ollama",
-      model: "bge-m3",
+      provider: "openai",
+      model: "text-embedding-3-small",
       dimensions: 3,
       embedding: [1, 0, 0],
       contentHash: "h1"
@@ -156,7 +156,7 @@ describe("query_knowledge", () => {
     const completeText = vi.fn().mockResolvedValue("第一個地點是日月潭。");
     const handler = createQueryKnowledgeHandler({
       store,
-      embedding: { provider: "ollama", model: "bge-m3", dimensions: 3, embed },
+      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 3, embed },
       textGenerator: { completeText }
     });
 
@@ -175,7 +175,7 @@ describe("query_knowledge", () => {
 
     expect(result.replyText).toContain("第一個地點是日月潭");
     expect(result.replyText).toContain("八月出遊：https://www.notion.so/doc");
-    expect(result.replyText).not.toMatch(/(?:Notion|pgvector|Ollama)[：:]/iu);
+    expect(result.replyText).not.toMatch(/(?:Notion|pgvector)[：:]/iu);
     expect(completeText).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: expect.stringContaining("只能根據證據") })
     );
@@ -239,8 +239,8 @@ describe("query_knowledge", () => {
     const handler = createQueryKnowledgeHandler({
       store,
       embedding: {
-        provider: "ollama",
-        model: "bge-m3",
+        provider: "openai",
+        model: "text-embedding-3-small",
         dimensions: 3,
         embed: vi.fn().mockRejectedValue(new Error("offline"))
       },

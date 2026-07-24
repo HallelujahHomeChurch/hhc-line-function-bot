@@ -17,7 +17,7 @@ import {
   type LineEvent
 } from "../types.js";
 import { evaluateActionPolicy } from "./policy.js";
-import type { EmbeddingClient } from "../clients/ollama-embedding.js";
+import type { EmbeddingClient } from "../clients/embedding.js";
 import { parseNotionRootId, type NotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import type { KnowledgeSourceRecord, KnowledgeStore } from "../knowledge/store.js";
 import { markKnowledgeSyncFailure, syncKnowledgeSource } from "../knowledge/sync-service.js";

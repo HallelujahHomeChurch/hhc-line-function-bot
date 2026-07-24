@@ -24,7 +24,7 @@ function profile(overrides: Partial<BotProfileConfig> = {}): BotProfileConfig {
     adminDirectOnly: true,
     directAccessPolicy: "managed",
     groupAccessPolicy: "managed",
-    allowedProviders: ["ollama"],
+    allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     smallTalk: { mode: "template", maxChars: 80 },
     ...overrides
@@ -52,7 +52,7 @@ describe("small talk replies", () => {
       profile: profile({ smallTalk: { mode: "llm", maxChars: 80 } }),
       text: "小哈你好嗎",
       category: "wellbeing",
-      generator: { providerName: "ollama", completeText }
+      generator: { providerName: "deepseek", completeText }
     });
 
     expect(result.replyText).toBe("我在，今天也一起慢慢處理。");
@@ -61,7 +61,7 @@ describe("small talk replies", () => {
         profileName: "helper",
         text: "小哈你好嗎",
         category: "wellbeing",
-        maxChars: 80
+        maxChars: undefined
       })
     );
   });
@@ -130,7 +130,7 @@ describe("small talk replies", () => {
       profile: profile({ smallTalk: { mode: "llm", maxChars: 80 } }),
       text: "小哈你好",
       category: "greeting",
-      generator: { providerName: "ollama", completeText }
+      generator: { providerName: "deepseek", completeText }
     });
 
     const prompt = completeText.mock.calls[0]?.[0].prompt ?? "";
@@ -156,13 +156,13 @@ describe("small talk replies", () => {
   it("falls back to a template when controlled generation is invalid", async () => {
     const completeText = vi
       .fn<TextGenerationProvider["completeText"]>()
-      .mockResolvedValue("我會去查 Ollama、Notion 和 token，請看 https://example.com");
+      .mockResolvedValue("我會去查內部模型、Notion 和 token，請看 https://example.com");
 
     const result = await createControlledSmallTalkReply({
       profile: profile({ smallTalk: { mode: "llm", maxChars: 80 } }),
       text: "小哈你好嗎",
       category: "wellbeing",
-      generator: { providerName: "ollama", completeText }
+      generator: { providerName: "deepseek", completeText }
     });
 
     expect(result.replyText).toBe(createSmallTalkReply("wellbeing").replyText);
@@ -185,7 +185,7 @@ describe("small talk replies", () => {
     expect(completeText.mock.calls[0]?.[0].prompt).not.toContain("最多");
   });
 
-  it("falls back to local short controlled replies when the remote API provider fails", async () => {
+  it("does not invoke a second semantic generator with the same provider name", async () => {
     const primaryCompleteText = vi
       .fn<TextGenerationProvider["completeText"]>()
       .mockRejectedValue(new Error("remote failed"));
@@ -198,20 +198,19 @@ describe("small talk replies", () => {
       text: "小哈你好嗎",
       category: "wellbeing",
       generator: { providerName: "deepseek", completeText: primaryCompleteText },
-      fallbackGenerator: { providerName: "ollama", completeText: fallbackCompleteText }
+      fallbackGenerator: { providerName: "deepseek", completeText: fallbackCompleteText }
     });
 
-    expect(result.replyText).toBe("我在，慢慢來。");
+    expect(result.replyText).toBe(createSmallTalkReply("wellbeing").replyText);
     expect(result.smallTalkTrace).toMatchObject({
-      provider: "ollama",
       lane: "smart_talk",
-      outcome: "fallback",
-      reason: "primary_failed"
+      outcome: "template",
+      reason: "generation_failed"
     });
     expect(primaryCompleteText).toHaveBeenCalledWith(
       expect.objectContaining({ maxChars: undefined })
     );
-    expect(fallbackCompleteText).toHaveBeenCalledWith(expect.objectContaining({ maxChars: 80 }));
+    expect(fallbackCompleteText).not.toHaveBeenCalled();
   });
 
   it("keeps template mode when LLM small talk is not enabled", async () => {
@@ -221,7 +220,7 @@ describe("small talk replies", () => {
       profile: profile(),
       text: "小哈你好嗎",
       category: "wellbeing",
-      generator: { providerName: "ollama", completeText }
+      generator: { providerName: "deepseek", completeText }
     });
 
     expect(result.replyText).toBe(createSmallTalkReply("wellbeing").replyText);

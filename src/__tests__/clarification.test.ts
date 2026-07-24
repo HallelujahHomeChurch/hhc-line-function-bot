@@ -45,12 +45,9 @@ function testConfig(): AppConfig {
       }
     ],
     llm: {
-      ollamaBaseUrl: "http://127.0.0.1:11434",
-      ollamaModel: "qwen3:4b-instruct",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
-      deepseekTimeoutMs: 8000,
-      timeoutMs: 8000
+      deepseekTimeoutMs: 8000
     },
     graph: {
       tenantId: "tenant",
@@ -177,7 +174,7 @@ describe("clarification flow", () => {
       type: "execute",
       action: "find_ppt_slides",
       arguments: { query: "" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(config, {
@@ -260,7 +257,7 @@ describe("clarification flow", () => {
       type: "execute",
       action: "find_ppt_slides",
       arguments: { query: "" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(config, {
@@ -328,7 +325,7 @@ describe("clarification flow", () => {
       type: "execute",
       action: "find_sheet_music",
       arguments: { query: "" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(config, {
@@ -402,7 +399,7 @@ describe("clarification flow", () => {
       type: "execute",
       action: "find_sheet_music",
       arguments: { query: "" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(config, {
@@ -502,7 +499,7 @@ describe("clarification flow", () => {
       type: "execute",
       action: "query_schedule",
       arguments: { query: "服事表" },
-      provider: "ollama"
+      provider: "deepseek"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(config, {

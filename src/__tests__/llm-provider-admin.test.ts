@@ -31,27 +31,23 @@ function config(): AppConfig {
         adminDirectOnly: true,
         directAccessPolicy: "managed",
         groupAccessPolicy: "managed",
-        allowedProviders: ["ollama", "deepseek"],
+        allowedProviders: ["deepseek"],
         allowSubscriptionProviders: false,
         providerPolicy: {
-          function_routing: { primary: "ollama" },
-          admin_routing: { primary: "ollama" },
-          memory_routing: { primary: "ollama" },
-          smart_talk: { primary: "deepseek", fallback: "ollama" },
-          general_agent: { primary: "deepseek", fallback: "ollama" },
+          function_routing: { primary: "deepseek" },
+          admin_routing: { primary: "deepseek" },
+          memory_routing: { primary: "deepseek" },
+          smart_talk: { primary: "deepseek" },
+          general_agent: { primary: "deepseek" },
           context_compression: { primary: "deepseek" }
         }
       }
     ],
     llm: {
       provider: "deepseek",
-      fallbackProvider: "ollama",
-      ollamaBaseUrl: "http://127.0.0.1:11434",
-      ollamaModel: "qwen3:4b-instruct",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
-      deepseekTimeoutMs: 8000,
-      timeoutMs: 8000
+      deepseekTimeoutMs: 8000
     }
   };
 }
@@ -65,7 +61,7 @@ function mainConfig(): AppConfig {
         ...value.profiles[0],
         name: "main",
         webhookPath: "/api/line/webhook/main",
-        allowedProviders: ["ollama"],
+        allowedProviders: ["deepseek"],
         providerPolicy: undefined
       }
     ]
@@ -106,8 +102,8 @@ describe("LLM provider admin commands", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(replyText.mock.calls[0]?.[1]).toContain("active: deepseek -> ollama");
-    expect(replyText.mock.calls[0]?.[1]).toContain("available: ollama, deepseek");
+    expect(replyText.mock.calls[0]?.[1]).toContain("active: deepseek");
+    expect(replyText.mock.calls[0]?.[1]).toContain("available: deepseek");
   });
 
   it("lists only providers allowed by the current profile", async () => {
@@ -132,8 +128,7 @@ describe("LLM provider admin commands", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(replyText.mock.calls[0]?.[1]).toContain("available: ollama");
-    expect(replyText.mock.calls[0]?.[1]).not.toContain("deepseek");
+    expect(replyText.mock.calls[0]?.[1]).toContain("available: deepseek");
   });
 
   it("does not advertise provider login or logout commands", async () => {

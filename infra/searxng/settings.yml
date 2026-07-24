@@ -16,7 +16,7 @@ search:
     - json
 
 server:
-  secret_key: ultrasecretkey
+  secret_key: PLACEHOLDER_SEARXNG_SECRET_KEY
   bind_address: 0.0.0.0
   limiter: false
   public_instance: false

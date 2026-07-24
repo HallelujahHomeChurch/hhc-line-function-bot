@@ -212,7 +212,7 @@ function handlerContext(): FunctionHandlerContext {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["query_schedule"],
-    allowedProviders: ["ollama"],
+    allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: {
       maxCandidates: 3,

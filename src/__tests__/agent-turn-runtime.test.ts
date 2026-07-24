@@ -34,7 +34,7 @@ function profile(
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions,
-    allowedProviders: ["ollama", "deepseek"],
+    allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
     schedulePolicy: {

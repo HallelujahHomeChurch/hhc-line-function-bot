@@ -3,12 +3,14 @@ import { SCHEDULE_KERNEL_CASES } from "./cases/schedule.js";
 import { RETRIEVAL_KERNEL_CASES } from "./cases/retrieval.js";
 import { SECURITY_AND_STATE_KERNEL_CASES } from "./cases/security-and-state.js";
 import { REAL_JOURNEY_KERNEL_CASES } from "./cases/real-journeys.js";
+import { REMOTE_RUNTIME_KERNEL_CASES } from "./cases/remote-runtime.js";
 
 export const KERNEL_ACCEPTANCE_CASES: KernelAcceptanceCase[] = [
   ...SCHEDULE_KERNEL_CASES,
   ...RETRIEVAL_KERNEL_CASES,
   ...SECURITY_AND_STATE_KERNEL_CASES,
-  ...REAL_JOURNEY_KERNEL_CASES
+  ...REAL_JOURNEY_KERNEL_CASES,
+  ...REMOTE_RUNTIME_KERNEL_CASES
 ];
 
 export function validateKernelCorpus(

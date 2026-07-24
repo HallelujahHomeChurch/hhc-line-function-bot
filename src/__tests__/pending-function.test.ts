@@ -143,6 +143,49 @@ describe("pending function answers", () => {
     expect(saveMemory).not.toHaveBeenCalled();
   });
 
+  it("does not let a pending URL collection consume an attachment confirmation", async () => {
+    const sessionStore = new InMemorySessionStore();
+    vi.spyOn(sessionStore, "findPendingFunction").mockResolvedValue({
+      id: "pending-url",
+      type: "pending_function",
+      action: "save_resource",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "user", userId: "U1" },
+      arguments: { url: "" },
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    vi.spyOn(sessionStore, "findPendingAttachment").mockResolvedValue({
+      id: "pending-attachment",
+      type: "pending_attachment",
+      action: "save_resource",
+      stage: "awaiting_confirmation",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "user", userId: "U1" },
+      attachment: { messageId: "line-message-id", messageType: "file" },
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck"
+      },
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const saveResource = vi.fn<FunctionHandler>();
+    const handler = createPendingFunctionTextMessageHandler({
+      sessionStore,
+      functions: { save_resource: saveResource }
+    });
+    const attachmentContext: TextMessageContext = {
+      ...context(),
+      profile: { ...context().profile, enabledFunctions: ["save_resource"] }
+    };
+
+    await expect(handler.matches({ text: "保存" }, attachmentContext)).resolves.toBe(false);
+    expect(saveResource).not.toHaveBeenCalled();
+  });
+
   it("persists a collected schedule after confirmation and makes exact and next queries available", async () => {
     const now = new Date("2026-07-14T12:31:00.000Z");
     const sessionStore = new InMemorySessionStore({ now: () => now });

@@ -3,15 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 import { runKnowledgeMigrations } from "../knowledge/migrations.js";
 
 describe("knowledge migrations", () => {
-  it("creates a 1024-dimension cosine HNSW index without installing pgvector", async () => {
+  it("clears only derived knowledge rows before rebuilding the 1536-dimension cosine HNSW index", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
 
     await runKnowledgeMigrations({ query });
 
     const sql = query.mock.calls.map(([statement]) => statement).join("\n");
-    expect(sql).toContain("embedding vector(1024)");
+    expect(sql).toContain("embedding vector(1536)");
+    expect(sql).toContain("delete from knowledge_embeddings");
+    expect(sql).toContain("delete from knowledge_chunks");
+    expect(sql).toContain("delete from knowledge_documents");
+    expect(sql).toContain("update knowledge_sources set last_synced_at=null");
+    expect(sql).toContain("alter column embedding type vector(1536)");
     expect(sql).toContain("vector_cosine_ops");
     expect(sql).toContain("using hnsw");
+    expect(sql).not.toMatch(/delete\s+from\s+knowledge_sources/iu);
     expect(sql).toContain("aliases text[] not null default '{}'");
     expect(sql).toContain("topics text[] not null default '{}'");
     expect(sql).toContain("sample_queries text[] not null default '{}'");
@@ -33,6 +39,23 @@ describe("knowledge migrations", () => {
     );
     expect(sql).toMatch(/alter table knowledge_chunks alter column section_key set not null/iu);
     expect(sql).not.toMatch(/create\s+extension/iu);
+
+    const rebuild = sql.match(/do \$\$[\s\S]*?end \$\$/iu)?.[0] ?? "";
+    expect(rebuild.indexOf("delete from knowledge_embeddings")).toBeLessThan(
+      rebuild.indexOf("delete from knowledge_chunks")
+    );
+    expect(rebuild.indexOf("delete from knowledge_chunks")).toBeLessThan(
+      rebuild.indexOf("delete from knowledge_documents")
+    );
+    expect(rebuild.indexOf("drop index if exists knowledge_embeddings_cosine_idx")).toBeLessThan(
+      rebuild.indexOf("alter table knowledge_embeddings alter column embedding type vector(1536)")
+    );
+    expect(
+      rebuild.indexOf("alter table knowledge_embeddings alter column embedding type vector(1536)")
+    ).toBeLessThan(rebuild.indexOf("add constraint knowledge_embeddings_dimensions_check"));
+    expect(rebuild.indexOf("add constraint knowledge_embeddings_dimensions_check")).toBeLessThan(
+      rebuild.indexOf("create index knowledge_embeddings_cosine_idx")
+    );
   });
 
   it("does not overwrite a staged permanent expiry when migrations rerun", async () => {

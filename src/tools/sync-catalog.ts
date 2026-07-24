@@ -4,7 +4,7 @@ import { syncCatalogSources } from "../catalog/sync-service.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
-import { createOllamaEmbeddingClient } from "../clients/ollama-embedding.js";
+import { createOpenAiEmbeddingClient } from "../clients/openai-embedding.js";
 import { loadConfigFromEnv } from "../config.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createScheduleStore } from "../schedules/create-schedule-store.js";
@@ -50,12 +50,12 @@ try {
   };
   if (config.knowledge) {
     const notionKnowledge = createNotionKnowledgeClient(config.knowledge.notionToken);
-    const embedding = createOllamaEmbeddingClient({
+    const embedding = createOpenAiEmbeddingClient({
+      apiKey: config.knowledge.embedding.apiKey,
       baseUrl: config.knowledge.embedding.baseUrl,
       model: config.knowledge.embedding.model,
       dimensions: config.knowledge.embedding.dimensions,
-      timeoutMs: config.knowledge.embedding.timeoutMs,
-      keepAlive: config.knowledge.embedding.keepAlive
+      timeoutMs: config.knowledge.embedding.timeoutMs
     });
     const requested = new Set(
       (process.env.KNOWLEDGE_SYNC_SOURCE_KEYS ?? "")

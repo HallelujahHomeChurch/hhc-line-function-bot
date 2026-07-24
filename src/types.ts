@@ -51,7 +51,7 @@ export type ActionName = FunctionName | SystemActionName | AdminActionName;
 
 export type JsonRecord = Record<string, unknown>;
 
-export const MODEL_PROVIDER_NAMES = ["ollama", "deepseek"] as const;
+export const MODEL_PROVIDER_NAMES = ["deepseek"] as const;
 
 export type ModelProviderName = (typeof MODEL_PROVIDER_NAMES)[number];
 export type RouteProviderName = ModelProviderName | "keyword" | "router";
@@ -261,10 +261,6 @@ export interface BotProfileConfig {
 
 export interface LlmConfig {
   provider?: ModelProviderName;
-  fallbackProvider?: ModelProviderName;
-  ollamaBaseUrl: string;
-  ollamaModel: string;
-  ollamaKeepAlive?: string | number;
   deepseekApiKey?: string;
   deepseekBaseUrl: string;
   deepseekModel: string;
@@ -274,7 +270,6 @@ export interface LlmConfig {
   contextCompressionThresholdRatio?: number;
   generalMaxOutputTokens?: number;
   routeMaxOutputTokens?: number;
-  timeoutMs: number;
 }
 
 export interface GraphConfig {
@@ -306,18 +301,6 @@ export interface WikipediaConfig {
   timeoutMs: number;
 }
 
-export interface VirusScanConfig {
-  endpoint: string;
-  apiKey?: string;
-  timeoutMs: number;
-}
-
-export interface ClamAvConfig {
-  host: string;
-  port: number;
-  timeoutMs: number;
-}
-
 export interface WebSearchConfig {
   searxngBaseUrl?: string;
   timeoutMs: number;
@@ -339,8 +322,6 @@ export interface AppConfig {
   graph?: GraphConfig;
   notion?: NotionConfig;
   wikipedia?: WikipediaConfig;
-  virusScan?: VirusScanConfig;
-  clamAv?: ClamAvConfig;
   webSearch?: WebSearchConfig;
   redis?: RedisConfig;
   database?: DatabaseConfig;
@@ -357,19 +338,20 @@ export interface ObservabilityConfig {
 export interface KnowledgeConfig {
   notionToken: string;
   embedding: {
-    provider: "ollama";
+    provider: "openai";
+    apiKey: string;
     baseUrl: string;
     model: string;
-    dimensions: 1024;
+    dimensions: 1536;
     batchSize: number;
     timeoutMs: number;
-    keepAlive: string | number;
   };
 }
 
 export interface AttachmentConfig {
   maxBytes: number;
   lineDownloadTimeoutMs: number;
+  scanQueueUrl?: string;
 }
 
 export interface ExternalResourceConfig {
@@ -402,7 +384,7 @@ export interface LastErrorsConfig {
   maxEntries: number;
 }
 
-export type DependencyName = "postgres" | "redis" | "ollama" | "embedding" | "graph" | "notion";
+export type DependencyName = "postgres" | "redis" | "embedding" | "graph" | "notion";
 
 export type DependencyStatusValue = "ok" | "degraded" | "missing" | "error";
 
@@ -844,25 +826,9 @@ export interface BinaryReadLimits {
 export interface LineContentClient {
   getMessageContent(
     messageId: string,
-    profile: BotProfileConfig,
+    profile: Pick<BotProfileConfig, "name" | "channelAccessToken">,
     limits: BinaryReadLimits
   ): Promise<LineContent>;
-}
-
-export interface VirusScanInput {
-  data: Uint8Array;
-  fileName: string;
-  contentType: string;
-  sha256: string;
-}
-
-export interface VirusScanResult {
-  status: "clean" | "infected" | "unavailable";
-  detail?: string;
-}
-
-export interface VirusScanner {
-  scan(input: VirusScanInput): Promise<VirusScanResult>;
 }
 
 export interface WebSearchInput {

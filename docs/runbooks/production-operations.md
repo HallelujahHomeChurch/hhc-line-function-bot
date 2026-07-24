@@ -3,7 +3,7 @@
 ## Health And Readiness
 
 - `GET /healthz` is liveness only. It returns minimal service status and must not expose profiles, functions, or provider details.
-- `GET /readyz` is public readiness for the data layer only. It checks Postgres and Redis, and must not mention Ollama, Graph, Notion, profile names, enabled functions, IDs, or secrets.
+- `GET /readyz` is public readiness for the data layer only. It checks Postgres and Redis, and must not mention model providers, Graph, Notion, profile names, enabled functions, IDs, or secrets.
 - Use LINE admin `/diag` in direct chat for detailed dependency diagnostics.
 
 ## Admin Diagnostics
@@ -22,13 +22,13 @@ Direct-message admin commands:
 /help admin all
 ```
 
-`/diag` may show dependency status for Ollama, Redis, Postgres, Graph, and Notion, but must not print tenant IDs, database IDs, folder IDs, LINE IDs, tokens, secrets, credential URLs, raw user messages, or invite codes.
+`/diag` may show dependency status for DeepSeek, OpenAI embeddings, Redis, Postgres, Graph, and Notion, but must not print tenant IDs, database IDs, folder IDs, LINE IDs, tokens, secrets, credential URLs, raw user messages, or invite codes.
 
-`/llm-use` and `/llm-status` are bootstrap superadmin direct-chat only. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes. `/llm-status` lists the current profile's lane policy, including which lanes use Ollama and which use DeepSeek. DeepSeek uses `DEEPSEEK_API_KEY` from ACA secrets or local `.env`.
+`/llm-use` and `/llm-status` are bootstrap superadmin direct-chat only. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes. `/llm-status` lists the current profile's DeepSeek-only lane policy. DeepSeek uses `DEEPSEEK_API_KEY` from ACA secrets or local `.env`.
 
 If upgrading from the removed direct OAuth provider, review `docs/sql/drop-legacy-llm-auth.sql` before manually dropping the old `llm_auth_profiles` table.
 
-Remote API providers are profile-scoped. Configure the internal `helper` profile with explicit `allowedProviders` such as `["ollama","deepseek"]` and a `providerPolicy` that keeps `function_routing`, `admin_routing`, and `memory_routing` on Ollama while using DeepSeek only for higher-value generation lanes such as `smart_talk`. Future official `main` profiles should define their own provider allowlist and lane policy.
+Model access is profile-scoped. Configure every LLM-enabled profile with `allowedProviders: ["deepseek"]` and `primary: "deepseek"` for every semantic lane. Semantic fallback entries are rejected.
 
 ## Provider Secrets
 
@@ -85,7 +85,7 @@ The line bot does not expose LLM auth callback routes. Public gateway routing sh
 ## Controlled Agent Evals
 
 - `pnpm eval:agent` is deterministic and offline. It exercises bounded candidates, planner proposals, plan validation, active tasks, and fail-closed recovery.
-- `pnpm eval:agent:live` is manual and uses the configured DeepSeek-primary/Ollama-fallback lane. Do not run it in CI/CD unless the pipeline has intentional model endpoints and secrets.
+- `pnpm eval:agent:live` is manual and uses the configured DeepSeek-only lane. Do not run it in CI/CD unless the pipeline has intentional model endpoints and secrets.
 
 ## Dependency Checks
 
@@ -93,7 +93,7 @@ The line bot does not expose LLM auth callback routes. Public gateway routing sh
 - Redis also stores requester-scoped conversation windows and long-running job results. If Redis is down, production should fail startup instead of silently losing those results.
 - Postgres: verify `DATABASE_URL` and `DATABASE_SSL` are set and `/readyz` shows Postgres `ok`.
 - Postgres stores access principals, audit events, and agent memory metadata.
-- Ollama: use `/llm-status` or `/diag`, not `/readyz`.
+- DeepSeek: use `/llm-status` or `/diag`, not `/readyz`.
 - Graph: use function smoke tests through LINE, then `/diag` for configured/not configured state.
 - Notion: use `pnpm check:notion` locally or function smoke tests through LINE, then `/diag` for configured/not configured state.
 
@@ -139,8 +139,10 @@ Required job settings:
 - `GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID`
 - `NOTION_TOKEN`
 - `NOTION_SERVICE_DATABASE_ID`
-- `OLLAMA_EMBEDDING_MODEL=bge-m3`
-- `EMBEDDING_BATCH_SIZE=16`, `EMBEDDING_TIMEOUT_MS=30000`, `EMBEDDING_KEEP_ALIVE=1m`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL=https://api.openai.com/v1`
+- `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`
+- `EMBEDDING_BATCH_SIZE=16`, `EMBEDDING_TIMEOUT_MS=30000`
 
 Manual run after deployment:
 
@@ -161,7 +163,7 @@ az containerapp job execution list `
 
 The sync output is JSON and includes catalog/schedule counters plus a `knowledge` summary with source, document, chunk, embedding, and failure counts. Knowledge sources use content hashes so unchanged chunks retain their embeddings. An embedding outage leaves lexical content searchable and marks the source pending for the next run. OneDrive sources persist the final Graph delta link after successful writes; later runs apply only changes and tombstone deleted items. A `410 Gone` clears the stale cursor and re-enumerates the source, while sources that cannot use delta fall back to the full crawl. If a source page disappears, the next successful sync tombstones its read-model rows.
 
-Before enabling `query_knowledge`, confirm `select extversion from pg_extension where extname='vector'`, pull `bge-m3` on the private Ollama host, and verify `/diag` reports `embedding: ok`. Use `ollama ps` on that host to inspect RAM/VRAM residency. Bulk knowledge synchronization is single-threaded in batches of 16 and should be scheduled off peak.
+Before enabling `query_knowledge`, confirm `select extversion from pg_extension where extname='vector'`, configure the OpenAI embedding credentials, and verify `/diag` reports `embedding: ok`. Bulk knowledge synchronization is single-threaded in batches of 16 and should be scheduled off peak.
 
 ## Rollback
 
@@ -190,7 +192,7 @@ Do not paste these into LINE, logs, commits, screenshots, or public issues:
 - LINE channel secret or access token.
 - `DEEPSEEK_API_KEY`.
 - Invite codes that have not expired.
-- `DATABASE_URL`, `REDIS_URL`, `OLLAMA_BASE_URL` if it reveals private network layout.
+- `DATABASE_URL` and `REDIS_URL` if they reveal private network layout.
 - Graph tenant/client/folder/drive IDs.
 - Notion token or database ID.
 - Raw user messages from production.
@@ -207,32 +209,9 @@ Do not add `image` or `file` to a production profile's `allowedMessageTypes` unt
 
 - `save_resource` is granted only to the intended helper users/groups.
 - The target catalog sources have write capabilities and real OneDrive folder IDs.
-- `CLAMAV_HOST` and `CLAMAV_PORT` point to a private reachable `clamd` service. The HTTP scanner settings are only a compatibility fallback.
 - Redis is configured so pending attachment sessions are not lost across restarts or replicas.
+- The finite attachment-scan worker has a local ClamAV database, a current signature manifest, and the queue/job configuration required to process confirmed attachments.
 
-The webhook entrance still only creates a short-lived pending attachment session and asks for purpose. The later pending-attachment handler downloads the LINE content only after the requester provides a supported purpose, then validates size, MIME/magic bytes, extension, safe filename, hash, and virus scan. It previews the resolved name/type and requires the requester to reply `保存` before uploading to OneDrive and upserting catalog metadata.
+The webhook entrance still only creates a short-lived pending attachment session and asks for purpose. After final confirmation it queues opaque work; the finite worker downloads the LINE content, validates size, MIME/magic bytes, extension, safe filename, and hash, then scans it locally. It publishes only after a `clean` result with a current signature manifest.
 
-If the scanner is missing, times out, returns a non-2xx response, or returns any status other than `clean`, publishing fails closed. The bot should not bypass this for production.
-
-## Office Local Services
-
-SearXNG and ClamAV run on the office Windows workstation from
-[`infra/local-services/docker-compose.yml`](../../infra/local-services/docker-compose.yml).
-Both containers use `restart: unless-stopped`, persistent volumes, bounded logs,
-and health checks. Run the reconciler manually with:
-
-```powershell
-.\scripts\start-local-services.ps1
-```
-
-Install the logon startup entry with:
-
-```powershell
-.\scripts\install-local-services-autostart.ps1
-```
-
-The installer prefers an ONLOGON Scheduled Task and falls back to the current
-user Startup folder when Task Scheduler registration is not permitted. The
-startup script launches Docker Desktop when needed, waits for the engine, and
-runs `docker compose up -d`. The bastion relays ports 8888 and 3310 only across
-the private VNet/Tailscale path; do not expose either service publicly.
+If the worker, scanner, manifest, or queue is unavailable, or the scan result is anything other than `clean`, publishing fails closed. The bot should not bypass this for production.

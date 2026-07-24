@@ -10,6 +10,7 @@ import type { RedisLastErrorClient } from "./observability/create-last-error-sto
 import type { RedisRateLimitClient } from "./rate-limit.js";
 import type { RedisSessionClient } from "./state/redis-session-store.js";
 import type { RedisAgentJobClient } from "./agent/jobs.js";
+import type { RedisAttachmentScanWorkClient } from "./attachments/scan-work-store.js";
 import type { RedisConversationWindowClient } from "./agent/context-manager.js";
 import type { RedisAgentTraceClient } from "./agent/trace-store.js";
 import type { RedisWebhookEventClient } from "./idempotency/webhook-event-store.js";
@@ -24,6 +25,7 @@ export interface RedisRuntime {
     DiagnosticRedisClient &
     RedisInFlightClient &
     RedisAgentJobClient &
+    RedisAttachmentScanWorkClient &
     RedisAgentTraceClient &
     RedisWebhookEventClient &
     RedisConversationWindowClient;
@@ -31,16 +33,21 @@ export interface RedisRuntime {
 }
 
 export async function createRedisRuntime(
-  config: RedisConfig | undefined
+  config: RedisConfig | undefined,
+  options: { onError?: (error: unknown) => void } = {}
 ): Promise<RedisRuntime | undefined> {
   if (!config) {
     return undefined;
   }
 
   const client = createClient({ url: config.url });
-  client.on("error", (error) => {
-    console.error("Redis client error", error);
-  });
+  client.on(
+    "error",
+    options.onError ??
+      ((error) => {
+        console.error("Redis client error", error);
+      })
+  );
   await client.connect();
 
   return {

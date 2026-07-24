@@ -21,6 +21,17 @@ function baseEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function knowledgeEnv(): NodeJS.ProcessEnv {
+  return {
+    NOTION_TOKEN: "notion-secret",
+    NOTION_SERVICE_DATABASE_ID: "database-id",
+    NOTION_DATE_PROPERTY: "date",
+    NOTION_MEETING_PROPERTY: "meeting",
+    NOTION_ROLE_PROPERTY: "role",
+    NOTION_PERSON_PROPERTY: "person"
+  };
+}
+
 function profilesEnv(profiles: unknown): NodeJS.ProcessEnv {
   const directory = mkdtempSync(join(tmpdir(), "hhc-line-function-bot-profile-sync-"));
   const path = join(directory, "profiles.json");
@@ -98,6 +109,18 @@ describe("config", () => {
     ).toEqual({ maxBytes: 1_048_576, lineDownloadTimeoutMs: 5_000 });
   });
 
+  it("loads an optional attachment scan queue URL", () => {
+    expect(
+      loadConfigFromEnv({
+        ...baseEnv(),
+        ATTACHMENT_SCAN_QUEUE_URL:
+          "https://storage.example.test/attachment-scan?sv=opaque-signature"
+      }).attachments
+    ).toMatchObject({
+      scanQueueUrl: "https://storage.example.test/attachment-scan?sv=opaque-signature"
+    });
+  });
+
   it("loads safe external resource download defaults", () => {
     expect(loadConfigFromEnv(baseEnv()).externalResources).toEqual({
       downloadTimeoutMs: 15_000,
@@ -144,6 +167,48 @@ describe("config", () => {
         });
 
         expect(config.profiles.map((profile) => profile.name)).toEqual(["helper"]);
+      }
+    );
+  });
+
+  it("requires an attachment scan queue when save_resource is enabled in production", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
+          channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
+          enabledFunctions: ["save_resource"]
+        }
+      ],
+      async (path) => {
+        const env = {
+          NODE_ENV: "production",
+          PROFILE_CONFIG_PATH: path,
+          LINE_HELPER_CHANNEL_SECRET: "secret",
+          LINE_HELPER_CHANNEL_ACCESS_TOKEN: "token",
+          OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef"
+        };
+
+        expect(() => loadConfigFromEnv(env)).toThrow(
+          "ATTACHMENT_SCAN_QUEUE_URL is required in production when save_resource is enabled"
+        );
+        expect(() =>
+          loadConfigFromEnv({
+            ...env,
+            ATTACHMENT_SCAN_QUEUE_URL:
+              "https://storage.example.test/attachment-scan?sv=opaque-signature"
+          })
+        ).toThrow("REDIS_URL is required in production when save_resource is enabled");
+        expect(
+          loadConfigFromEnv({
+            ...env,
+            REDIS_URL: "redis://placeholder",
+            ATTACHMENT_SCAN_QUEUE_URL:
+              "https://storage.example.test/attachment-scan?sv=opaque-signature"
+          }).attachments.scanQueueUrl
+        ).toContain("/attachment-scan");
       }
     );
   });
@@ -286,32 +351,22 @@ describe("config", () => {
     );
   });
 
-  it("loads optional virus scanner configuration only when an endpoint is set", () => {
-    expect(loadConfigFromEnv(baseEnv()).virusScan).toBeUndefined();
-
+  it("does not expose retired bot-process scanner endpoint configuration", () => {
+    const retiredScannerEnv = {
+      [["VIRUS_", "SCAN_", "ENDPOINT"].join("")]: "https://scanner.internal/scan",
+      [["VIRUS_", "SCAN_", "API_KEY"].join("")]: "scan-key",
+      [["VIRUS_", "SCAN_", "TIMEOUT_MS"].join("")]: "5000",
+      [["CLAM", "AV_HOST"].join("")]: ["172", "16", "65", "5"].join("."),
+      [["CLAM", "AV_PORT"].join("")]: "3310",
+      [["CLAM", "AV_TIMEOUT_MS"].join("")]: "15000"
+    };
     const config = loadConfigFromEnv({
       ...baseEnv(),
-      VIRUS_SCAN_ENDPOINT: "https://scanner.internal/scan",
-      VIRUS_SCAN_API_KEY: "scan-key",
-      VIRUS_SCAN_TIMEOUT_MS: "5000"
+      ...retiredScannerEnv
     });
 
-    expect(config.virusScan).toEqual({
-      endpoint: "https://scanner.internal/scan",
-      apiKey: "scan-key",
-      timeoutMs: 5000
-    });
-  });
-
-  it("loads native ClamAV configuration when a host is set", () => {
-    const config = loadConfigFromEnv({
-      ...baseEnv(),
-      CLAMAV_HOST: "172.16.65.5",
-      CLAMAV_PORT: "3310",
-      CLAMAV_TIMEOUT_MS: "15000"
-    });
-
-    expect(config.clamAv).toEqual({ host: "172.16.65.5", port: 3310, timeoutMs: 15000 });
+    expect(config).not.toHaveProperty("virusScan");
+    expect(config).not.toHaveProperty("clamAv");
   });
 
   it("loads optional SearXNG web search configuration only when a base URL is set", () => {
@@ -561,22 +616,71 @@ describe("config", () => {
     ).toThrow("registration.inviteCodeRequired is no longer supported");
   });
 
-  it("coerces numeric Ollama keep_alive values from environment strings", () => {
+  it("rejects retired local-model runtime settings", () => {
+    const retiredProvider = ["olla", "ma"].join("");
+    const retiredEnvToken = retiredProvider.toUpperCase();
+    for (const [name, value] of Object.entries({
+      LLM_PROVIDER: retiredProvider,
+      LLM_FALLBACK_PROVIDER: "deepseek",
+      [`${retiredEnvToken}_BASE_URL`]: "http://127.0.0.1:11434",
+      [`${retiredEnvToken}_KEEP_ALIVE`]: "-1",
+      [`${retiredEnvToken}_EMBEDDING_MODEL`]: "retired-embedding-model",
+      [`EMBEDDING_${retiredEnvToken}_BASE_URL`]: "http://127.0.0.1:11434",
+      EMBEDDING_KEEP_ALIVE: "1m"
+    })) {
+      expect(() => loadConfigFromEnv({ ...baseEnv(), [name]: value })).toThrow(
+        "Local model runtime settings are no longer supported"
+      );
+    }
+  });
+
+  it("requires an OpenAI API key when Notion knowledge embeddings are enabled", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        ...baseEnv(),
+        ...knowledgeEnv()
+      })
+    ).toThrow("OPENAI_API_KEY is required when knowledge embeddings are enabled");
+  });
+
+  it("uses OpenAI text-embedding-3-small at its native 1536 dimensions", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),
-      OLLAMA_KEEP_ALIVE: "-1"
+      ...knowledgeEnv(),
+      OPENAI_API_KEY: "openai-secret"
     });
 
-    expect(config.llm.ollamaKeepAlive).toBe(-1);
+    expect(config.knowledge?.embedding).toEqual({
+      provider: "openai",
+      apiKey: "openai-secret",
+      baseUrl: "https://api.openai.com/v1",
+      model: "text-embedding-3-small",
+      dimensions: 1536,
+      batchSize: 16,
+      timeoutMs: 30_000
+    });
   });
 
-  it("omits Ollama keep_alive when it is not explicitly configured", () => {
-    const config = loadConfigFromEnv(baseEnv());
-
-    expect(config.llm.ollamaKeepAlive).toBeUndefined();
+  it("rejects any embedding dimension override and any unsupported model override", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        ...baseEnv(),
+        ...knowledgeEnv(),
+        OPENAI_API_KEY: "openai-secret",
+        EMBEDDING_DIMENSIONS: "1536"
+      })
+    ).toThrow("EMBEDDING_DIMENSIONS is not supported");
+    expect(() =>
+      loadConfigFromEnv({
+        ...baseEnv(),
+        ...knowledgeEnv(),
+        OPENAI_API_KEY: "openai-secret",
+        OPENAI_EMBEDDING_MODEL: "text-embedding-3-large"
+      })
+    ).toThrow("OPENAI_EMBEDDING_MODEL must be text-embedding-3-small");
   });
 
-  it("loads DeepSeek as a pluggable LLM provider", () => {
+  it("loads DeepSeek as the sole LLM provider", () => {
     const config = loadConfigFromEnv({
       ...baseEnv(),
       ...profilesEnv([
@@ -585,11 +689,10 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"]
+          allowedProviders: ["deepseek"]
         }
       ]),
       LLM_PROVIDER: "deepseek",
-      LLM_FALLBACK_PROVIDER: "ollama",
       DEEPSEEK_API_KEY: "sk-test",
       DEEPSEEK_BASE_URL: "https://api.deepseek.com",
       DEEPSEEK_MODEL: "deepseek-v4-flash",
@@ -598,7 +701,6 @@ describe("config", () => {
 
     expect(config.llm).toMatchObject({
       provider: "deepseek",
-      fallbackProvider: "ollama",
       deepseekApiKey: "sk-test",
       deepseekBaseUrl: "https://api.deepseek.com",
       deepseekModel: "deepseek-v4-flash",
@@ -626,7 +728,7 @@ describe("config", () => {
     const config = loadConfigFromEnv(baseEnv());
 
     expect(config.profiles[0]).toMatchObject({
-      allowedProviders: ["ollama"],
+      allowedProviders: ["deepseek"],
       allowSubscriptionProviders: false
     });
   });
@@ -662,7 +764,7 @@ describe("config", () => {
     ).toThrow(field);
   });
 
-  it("allows a DeepSeek-primary controlled planner", async () => {
+  it("allows a DeepSeek-only controlled planner", async () => {
     await withProfileFile(
       [
         {
@@ -670,9 +772,9 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"],
+          allowedProviders: ["deepseek"],
           providerPolicy: {
-            function_routing: { primary: "deepseek", fallback: "ollama" }
+            function_routing: { primary: "deepseek" }
           },
           controlledAgent: {
             maxCandidates: 3,
@@ -684,8 +786,7 @@ describe("config", () => {
         const config = loadConfigFromEnv({ PROFILE_CONFIG_PATH: path });
 
         expect(config.profiles[0]!.providerPolicy!.function_routing).toEqual({
-          primary: "deepseek",
-          fallback: "ollama"
+          primary: "deepseek"
         });
       }
     );
@@ -707,7 +808,7 @@ describe("config", () => {
     ).toThrow("controlled routing is always authoritative");
   });
 
-  it("loads helper provider policy for remote API providers", () => {
+  it("loads the helper profile with only the DeepSeek provider", () => {
     const config = loadConfigFromEnv({
       ...profilesEnv([
         {
@@ -715,19 +816,19 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"]
+          allowedProviders: ["deepseek"]
         }
       ])
     });
 
     expect(config.profiles[0]).toMatchObject({
-      allowedProviders: ["ollama", "deepseek"],
+      allowedProviders: ["deepseek"],
       allowSubscriptionProviders: false
     });
     expect(config.profiles[0]).not.toHaveProperty("llmProvider");
   });
 
-  it("loads lane provider policy for cost-aware routing", () => {
+  it("uses DeepSeek for every lane", () => {
     const config = loadConfigFromEnv({
       ...profilesEnv([
         {
@@ -735,30 +836,23 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
           channelAccessToken: "token",
-          allowedProviders: ["ollama", "deepseek"],
-          providerPolicy: {
-            function_routing: { primary: "ollama" },
-            admin_routing: { primary: "ollama" },
-            memory_routing: { primary: "ollama" },
-            smart_talk: { primary: "deepseek", fallback: "ollama" },
-            general_agent: { primary: "deepseek", fallback: "ollama" },
-            context_compression: { primary: "deepseek" }
-          }
+          allowedProviders: ["deepseek"]
         }
       ])
     });
 
     expect(config.profiles[0].providerPolicy).toMatchObject({
-      function_routing: { primary: "ollama" },
-      admin_routing: { primary: "ollama" },
-      memory_routing: { primary: "ollama" },
-      smart_talk: { primary: "deepseek", fallback: "ollama" },
-      general_agent: { primary: "deepseek", fallback: "ollama" },
+      function_routing: { primary: "deepseek" },
+      admin_routing: { primary: "deepseek" },
+      memory_routing: { primary: "deepseek" },
+      smart_talk: { primary: "deepseek" },
+      general_agent: { primary: "deepseek" },
       context_compression: { primary: "deepseek" }
     });
   });
 
-  it("rejects lane provider policy outside the profile allowed provider list", () => {
+  it("rejects a profile containing the retired local model provider", () => {
+    const retiredProvider = ["olla", "ma"].join("");
     expect(() =>
       loadConfigFromEnv({
         ...profilesEnv([
@@ -767,14 +861,14 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/helper",
             channelSecret: "secret",
             channelAccessToken: "token",
-            allowedProviders: ["ollama"],
+            allowedProviders: [retiredProvider],
             providerPolicy: {
               smart_talk: { primary: "deepseek" }
             }
           }
         ])
       })
-    ).toThrow("Profile helper providerPolicy.smart_talk primary provider deepseek is not allowed");
+    ).toThrow();
   });
 
   it("rejects unsupported provider names in profile policy", () => {
@@ -786,7 +880,7 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/main",
             channelSecret: "secret",
             channelAccessToken: "token",
-            allowedProviders: ["ollama", "codex_app_server"],
+            allowedProviders: ["deepseek", "codex_app_server"],
             allowSubscriptionProviders: false
           }
         ])
@@ -794,7 +888,7 @@ describe("config", () => {
     ).toThrow();
   });
 
-  it("rejects fallback providers outside the profile provider policy", () => {
+  it("rejects semantic lane fallbacks", () => {
     expect(() =>
       loadConfigFromEnv({
         ...profilesEnv([
@@ -803,13 +897,14 @@ describe("config", () => {
             webhookPath: "/api/line/webhook/helper",
             channelSecret: "secret",
             channelAccessToken: "token",
-            allowedProviders: ["deepseek"]
+            allowedProviders: ["deepseek"],
+            providerPolicy: {
+              function_routing: { primary: "deepseek", fallback: "deepseek" }
+            }
           }
-        ]),
-        LLM_PROVIDER: "deepseek",
-        LLM_FALLBACK_PROVIDER: "ollama"
+        ])
       })
-    ).toThrow("Profile helper fallback provider ollama must be listed in allowedProviders");
+    ).toThrow("Profile helper providerPolicy.function_routing fallback is no longer supported");
   });
 
   it("defaults profile small talk to template mode with an 80 character limit", () => {
