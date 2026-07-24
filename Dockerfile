@@ -26,6 +26,12 @@ RUN apt-get update \
       "clamav=${CLAMAV_VERSION}" \
       "clamav-base=${CLAMAV_VERSION}" \
       "clamav-freshclam=${CLAMAV_VERSION}" \
+    && sed -i \
+      's#^UpdateLogFile .*#UpdateLogFile /tmp/hhc-line-bot-freshclam.log#' \
+      /etc/clamav/freshclam.conf \
+    && grep -Fxq \
+      'UpdateLogFile /tmp/hhc-line-bot-freshclam.log' \
+      /etc/clamav/freshclam.conf \
     && rm -rf /var/lib/apt/lists/*
 LABEL org.opencontainers.image.source="https://github.com/HallelujahHomeChurch/hhc-line-function-bot"
 LABEL org.opencontainers.image.description="Finite LINE attachment scan and signature refresh worker"
