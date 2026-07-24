@@ -126,6 +126,7 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
           queryEmbedding,
           embeddingProvider: options.embedding?.provider,
           embeddingModel: options.embedding?.model,
+          embeddingDimensions: options.embedding?.dimensions,
           ordinal: args.ordinal,
           sourceIds: sourceResolution.sources.map(({ id }) => id)
         });
@@ -408,6 +409,7 @@ async function searchScopes(
         queryEmbedding: input.queryEmbedding,
         embeddingProvider: options.embedding?.provider,
         embeddingModel: options.embedding?.model,
+        embeddingDimensions: options.embedding?.dimensions,
         sourceId: input.sourceId,
         sourceIds: input.sourceIds,
         ...scope,

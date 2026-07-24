@@ -93,6 +93,7 @@ export interface KnowledgeSearchInput {
   queryEmbedding?: number[];
   embeddingProvider?: string;
   embeddingModel?: string;
+  embeddingDimensions?: number;
   sourceId?: string;
   sourceIds?: string[];
   sourceKey?: string;
@@ -108,6 +109,7 @@ export interface KnowledgeTopPerSourceInput {
   queryEmbedding?: number[];
   embeddingProvider?: string;
   embeddingModel?: string;
+  embeddingDimensions?: number;
   ordinal?: number;
   sourceIds: string[];
 }

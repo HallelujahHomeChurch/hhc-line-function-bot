@@ -3,13 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { runKnowledgeMigrations } from "../knowledge/migrations.js";
 
 describe("knowledge migrations", () => {
-  it("creates a 1024-dimension cosine HNSW index without installing pgvector", async () => {
+  it("rebuilds derived knowledge data before creating a 1536-dimension cosine HNSW index", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
 
     await runKnowledgeMigrations({ query });
 
     const sql = query.mock.calls.map(([statement]) => statement).join("\n");
-    expect(sql).toContain("embedding vector(1024)");
+    expect(sql).toContain("embedding vector(1536)");
+    expect(sql).toContain("delete from knowledge_documents");
+    expect(sql).toContain("update knowledge_sources set last_synced_at=null");
+    expect(sql).toContain("alter column embedding type vector(1536)");
     expect(sql).toContain("vector_cosine_ops");
     expect(sql).toContain("using hnsw");
     expect(sql).toContain("aliases text[] not null default '{}'");

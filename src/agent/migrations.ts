@@ -205,7 +205,7 @@ const migrations = [
   `,
   `
   alter table agent_text_memories
-    add column if not exists embedding vector(1024)
+    add column if not exists embedding vector(1536)
   `,
   `
   create index if not exists agent_text_memories_search_idx
@@ -218,6 +218,24 @@ const migrations = [
   create index if not exists agent_text_memories_embedding_idx
   on agent_text_memories using hnsw (embedding vector_cosine_ops)
   where deleted_at is null and embedding is not null
+  `,
+  `
+  do $$
+  begin
+    if exists (
+      select 1 from pg_attribute a
+      join pg_class c on c.oid=a.attrelid
+      where c.relname='agent_text_memories' and a.attname='embedding'
+        and format_type(a.atttypid,a.atttypmod)='vector(1024)'
+    ) then
+      drop index if exists agent_text_memories_embedding_idx;
+      update agent_text_memories set embedding=null where embedding is not null;
+      alter table agent_text_memories alter column embedding type vector(1536);
+      create index agent_text_memories_embedding_idx
+        on agent_text_memories using hnsw (embedding vector_cosine_ops)
+        where deleted_at is null and embedding is not null;
+    end if;
+  end $$
   `,
   `
   alter table agent_resources

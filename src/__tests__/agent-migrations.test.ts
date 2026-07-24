@@ -23,7 +23,9 @@ describe("agent memory migrations", () => {
     await runAgentMemoryMigrations({ query });
 
     const sql = query.mock.calls.map(([statement]) => String(statement)).join("\n");
-    expect(sql).toContain("embedding vector(1024)");
+    expect(sql).toContain("embedding vector(1536)");
+    expect(sql).toContain("update agent_text_memories set embedding=null");
+    expect(sql).toContain("alter column embedding type vector(1536)");
     expect(sql).toContain("agent_text_memories_search_idx");
     expect(sql).toContain("agent_text_memories_embedding_idx");
     expect(sql).toContain("if not exists");
