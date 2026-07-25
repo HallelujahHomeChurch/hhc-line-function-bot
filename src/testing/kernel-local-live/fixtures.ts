@@ -87,7 +87,7 @@ export async function seedKernelLocalLiveFixtures(options: {
         origin: "line",
         serviceDate: "2026-07-27",
         meeting: "Synthetic Morning",
-        role: "Projection",
+        role: "投影",
         assignee: "Synthetic A"
       },
       {
@@ -96,7 +96,7 @@ export async function seedKernelLocalLiveFixtures(options: {
         origin: "line",
         serviceDate: "2026-07-27",
         meeting: "Synthetic Morning",
-        role: "Audio",
+        role: "音控",
         assignee: "Synthetic B"
       },
       {
@@ -105,7 +105,7 @@ export async function seedKernelLocalLiveFixtures(options: {
         origin: "line",
         serviceDate: "2026-08-03",
         meeting: "Synthetic Evening",
-        role: "Projection",
+        role: "投影",
         assignee: "Synthetic C"
       }
     ]

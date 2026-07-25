@@ -28,15 +28,15 @@ const GROUP_USER_B = {
 export const KERNEL_LOCAL_LIVE_JOURNEYS: readonly Readonly<KernelLocalLiveJourneyDefinition>[] =
   Object.freeze([
     journey("schedule-explicit", "execute", [
-      textTurn("schedule-explicit", 0, USER_A, "查 synthetic service 2026-07-27 Projection 服事")
+      textTurn("schedule-explicit", 0, USER_A, "查 synthetic service 2026-07-27 投影服事")
     ]),
     journey("schedule-refinement", "active_task_continuation", [
       textTurn("schedule-refinement", 0, USER_A, "查 synthetic service 2026-07-27 服事"),
-      textTurn("schedule-refinement", 1, USER_A, "只看 Projection")
+      textTurn("schedule-refinement", 1, USER_A, "只看投影")
     ]),
     journey("schedule-ambiguity", "clarify", [textTurn("schedule-ambiguity", 0, USER_A, "查服事")]),
     journey("capability-switch", "explicit_switch", [
-      textTurn("capability-switch", 0, USER_A, "查 synthetic service 2026-07-27 Projection 服事"),
+      textTurn("capability-switch", 0, USER_A, "查 synthetic service 2026-07-27 投影服事"),
       textTurn("capability-switch", 1, USER_A, "改查知識 synthetic alpha procedure")
     ]),
     journey("knowledge-follow-up", "grounded_follow_up", [
@@ -44,10 +44,10 @@ export const KERNEL_LOCAL_LIVE_JOURNEYS: readonly Readonly<KernelLocalLiveJourne
       textTurn("knowledge-follow-up", 1, USER_A, "最後由哪個 role 驗證？")
     ]),
     journey("group-requester-isolation", "requester_isolated", [
-      textTurn("group-requester-isolation", 0, GROUP_USER_B, "只看 Projection")
+      textTurn("group-requester-isolation", 0, GROUP_USER_B, "只看投影")
     ]),
     journey("provider-unavailable", "providers_unavailable", [
-      textTurn("provider-unavailable", 0, USER_A, "查 synthetic service 2026-07-27 Projection 服事")
+      textTurn("provider-unavailable", 0, USER_A, "查 synthetic service 2026-07-27 投影服事")
     ]),
     journey("write-preview-confirm", "confirmed_local_write", [
       fileTurn("write-preview-confirm", 0, USER_A),

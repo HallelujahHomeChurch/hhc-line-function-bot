@@ -138,7 +138,7 @@ export function createKernelLocalLiveConfig(
               key: "synthetic_service",
               displayName: "Synthetic Service",
               aliases: ["synthetic service"],
-              routingHints: ["Projection", "Audio"],
+              routingHints: ["投影", "音控"],
               schemaVersion: 1,
               inputSchema: "assignment_rows_v1",
               occurrencePolicy: "profile_meeting_windows_v1",

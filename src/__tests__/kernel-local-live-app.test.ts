@@ -343,6 +343,21 @@ describe("Kernel local live fixtures", () => {
       runtime.stores.schedule.searchItems({ profileName: "acceptance", limit: 10 })
     ).resolves.toHaveLength(3);
     await expect(
+      runtime.stores.schedule.searchItems({
+        profileName: "acceptance",
+        sourceKeys: ["synthetic-schedule"],
+        serviceDate: "2026-07-27",
+        role: "投影",
+        limit: 10
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        serviceDate: "2026-07-27",
+        role: "投影",
+        assignee: "Synthetic A"
+      })
+    ]);
+    await expect(
       runtime.stores.catalog.listSources({
         profileName: "acceptance",
         sourceKeys: ["xiaoha_database"]
