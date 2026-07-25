@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { signLineBody } from "../line-signature.js";
-import { createApp } from "../server.js";
+import { createTestApp as createApp } from "../testing/create-test-app.js";
 import type { AppConfig, LineReplyClient } from "../types.js";
 
 function config(): AppConfig {

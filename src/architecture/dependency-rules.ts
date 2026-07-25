@@ -11,14 +11,16 @@ export interface BoundaryViolation {
   rule: string;
 }
 
-type ModuleLayer = "bootstrap" | "transport" | "application" | "capabilities" | "infrastructure";
+type ModuleLayer =
+  "bootstrap" | "transport" | "application" | "capabilities" | "infrastructure" | "testing";
 
 const FORBIDDEN_IMPORTS: Record<ModuleLayer, ModuleLayer[]> = {
-  bootstrap: [],
-  transport: ["bootstrap", "infrastructure"],
-  application: ["bootstrap", "transport", "infrastructure"],
-  capabilities: ["bootstrap", "transport", "infrastructure"],
-  infrastructure: ["bootstrap", "transport"]
+  bootstrap: ["testing"],
+  transport: ["bootstrap", "infrastructure", "testing"],
+  application: ["bootstrap", "transport", "infrastructure", "testing"],
+  capabilities: ["bootstrap", "transport", "infrastructure", "testing"],
+  infrastructure: ["bootstrap", "transport", "testing"],
+  testing: []
 };
 
 const IMPORT_PATTERN =
@@ -46,12 +48,15 @@ export function checkDependencyBoundaries(files: SourceFile[]): BoundaryViolatio
       continue;
     }
 
-    for (const specifier of importSpecifiers(file.source)) {
+    for (const { specifier, typeOnly } of importSpecifiers(file.source)) {
       if (!specifier.startsWith(".")) {
         continue;
       }
       const imported = resolveSourceImport(importer, specifier);
       const importedLayer = layerFor(imported);
+      if (typeOnly && importedLayer === "infrastructure") {
+        continue;
+      }
       if (!importedLayer || !FORBIDDEN_IMPORTS[importerLayer].includes(importedLayer)) {
         continue;
       }
@@ -70,8 +75,11 @@ export function checkDependencyBoundaries(files: SourceFile[]): BoundaryViolatio
   );
 }
 
-function importSpecifiers(source: string): string[] {
-  return [...source.matchAll(IMPORT_PATTERN)].map((match) => match[1] ?? match[2]);
+function importSpecifiers(source: string): Array<{ specifier: string; typeOnly: boolean }> {
+  return [...source.matchAll(IMPORT_PATTERN)].map((match) => ({
+    specifier: match[1] ?? match[2],
+    typeOnly: /^\s*(?:import|export)\s+type\b/u.test(match[0])
+  }));
 }
 
 function resolveSourceImport(importer: string, specifier: string): string {
@@ -85,6 +93,15 @@ function normalizeSourcePath(filePath: string): string {
 }
 
 function layerFor(filePath: string): ModuleLayer | undefined {
+  if (/^src\/(?:__tests__|testing)\//u.test(filePath)) {
+    return "testing";
+  }
+  if (
+    /^src\/(?:clients|db|state|cache|access|in-flight|idempotency)\//u.test(filePath) ||
+    /^src\/(?:redis|rate-limit)\.ts$/u.test(filePath)
+  ) {
+    return "infrastructure";
+  }
   const match = /^src\/(bootstrap|transport|application|capabilities|infrastructure)\//u.exec(
     filePath
   );

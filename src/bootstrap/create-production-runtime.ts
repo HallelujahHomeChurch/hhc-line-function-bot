@@ -11,6 +11,7 @@ import {
 import { createAgentMemoryStore } from "../agent/create-agent-memory-store.js";
 import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
 import { createAgentRuntime } from "../agent/agent-runtime.js";
+import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { createAgentPlanner } from "../agent/planner.js";
 import { createControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import {
@@ -28,13 +29,20 @@ import {
   RedisAttachmentScanWorkStore
 } from "../attachments/scan-work-store.js";
 import { startAttachmentScanOutboxDispatcher } from "../attachments/scan-outbox.js";
-import { RedisConversationWindowStore } from "../agent/context-manager.js";
-import { RedisAgentTraceStore } from "../agent/trace-store.js";
+import {
+  InMemoryConversationWindowStore,
+  RedisConversationWindowStore
+} from "../agent/context-manager.js";
+import { InMemoryAgentTraceStore, RedisAgentTraceStore } from "../agent/trace-store.js";
 import { createCacheStore } from "../cache/create-cache-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
-import { createLineSdkContentClient } from "../clients/line.js";
+import {
+  createLineSdkContentClient,
+  createLineSdkIdentityClient,
+  createLineSdkReplyClient
+} from "../clients/line.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { createSearxngClient } from "../clients/searxng.js";
@@ -60,11 +68,22 @@ import { createSheetMusicExternalSearchSummarizer } from "../search/sheet-music-
 import { createApp } from "../server.js";
 import { createSessionStore } from "../state/create-session-store.js";
 import type { AppConfig } from "../types.js";
-import { assertProductionPersistence, type ProductionRuntime } from "./runtime-contracts.js";
+import {
+  assertProductionPersistence,
+  type ApplicationRuntime,
+  type ProductionRuntime
+} from "./runtime-contracts.js";
 
 export async function createProductionRuntime(config: AppConfig): Promise<ProductionRuntime> {
   assertProductionPersistence(config);
+  return createRuntime(config);
+}
 
+export async function createLocalRuntime(config: AppConfig): Promise<ApplicationRuntime> {
+  return createRuntime(config);
+}
+
+async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const redis = await createRedisRuntime(config.redis);
   const postgres = await createPostgresRuntime(config.database);
 
@@ -131,7 +150,7 @@ export async function createProductionRuntime(config: AppConfig): Promise<Produc
     : undefined;
   const registrationInviteCodeStore = redis
     ? new RedisRegistrationInviteCodeStore({ client: redis.client, keyPrefix: redis.keyPrefix })
-    : undefined;
+    : new InMemoryRegistrationInviteCodeStore();
   const confirmationStore = redis
     ? new RedisConfirmationStore({ client: redis.client, keyPrefix: redis.keyPrefix })
     : undefined;
@@ -142,7 +161,7 @@ export async function createProductionRuntime(config: AppConfig): Promise<Produc
         keyPrefix: redis.keyPrefix,
         maxEntries: config.lastErrors?.maxEntries ?? 20
       })
-    : undefined;
+    : new InMemoryAgentTraceStore(config.lastErrors?.maxEntries ?? 20);
   const cache = createCacheStore({ redis });
   const catalog = await createCatalogStore({ db: postgres?.pool });
   await seedCatalogSources({
@@ -210,8 +229,7 @@ export async function createProductionRuntime(config: AppConfig): Promise<Produc
     : undefined;
   const knowledgeAdminActionRegistry = createAdminActionRegistry({
     accessStore,
-    registrationInviteCodeStore:
-      registrationInviteCodeStore ?? new InMemoryRegistrationInviteCodeStore(),
+    registrationInviteCodeStore: registrationInviteCodeStore,
     registrationInviteCodeTtlMinutes: config.access?.registrationInviteCodeTtlMinutes ?? 60,
     confirmationStore,
     confirmationTtlMinutes: config.access?.confirmationTtlMinutes,
@@ -244,7 +262,7 @@ export async function createProductionRuntime(config: AppConfig): Promise<Produc
       : undefined;
   const conversationWindowStore = redis
     ? new RedisConversationWindowStore({ client: redis.client, keyPrefix: redis.keyPrefix })
-    : undefined;
+    : new InMemoryConversationWindowStore();
   const lastErrorStore = createLastErrorStore({
     redis,
     maxEntries: config.lastErrors?.maxEntries ?? 20
@@ -298,20 +316,40 @@ export async function createProductionRuntime(config: AppConfig): Promise<Produc
         : module
     )
   );
-  const app = createApp(config, {
+  const applicationAgentRuntime = createAgentRuntime({ memoryStore, graph, accessStore });
+  const agentTurnRuntime = createAgentTurnRuntime({
+    functionRegistry: registries.functions,
+    textMessageHandlers: registries.textMessages,
     adminActionRouter,
     adminActionRegistry: knowledgeAdminActionRegistry,
-    functionRegistry: registries.functions,
+    accessStore,
+    inFlightStore,
+    sessionStore,
+    agentRuntime: applicationAgentRuntime,
+    traceStore: agentTraceStore,
+    lastErrorStore,
+    lastRouteStore,
+    routeObserver: createConsoleRouteObserver(),
+    textGenerator: smartTalkPrimary,
+    conversationWindowStore,
+    controlledAgentRouter,
+    observabilityHmacKey: config.observability?.hmacKey,
+    timeZone: config.timeZone
+  });
+  const app = createApp(config, {
+    adminActionRegistry: knowledgeAdminActionRegistry,
     postbackHandlers: registries.postbacks,
     textMessageHandlers: registries.textMessages,
     adminHandlers: registries.adminHandlers,
+    createLineReplyClient: createLineSdkReplyClient,
+    createLineIdentityClient: createLineSdkIdentityClient,
+    requestIdFactory: randomUUID,
     lastErrorStore,
     lastRouteStore,
     rateLimiter,
     accessStore,
     registrationInviteCodeStore,
     confirmationStore,
-    inFlightStore,
     webhookEventStore,
     sessionStore,
     agentTraceStore,
@@ -319,7 +357,8 @@ export async function createProductionRuntime(config: AppConfig): Promise<Produc
     conversationWindowStore,
     controlledAgentRouter,
     textGenerator: smartTalkPrimary,
-    agentRuntime: createAgentRuntime({ memoryStore, graph, accessStore }),
+    agentRuntime: applicationAgentRuntime,
+    agentTurnRuntime,
     diagnostics: createDependencyDiagnostics({
       config,
       postgres: postgres?.pool,
@@ -340,3 +379,4 @@ export async function createProductionRuntime(config: AppConfig): Promise<Produc
     }
   };
 }
+import { randomUUID } from "node:crypto";

@@ -1,25 +1,11 @@
-import type { CacheStore } from "../cache/cache-store.js";
-import type { AgentJobStore } from "../agent/jobs.js";
-import type { AgentMemoryStore } from "../agent/memory-store.js";
-import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
-import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
-import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
-import type { SessionStore } from "../state/session-store.js";
-import { FUNCTION_NAMES } from "../types.js";
 import type {
-  AppConfig,
-  FunctionName,
-  FunctionRegistry,
-  GraphDriveClient,
-  JsonRecord,
-  LineContentClient,
-  NotionDatabaseClient,
-  PostbackHandlerRegistry,
-  TextMessageHandlerRegistry,
-  AdminHandlerRegistry,
-  TextGenerationProvider,
-  WebSearchClient
-} from "../types.js";
+  FunctionModule,
+  FunctionModuleContext,
+  FunctionModuleRegistrations,
+  RouterEvalCase
+} from "../application/contracts/function-module.js";
+import { FUNCTION_NAMES } from "../types.js";
+import type { FunctionName } from "../types.js";
 import { getFunctionDefinition, type FunctionDefinition } from "./definitions.js";
 import {
   createFindPptSlidesHandler,
@@ -32,16 +18,11 @@ import {
   createFindPopSheetMusicTextMessageHandler
 } from "./find-pop-sheet-music.js";
 import { queryScheduleModule } from "../capabilities/query-schedule/module.js";
-import { createWikipediaLookupHandler, type WikipediaSummarizer } from "../wikipedia/lookup.js";
-import type { WikipediaClient } from "../wikipedia/client.js";
+import { createWikipediaLookupHandler } from "../wikipedia/lookup.js";
 import { createRetrieveMemoryHandler, createSaveMemoryHandler } from "./agent-memory-functions.js";
 import { createPendingAttachmentTextMessageHandler } from "./attachment-save.js";
 import { createUploadIntentTextMessageHandler } from "./upload-intent.js";
 import { createFindResourceHandler } from "./find-resource.js";
-import type { CatalogStore } from "../catalog/store.js";
-import type { ScheduleStore } from "../schedules/store.js";
-import type { EmbeddingClient } from "../clients/embedding.js";
-import type { KnowledgeStore } from "../knowledge/store.js";
 import { createSaveResourceHandler } from "./save-resource.js";
 import {
   createQueryKnowledgeHandler,
@@ -50,61 +31,7 @@ import {
 } from "./query-knowledge.js";
 import { createSaveScheduleHandler } from "./schedule-memory.js";
 
-export interface FunctionModuleContext {
-  config: AppConfig;
-  clients: {
-    graph?: GraphDriveClient;
-    notion?: NotionDatabaseClient;
-    sessionStore: SessionStore;
-    cache: CacheStore;
-    memoryStore?: AgentMemoryStore;
-    catalog?: CatalogStore;
-    scheduleStore?: ScheduleStore;
-    lineContent?: LineContentClient;
-    wikipedia?: WikipediaClient;
-    wikipediaSummarizer?: WikipediaSummarizer;
-    webSearch?: WebSearchClient;
-    sheetMusicExternalSearchSummarizer?: SheetMusicExternalSearchSummarizer;
-    knowledgeStore?: KnowledgeStore;
-    embedding?: EmbeddingClient;
-    knowledgeTextGenerator?: TextGenerationProvider;
-    agentJobStore?: AgentJobStore;
-    attachmentScanQueue?: AttachmentScanQueue;
-    attachmentScanWorkStore?: AttachmentScanWorkStore;
-    now?: () => Date;
-    requestIdFactory?: () => string;
-  };
-}
-
-export interface FunctionModuleRegistrations {
-  functions?: FunctionRegistry;
-  postbacks?: PostbackHandlerRegistry;
-  textMessages?: TextMessageHandlerRegistry;
-  adminHandlers?: AdminHandlerRegistry;
-}
-
-export interface RouterEvalCase {
-  kind: "positive" | "missing_slot" | "typo" | "negative" | "disabled" | "cross_function";
-  text: string;
-  enabledFunctions?: FunctionName[];
-  expected:
-    | {
-        type: "execute";
-        action: FunctionName;
-        arguments: JsonRecord;
-      }
-    | {
-        type: "deny";
-        reason: string;
-      };
-}
-
-export interface FunctionModule {
-  name: FunctionName;
-  definition: FunctionDefinition;
-  routerEvalCases: RouterEvalCase[];
-  register(context: FunctionModuleContext): FunctionModuleRegistrations;
-}
+export type { FunctionModule, FunctionModuleContext, FunctionModuleRegistrations, RouterEvalCase };
 
 export const FUNCTION_MODULES: FunctionModule[] = [
   {

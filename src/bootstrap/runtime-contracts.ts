@@ -4,10 +4,12 @@ import type { AppConfig } from "../types.js";
 
 export type ProductionRuntimeConfig = Pick<AppConfig, "database" | "redis">;
 
-export interface ProductionRuntime {
+export interface ApplicationRuntime {
   app: FastifyInstance;
   close(): Promise<void>;
 }
+
+export type ProductionRuntime = ApplicationRuntime;
 
 export function assertProductionPersistence(config: ProductionRuntimeConfig): void {
   if (!config.database || !config.redis) {

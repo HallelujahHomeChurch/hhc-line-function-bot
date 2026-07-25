@@ -1,10 +1,16 @@
-import type { FunctionModule, FunctionModuleRegistrations } from "../../functions/modules.js";
+import type {
+  FunctionModule,
+  FunctionModuleRegistrations
+} from "../../application/contracts/function-module.js";
 import { queryScheduleDefinition } from "./definition.js";
 import { queryScheduleRouterEvalCases } from "./eval-cases.js";
 import { createQueryScheduleHandler } from "./handler.js";
 import type { QueryScheduleDependencies } from "./ports.js";
 
 export function createQueryScheduleModule(dependencies: QueryScheduleDependencies): FunctionModule {
+  if (!dependencies.memoryStore) {
+    throw new Error("query_schedule requires memoryStore");
+  }
   return {
     name: "query_schedule",
     definition: queryScheduleDefinition,
@@ -18,17 +24,18 @@ export const queryScheduleModule: FunctionModule = {
   definition: queryScheduleDefinition,
   routerEvalCases: queryScheduleRouterEvalCases,
   register: ({ config, clients }) => {
-    if (!clients.memoryStore) return {};
+    const typedClients = clients as unknown as QueryScheduleDependencies;
+    if (!typedClients.memoryStore) return {};
     return registrations({
-      memoryStore: clients.memoryStore,
-      scheduleStore: clients.scheduleStore,
-      notion: clients.notion,
+      memoryStore: typedClients.memoryStore,
+      scheduleStore: typedClients.scheduleStore,
+      notion: typedClients.notion,
       databaseId: config.notion?.databaseId,
       properties: config.notion?.properties,
       timeZone: config.timeZone,
-      sessionStore: clients.sessionStore,
-      now: clients.now,
-      requestIdFactory: clients.requestIdFactory
+      sessionStore: typedClients.sessionStore,
+      now: typedClients.now,
+      requestIdFactory: typedClients.requestIdFactory
     });
   }
 };

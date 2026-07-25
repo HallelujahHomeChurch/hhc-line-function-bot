@@ -4,7 +4,7 @@ import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
 import { createTestFunctionRegistries } from "../testing/create-test-function-registries.js";
 import { signLineBody } from "../line-signature.js";
-import { createApp } from "../server.js";
+import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import type {

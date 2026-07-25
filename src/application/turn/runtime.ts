@@ -72,6 +72,8 @@ import {
   turnSourceKey
 } from "./stages/function-execution-stage.js";
 import { matchTextContinuation } from "./stages/text-continuation-stage.js";
+import { runTurnStages } from "./coordinator.js";
+import type { TurnStage, TurnStageName } from "./contracts.js";
 
 export interface AgentTurnRuntimeOptions {
   functionRegistry: FunctionRegistry;
@@ -150,171 +152,359 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         requesterIsAdmin: input.requesterIsAdmin
       };
 
-      const textMessageHandler = await matchTextContinuation(
-        input.event,
-        input.profile,
-        options.textMessageHandlers,
-        input.requesterDisplayName,
+      const continueStage = Symbol("continue_turn_stage");
+      type StageActionResult = FunctionExecutionResult | undefined | typeof continueStage;
+      const stage = (
+        name: TurnStageName,
+        run: () => Promise<StageActionResult>
+      ): TurnStage<void, FunctionExecutionResult | undefined> => ({
+        name,
+        async run() {
+          const result = await run();
+          return result === continueStage ? { kind: "continue" } : { kind: "handled", result };
+        }
+      });
+      let routingText = text;
+      let routingFunctions: FunctionName[] = [...input.profile.enabledFunctions];
+      let activeTask: ActiveTaskContext | undefined;
+      let plannedRoute: RouteResult | undefined;
+      let controlledContinuationAuthorized = false;
 
-        input.requesterIsAdmin
-      );
-      if (textMessageHandler) {
-        const startedAt = Date.now();
-        const result = await textMessageHandler.handler.handle(
-          { text },
-          {
-            profile: input.profile,
-            event: input.event,
-            requestId: input.requestId,
-            requesterDisplayName: input.requesterDisplayName,
-            requesterIsAdmin: input.requesterIsAdmin
-          }
+      const textContinuationStage = stage("text_continuation", async () => {
+        const textMessageHandler = await matchTextContinuation(
+          input.event,
+          input.profile,
+          options.textMessageHandlers,
+          input.requesterDisplayName,
+
+          input.requesterIsAdmin
         );
-        steps.push({
-          phase: "text_handler",
-          outcome: textMessageHandler.name,
-          ok: result?.ok,
-          durationMs: elapsedMs(startedAt)
-        });
-        await emitRouteEvent(options.routeObserver, {
-          kind: "text_handler",
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          requestId: input.requestId,
-          handler: textMessageHandler.name,
-          ok: result?.ok,
-          durationMs: elapsedMs(startedAt)
-        });
-        if (result) {
-          if (result.executedAction) {
-            await recordFunctionWriteAudit(
-              options.accessStore,
-              context,
-              result.executedAction,
-              {},
-              result
-            );
-          }
-          const textHandlerFunctionName = functionNameForAgentResource(
-            result.agentResource?.resourceType,
-            context.profile.enabledFunctions
+        if (textMessageHandler) {
+          const startedAt = Date.now();
+          const result = await textMessageHandler.handler.handle(
+            { text },
+            {
+              profile: input.profile,
+              event: input.event,
+              requestId: input.requestId,
+              requesterDisplayName: input.requesterDisplayName,
+              requesterIsAdmin: input.requesterIsAdmin
+            }
           );
-          const transitionFunctionName = result.executedAction ?? textHandlerFunctionName;
-          if (transitionFunctionName) {
-            const previousTask = await readActiveTask(options, input, true);
-            if (options.traceStore) {
+          steps.push({
+            phase: "text_handler",
+            outcome: textMessageHandler.name,
+            ok: result?.ok,
+            durationMs: elapsedMs(startedAt)
+          });
+          await emitRouteEvent(options.routeObserver, {
+            kind: "text_handler",
+            profileName: input.profile.name,
+            sourceType: input.event.source.type,
+            requestId: input.requestId,
+            handler: textMessageHandler.name,
+            ok: result?.ok,
+            durationMs: elapsedMs(startedAt)
+          });
+          if (result) {
+            if (result.executedAction) {
+              await recordFunctionWriteAudit(
+                options.accessStore,
+                context,
+                result.executedAction,
+                {},
+                result
+              );
+            }
+            const textHandlerFunctionName = functionNameForAgentResource(
+              result.agentResource?.resourceType,
+              context.profile.enabledFunctions
+            );
+            const transitionFunctionName = result.executedAction ?? textHandlerFunctionName;
+            if (transitionFunctionName) {
+              const previousTask = await readActiveTask(options, input, true);
+              if (options.traceStore) {
+                steps.push({
+                  phase: "active_task",
+                  outcome: previousTask ? "present" : "missing",
+                  action: previousTask?.currentCapability,
+                  lifecycleOutcome: previousTask ? "read" : "missing"
+                });
+              }
+              const lifecycleOutcome = await applyActiveTaskTransition({
+                store: options.conversationWindowStore,
+                scope: activeTaskScope(options.conversationWindowStore, input),
+                capability: transitionFunctionName,
+                enabledFunctions: input.profile.enabledFunctions,
+                result,
+                now: now(),
+                ttlMs: activeTaskTtlMs(input.profile),
+                previousTask
+              });
+              steps.push(resultEnvelopeTraceStep(result));
               steps.push({
                 phase: "active_task",
-                outcome: previousTask ? "present" : "missing",
-                action: previousTask?.currentCapability,
-                lifecycleOutcome: previousTask ? "read" : "missing"
+                outcome: "transition",
+                action: transitionFunctionName,
+                lifecycleOutcome
               });
             }
-            const lifecycleOutcome = await applyActiveTaskTransition({
-              store: options.conversationWindowStore,
-              scope: activeTaskScope(options.conversationWindowStore, input),
-              capability: transitionFunctionName,
-              enabledFunctions: input.profile.enabledFunctions,
-              result,
-              now: now(),
-              ttlMs: activeTaskTtlMs(input.profile),
-              previousTask
-            });
-            steps.push(resultEnvelopeTraceStep(result));
-            steps.push({
-              phase: "active_task",
-              outcome: "transition",
-              action: transitionFunctionName,
-              lifecycleOutcome
-            });
+            if (textHandlerFunctionName) {
+              await options.agentRuntime?.afterFunctionResult({
+                context,
+                action: textHandlerFunctionName,
+                arguments: {},
+                result
+              });
+            }
           }
-          if (textHandlerFunctionName) {
-            await options.agentRuntime?.afterFunctionResult({
-              context,
-              action: textHandlerFunctionName,
-              arguments: {},
-              result
-            });
-          }
+          return finish(input, steps, result);
         }
-        return finish(input, steps, result);
-      }
 
-      if (input.allowRouting === false) {
-        return undefined;
-      }
-
-      const resolutionStage = await runCapabilityResolutionStage({
-        sessionStore: options.sessionStore,
-        profile: input.profile,
-        event: input.event,
-        text
+        if (input.allowRouting === false) {
+          return undefined;
+        }
+        return continueStage;
       });
-      if (resolutionStage.kind === "handled") {
-        steps.push({ phase: resolutionStage.tracePhase, outcome: "handled", ok: true });
-        return finish(input, steps, resolutionStage.result);
-      }
-      const { routingText, routingFunctions } = resolutionStage;
 
-      const adminStage = await runAdminActionStage(() =>
-        handleNaturalLanguageAdminAction({
-          text: routingText,
+      const capabilityResolutionStage = stage("capability_resolution", async () => {
+        const resolutionStage = await runCapabilityResolutionStage({
+          sessionStore: options.sessionStore,
           profile: input.profile,
           event: input.event,
-          adminActionRouter: options.adminActionRouter,
-          adminActionRegistry: options.adminActionRegistry,
-          accessStore: options.accessStore,
+          text
+        });
+        if (resolutionStage.kind === "handled") {
+          steps.push({ phase: resolutionStage.tracePhase, outcome: "handled", ok: true });
+          return finish(input, steps, resolutionStage.result);
+        }
+        routingText = resolutionStage.routingText;
+        routingFunctions = resolutionStage.routingFunctions;
+        return continueStage;
+      });
+
+      const adminActionStage = stage("admin_action", async () => {
+        const adminStage = await runAdminActionStage(() =>
+          handleNaturalLanguageAdminAction({
+            text: routingText,
+            profile: input.profile,
+            event: input.event,
+            adminActionRouter: options.adminActionRouter,
+            adminActionRegistry: options.adminActionRegistry,
+            accessStore: options.accessStore,
+            routeObserver: options.routeObserver,
+            lastRouteStore: options.lastRouteStore,
+            requestId: input.requestId,
+            steps
+          })
+        );
+        if (adminStage.kind === "handled") {
+          return finish(input, steps, adminStage.result);
+        }
+        return continueStage;
+      });
+
+      const controlledPlanStage = stage("controlled_plan", async () => {
+        const routeStartedAt = Date.now();
+        let plan: ValidatedAgentPlan;
+        try {
+          activeTask = await readActiveTask(options, input, true);
+          if (options.traceStore) {
+            steps.push({
+              phase: "active_task",
+              outcome: activeTask ? "present" : "missing",
+              action: activeTask?.currentCapability,
+              lifecycleOutcome: activeTask ? "read" : "missing",
+              stateAgeBucket: activeTask ? stateAgeBucket(activeTask.createdAt, now()) : undefined
+            });
+          }
+          plan = await resolveControlledPlan(
+            options.controlledAgentRouter,
+            input,
+            routingText,
+            activeTask,
+            options.traceStore ? steps : undefined,
+            routingFunctions
+          );
+        } catch {
+          plan = { disposition: "clarify", reasonCode: "planner_unavailable" };
+        }
+        steps.push(controlledTraceStep(plan));
+        if (plan.disposition === "collect") {
+          const slotCollection = await createSlotClarificationResult({
+            sessionStore: options.sessionStore,
+            action: plan.capability,
+            arguments: plan.arguments,
+            context,
+            requestId: input.requestId,
+            now: now()
+          });
+          if (slotCollection) {
+            steps.push({
+              phase: "slot_clarification",
+              outcome: "handled",
+              action: plan.capability,
+              query: queryMarker(plan.arguments)
+            });
+            await emitProductEvent(options.routeObserver, {
+              eventName: "clarification_requested",
+              requestId: input.requestId,
+              profileName: input.profile.name,
+              source: input.event.source,
+              hmacKey: options.observabilityHmacKey,
+              action: plan.capability,
+              clarificationCount: 1
+            });
+            return finish(input, steps, slotCollection);
+          }
+          return finish(
+            input,
+            steps,
+            controlledClarificationResult(
+              {
+                disposition: "clarify",
+                capability: plan.capability,
+                reasonCode: "missing_required_slot"
+              },
+              context
+            )
+          );
+        }
+        if (plan.disposition === "clarify") {
+          if (plan.candidateCapabilities && plan.candidateCapabilities.length > 1) {
+            const resolution = await createCapabilityResolution({
+              sessionStore: options.sessionStore,
+              id: input.requestId,
+              profileName: input.profile.name,
+              source: input.event.source,
+              requesterUserId: input.event.source.userId,
+              originalText: routingText,
+              candidates: plan.candidateCapabilities,
+              now: now()
+            });
+            if (resolution) {
+              steps.push({ phase: "capability_resolution", outcome: "created", ok: true });
+              return finish(input, steps, resolution);
+            }
+          }
+          return finish(input, steps, controlledClarificationResult(plan, context));
+        }
+        controlledContinuationAuthorized =
+          plan.disposition === "execute" && plan.reasonCode === "active_task_refinement";
+        plannedRoute = controlledPlanToRoute(plan, input, routingText);
+        const route = plannedRoute;
+
+        const routeDurationMs = elapsedMs(routeStartedAt);
+        steps.push({
+          phase: "route",
+          outcome: route.type,
+          provider: route.provider,
+          lane: route.lane,
+          action: route.type === "execute" || route.type === "respond" ? route.action : undefined,
+          reason: route.type === "deny" ? route.reason : undefined,
+          query: route.type === "execute" ? queryMarker(route.arguments) : undefined,
+          durationMs: routeDurationMs
+        });
+        await recordRoute({
           routeObserver: options.routeObserver,
           lastRouteStore: options.lastRouteStore,
-          requestId: input.requestId,
-          steps
-        })
-      );
-      if (adminStage.kind === "handled") {
-        return finish(input, steps, adminStage.result);
-      }
-
-      const routeStartedAt = Date.now();
-      let activeTask: ActiveTaskContext | undefined;
-      let plan: ValidatedAgentPlan;
-      try {
-        activeTask = await readActiveTask(options, input, true);
-        if (options.traceStore) {
-          steps.push({
-            phase: "active_task",
-            outcome: activeTask ? "present" : "missing",
-            action: activeTask?.currentCapability,
-            lifecycleOutcome: activeTask ? "read" : "missing",
-            stateAgeBucket: activeTask ? stateAgeBucket(activeTask.createdAt, now()) : undefined
-          });
-        }
-        plan = await resolveControlledPlan(
-          options.controlledAgentRouter,
           input,
-          routingText,
-          activeTask,
-          options.traceStore ? steps : undefined,
-          routingFunctions
-        );
-      } catch {
-        plan = { disposition: "clarify", reasonCode: "planner_unavailable" };
-      }
-      steps.push(controlledTraceStep(plan));
-      if (plan.disposition === "collect") {
-        const slotCollection = await createSlotClarificationResult({
+          provider: route.provider,
+          lane: route.lane,
+          outcome: route.type,
+          action: route.type === "execute" || route.type === "respond" ? route.action : undefined,
+          reason: route.type === "deny" ? route.reason : undefined,
+          confidence:
+            route.type === "execute" || route.type === "respond" ? route.confidence : undefined,
+          fallbackProvider: route.fallbackProvider,
+          fallbackReason: route.fallbackReason,
+          arguments: route.type === "execute" ? route.arguments : undefined,
+          durationMs: routeDurationMs
+        });
+
+        if (route.type === "respond") {
+          if (route.action === "introduce_bot") {
+            if (introVariantRouteArgument(route.arguments) === "identity") {
+              const result = await createControlledSmallTalkReply({
+                profile: input.profile,
+                text,
+                category: "persona",
+                generator: options.textGenerator,
+                fallbackGenerator: options.textFallbackGenerator
+              });
+              return finish(input, steps, result);
+            }
+            const intro = createIntroReply(input.profile, text, {
+              force: true,
+              variant: introVariantRouteArgument(route.arguments)
+            });
+            return finish(
+              input,
+              steps,
+              intro ?? { ok: false, replyText: requestFailedMessage(input.requestId) }
+            );
+          }
+          if (route.action === "small_talk") {
+            const result = await createControlledSmallTalkReply({
+              profile: input.profile,
+              text,
+              category: smallTalkCategoryFromArguments(route.arguments),
+              generator: options.textGenerator,
+              fallbackGenerator: options.textFallbackGenerator
+            });
+            if (result.smallTalkTrace) {
+              steps.push({
+                phase: "small_talk",
+                outcome: result.smallTalkTrace.outcome,
+                provider: result.smallTalkTrace.provider,
+                lane: result.smallTalkTrace.lane,
+                reason: result.smallTalkTrace.reason
+              });
+            }
+            return finish(input, steps, result);
+          }
+          return finish(input, steps, { ok: true, replyText: messages.unsupported });
+        }
+
+        if (route.type === "deny") {
+          return finish(input, steps, { ok: true, replyText: messages.unsupported });
+        }
+        return continueStage;
+      });
+
+      const functionExecutionStage = stage("function_execution", async () => {
+        const route = plannedRoute;
+        if (!route || route.type !== "execute") {
+          throw new Error("Function execution stage requires an executable route");
+        }
+        const normalizedArguments = normalizeFunctionArguments(route.action, route.arguments, {
+          text: routingText
+        });
+        steps.push({
+          phase: "argument_grounding",
+          outcome: "validated",
+          action: route.action,
+          ...argumentGroundingCounts(route.arguments, normalizedArguments)
+        });
+        const handler = options.functionRegistry[route.action];
+        if (!handler) {
+          return finish(input, steps, { ok: true, replyText: messages.functionNotConfigured });
+        }
+
+        const slotClarification = await createSlotClarificationResult({
           sessionStore: options.sessionStore,
-          action: plan.capability,
-          arguments: plan.arguments,
+          action: route.action,
+          arguments: normalizedArguments,
           context,
           requestId: input.requestId,
           now: now()
         });
-        if (slotCollection) {
+        if (slotClarification) {
           steps.push({
             phase: "slot_clarification",
             outcome: "handled",
-            action: plan.capability,
-            query: queryMarker(plan.arguments)
+            action: route.action,
+            query: queryMarker(normalizedArguments)
           });
           await emitProductEvent(options.routeObserver, {
             eventName: "clarification_requested",
@@ -322,179 +512,115 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             profileName: input.profile.name,
             source: input.event.source,
             hmacKey: options.observabilityHmacKey,
-            action: plan.capability,
+            action: route.action,
             clarificationCount: 1
           });
-          return finish(input, steps, slotCollection);
+          return finish(input, steps, slotClarification);
         }
-        return finish(
-          input,
-          steps,
-          controlledClarificationResult(
-            {
-              disposition: "clarify",
-              capability: plan.capability,
-              reasonCode: "missing_required_slot"
-            },
-            context
-          )
+
+        const inFlight = buildInFlightKey(
+          input.profile.name,
+          input.event.source,
+          route.action,
+          normalizedArguments
         );
-      }
-      if (plan.disposition === "clarify") {
-        if (plan.candidateCapabilities && plan.candidateCapabilities.length > 1) {
-          const resolution = await createCapabilityResolution({
-            sessionStore: options.sessionStore,
-            id: input.requestId,
-            profileName: input.profile.name,
-            source: input.event.source,
-            requesterUserId: input.event.source.userId,
-            originalText: routingText,
-            candidates: plan.candidateCapabilities,
-            now: now()
-          });
-          if (resolution) {
-            steps.push({ phase: "capability_resolution", outcome: "created", ok: true });
-            return finish(input, steps, resolution);
-          }
-        }
-        return finish(input, steps, controlledClarificationResult(plan, context));
-      }
-      const controlledContinuationAuthorized =
-        plan.disposition === "execute" && plan.reasonCode === "active_task_refinement";
-      const route = controlledPlanToRoute(plan, input, routingText);
-
-      const routeDurationMs = elapsedMs(routeStartedAt);
-      steps.push({
-        phase: "route",
-        outcome: route.type,
-        provider: route.provider,
-        lane: route.lane,
-        action: route.type === "execute" || route.type === "respond" ? route.action : undefined,
-        reason: route.type === "deny" ? route.reason : undefined,
-        query: route.type === "execute" ? queryMarker(route.arguments) : undefined,
-        durationMs: routeDurationMs
-      });
-      await recordRoute({
-        routeObserver: options.routeObserver,
-        lastRouteStore: options.lastRouteStore,
-        input,
-        provider: route.provider,
-        lane: route.lane,
-        outcome: route.type,
-        action: route.type === "execute" || route.type === "respond" ? route.action : undefined,
-        reason: route.type === "deny" ? route.reason : undefined,
-        confidence:
-          route.type === "execute" || route.type === "respond" ? route.confidence : undefined,
-        fallbackProvider: route.fallbackProvider,
-        fallbackReason: route.fallbackReason,
-        arguments: route.type === "execute" ? route.arguments : undefined,
-        durationMs: routeDurationMs
-      });
-
-      if (route.type === "respond") {
-        if (route.action === "introduce_bot") {
-          if (introVariantRouteArgument(route.arguments) === "identity") {
-            const result = await createControlledSmallTalkReply({
-              profile: input.profile,
-              text,
-              category: "persona",
-              generator: options.textGenerator,
-              fallbackGenerator: options.textFallbackGenerator
-            });
-            return finish(input, steps, result);
-          }
-          const intro = createIntroReply(input.profile, text, {
-            force: true,
-            variant: introVariantRouteArgument(route.arguments)
-          });
-          return finish(
-            input,
-            steps,
-            intro ?? { ok: false, replyText: requestFailedMessage(input.requestId) }
-          );
-        }
-        if (route.action === "small_talk") {
-          const result = await createControlledSmallTalkReply({
-            profile: input.profile,
-            text,
-            category: smallTalkCategoryFromArguments(route.arguments),
-            generator: options.textGenerator,
-            fallbackGenerator: options.textFallbackGenerator
-          });
-          if (result.smallTalkTrace) {
+        if (inFlight) {
+          const startResult = await options.inFlightStore.tryStart(inFlight.key, IN_FLIGHT_TTL_MS);
+          if (startResult === "busy") {
             steps.push({
-              phase: "small_talk",
-              outcome: result.smallTalkTrace.outcome,
-              provider: result.smallTalkTrace.provider,
-              lane: result.smallTalkTrace.lane,
-              reason: result.smallTalkTrace.reason
+              phase: "in_flight",
+              outcome: "busy",
+              action: route.action,
+              dedup: "busy",
+              query: "present"
+            });
+            await emitRouteEvent(options.routeObserver, {
+              kind: "function_result",
+              profileName: input.profile.name,
+              sourceType: input.event.source.type,
+              requestId: input.requestId,
+              action: route.action,
+              ok: false,
+              dedup: "busy",
+              queryHash: inFlight.queryHash
+            });
+            await emitProductEvent(options.routeObserver, {
+              eventName: "retry_observed",
+              requestId: input.requestId,
+              profileName: input.profile.name,
+              source: input.event.source,
+              hmacKey: options.observabilityHmacKey,
+              action: route.action,
+              retry: true
+            });
+            return finish(input, steps, {
+              ok: true,
+              replyText: input.requesterDisplayName
+                ? `${input.requesterDisplayName}，我還在找這個，等我一下就好。`
+                : "我還在找這個，等我一下就好。"
             });
           }
-          return finish(input, steps, result);
-        }
-        return finish(input, steps, { ok: true, replyText: messages.unsupported });
-      }
-
-      if (route.type === "deny") {
-        return finish(input, steps, { ok: true, replyText: messages.unsupported });
-      }
-
-      const normalizedArguments = normalizeFunctionArguments(route.action, route.arguments, {
-        text: routingText
-      });
-      steps.push({
-        phase: "argument_grounding",
-        outcome: "validated",
-        action: route.action,
-        ...argumentGroundingCounts(route.arguments, normalizedArguments)
-      });
-      const handler = options.functionRegistry[route.action];
-      if (!handler) {
-        return finish(input, steps, { ok: true, replyText: messages.functionNotConfigured });
-      }
-
-      const slotClarification = await createSlotClarificationResult({
-        sessionStore: options.sessionStore,
-        action: route.action,
-        arguments: normalizedArguments,
-        context,
-        requestId: input.requestId,
-        now: now()
-      });
-      if (slotClarification) {
-        steps.push({
-          phase: "slot_clarification",
-          outcome: "handled",
-          action: route.action,
-          query: queryMarker(normalizedArguments)
-        });
-        await emitProductEvent(options.routeObserver, {
-          eventName: "clarification_requested",
-          requestId: input.requestId,
-          profileName: input.profile.name,
-          source: input.event.source,
-          hmacKey: options.observabilityHmacKey,
-          action: route.action,
-          clarificationCount: 1
-        });
-        return finish(input, steps, slotClarification);
-      }
-
-      const inFlight = buildInFlightKey(
-        input.profile.name,
-        input.event.source,
-        route.action,
-        normalizedArguments
-      );
-      if (inFlight) {
-        const startResult = await options.inFlightStore.tryStart(inFlight.key, IN_FLIGHT_TTL_MS);
-        if (startResult === "busy") {
           steps.push({
             phase: "in_flight",
-            outcome: "busy",
+            outcome: "started",
+
             action: route.action,
-            dedup: "busy",
-            query: "present"
+            dedup: "started"
+          });
+        }
+
+        const functionStartedAt = Date.now();
+        try {
+          const rawResult = await handler(normalizedArguments, {
+            ...context,
+            activeTask: controlledContinuationAuthorized ? activeTaskView(activeTask) : undefined
+          });
+          const result = projectAgentReply({
+            capability: route.action,
+            text: routingText,
+            result: rawResult
+          });
+          {
+            const lifecycleOutcome = await applyActiveTaskTransition({
+              store: options.conversationWindowStore,
+              scope: activeTaskScope(options.conversationWindowStore, input),
+              capability: route.action,
+              enabledFunctions: input.profile.enabledFunctions,
+              result,
+              now: now(),
+              ttlMs: activeTaskTtlMs(input.profile),
+              previousTask: activeTask
+            });
+            steps.push(resultEnvelopeTraceStep(result));
+            steps.push({
+              phase: "active_task",
+              outcome: "transition",
+              action: route.action,
+              lifecycleOutcome
+            });
+          }
+          await recordFunctionWriteAudit(
+            options.accessStore,
+            context,
+            route.action,
+            normalizedArguments,
+            result
+          );
+          await options.agentRuntime?.afterFunctionResult({
+            context,
+            action: route.action,
+            arguments: normalizedArguments,
+            result
+          });
+          const durationMs = elapsedMs(functionStartedAt);
+          steps.push({
+            phase: "function",
+            outcome: "executed",
+            action: route.action,
+            ok: result.ok,
+            query: queryMarker(normalizedArguments),
+            durationMs,
+            ...result.diagnostics
           });
           await emitRouteEvent(options.routeObserver, {
             kind: "function_result",
@@ -502,181 +628,106 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             sourceType: input.event.source.type,
             requestId: input.requestId,
             action: route.action,
-            ok: false,
-            dedup: "busy",
-            queryHash: inFlight.queryHash
+            ok: result.ok,
+            dedup: inFlight ? "started" : undefined,
+            queryHash: inFlight?.queryHash,
+            durationMs,
+            ...result.diagnostics
           });
           await emitProductEvent(options.routeObserver, {
-            eventName: "retry_observed",
-            requestId: input.requestId,
-            profileName: input.profile.name,
-            source: input.event.source,
-            hmacKey: options.observabilityHmacKey,
-            action: route.action,
-            retry: true
-          });
-          return finish(input, steps, {
-            ok: true,
-            replyText: input.requesterDisplayName
-              ? `${input.requesterDisplayName}，我還在找這個，等我一下就好。`
-              : "我還在找這個，等我一下就好。"
-          });
-        }
-        steps.push({
-          phase: "in_flight",
-          outcome: "started",
-
-          action: route.action,
-          dedup: "started"
-        });
-      }
-
-      const functionStartedAt = Date.now();
-      try {
-        const rawResult = await handler(normalizedArguments, {
-          ...context,
-          activeTask: controlledContinuationAuthorized ? activeTaskView(activeTask) : undefined
-        });
-        const result = projectAgentReply({
-          capability: route.action,
-          text: routingText,
-          result: rawResult
-        });
-        {
-          const lifecycleOutcome = await applyActiveTaskTransition({
-            store: options.conversationWindowStore,
-            scope: activeTaskScope(options.conversationWindowStore, input),
-            capability: route.action,
-            enabledFunctions: input.profile.enabledFunctions,
-            result,
-            now: now(),
-            ttlMs: activeTaskTtlMs(input.profile),
-            previousTask: activeTask
-          });
-          steps.push(resultEnvelopeTraceStep(result));
-          steps.push({
-            phase: "active_task",
-            outcome: "transition",
-            action: route.action,
-            lifecycleOutcome
-          });
-        }
-        await recordFunctionWriteAudit(
-          options.accessStore,
-          context,
-          route.action,
-          normalizedArguments,
-          result
-        );
-        await options.agentRuntime?.afterFunctionResult({
-          context,
-          action: route.action,
-          arguments: normalizedArguments,
-          result
-        });
-        const durationMs = elapsedMs(functionStartedAt);
-        steps.push({
-          phase: "function",
-          outcome: "executed",
-          action: route.action,
-          ok: result.ok,
-          query: queryMarker(normalizedArguments),
-          durationMs,
-          ...result.diagnostics
-        });
-        await emitRouteEvent(options.routeObserver, {
-          kind: "function_result",
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          requestId: input.requestId,
-          action: route.action,
-          ok: result.ok,
-          dedup: inFlight ? "started" : undefined,
-          queryHash: inFlight?.queryHash,
-          durationMs,
-          ...result.diagnostics
-        });
-        await emitProductEvent(options.routeObserver, {
-          eventName: "function_completed",
-          requestId: input.requestId,
-          profileName: input.profile.name,
-          source: input.event.source,
-          hmacKey: options.observabilityHmacKey,
-          action: route.action,
-          resultClass: productResultClass(result),
-          durationMs,
-          clarificationCount: 0
-        });
-        if (result.writePhase) {
-          await emitProductEvent(options.routeObserver, {
-            eventName: result.writePhase === "commit" ? "write_committed" : "write_previewed",
+            eventName: "function_completed",
             requestId: input.requestId,
             profileName: input.profile.name,
             source: input.event.source,
             hmacKey: options.observabilityHmacKey,
             action: route.action,
             resultClass: productResultClass(result),
+            durationMs,
+            clarificationCount: 0
+          });
+          if (result.writePhase) {
+            await emitProductEvent(options.routeObserver, {
+              eventName: result.writePhase === "commit" ? "write_committed" : "write_previewed",
+              requestId: input.requestId,
+              profileName: input.profile.name,
+              source: input.event.source,
+              hmacKey: options.observabilityHmacKey,
+              action: route.action,
+              resultClass: productResultClass(result),
+              durationMs
+            });
+          }
+          await options.lastRouteStore.record({
+            requestId: input.requestId,
+            occurredAt: now().toISOString(),
+            profileName: input.profile.name,
+            sourceType: input.event.source.type,
+            phase: "function",
+            action: route.action,
+            ok: result.ok,
             durationMs
           });
+          return finish(input, steps, result);
+        } catch (error) {
+          const durationMs = elapsedMs(functionStartedAt);
+          await recordRuntimeError({
+            store: options.lastErrorStore,
+            input,
+            phase: "function",
+            action: route.action,
+            error
+          });
+          steps.push({
+            phase: "function_error",
+            outcome: "function",
+            action: route.action,
+            ok: false,
+            errorName: error instanceof Error ? error.name : typeof error,
+            durationMs
+          });
+          await emitRouteEvent(options.routeObserver, {
+            kind: "function_error",
+            profileName: input.profile.name,
+            sourceType: input.event.source.type,
+            requestId: input.requestId,
+            action: route.action,
+            ok: false,
+            errorName: error instanceof Error ? error.name : typeof error,
+            durationMs
+          });
+          await options.lastRouteStore.record({
+            requestId: input.requestId,
+            occurredAt: now().toISOString(),
+            profileName: input.profile.name,
+            sourceType: input.event.source.type,
+            phase: "function",
+            action: route.action,
+            ok: false,
+            errorName: error instanceof Error ? error.name : typeof error,
+            durationMs
+          });
+          return finish(input, steps, {
+            ok: false,
+            replyText: requestFailedMessage(input.requestId)
+          });
+        } finally {
+          if (inFlight) {
+            await releaseInFlight(options.inFlightStore, inFlight.key);
+          }
         }
-        await options.lastRouteStore.record({
-          requestId: input.requestId,
-          occurredAt: now().toISOString(),
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          phase: "function",
-          action: route.action,
-          ok: result.ok,
-          durationMs
-        });
-        return finish(input, steps, result);
-      } catch (error) {
-        const durationMs = elapsedMs(functionStartedAt);
-        await recordRuntimeError({
-          store: options.lastErrorStore,
-          input,
-          phase: "function",
-          action: route.action,
-          error
-        });
-        steps.push({
-          phase: "function_error",
-          outcome: "function",
-          action: route.action,
-          ok: false,
-          errorName: error instanceof Error ? error.name : typeof error,
-          durationMs
-        });
-        await emitRouteEvent(options.routeObserver, {
-          kind: "function_error",
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          requestId: input.requestId,
-          action: route.action,
-          ok: false,
-          errorName: error instanceof Error ? error.name : typeof error,
-          durationMs
-        });
-        await options.lastRouteStore.record({
-          requestId: input.requestId,
-          occurredAt: now().toISOString(),
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          phase: "function",
-          action: route.action,
-          ok: false,
-          errorName: error instanceof Error ? error.name : typeof error,
-          durationMs
-        });
-        return finish(input, steps, {
-          ok: false,
-          replyText: requestFailedMessage(input.requestId)
-        });
-      } finally {
-        if (inFlight) {
-          await releaseInFlight(options.inFlightStore, inFlight.key);
-        }
-      }
+      });
+
+      const outcome = await runTurnStages(
+        [
+          functionExecutionStage,
+          adminActionStage,
+          textContinuationStage,
+          controlledPlanStage,
+          capabilityResolutionStage
+        ],
+        undefined
+      );
+      return outcome.kind === "handled" ? outcome.result : undefined;
     }
   };
 }

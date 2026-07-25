@@ -27,13 +27,23 @@ describe("modular dependency rules", () => {
       importer: "src/infrastructure/postgres/store.ts",
       imported: "src/transport/line/contracts.ts",
       rule: "infrastructure_must_not_import_transport"
+    },
+    {
+      importer: "src/transport/line/webhook-routes.ts",
+      imported: "src/clients/line.ts",
+      rule: "transport_must_not_import_infrastructure"
+    },
+    {
+      importer: "src/bootstrap/create-production-runtime.ts",
+      imported: "src/testing/create-test-runtime.ts",
+      rule: "bootstrap_must_not_import_testing"
     }
   ])("rejects $rule", ({ importer, imported, rule }) => {
     expect(
       check([
         {
           path: importer,
-          source: `import "../../${imported.replace("src/", "")}";`
+          source: `import "${path.posix.relative(path.posix.dirname(importer), imported)}";`
         }
       ])
     ).toEqual([{ importer, imported, rule }]);
@@ -61,6 +71,17 @@ describe("modular dependency rules", () => {
         {
           path: "src/capabilities/query-schedule/handler.ts",
           source: 'import "../../application/contracts/function-execution.js";'
+        }
+      ])
+    ).toEqual([]);
+  });
+
+  it("allows type-only references to legacy infrastructure ports during migration", () => {
+    expect(
+      check([
+        {
+          path: "src/application/turn/runtime.ts",
+          source: 'import type { SessionStore } from "../../state/session-store.js";'
         }
       ])
     ).toEqual([]);
@@ -113,3 +134,4 @@ describe("modular dependency rules", () => {
     ]);
   });
 });
+import path from "node:path";

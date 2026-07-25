@@ -1,41 +1,25 @@
-import { randomUUID } from "node:crypto";
-
 import fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import { InMemoryAccessStore } from "../../access/memory-access-store.js";
-import {
-  createAdminActionRegistry,
-  type AdminActionRegistry
-} from "../../actions/admin-registry.js";
+import type { AdminActionRegistry } from "../../actions/admin-registry.js";
 import type { ConfirmationStore } from "../../actions/confirmation-store.js";
-import {
-  InMemoryRegistrationInviteCodeStore,
-  type RegistrationInviteCodeStore
-} from "../../access/registration-invite-code-store.js";
+import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
 import type { AgentRuntime } from "../../agent/agent-runtime.js";
 import type { ControlledAgentRouter } from "../../agent/controlled-agent-router.js";
 import { applyActiveTaskTransition } from "../../agent/active-task-transition.js";
-import { createAgentTurnRuntime, type AgentTurnRuntime } from "../../agent/turn-runtime.js";
-import { InMemoryAgentJobStore, type AgentJobStore } from "../../agent/jobs.js";
+import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
+import type { AgentJobStore } from "../../agent/jobs.js";
 import {
-  InMemoryConversationWindowStore,
   type ConversationWindowScope,
   type ConversationWindowStore
 } from "../../agent/context-manager.js";
-import {
-  formatAgentTurnTraces,
-  InMemoryAgentTraceStore,
-  type AgentTraceStore
-} from "../../agent/trace-store.js";
+import { formatAgentTurnTraces, type AgentTraceStore } from "../../agent/trace-store.js";
 import type { AccessPrincipalType, AccessStore } from "../../access/types.js";
-import { createStaticAppDiagnostics } from "../../diagnostics/dependencies.js";
 import {
   classifyGroupEngagement,
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
 } from "../../engagement.js";
-import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../../clients/line.js";
 import {
   getFunctionDefinition,
   isFunctionGrantableForPrincipal,
@@ -43,11 +27,7 @@ import {
   userFacingFunctionNames
 } from "../../functions/definitions.js";
 import { handleAttachmentMessage } from "../../functions/attachment-entrance.js";
-import { MemoryInFlightStore, type InFlightStore } from "../../in-flight/in-flight-store.js";
-import {
-  InMemoryWebhookEventStore,
-  type WebhookEventStore
-} from "../../idempotency/webhook-event-store.js";
+import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
 import { createIntroReply } from "../../intro.js";
 import { verifyLineSignature } from "../../line-signature.js";
 import {
@@ -58,17 +38,9 @@ import { messages } from "../../messages.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
 import { resolveRequesterDisplayName } from "../../requester-personalization.js";
 import { createControlledSmallTalkReply } from "../../small-talk.js";
-import {
-  formatLastErrors,
-  InMemoryLastErrorStore,
-  type LastErrorStore
-} from "../../observability/last-error-store.js";
-import {
-  formatLastRoutes,
-  InMemoryLastRouteStore,
-  type LastRouteStore
-} from "../../observability/last-route-store.js";
-import { InMemoryRateLimiter, type RateLimiter } from "../../rate-limit.js";
+import { formatLastErrors, type LastErrorStore } from "../../observability/last-error-store.js";
+import { formatLastRoutes, type LastRouteStore } from "../../observability/last-route-store.js";
+import type { RateLimiter } from "../../rate-limit.js";
 import type { SessionStore } from "../../state/session-store.js";
 import type {
   AppConfig,
@@ -77,8 +49,6 @@ import type {
   AdminHandlerRegistry,
   BotProfileConfig,
   FunctionExecutionResult,
-  FunctionRegistry,
-  AdminActionRouterPort,
   LineIdentityClient,
   LineEvent,
   ModelProviderName,
@@ -103,32 +73,29 @@ import {
 import { handlePublicAccessCommand } from "./public-access-commands.js";
 
 export interface AppDependencies {
-  adminActionRouter?: AdminActionRouterPort;
-  adminActionRegistry?: AdminActionRegistry;
-  functionRegistry?: FunctionRegistry;
-  postbackHandlers?: PostbackHandlerRegistry;
-  textMessageHandlers?: TextMessageHandlerRegistry;
-  adminHandlers?: AdminHandlerRegistry;
-  createLineReplyClient?: (profile: BotProfileConfig) => LineReplyClient;
-  createLineIdentityClient?: (profile: BotProfileConfig) => LineIdentityClient;
+  adminActionRegistry: AdminActionRegistry;
+  postbackHandlers: PostbackHandlerRegistry;
+  textMessageHandlers: TextMessageHandlerRegistry;
+  adminHandlers: AdminHandlerRegistry;
+  createLineReplyClient: (profile: BotProfileConfig) => LineReplyClient;
+  createLineIdentityClient: (profile: BotProfileConfig) => LineIdentityClient;
   routeObserver?: RouteObserver;
-  requestIdFactory?: () => string;
-  lastErrorStore?: LastErrorStore;
-  lastRouteStore?: LastRouteStore;
-  rateLimiter?: RateLimiter;
-  accessStore?: AccessStore;
-  registrationInviteCodeStore?: RegistrationInviteCodeStore;
-  diagnostics?: AppDiagnostics;
+  requestIdFactory: () => string;
+  lastErrorStore: LastErrorStore;
+  lastRouteStore: LastRouteStore;
+  rateLimiter: RateLimiter;
+  accessStore: AccessStore;
+  registrationInviteCodeStore: RegistrationInviteCodeStore;
+  diagnostics: AppDiagnostics;
   confirmationStore?: ConfirmationStore;
-  inFlightStore?: InFlightStore;
-  webhookEventStore?: WebhookEventStore;
+  webhookEventStore: WebhookEventStore;
   textGenerator?: TextGenerationProvider;
   agentRuntime?: AgentRuntime;
-  agentTurnRuntime?: AgentTurnRuntime;
-  agentTraceStore?: AgentTraceStore;
+  agentTurnRuntime: AgentTurnRuntime;
+  agentTraceStore: AgentTraceStore;
   sessionStore?: SessionStore;
-  agentJobStore?: AgentJobStore;
-  conversationWindowStore?: ConversationWindowStore;
+  agentJobStore: AgentJobStore;
+  conversationWindowStore: ConversationWindowStore;
   textFallbackGenerator?: TextGenerationProvider;
   controlledAgentRouter?: ControlledAgentRouter;
 }
@@ -229,65 +196,23 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     logger: false,
     bodyLimit: config.maxBodyBytes
   });
-  const functionRegistry = deps.functionRegistry ?? {};
-  const adminActionRouter = deps.adminActionRouter;
-  const createReplyClient = deps.createLineReplyClient ?? createLineSdkReplyClient;
-  const createIdentityClient = deps.createLineIdentityClient ?? createLineSdkIdentityClient;
-  const requestIdFactory = deps.requestIdFactory ?? randomUUID;
-  const accessStore = deps.accessStore ?? new InMemoryAccessStore();
-  const registrationInviteCodeStore =
-    deps.registrationInviteCodeStore ?? new InMemoryRegistrationInviteCodeStore();
-  const registrationInviteCodeTtlMinutes = config.access?.registrationInviteCodeTtlMinutes ?? 60;
-  const adminActionRegistry =
-    deps.adminActionRegistry ??
-    createAdminActionRegistry({
-      accessStore,
-      registrationInviteCodeStore,
-      registrationInviteCodeTtlMinutes,
-      confirmationStore: deps.confirmationStore,
-      confirmationTtlMinutes: config.access?.confirmationTtlMinutes
-    });
-  const lastErrorStore =
-    deps.lastErrorStore ?? new InMemoryLastErrorStore(config.lastErrors?.maxEntries ?? 20);
-  const lastRouteStore =
-    deps.lastRouteStore ?? new InMemoryLastRouteStore(config.lastErrors?.maxEntries ?? 20);
-  const rateLimiter =
-    deps.rateLimiter ??
-    new InMemoryRateLimiter(
-      config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
-    );
-  const diagnostics = deps.diagnostics ?? createStaticAppDiagnostics(config);
-  const inFlightStore = deps.inFlightStore ?? new MemoryInFlightStore();
-  const webhookEventStore = deps.webhookEventStore ?? new InMemoryWebhookEventStore();
+  const createReplyClient = deps.createLineReplyClient;
+  const createIdentityClient = deps.createLineIdentityClient;
+  const requestIdFactory = deps.requestIdFactory;
+  const accessStore = deps.accessStore;
+  const registrationInviteCodeStore = deps.registrationInviteCodeStore;
+  const adminActionRegistry = deps.adminActionRegistry;
+  const lastErrorStore = deps.lastErrorStore;
+  const lastRouteStore = deps.lastRouteStore;
+  const rateLimiter = deps.rateLimiter;
+  const diagnostics = deps.diagnostics;
+  const webhookEventStore = deps.webhookEventStore;
   const textGenerator = deps.textGenerator;
   const textFallbackGenerator = deps.textFallbackGenerator;
-  const agentTraceStore =
-    deps.agentTraceStore ?? new InMemoryAgentTraceStore(config.lastErrors?.maxEntries ?? 20);
-  const agentJobStore = deps.agentJobStore ?? new InMemoryAgentJobStore();
-  const conversationWindowStore =
-    deps.conversationWindowStore ?? new InMemoryConversationWindowStore();
-  const agentTurnRuntime =
-    deps.agentTurnRuntime ??
-    createAgentTurnRuntime({
-      functionRegistry,
-      textMessageHandlers: deps.textMessageHandlers ?? {},
-      adminActionRouter,
-      adminActionRegistry,
-      accessStore,
-      inFlightStore,
-      sessionStore: deps.sessionStore,
-      agentRuntime: deps.agentRuntime,
-      traceStore: agentTraceStore,
-      lastErrorStore,
-      lastRouteStore,
-      routeObserver: deps.routeObserver,
-      textGenerator,
-      textFallbackGenerator,
-      conversationWindowStore,
-      controlledAgentRouter: deps.controlledAgentRouter,
-      observabilityHmacKey: config.observability?.hmacKey,
-      timeZone: config.timeZone
-    });
+  const agentTraceStore = deps.agentTraceStore;
+  const agentJobStore = deps.agentJobStore;
+  const conversationWindowStore = deps.conversationWindowStore;
+  const agentTurnRuntime = deps.agentTurnRuntime;
 
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
@@ -303,9 +228,9 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         profile,
         config,
         adminActionRegistry,
-        deps.postbackHandlers ?? {},
-        deps.textMessageHandlers ?? {},
-        deps.adminHandlers ?? {},
+        deps.postbackHandlers,
+        deps.textMessageHandlers,
+        deps.adminHandlers,
         createReplyClient,
         createIdentityClient,
         deps.routeObserver,

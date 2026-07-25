@@ -93,4 +93,10 @@ describe("function modules", () => {
       )
     ).resolves.toMatchObject({ ok: true, replyText: "查不到符合的服事表。" });
   });
+
+  it("rejects query_schedule construction without its required memory port", () => {
+    expect(() => createQueryScheduleModule({ memoryStore: undefined } as never)).toThrow(
+      "query_schedule requires memoryStore"
+    );
+  });
 });
