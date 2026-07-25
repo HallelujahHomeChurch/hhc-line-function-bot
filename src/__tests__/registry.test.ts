@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryCacheStore } from "../cache/cache-store.js";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryCatalogStore, type CatalogSourceInput } from "../catalog/store.js";
-import { createFunctionRegistries } from "../functions/registry.js";
+import { createTestFunctionRegistries } from "../testing/create-test-function-registries.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type { AppConfig, BotProfileConfig, GraphDriveClient } from "../types.js";
 
@@ -74,7 +74,7 @@ describe("function registry", () => {
       listFolderFilesRecursive: vi.fn(),
       createSharingLink: vi.fn()
     };
-    const registries = createFunctionRegistries(config(), { graph });
+    const registries = createTestFunctionRegistries(config(), { graph });
 
     expect(registries.functions.find_sheet_music).toBeDefined();
     expect(registries.postbacks.select_sheet_music).toBeDefined();
@@ -107,7 +107,7 @@ describe("function registry", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     });
 
-    const registries = createFunctionRegistries(config(), {
+    const registries = createTestFunctionRegistries(config(), {
       graph,
       cache,
       sessionStore,
@@ -172,7 +172,7 @@ describe("function registry", () => {
       ]),
       createSharingLink: vi.fn()
     };
-    const registries = createFunctionRegistries(config(), {
+    const registries = createTestFunctionRegistries(config(), {
       catalog,
       accessStore,
       graph
