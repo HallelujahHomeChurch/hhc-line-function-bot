@@ -1,4 +1,4 @@
-import type { FunctionExecutionResult } from "../../../types.js";
+import type { FunctionExecutionResult } from "../../contracts/function-execution.js";
 
 export async function runAdminActionStage(
   execute: () => Promise<FunctionExecutionResult | undefined>

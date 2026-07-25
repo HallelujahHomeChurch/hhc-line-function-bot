@@ -33,23 +33,27 @@ import type {
   ConversationWindowStore
 } from "../../agent/context-manager.js";
 import type {
-  AdminActionRouterPort,
   BotProfileConfig,
-  FunctionExecutionResult,
-  FunctionHandlerContext,
   FunctionName,
-  FunctionRegistry,
   JsonRecord,
   LineEvent,
   ModelProviderLane,
   ModelProviderName,
+  RouteProviderName,
+  TextGenerationProvider
+} from "../../types.js";
+import type {
+  FunctionExecutionResult,
+  FunctionHandlerContext,
+  FunctionRegistry,
+  TextMessageHandlerRegistry
+} from "../contracts/function-execution.js";
+import type {
+  AdminActionRouterPort,
   RouteObserver,
   RouteObserverEvent,
-  RouteProviderName,
-  RouteResult,
-  TextGenerationProvider,
-  TextMessageHandlerRegistry
-} from "../../types.js";
+  RouteResult
+} from "../contracts/routing.js";
 import type { AgentRuntime } from "../../agent/agent-runtime.js";
 import { createCapabilityResolution } from "../../agent/capability-resolution.js";
 import { projectAgentReply } from "../../agent/response-projector.js";

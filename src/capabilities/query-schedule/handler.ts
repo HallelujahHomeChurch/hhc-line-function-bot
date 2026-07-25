@@ -6,13 +6,12 @@ import {
   type QueryServiceScheduleArguments
 } from "../../function-arguments.js";
 import type { AgentMemoryStore } from "../../agent/memory-store.js";
+import type { NotionDatabaseClient, QuickReplyItem } from "../../types.js";
 import type {
-  FunctionHandler,
-  FunctionHandlerContext,
   FunctionExecutionResult,
-  NotionDatabaseClient,
-  QuickReplyItem
-} from "../../types.js";
+  FunctionHandler,
+  FunctionHandlerContext
+} from "../../application/contracts/function-execution.js";
 import type { SessionStore } from "../../state/session-store.js";
 import type { ScheduleStore } from "../../schedules/store.js";
 import { createQueryScheduleMemoryHandler } from "../../functions/schedule-memory.js";

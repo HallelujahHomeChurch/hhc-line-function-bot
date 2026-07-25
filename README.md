@@ -42,6 +42,20 @@ The helper production profile enables the controlled church lookup functions, st
 
 Disabled, unknown, unclear, or explicitly denied actions are denied. There is no Azure OpenAI chat fallback in this version.
 
+## Architecture
+
+The service is one modular monolith. `src/bootstrap` explicitly constructs
+production adapters; `src/transport` owns Fastify and LINE entrance concerns;
+`src/application` owns use-case contracts and controlled turn stages; and
+`src/capabilities` owns vertical product slices. `query-schedule` is the
+reference slice with its definition, eval cases, ports, handler, and module
+factory in one boundary.
+
+Run `pnpm architecture:check` to enforce dependency direction. PR CI runs the
+same check. Production construction requires PostgreSQL and Redis and never
+silently falls back to in-memory stores; tests use explicit builders under
+`src/testing`.
+
 ## Local Setup
 
 ```powershell

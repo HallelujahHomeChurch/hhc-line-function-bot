@@ -1,5 +1,38 @@
-import type { AgentReplyData, AgentResultEnvelope } from "./agent/result-envelope.js";
-import type { RetrievalDiagnostics } from "./observability/retrieval-diagnostics.js";
+import type { LineReplyOptions } from "./application/contracts/function-execution.js";
+
+export type {
+  AdminActionRouteInput,
+  AdminActionRouteResult,
+  AdminActionRouterPort,
+  FunctionRouterPort,
+  RouteInput,
+  RouteObserver,
+  RouteObserverEvent,
+  RouteResult
+} from "./application/contracts/routing.js";
+export type {
+  AdminCommandContext,
+  AdminHandler,
+  AdminHandlerRegistry,
+  AgentResourceReference,
+  AgentResourceStorage,
+  AgentResourceType,
+  ControlledTurnStage,
+  FunctionExecutionResult,
+  FunctionHandler,
+  FunctionHandlerContext,
+  FunctionRegistry,
+  LineReplyOptions,
+  PostbackContext,
+  PostbackHandler,
+  PostbackHandlerRegistry,
+  PostbackRequest,
+  QuickReplyItem,
+  TextMessageContext,
+  TextMessageHandler,
+  TextMessageHandlerRegistry,
+  TextMessageRequest
+} from "./application/contracts/function-execution.js";
 
 export const FUNCTION_NAMES = [
   "find_ppt_slides",
@@ -457,129 +490,6 @@ export interface LineMessage {
   };
 }
 
-export interface RouteInput {
-  profileName: string;
-  text: string;
-  enabledFunctions: FunctionName[];
-  source: LineSource;
-  runtimeContext?: string;
-}
-
-export type RouteResult =
-  | {
-      type: "execute";
-      action: FunctionName;
-      arguments: JsonRecord;
-      confidence?: number;
-      provider: RouteProviderName;
-      lane?: ModelProviderLane;
-      fallbackProvider?: ModelProviderName;
-      fallbackReason?: string;
-    }
-  | {
-      type: "respond";
-      action: SystemActionName;
-      arguments: JsonRecord;
-      confidence?: number;
-      provider: RouteProviderName;
-      lane?: ModelProviderLane;
-      fallbackProvider?: ModelProviderName;
-      fallbackReason?: string;
-    }
-  | {
-      type: "deny";
-      reason: string;
-      provider: RouteProviderName;
-      lane?: ModelProviderLane;
-      fallbackProvider?: ModelProviderName;
-      fallbackReason?: string;
-    };
-
-export interface FunctionRouterPort {
-  route(input: RouteInput): Promise<RouteResult>;
-}
-
-export interface AdminActionRouteInput {
-  profileName: string;
-  text: string;
-  enabledActions: AdminActionName[];
-  source: LineSource;
-}
-
-export type AdminActionRouteResult =
-  | {
-      type: "execute";
-      action: AdminActionName;
-      arguments: JsonRecord;
-      confidence?: number;
-      provider: ModelProviderName;
-      lane?: ModelProviderLane;
-      fallbackProvider?: ModelProviderName;
-      fallbackReason?: string;
-    }
-  | {
-      type: "deny";
-      reason: string;
-      provider: ModelProviderName | "router";
-      lane?: ModelProviderLane;
-      fallbackProvider?: ModelProviderName;
-      fallbackReason?: string;
-    };
-
-export interface AdminActionRouterPort {
-  route(input: AdminActionRouteInput): Promise<AdminActionRouteResult>;
-}
-
-export interface RouteObserverEvent {
-  kind:
-    | "route"
-    | "function_result"
-    | "function_error"
-    | "admin_action_route"
-    | "admin_action_result"
-    | "text_handler"
-    | "postback"
-    | "admin_command"
-    | "rate_limited"
-    | "product_event";
-  profileName: string;
-  sourceType: string;
-  requestId?: string;
-  supportId?: string;
-  durationMs?: number;
-  provider?: RouteResult["provider"];
-  lane?: ModelProviderLane;
-  outcome?: RouteResult["type"];
-  action?: FunctionName | string;
-  reason?: string;
-  confidence?: number;
-  fallbackProvider?: ModelProviderName;
-  fallbackReason?: string;
-  handler?: string;
-  command?: string;
-  authorized?: boolean;
-  ok?: boolean;
-  errorName?: string;
-  engagement?: string;
-  smallTalkCategory?: string;
-  dedup?: string;
-  queryHash?: string;
-  executionMode?: RetrievalDiagnostics["executionMode"];
-  stateAgeBucket?: RetrievalDiagnostics["stateAgeBucket"];
-  freshnessStatus?: RetrievalDiagnostics["freshnessStatus"];
-  sourceRevision?: RetrievalDiagnostics["sourceRevision"];
-  queryFingerprint?: string;
-  referenceFingerprint?: string;
-  eventName?: string;
-  actorFingerprint?: string;
-  resultClass?: string;
-  latencyBucket?: string;
-  clarificationCountBucket?: string;
-  retry?: boolean;
-}
-
-export type RouteObserver = (event: RouteObserverEvent) => void | Promise<void>;
-
 export interface ChatProviderRequest {
   prompt: string;
   profileName: string;
@@ -618,151 +528,6 @@ export interface LineIdentityClient {
   getUserDisplayName(userId: string): Promise<string | undefined>;
   getGroupDisplayName(groupId: string): Promise<string | undefined>;
 }
-
-export type AgentResourceType = "ppt_slide" | "sheet_music" | "general_resource";
-
-export type AgentResourceStorage =
-  | {
-      provider: "graph";
-      driveId: string;
-      itemId: string;
-    }
-  | {
-      provider: "external_link";
-      url: string;
-      sourceLabel?: string;
-      description?: string;
-    };
-
-export interface AgentResourceReference {
-  resourceType: AgentResourceType;
-  title: string;
-  query?: string;
-  storage: AgentResourceStorage;
-  /** Opaque source snapshot revision used only for bounded revalidation. */
-  sourceRevision?: string;
-}
-
-export interface FunctionExecutionResult {
-  ok: boolean;
-  replyText: string;
-  executedAction?: FunctionName;
-  writePhase?: "preview" | "commit";
-  quickReplies?: QuickReplyItem[];
-  agentResult?: AgentResultEnvelope;
-  /** Ephemeral response-only data. Never persist in task frames or traces. */
-  responseData?: AgentReplyData;
-  /** Ephemeral observability data. Never persist in task frames, memory, or replies. */
-  diagnostics?: RetrievalDiagnostics;
-  agentResource?: AgentResourceReference;
-  smallTalkTrace?: {
-    lane: "smart_talk";
-    outcome: "generated" | "fallback" | "template";
-    provider?: ModelProviderName;
-    reason?: string;
-  };
-}
-
-export interface FunctionHandlerContext {
-  profile: BotProfileConfig;
-  event: LineEvent;
-  requestId?: string;
-  requesterDisplayName?: string;
-  requesterIsAdmin?: boolean;
-  activeTask?: {
-    capability: FunctionName;
-    anchors: JsonRecord;
-    references?: JsonRecord;
-    entities: Array<{ type: string; key: string; label: string; aliases?: string[] }>;
-    supportedOperations: string[];
-  };
-}
-
-export type FunctionHandler = (
-  args: JsonRecord,
-  context: FunctionHandlerContext
-) => Promise<FunctionExecutionResult>;
-
-export type FunctionRegistry = Partial<Record<FunctionName, FunctionHandler>>;
-
-export interface QuickReplyItem {
-  label: string;
-  action:
-    | {
-        type: "message";
-        label: string;
-        text: string;
-      }
-    | {
-        type: "postback";
-        label: string;
-        data: string;
-        displayText?: string;
-      };
-}
-
-export interface LineReplyOptions {
-  quickReplies?: QuickReplyItem[];
-}
-
-export interface PostbackRequest {
-  action: string;
-  params: Record<string, string>;
-}
-
-export interface PostbackContext {
-  profile: BotProfileConfig;
-  event: LineEvent;
-  requestId?: string;
-  requesterDisplayName?: string;
-}
-
-export type PostbackHandler = (
-  request: PostbackRequest,
-  context: PostbackContext
-) => Promise<FunctionExecutionResult>;
-
-export type PostbackHandlerRegistry = Record<string, PostbackHandler>;
-
-export interface TextMessageRequest {
-  text: string;
-}
-
-export interface TextMessageContext {
-  profile: BotProfileConfig;
-  event: LineEvent;
-  requestId?: string;
-  requesterDisplayName?: string;
-  requesterIsAdmin?: boolean;
-}
-
-export type ControlledTurnStage =
-  "pending_function" | "resolution" | "attachment" | "pre_route_recall";
-
-export interface TextMessageHandler {
-  turnStage: ControlledTurnStage;
-  matches(request: TextMessageRequest, context: TextMessageContext): Promise<boolean> | boolean;
-  handle(
-    request: TextMessageRequest,
-    context: TextMessageContext
-  ): Promise<FunctionExecutionResult | undefined>;
-}
-
-export type TextMessageHandlerRegistry = Record<string, TextMessageHandler>;
-
-export interface AdminCommandContext {
-  profile: BotProfileConfig;
-  event: LineEvent;
-  command: string;
-  args: string[];
-  requestId?: string;
-}
-
-export type AdminHandler = (
-  context: AdminCommandContext
-) => Promise<FunctionExecutionResult> | FunctionExecutionResult;
-
-export type AdminHandlerRegistry = Record<string, AdminHandler>;
 
 export interface DriveItem {
   id: string;

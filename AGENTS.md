@@ -86,16 +86,23 @@ When adding or changing an admin action:
 
 ## Architecture Map
 
-- `src/index.ts`: app bootstrapping and dependency wiring.
+- `src/index.ts`: load configuration, create the production runtime, and listen.
+- `src/bootstrap/create-production-runtime.ts`: sole production composition root for concrete adapters, stores, capability modules, timers, and shutdown.
+- `src/testing/*`: explicit in-memory test construction; production code must not import it.
+- `src/transport/http/*` and `src/transport/line/*`: health/readiness, LINE webhook entrance, access/admin commands, postbacks, and transport contracts.
+- `src/application/contracts/*`: cross-capability execution and routing contracts.
+- `src/application/turn/*`: controlled turn coordinator and focused workflow stages.
+- `src/capabilities/query-schedule/*`: reference vertical capability slice with definition, evals, ports, handler, and module factory.
+- `src/architecture/dependency-rules.ts`: mechanically enforced module dependency direction used by `pnpm architecture:check`.
 - `src/config.ts`: env parsing and profile validation.
 - `src/profile-path.ts`: canonical profile name and webhook path contract.
-- `src/server.ts`: Fastify routes, LINE webhook entrance, access gates, admin commands, and postbacks.
+- `src/server.ts`: compatibility re-export for the LINE Fastify app; do not add behavior here.
 - `src/router.ts`: primary model routing and router result model.
 - `src/llm/provider-runtime.ts` and `src/llm/provider-metadata.ts`: provider allowlist/runtime metadata.
 - `src/agent/capability-candidates.ts`, `src/agent/controlled-agent-router.ts`, and `src/agent/plan-validator.ts`: bounded candidates, advisory model planning, and deterministic authority validation.
 - `src/function-arguments.ts`: argument extraction and slot handling.
-- `src/functions/*`: function definitions, modules, and implementations.
-- `src/agent/turn-runtime.ts`: shared text-turn pipeline after LINE entrance checks.
+- `src/functions/*`: compatibility aggregation and capabilities not yet migrated to vertical slices.
+- `src/agent/turn-runtime.ts`: compatibility re-export for the application turn runtime.
 - `src/agent/capability-candidates.ts`, `src/agent/planner.ts`, and `src/agent/plan-validator.ts`: deterministic candidate generation, advisory semantic planning, and the server-owned authority boundary.
 - `src/agent/active-task.ts` and `src/agent/active-task-transition.ts`: compatibility filenames for requester-scoped version-2 task-frame state derived from successful structured results. `currentCapability` is the single authority field; do not add a duplicate legacy capability field or version-1 behavior.
 - `src/agent/context-manager.ts`: runtime context budget/compression plus requester-scoped conversation windows.
@@ -190,7 +197,7 @@ routers.
 - Schedule domains belong in the profile-scoped `schedulePolicy.domains` registry. Add an existing-schema domain by changing registry/binding data; do not add domain-specific router or `query_schedule`/`save_schedule` branches. Multiple domain matches must clarify. Write previews are bound to the domain revision and canonical schedule-source refreshes publish atomically.
 - Do not add automatic group-chat recording. Text memory must be explicit user intent.
 - LINE attachment download/storage is allowed only through the controlled `save_resource` pending-attachment flow. Direct chat may create a short-lived requester/source-scoped pending attachment session. A group must first receive a requester-scoped, two-minute, one-shot upload intent from an explicit activation phrase; unrelated group attachments remain silent. The requester must opt in, choose one of the four declared purposes, enter a title, review the preview, and explicitly confirm. Final confirmation may persist and enqueue only one opaque work ID through the durable outbox. The event-driven ACA scan job leases one queue message and claims work with a bounded token lease; expired claims are reclaimable, stale tokens cannot complete a newer claim, and `not_claimed` delivery is acknowledged only after terminal state is observed. The worker then checks target source write capability, size, MIME/magic bytes, extension, safe filename, hash, current signatures, and local ClamAV result before uploading to OneDrive and upserting catalog metadata. Do not download in the bot process, pass queue content to the scaler, or add another binary publish path.
-- The scan ACA Job has no ingress, one replica per execution, 1 vCPU/4 GiB, a bounded timeout, and the ClamAV Azure Files share mounted through the read-only environment storage definition. The scheduled refresh job runs `10 19 */2 * *` UTC against the same share through a separate read/write definition. It must stage and validate a complete `main`/`daily`/`bytecode` set, promote it to an immutable versioned directory, atomically replace the sanitized manifest last, and retain the previous active directory on every failure. Deployment must bootstrap and wait for one successful refresh before enabling the queue scanner. Scan and publish fail closed when the manifest is missing, malformed, changes during scanning, comes from the future, or is older than 72 hours.
+- The scan ACA Job has no ingress, one replica per execution, 1 vCPU/4 GiB, a bounded timeout, and the ClamAV Azure Files share mounted through the read-only environment storage definition. The scheduled refresh job runs weekly at `10 19 * * 0` UTC against the same share through a separate read/write definition. It must stage and validate a complete `main`/`daily`/`bytecode` set, promote it to an immutable versioned directory, atomically replace the sanitized manifest last, and retain the previous active directory on every failure. Deployment must bootstrap and wait for one successful refresh before enabling the queue scanner. Scan and publish fail closed when the manifest is missing, malformed, changes during scanning, comes from the future, or is older than 72 hours.
 - Agent turn traces are diagnostic metadata only. Do not store raw user text, file names, invite codes, secrets, or generated sharing links in traces.
 - Controlled-agent traces are allowlist-only. Record phases, bounded capability names/counts, provider/disposition/confidence bucket, validator reason, result status/anchor count/entity types, and lifecycle outcome. Never fall back to serializing raw prompts, messages, people, URLs, source titles/IDs, retrieval evidence, or provider payloads.
 - Resource replay and response-field follow-ups must use requester-scoped task-frame evidence plus the normal candidate/planner/validator path. Do not reintroduce pre-route latest-resource lookup or phrase-specific execution shortcuts.

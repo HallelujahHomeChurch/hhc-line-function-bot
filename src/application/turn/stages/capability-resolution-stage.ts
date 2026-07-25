@@ -1,12 +1,8 @@
 import { resumeCapabilityResolution } from "../../../agent/capability-resolution.js";
 import { createQueryClarificationReply } from "../../../query-clarification.js";
 import type { SessionStore } from "../../../state/session-store.js";
-import type {
-  BotProfileConfig,
-  FunctionExecutionResult,
-  FunctionName,
-  LineEvent
-} from "../../../types.js";
+import type { BotProfileConfig, FunctionName, LineEvent } from "../../../types.js";
+import type { FunctionExecutionResult } from "../../contracts/function-execution.js";
 
 export type CapabilityResolutionStageResult =
   | {
