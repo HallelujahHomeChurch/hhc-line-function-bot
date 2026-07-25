@@ -64,7 +64,7 @@ scanning are production ACA workloads, not workstation services.
 
 In production, the public API Gateway forwards those webhook paths through Dapr service invocation to app id `hhc-line-function-bot`. The bot Container App therefore keeps Dapr enabled on HTTP app port 3000 while its own ingress remains internal.
 
-The consent-only sheet-music fallback uses the separate `hhc-searxng` Container App. Its ingress is internal-only; the release script deploys it before the bot and supplies `SEARXNG_BASE_URL` from its ACA internal FQDN. Do not configure production with an office-network or public SearXNG endpoint.
+The consent-only sheet-music fallback uses the separate `hhc-searxng` Container App with `0.25` CPU and `0.5Gi` memory. Its ingress is internal-only; the release script deploys it before the bot and supplies `SEARXNG_BASE_URL` from its ACA internal FQDN. Do not configure production with an office-network or public SearXNG endpoint.
 
 Health and readiness:
 
@@ -436,7 +436,7 @@ Supported attachment targets in this flow:
 
 The always-on bot process has no TCP or HTTP scanner endpoint configuration. The finite attachment-scan worker uses a dedicated minimal configuration loader: profile name and LINE access token, PostgreSQL, Redis, Graph publication, bounded download limits, queue access, and ClamAV paths only. It does not require LINE channel secrets, bootstrap admin IDs, LLM keys, Notion credentials, or observability secrets. The worker runs local ClamAV and requires `CLAMAV_DATABASE_DIRECTORY` plus `CLAMAV_SIGNATURE_MANIFEST_PATH` (defaulting to `manifest.json` in that directory). The manifest selects an immutable versioned database directory beneath the configured root, so a refresh cannot create a reader-visible gap. `CLAMAV_SCAN_TIMEOUT_MS` controls its bounded scan duration. It revalidates the same signature version immediately before publication and fails closed when the manifest is missing, malformed, changed during the scan, from the future, or more than 72 hours old.
 
-`aca.clamav-signature-refresh-job.yaml` runs at `10 19 */2 * *` UTC. It mounts the same Azure Files share through a separate read/write environment storage definition, downloads into a private staging directory, requires `main`, `daily`, and `bytecode` databases, validates each with ClamAV tooling, moves the set into an immutable versioned directory, and atomically replaces the sanitized manifest last. Deployment also starts and waits for one refresh execution before enabling the queue scanner, so a newly provisioned share is never left empty until the first scheduled run. Any download, completeness, validation, or promotion failure exits non-zero and retains the prior active set.
+`aca.clamav-signature-refresh-job.yaml` runs every Monday at `10 19 * * 0` UTC, which is 03:10 Monday in Asia/Taipei. It mounts the same Azure Files share through a separate read/write environment storage definition, downloads into a private staging directory, requires `main`, `daily`, and `bytecode` databases, validates each with ClamAV tooling, moves the set into an immutable versioned directory, and atomically replaces the sanitized manifest last. Deployment also starts and waits for one refresh execution before enabling the queue scanner, so a newly provisioned share is never left empty until the first scheduled run. Any download, completeness, validation, or promotion failure exits non-zero and retains the prior active set.
 
 ## Runtime Secrets
 

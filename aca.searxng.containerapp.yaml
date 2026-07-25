@@ -31,6 +31,9 @@ properties:
             value: "false"
           - name: SEARXNG_PUBLIC_INSTANCE
             value: "false"
+        resources:
+          cpu: 0.25
+          memory: 0.5Gi
     volumes:
       - name: searxng-settings
         storageType: Secret
