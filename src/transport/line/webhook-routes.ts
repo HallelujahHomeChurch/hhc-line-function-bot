@@ -56,7 +56,6 @@ import {
 } from "../../llm/provider-runtime.js";
 import { messages } from "../../messages.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
-import { emitProductEvent } from "../../observability/product-events.js";
 import { resolveRequesterDisplayName } from "../../requester-personalization.js";
 import { createControlledSmallTalkReply } from "../../small-talk.js";
 import {
