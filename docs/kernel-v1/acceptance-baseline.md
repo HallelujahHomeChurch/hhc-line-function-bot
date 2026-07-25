@@ -46,6 +46,9 @@ report could be produced. Do not mark R4 implementation started until an
 operator explicitly authorizes one new bounded full run and
 `artifacts/kernel-v1/local-live-report.json` reports all eight cases `PASS`
 within 10 DeepSeek requests, 3 embedding batches, and successful cleanup.
+That bounded local report is the approved privacy-safe replacement for the
+previously pending production observation window; no raw LINE conversation or
+human tester is required.
 
 The local simulation cannot prove LINE platform delivery or reply-token
 behavior, production latency, production PostgreSQL/Redis failover, or Graph,
