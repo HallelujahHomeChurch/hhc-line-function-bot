@@ -28,6 +28,30 @@ describe("Kernel local live report", () => {
         rawMessage: "synthetic private input"
       })
     ).toThrow("kernel_local_live_report_unknown_key");
+    expect(() =>
+      createKernelLocalLiveReport({
+        ...validReportInput(),
+        cases: [
+          {
+            caseId: "schedule-explicit",
+            passed: false,
+            failureCode: "provider said: raw response"
+          }
+        ]
+      })
+    ).toThrow("kernel_local_live_report_invalid");
+    expect(() =>
+      createKernelLocalLiveReport({
+        ...validReportInput(),
+        cases: [
+          {
+            caseId: "schedule-explicit",
+            passed: false,
+            capability: "unbounded-capability"
+          }
+        ]
+      })
+    ).toThrow("kernel_local_live_report_invalid");
   });
 
   it("writes only the allowlisted JSON and Markdown evidence", async () => {

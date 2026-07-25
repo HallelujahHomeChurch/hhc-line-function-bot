@@ -25,6 +25,58 @@ const CASE_KEYS = new Set([
 ]);
 const PROVIDER_KEYS = new Set(["deepSeekRequests", "embeddingBatches"]);
 const CLEANUP_KEYS = new Set(["namespace", "compose", "secretFiles", "passed"]);
+const CASE_STRING_VALUES = {
+  failureCode: new Set(["journey_assertion_failed"]),
+  disposition: new Set([
+    "execute",
+    "continue",
+    "refine",
+    "advance",
+    "select",
+    "switch",
+    "clarify",
+    "chat",
+    "deny",
+    "collect"
+  ]),
+  capability: new Set(["query_schedule", "query_knowledge", "save_resource"]),
+  validatorReason: new Set([
+    "active_task_refinement",
+    "active_task_unavailable",
+    "ambiguous_entity",
+    "candidate_not_allowed",
+    "capability_evidence_unresolved",
+    "capability_not_agent_enabled",
+    "deterministic_explicit_intent",
+    "explicit_capability_switch",
+    "explicit_intent",
+    "explicit_switch_required",
+    "function_disabled",
+    "invalid_arguments",
+    "invalid_policy",
+    "low_confidence",
+    "missing_required_slot",
+    "no_capability_evidence",
+    "operation_not_allowed",
+    "planner_clarification",
+    "planner_denied",
+    "planner_unavailable",
+    "retrieval_unavailable",
+    "source_not_allowed",
+    "write_evidence_missing"
+  ]),
+  resultClass: new Set(["success", "not_found", "ambiguous", "unavailable"]),
+  lifecycleOutcome: new Set([
+    "read",
+    "missing",
+    "invalid",
+    "write",
+    "preserve",
+    "replace",
+    "expire",
+    "clear"
+  ])
+} as const;
 
 export interface KernelLocalLiveCaseReport {
   caseId: KernelLocalLiveCaseId;
@@ -68,14 +120,7 @@ export function createKernelLocalLiveReport(input: unknown): KernelLocalLiveRepo
     return {
       caseId: assertCaseId(string(item.caseId)),
       passed: boolean(item.passed),
-      ...optionalStringFields(item, [
-        "failureCode",
-        "disposition",
-        "capability",
-        "validatorReason",
-        "resultClass",
-        "lifecycleOutcome"
-      ])
+      ...optionalCaseStringFields(item)
     };
   });
   const providers = record(value.providers);
@@ -207,11 +252,13 @@ function assertCaseId(value: string): KernelLocalLiveCaseId {
   return value as KernelLocalLiveCaseId;
 }
 
-function optionalStringFields(
-  value: Record<string, unknown>,
-  keys: readonly string[]
-): Record<string, string> {
+function optionalCaseStringFields(value: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(
-    keys.flatMap((key) => (value[key] === undefined ? [] : [[key, string(value[key])]]))
+    Object.entries(CASE_STRING_VALUES).flatMap(([key, allowed]) => {
+      if (value[key] === undefined) return [];
+      const candidate = string(value[key]);
+      if (!allowed.has(candidate)) throw new Error("kernel_local_live_report_invalid");
+      return [[key, candidate]];
+    })
   );
 }
