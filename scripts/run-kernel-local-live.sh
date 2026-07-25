@@ -55,6 +55,7 @@ SECRET_VOLUME=""
 SECRET_LOADER_CONTAINER=""
 deepseek_secret=""
 azure_embedding_secret=""
+CURRENT_STAGE="initialization"
 
 cleanup() {
   if [[ "$CLEANUP_RAN" == "true" ]]; then return 0; fi
@@ -83,10 +84,20 @@ on_signal() {
   cleanup
   exit 2
 }
-trap cleanup EXIT
+on_exit() {
+  exit_status=$?
+  trap - EXIT
+  cleanup
+  if ((exit_status != 0)); then
+    printf '%s\n' "kernel_local_live_failed_stage:${CURRENT_STAGE}" >&2
+  fi
+  exit "$exit_status"
+}
+trap on_exit EXIT
 trap on_signal INT TERM
 
 cd "$ROOT_DIRECTORY"
+CURRENT_STAGE="image_build"
 COMMIT="$(git rev-parse HEAD)"
 IMAGE="kernel-local-live:${COMMIT:0:12}"
 RUN_ID="run-$(date -u +%Y%m%d%H%M%S)-$$"
@@ -103,6 +114,7 @@ ARTIFACT_DIRECTORY="${ARTIFACT_ROOT}/artifacts/kernel-v1"
 mkdir -p "$ARTIFACT_DIRECTORY"
 
 docker build --target kernel-local-live -t "$IMAGE" . || exit 2
+CURRENT_STAGE="case_validation"
 if [[ -n "$CASE_ID" ]]; then
   docker run --rm "$IMAGE" node dist/tools/eval-kernel-local-live.js --validate-case "$CASE_ID" ||
     exit 2
@@ -111,6 +123,7 @@ else
 fi
 az account show --output none >/dev/null || exit 2
 
+CURRENT_STAGE="secret_retrieval"
 TEMP_DIRECTORY="$(mktemp -d /dev/shm/kernel-local-live.XXXXXXXX)"
 chmod 0700 "$TEMP_DIRECTORY"
 DEEPSEEK_FILE="${TEMP_DIRECTORY}/deepseek-api-key"
@@ -137,6 +150,7 @@ printf '%s' "$deepseek_secret" >"$DEEPSEEK_FILE"
 printf '%s' "$azure_embedding_secret" >"$AZURE_EMBEDDING_FILE"
 chmod 0600 "$DEEPSEEK_FILE" "$AZURE_EMBEDDING_FILE"
 
+CURRENT_STAGE="secret_staging"
 SECRET_VOLUME="kernel-local-live-secrets-${RUN_ID}"
 SECRET_LOADER_CONTAINER="kernel-local-live-secret-loader-${RUN_ID}"
 docker volume create \
@@ -173,8 +187,10 @@ fi
 
 COMPOSE_CONFIG_FILE="${TEMP_DIRECTORY}/compose-config.txt"
 CONSOLE_FILE="${TEMP_DIRECTORY}/console.txt"
-docker compose -f "$COMPOSE_FILE" config >"$COMPOSE_CONFIG_FILE"
+CURRENT_STAGE="compose_config"
+docker compose -f "$COMPOSE_FILE" config >"$COMPOSE_CONFIG_FILE" || exit 2
 COMPOSE_STARTED=true
+CURRENT_STAGE="compose_run"
 set +e
 timeout --signal=TERM --kill-after=15s 10m \
   docker compose -f "$COMPOSE_FILE" up --abort-on-container-exit --exit-code-from acceptance-driver \
@@ -184,6 +200,7 @@ set -e
 
 compose_config_contents="$(<"$COMPOSE_CONFIG_FILE")"
 console_contents="$(<"$CONSOLE_FILE")"
+CURRENT_STAGE="cleanup"
 cleanup
 if [[ "$CLEANUP_FAILED" == "true" ]]; then
   exit 2
@@ -193,6 +210,7 @@ export KERNEL_LOCAL_LIVE_ARTIFACT_ROOT="$ARTIFACT_ROOT"
 export KERNEL_LOCAL_LIVE_COMPOSE_CLEAN=true
 export KERNEL_LOCAL_LIVE_SECRET_FILES_CLEAN=true
 if ((DRIVER_STATUS == 0)); then
+  CURRENT_STAGE="finalize"
   ARTIFACT_MOUNT_SOURCE="$ARTIFACT_DIRECTORY"
   if [[ "${DOCKER_EXECUTABLE:-}" == *.exe ]]; then
     ARTIFACT_MOUNT_SOURCE="$(wslpath -w "$ARTIFACT_DIRECTORY")"
@@ -202,12 +220,13 @@ if ((DRIVER_STATUS == 0)); then
     -e KERNEL_LOCAL_LIVE_COMPOSE_CLEAN=true \
     -e KERNEL_LOCAL_LIVE_SECRET_FILES_CLEAN=true \
     -v "${ARTIFACT_MOUNT_SOURCE}:/app/artifacts/kernel-v1" \
-    "$IMAGE" node dist/tools/eval-kernel-local-live.js --finalize-cleanup
+    "$IMAGE" node dist/tools/eval-kernel-local-live.js --finalize-cleanup || exit 2
 else
   ((DRIVER_STATUS == 1)) && exit 1
   exit 2
 fi
 
+CURRENT_STAGE="leak_scan"
 [[ "$compose_config_contents" != *"$deepseek_secret"* ]] || exit 2
 [[ "$compose_config_contents" != *"$azure_embedding_secret"* ]] || exit 2
 [[ "$console_contents" != *"$deepseek_secret"* ]] || exit 2
@@ -227,4 +246,5 @@ git_contents="$(git diff -- . ':(exclude)artifacts')"
 unset compose_config_contents console_contents scan_contents git_contents
 unset deepseek_secret azure_embedding_secret
 
+CURRENT_STAGE="complete"
 printf '%s\n' "Kernel v1 local live cleanup: PASS"

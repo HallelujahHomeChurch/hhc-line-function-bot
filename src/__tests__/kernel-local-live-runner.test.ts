@@ -35,6 +35,7 @@ describe("Kernel local live disposable runner", () => {
     expect(shell.match(/--show-values/gu)).toHaveLength(2);
     expect(shell).toContain("timeout --signal=TERM --kill-after=15s 10m");
     expect(shell).toContain("down --volumes --remove-orphans");
+    expect(shell).toContain("kernel_local_live_failed_stage:");
     expect(shell).not.toMatch(/\b(for|while)\b.*\b(retry|rerun)\b/u);
 
     expect(compose.match(/^ {2}[a-z][a-z-]+:\s*$/gmu)?.length).toBeGreaterThanOrEqual(4);
