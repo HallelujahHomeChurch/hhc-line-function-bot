@@ -10,7 +10,10 @@ import { RedisConversationWindowStore } from "../../agent/context-manager.js";
 import { RedisAgentJobStore } from "../../agent/jobs.js";
 import { RedisAgentTraceStore } from "../../agent/trace-store.js";
 import type { AttachmentScanQueue } from "../../attachments/scan-queue.js";
-import { RedisAttachmentScanWorkStore } from "../../attachments/scan-work-store.js";
+import {
+  RedisAttachmentScanWorkStore,
+  type AttachmentScanWorkStore
+} from "../../attachments/scan-work-store.js";
 import { createCacheStore } from "../../cache/create-cache-store.js";
 import { createCatalogStore } from "../../catalog/create-catalog-store.js";
 import { createPostgresRuntime } from "../../db/postgres.js";
@@ -80,10 +83,30 @@ export async function runKernelLocalLiveApp(
     client: redis.client,
     keyPrefix: redis.keyPrefix
   });
-  const scanWorkStore = new RedisAttachmentScanWorkStore({
+  const baseScanWorkStore = new RedisAttachmentScanWorkStore({
     client: redis.client,
     keyPrefix: redis.keyPrefix,
     jobStore: agentJobStore
+  });
+  const scanWorkStore: AttachmentScanWorkStore = new Proxy(baseScanWorkStore, {
+    get(target, property) {
+      if (property === "markEnqueued") {
+        return async (workId: string) => {
+          const marked = await target.markEnqueued(workId);
+          if (marked) {
+            await channel.appendObservation({
+              caseId: "write-preview-confirm",
+              kind: "scan_work",
+              ordinal: 1,
+              outcome: "queued"
+            });
+          }
+          return marked;
+        };
+      }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    }
   });
   const scanQueue: AttachmentScanQueue = {
     async enqueue() {

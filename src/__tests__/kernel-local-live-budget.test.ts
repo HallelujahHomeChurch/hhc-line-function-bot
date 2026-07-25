@@ -10,7 +10,7 @@ import {
 describe("Kernel local live case costs", () => {
   it("rejects a suite whose declared provider ceiling exceeds the authority limit", () => {
     expect(validateKernelLocalLiveCost(KERNEL_LOCAL_LIVE_CASES)).toEqual({
-      deepSeekMax: 10,
+      deepSeekMax: 9,
       embeddingBatchMax: 3
     });
 
@@ -21,7 +21,7 @@ describe("Kernel local live case costs", () => {
           id: "over-budget",
           version: 1,
           journey: "schedule_explicit",
-          deepSeekMax: 1,
+          deepSeekMax: 2,
           embeddingBatchMax: 0
         }
       ])
@@ -52,7 +52,7 @@ describe("Kernel local live case costs", () => {
       ["knowledge-follow-up", 2, 2],
       ["group-requester-isolation", 1, 0],
       ["provider-unavailable", 0, 0],
-      ["write-preview-confirm", 1, 0]
+      ["write-preview-confirm", 0, 0]
     ]);
     expect(Object.isFrozen(KERNEL_LOCAL_LIVE_CASES)).toBe(true);
     expect(KERNEL_LOCAL_LIVE_CASES.every(Object.isFrozen)).toBe(true);

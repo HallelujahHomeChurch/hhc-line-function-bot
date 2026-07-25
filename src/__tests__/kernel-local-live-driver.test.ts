@@ -173,7 +173,22 @@ describe("Kernel local live journey outcome evaluation", () => {
       evaluateKernelLocalLiveOutcome({
         caseId,
         traces,
-        observations,
+        observations: [
+          ...observations.filter(({ kind }) => kind !== "provider"),
+          ...successfulProviderObservations(caseId),
+          ...(caseId === "write-preview-confirm"
+            ? [
+                {
+                  caseId: "write-preview-confirm" as const,
+                  kind: "scan_work",
+                  ordinal: 1,
+                  outcome: "queued"
+                }
+              ]
+            : [])
+        ],
+        replyQuickReplyLabels:
+          caseId === "write-preview-confirm" ? writeReplyQuickReplyLabels() : [],
         preFinalQueueDetected: false
       })
     ).toMatchObject(expected);
@@ -230,14 +245,48 @@ describe("Kernel local live journey outcome evaluation", () => {
             kind: "queue",
             ordinal: 1,
             outcome: "queued"
+          },
+          {
+            caseId: "write-preview-confirm",
+            kind: "scan_work",
+            ordinal: 1,
+            outcome: "queued"
           }
         ],
+        replyQuickReplyLabels: writeReplyQuickReplyLabels(),
         preFinalQueueDetected: true
       })
     ).toMatchObject({
       passed: false,
       failureCode: "journey_assertion_failed"
     });
+  });
+
+  it("requires exact successful provider evidence and rejects budget exhaustion", () => {
+    const traces = [successfulTrace("query_schedule")];
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "schedule-explicit",
+        traces,
+        observations: []
+      })
+    ).toMatchObject({ passed: false });
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "schedule-explicit",
+        traces,
+        observations: [
+          ...successfulProviderObservations("schedule-explicit"),
+          {
+            caseId: "schedule-explicit",
+            kind: "provider",
+            provider: "deepseek",
+            ordinal: 2,
+            outcome: "budget_exhausted"
+          }
+        ]
+      })
+    ).toMatchObject({ passed: false });
   });
 
   it("finalizes the allowlisted suite result only after host cleanup", () => {
@@ -329,4 +378,45 @@ function successfulTrace(action: "query_schedule" | "query_knowledge"): AgentTur
     },
     { phase: "result_envelope", resultStatus: "success", lifecycleOutcome: "write" }
   ]);
+}
+
+function successfulProviderObservations(
+  caseId: Parameters<typeof evaluateKernelLocalLiveOutcome>[0]["caseId"]
+) {
+  const counts = {
+    "schedule-explicit": [1, 0],
+    "schedule-refinement": [2, 0],
+    "schedule-ambiguity": [1, 0],
+    "capability-switch": [2, 1],
+    "knowledge-follow-up": [2, 2],
+    "group-requester-isolation": [1, 0],
+    "provider-unavailable": [0, 0],
+    "write-preview-confirm": [0, 0]
+  }[caseId]!;
+  return [
+    ...Array.from({ length: counts[0] }, (_, index) => ({
+      caseId,
+      kind: "provider",
+      provider: "deepseek",
+      ordinal: index + 1,
+      outcome: "success"
+    })),
+    ...Array.from({ length: counts[1] }, (_, index) => ({
+      caseId,
+      kind: "provider",
+      provider: "azure_openai",
+      ordinal: index + 1,
+      outcome: "success"
+    }))
+  ];
+}
+
+function writeReplyQuickReplyLabels(): string[][] {
+  return [
+    ["是", "否"],
+    ["投影片", "流行歌譜", "詩歌歌譜", "小哈資料庫"],
+    [],
+    ["保存", "取消"],
+    ["查看結果"]
+  ];
 }

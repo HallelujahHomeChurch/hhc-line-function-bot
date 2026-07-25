@@ -64,7 +64,7 @@ export const KERNEL_LOCAL_LIVE_CASES: readonly Readonly<KernelLocalLiveCase>[] =
         id: "write-preview-confirm",
         version: 1,
         journey: "write_preview_confirm",
-        deepSeekMax: 1,
+        deepSeekMax: 0,
         embeddingBatchMax: 0
       }
     ] satisfies KernelLocalLiveCase[]

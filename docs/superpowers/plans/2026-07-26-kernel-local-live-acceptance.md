@@ -12,7 +12,7 @@
 
 - Production PostgreSQL, Redis, LINE, Graph, OneDrive, Notion, queues, and ClamAV publication are never called.
 - DeepSeek is the sole semantic provider; Azure `text-embedding-3-small` uses exactly 1536 dimensions.
-- The default suite has a hard ceiling of 10 DeepSeek requests and 3 embedding batches, provider concurrency exactly 1, no automatic retries, and a ten-minute full-run deadline.
+- The default suite requires exactly 9 successful DeepSeek requests and 3 successful embedding batches under the hard 10/3 authority cap, provider concurrency exactly 1, no automatic retries, and a ten-minute full-run deadline.
 - The host retrieves only ACA secrets `deepseek-api-key` and `azure-openai-embedding-key` from resource group `alive`, Container App `hhc-line-function-bot`.
 - Secret bytes exist only in random mode-`0700` `/dev/shm` storage as mode-`0600` files, mounted read-only at `/run/secrets`; they never enter command arguments, environment variables, Docker `Config.Env`, logs, reports, Git, or `.env` files.
 - Reports and console output contain allowlisted enums and counters only; they never contain raw messages, prompts, payloads, names, URLs, source identifiers, provider responses, or credentials.
@@ -42,11 +42,11 @@
 
 - [ ] **Step 1: Write failing case-cost and budget tests.**
 
-  Cover the eight exact IDs, the exact default totals `10` and `3`, unknown case rejection, single-case selection, increment-before-dispatch, rejection at request 11/batch 4, serial execution, zero retry after a thrown provider call, and sanitized observations:
+  Cover the eight exact IDs, the exact default totals `9` and `3`, unknown case rejection, single-case selection, increment-before-dispatch, rejection above the absolute request 10/batch 3 authority cap, serial execution, zero retry after a thrown provider call, and sanitized observations:
 
   ```ts
   expect(validateKernelLocalLiveCost(KERNEL_LOCAL_LIVE_CASES)).toEqual({
-    deepSeekMax: 10,
+    deepSeekMax: 9,
     embeddingBatchMax: 3
   });
   await expect(budget.runDeepSeek("schedule-explicit", failingCall)).rejects.toThrow(
@@ -78,7 +78,7 @@
     ["knowledge-follow-up", 2, 2],
     ["group-requester-isolation", 1, 0],
     ["provider-unavailable", 0, 0],
-    ["write-preview-confirm", 1, 0]
+    ["write-preview-confirm", 0, 0]
   ];
   ```
 

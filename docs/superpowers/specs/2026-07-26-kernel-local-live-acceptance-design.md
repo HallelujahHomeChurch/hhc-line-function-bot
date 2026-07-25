@@ -191,7 +191,7 @@ The default suite contains eight versioned journeys:
    - Proves one-provider fail-closed behavior and zero semantic fallback.
 
 8. `write-preview-confirm`
-   - Maximum live cost: 1 DeepSeek request, 0 embedding batches.
+   - Maximum live cost: 0 DeepSeek requests, 0 embedding batches.
    - Uses a granted synthetic requester, a synthetic attachment, and local
      attachment-work/outbox adapters.
    - Proves preview, confirmation, controlled write tracing, idempotency, and
@@ -208,9 +208,10 @@ No journey may contain loops. A journey has a statically bounded number of
 turns and declares its maximum DeepSeek and embedding cost next to the case
 definition. Runtime enforcement applies both the per-case ceiling and the
 global ceiling, and permits at most one DeepSeek request per webhook turn. The
-default suite therefore has a static ceiling of 10 DeepSeek requests and 3
-embedding batches. Static suite validation must prove the sum fits the global
-budget before secrets are read.
+default suite therefore requires exactly 9 successful DeepSeek requests and 3
+successful embedding batches under the absolute 10/3 authority cap. A failed
+or budget-exhausted provider observation fails its case. Static suite
+validation must prove the sum fits the global budget before secrets are read.
 
 ## Webhook And Reply Flow
 
@@ -334,8 +335,9 @@ the complete suite automatically if it fails.
 Kernel v1 may be marked accepted only when:
 
 - all eight journeys pass;
-- the real provider counters remain within 10 DeepSeek requests and 3 embedding
-  batches;
+- the real provider counters contain exactly 9 successful DeepSeek requests
+  and 3 successful embedding batches, with no failed or budget-exhausted
+  observation;
 - no external write occurs;
 - the report and output pass secret-leak checks;
 - cleanup verification passes;

@@ -17,7 +17,11 @@ import {
   type KernelLocalLiveObservation,
   type KernelLocalLiveRedisClient
 } from "../../../testing/kernel-local-live/redis-channel.js";
-import { selectKernelLocalLiveCases, validateKernelLocalLiveCost } from "./cases.js";
+import {
+  KERNEL_LOCAL_LIVE_CASES,
+  selectKernelLocalLiveCases,
+  validateKernelLocalLiveCost
+} from "./cases.js";
 import type { KernelLocalLiveCaseId } from "./contracts.js";
 import { selectKernelLocalLiveJourneys } from "./journeys.js";
 import {
@@ -124,6 +128,7 @@ export async function runKernelLocalLiveDriver(
         await seedRequesterAActiveTask(conversationStore);
       }
       const traces: AgentTurnTraceRecord[] = [];
+      const replyQuickReplyLabels: string[][] = [];
       let preFinalQueueDetected = false;
       for (const turn of journey.turns) {
         const request = createSignedLineWebhook(turn, "kernel-local-live-channel-secret");
@@ -149,16 +154,28 @@ export async function runKernelLocalLiveDriver(
         }
         const captured = await channel.readReply(request.replyToken);
         if (!captured) throw new Error("kernel_local_live_reply_missing");
+        replyQuickReplyLabels.push(captured.quickReplyLabels);
         traces.push(...(await traceStore.list(1)));
+        const currentObservations = await channel.readObservations();
         if (
           journey.caseId === "write-preview-confirm" &&
           turn.turnIndex < journey.turns.length - 1 &&
-          (await channel.readObservations()).some(
+          currentObservations.some(
             ({ caseId, kind, outcome }) =>
               caseId === journey.caseId && kind === "queue" && outcome === "queued"
           )
         ) {
           preFinalQueueDetected = true;
+        }
+        if (
+          currentObservations.some(
+            ({ caseId, kind, outcome }) =>
+              caseId === journey.caseId &&
+              kind === "provider" &&
+              (outcome === "failed" || outcome === "budget_exhausted")
+          )
+        ) {
+          break;
         }
         if (!entranceChecked) {
           await assertDuplicate(fetchImpl, appBaseUrl, request, channel);
@@ -170,6 +187,7 @@ export async function runKernelLocalLiveDriver(
         caseId: journey.caseId,
         traces,
         observations,
+        replyQuickReplyLabels,
         preFinalQueueDetected
       });
       caseReports.push(result);
@@ -250,6 +268,7 @@ export function evaluateKernelLocalLiveOutcome(input: {
   caseId: KernelLocalLiveCaseId;
   traces: AgentTurnTraceRecord[];
   observations: KernelLocalLiveObservation[];
+  replyQuickReplyLabels?: string[][];
   preFinalQueueDetected?: boolean;
 }): InternalCaseReport {
   const steps = input.traces.flatMap(({ steps }) => steps);
@@ -264,11 +283,11 @@ export function evaluateKernelLocalLiveOutcome(input: {
   const providerCounts = {
     deepseek: caseObservations.filter(
       ({ kind, provider, outcome }) =>
-        kind === "provider" && provider === "deepseek" && outcome !== "budget_exhausted"
+        kind === "provider" && provider === "deepseek" && outcome === "success"
     ).length,
     azure_openai: caseObservations.filter(
       ({ kind, provider, outcome }) =>
-        kind === "provider" && provider === "azure_openai" && outcome !== "budget_exhausted"
+        kind === "provider" && provider === "azure_openai" && outcome === "success"
     ).length
   };
   const passed = outcomePassed(input.caseId, {
@@ -281,6 +300,7 @@ export function evaluateKernelLocalLiveOutcome(input: {
     caseObservations,
     providerCounts,
     turns: input.traces.map(({ steps: turnSteps }) => turnEvidence(turnSteps)),
+    replyQuickReplyLabels: input.replyQuickReplyLabels ?? [],
     preFinalQueueDetected: input.preFinalQueueDetected === true
   });
   return {
@@ -354,9 +374,20 @@ function outcomePassed(
     caseObservations: KernelLocalLiveObservation[];
     providerCounts: { deepseek: number; azure_openai: number };
     turns: ReturnType<typeof turnEvidence>[];
+    replyQuickReplyLabels: string[][];
     preFinalQueueDetected: boolean;
   }
 ): boolean {
+  const declaredCase = KERNEL_LOCAL_LIVE_CASES.find(({ id }) => id === caseId)!;
+  if (
+    evidence.caseObservations.some(
+      ({ kind, outcome }) => kind === "provider" && outcome !== "success"
+    ) ||
+    evidence.providerCounts.deepseek !== declaredCase.deepSeekMax ||
+    evidence.providerCounts.azure_openai !== declaredCase.embeddingBatchMax
+  ) {
+    return false;
+  }
   switch (caseId) {
     case "schedule-explicit":
       return evidence.turns.length === 1 && turnSucceeded(evidence.turns[0], "query_schedule");
@@ -413,11 +444,32 @@ function outcomePassed(
         evidence.caseObservations.filter(
           ({ kind, outcome }) => kind === "queue" && outcome === "queued"
         ).length === 1 &&
+        evidence.caseObservations.filter(
+          ({ kind, outcome }) => kind === "scan_work" && outcome === "queued"
+        ).length === 1 &&
         evidence.turns.length === 5 &&
         evidence.turns.every(({ steps }) => steps.length > 0) &&
+        matchesWriteReplyStates(evidence.replyQuickReplyLabels) &&
         !evidence.preFinalQueueDetected
       );
   }
+}
+
+function matchesWriteReplyStates(labels: string[][]): boolean {
+  return (
+    labels.length === 5 &&
+    sameLabels(labels[0], ["是", "否"]) &&
+    sameLabels(labels[1], ["投影片", "流行歌譜", "詩歌歌譜", "小哈資料庫"]) &&
+    sameLabels(labels[2], []) &&
+    sameLabels(labels[3], ["保存", "取消"]) &&
+    sameLabels(labels[4], ["查看結果"])
+  );
+}
+
+function sameLabels(actual: string[] | undefined, expected: string[]): boolean {
+  return (
+    actual?.length === expected.length && actual.every((label, index) => label === expected[index])
+  );
 }
 
 function turnEvidence(steps: AgentTurnTraceStep[]) {
