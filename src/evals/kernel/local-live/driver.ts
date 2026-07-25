@@ -43,7 +43,18 @@ export interface KernelLocalLiveSuiteResult {
   cleanup: {
     namespace: boolean;
   };
+  infrastructureFailureCode?: KernelLocalLiveInfrastructureFailureCode;
 }
+
+export type KernelLocalLiveInfrastructureFailureCode =
+  | "app_unhealthy"
+  | "invalid_signature_failed"
+  | "webhook_failed"
+  | "webhook_ack_invalid"
+  | "reply_missing"
+  | "duplicate_failed"
+  | "duplicate_reply_detected"
+  | "dependency_unavailable";
 
 const SUITE_RESULT_KEYS = new Set([
   "schemaVersion",
@@ -55,7 +66,8 @@ const SUITE_RESULT_KEYS = new Set([
   "passed",
   "cases",
   "providers",
-  "cleanup"
+  "cleanup",
+  "infrastructureFailureCode"
 ]);
 const SUITE_CLEANUP_KEYS = new Set(["namespace"]);
 
@@ -101,6 +113,7 @@ export async function runKernelLocalLiveDriver(
   const caseReports: InternalCaseReport[] = [];
   let namespaceCleanup = false;
   let infrastructureFailure = false;
+  let infrastructureFailureCode: KernelLocalLiveInfrastructureFailureCode | undefined;
 
   try {
     const health = await fetchImpl(new URL("/healthz", appBaseUrl));
@@ -150,8 +163,9 @@ export async function runKernelLocalLiveDriver(
       caseReports.push(result);
       if (!result.passed) break;
     }
-  } catch {
+  } catch (error) {
     infrastructureFailure = true;
+    infrastructureFailureCode = classifyKernelLocalLiveInfrastructureFailure(error);
   } finally {
     try {
       await channel.cleanup();
@@ -193,11 +207,32 @@ export async function runKernelLocalLiveDriver(
     passed,
     cases: caseReports.map(stripInternalProviderCounts),
     providers: { deepSeekRequests, embeddingBatches },
-    cleanup: { namespace: namespaceCleanup }
+    cleanup: { namespace: namespaceCleanup },
+    ...(infrastructureFailureCode ? { infrastructureFailureCode } : {})
   };
   await writeSuiteResult(suiteResult, environment.KERNEL_LOCAL_LIVE_ARTIFACT_ROOT ?? "/app");
   return infrastructureFailure ? 2 : passed ? 0 : 1;
 }
+
+export function classifyKernelLocalLiveInfrastructureFailure(
+  error: unknown
+): KernelLocalLiveInfrastructureFailureCode {
+  const code =
+    error instanceof Error
+      ? SAFE_INFRASTRUCTURE_FAILURES[error.message as keyof typeof SAFE_INFRASTRUCTURE_FAILURES]
+      : undefined;
+  return code ?? "dependency_unavailable";
+}
+
+const SAFE_INFRASTRUCTURE_FAILURES = {
+  kernel_local_live_app_unhealthy: "app_unhealthy",
+  kernel_local_live_invalid_signature_failed: "invalid_signature_failed",
+  kernel_local_live_webhook_failed: "webhook_failed",
+  kernel_local_live_webhook_ack_invalid: "webhook_ack_invalid",
+  kernel_local_live_reply_missing: "reply_missing",
+  kernel_local_live_duplicate_failed: "duplicate_failed",
+  kernel_local_live_duplicate_reply_detected: "duplicate_reply_detected"
+} as const;
 
 export function evaluateKernelLocalLiveOutcome(input: {
   caseId: KernelLocalLiveCaseId;

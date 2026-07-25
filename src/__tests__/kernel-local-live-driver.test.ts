@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  classifyKernelLocalLiveInfrastructureFailure,
   evaluateKernelLocalLiveOutcome,
   finalizeKernelLocalLiveSuiteResult
 } from "../evals/kernel/local-live/driver.js";
@@ -230,6 +231,17 @@ describe("Kernel local live journey outcome evaluation", () => {
         { compose: true, secretFiles: true }
       )
     ).toThrow("kernel_local_live_suite_result_invalid");
+  });
+
+  it("classifies infrastructure failures without serializing error text", () => {
+    expect(
+      classifyKernelLocalLiveInfrastructureFailure(
+        new Error("kernel_local_live_invalid_signature_failed")
+      )
+    ).toBe("invalid_signature_failed");
+    expect(classifyKernelLocalLiveInfrastructureFailure(new Error("raw provider response"))).toBe(
+      "dependency_unavailable"
+    );
   });
 });
 
