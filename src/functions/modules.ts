@@ -1,25 +1,11 @@
-import type { CacheStore } from "../cache/cache-store.js";
-import type { AgentJobStore } from "../agent/jobs.js";
-import type { AgentMemoryStore } from "../agent/memory-store.js";
-import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
-import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
-import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
-import type { SessionStore } from "../state/session-store.js";
-import { FUNCTION_NAMES } from "../types.js";
 import type {
-  AppConfig,
-  FunctionName,
-  FunctionRegistry,
-  GraphDriveClient,
-  JsonRecord,
-  LineContentClient,
-  NotionDatabaseClient,
-  PostbackHandlerRegistry,
-  TextMessageHandlerRegistry,
-  AdminHandlerRegistry,
-  TextGenerationProvider,
-  WebSearchClient
-} from "../types.js";
+  FunctionModule,
+  FunctionModuleContext,
+  FunctionModuleRegistrations,
+  RouterEvalCase
+} from "../application/contracts/function-module.js";
+import { FUNCTION_NAMES } from "../types.js";
+import type { FunctionName } from "../types.js";
 import { getFunctionDefinition, type FunctionDefinition } from "./definitions.js";
 import {
   createFindPptSlidesHandler,
@@ -31,17 +17,12 @@ import {
   createFindPopSheetMusicPostbackHandler,
   createFindPopSheetMusicTextMessageHandler
 } from "./find-pop-sheet-music.js";
-import { createQueryScheduleHandler } from "./query-schedule.js";
-import { createWikipediaLookupHandler, type WikipediaSummarizer } from "../wikipedia/lookup.js";
-import type { WikipediaClient } from "../wikipedia/client.js";
+import { queryScheduleModule } from "../capabilities/query-schedule/module.js";
+import { createWikipediaLookupHandler } from "../wikipedia/lookup.js";
 import { createRetrieveMemoryHandler, createSaveMemoryHandler } from "./agent-memory-functions.js";
 import { createPendingAttachmentTextMessageHandler } from "./attachment-save.js";
 import { createUploadIntentTextMessageHandler } from "./upload-intent.js";
 import { createFindResourceHandler } from "./find-resource.js";
-import type { CatalogStore } from "../catalog/store.js";
-import type { ScheduleStore } from "../schedules/store.js";
-import type { EmbeddingClient } from "../clients/embedding.js";
-import type { KnowledgeStore } from "../knowledge/store.js";
 import { createSaveResourceHandler } from "./save-resource.js";
 import {
   createQueryKnowledgeHandler,
@@ -50,61 +31,7 @@ import {
 } from "./query-knowledge.js";
 import { createSaveScheduleHandler } from "./schedule-memory.js";
 
-export interface FunctionModuleContext {
-  config: AppConfig;
-  clients: {
-    graph?: GraphDriveClient;
-    notion?: NotionDatabaseClient;
-    sessionStore: SessionStore;
-    cache: CacheStore;
-    memoryStore?: AgentMemoryStore;
-    catalog?: CatalogStore;
-    scheduleStore?: ScheduleStore;
-    lineContent?: LineContentClient;
-    wikipedia?: WikipediaClient;
-    wikipediaSummarizer?: WikipediaSummarizer;
-    webSearch?: WebSearchClient;
-    sheetMusicExternalSearchSummarizer?: SheetMusicExternalSearchSummarizer;
-    knowledgeStore?: KnowledgeStore;
-    embedding?: EmbeddingClient;
-    knowledgeTextGenerator?: TextGenerationProvider;
-    agentJobStore?: AgentJobStore;
-    attachmentScanQueue?: AttachmentScanQueue;
-    attachmentScanWorkStore?: AttachmentScanWorkStore;
-    now?: () => Date;
-    requestIdFactory?: () => string;
-  };
-}
-
-export interface FunctionModuleRegistrations {
-  functions?: FunctionRegistry;
-  postbacks?: PostbackHandlerRegistry;
-  textMessages?: TextMessageHandlerRegistry;
-  adminHandlers?: AdminHandlerRegistry;
-}
-
-export interface RouterEvalCase {
-  kind: "positive" | "missing_slot" | "typo" | "negative" | "disabled" | "cross_function";
-  text: string;
-  enabledFunctions?: FunctionName[];
-  expected:
-    | {
-        type: "execute";
-        action: FunctionName;
-        arguments: JsonRecord;
-      }
-    | {
-        type: "deny";
-        reason: string;
-      };
-}
-
-export interface FunctionModule {
-  name: FunctionName;
-  definition: FunctionDefinition;
-  routerEvalCases: RouterEvalCase[];
-  register(context: FunctionModuleContext): FunctionModuleRegistrations;
-}
+export type { FunctionModule, FunctionModuleContext, FunctionModuleRegistrations, RouterEvalCase };
 
 export const FUNCTION_MODULES: FunctionModule[] = [
   {
@@ -196,124 +123,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
       };
     }
   },
-  {
-    name: "query_schedule",
-    definition: requiredDefinition("query_schedule"),
-    routerEvalCases: [
-      {
-        kind: "positive",
-        text: "小哈 下一場聚會服事表",
-        expected: {
-          type: "execute",
-          action: "query_schedule",
-          arguments: { query: "下一場聚會服事表", dateIntent: "next_meeting" }
-        }
-      },
-      {
-        kind: "positive",
-        text: "小哈 給我下一場影視團隊的服事表",
-        expected: {
-          type: "execute",
-          action: "query_schedule",
-          arguments: {
-            query: "給我下一場影視團隊的服事表",
-            dateIntent: "next_meeting"
-          }
-        }
-      },
-      {
-        kind: "positive",
-        text: "小哈 下一場服事表的音控是誰",
-        expected: {
-          type: "execute",
-          action: "query_schedule",
-          arguments: {
-            query: "下一場服事表的音控是誰",
-            dateIntent: "next_meeting"
-          }
-        }
-      },
-      {
-        kind: "positive",
-        text: "小哈 下一場青年出隊服事表",
-        expected: {
-          type: "execute",
-          action: "query_schedule",
-          arguments: {
-            query: "下一場青年出隊服事表",
-            dateIntent: "next_meeting"
-          }
-        }
-      },
-      {
-        kind: "missing_slot",
-        text: "小哈 查服事表",
-        expected: {
-          type: "execute",
-          action: "query_schedule",
-          arguments: { query: "" }
-        }
-      },
-      {
-        kind: "typo",
-        text: "小哈 查7/19舉牌",
-        expected: {
-          type: "execute",
-          action: "query_schedule",
-          arguments: { query: "7/19舉牌", scheduleType: "street_sign_service" }
-        }
-      },
-      {
-        kind: "negative",
-        text: "小哈 幫我訂便當",
-        expected: { type: "deny", reason: "keyword_no_match" }
-      },
-      {
-        kind: "disabled",
-        text: "小哈 下一場聚會服事表",
-        enabledFunctions: withoutFunction("query_schedule"),
-        expected: { type: "deny", reason: "function_disabled" }
-      },
-      {
-        kind: "cross_function",
-        text: "小哈 查投影片 主日報告",
-        expected: {
-          type: "execute",
-          action: "find_ppt_slides",
-          arguments: { query: "主日報告", matchMode: "fuzzy" }
-        }
-      },
-      {
-        kind: "cross_function",
-        text: "小哈 查流行歌譜 奇異恩典",
-        expected: {
-          type: "execute",
-          action: "find_sheet_music",
-          arguments: { query: "奇異恩典", fileType: "pdf", matchMode: "fuzzy" }
-        }
-      }
-    ],
-    register: ({ config, clients }) => {
-      if (!clients.memoryStore) {
-        return {};
-      }
-      return {
-        functions: {
-          query_schedule: createQueryScheduleHandler({
-            memoryStore: clients.memoryStore,
-            scheduleStore: clients.scheduleStore,
-            notion: clients.notion,
-            databaseId: config.notion?.databaseId,
-            properties: config.notion?.properties,
-            timeZone: config.timeZone,
-            sessionStore: clients.sessionStore,
-            now: clients.now,
-            requestIdFactory: clients.requestIdFactory
-          })
-        }
-      };
-    }
-  },
+  queryScheduleModule,
   {
     name: "query_knowledge",
     definition: requiredDefinition("query_knowledge"),

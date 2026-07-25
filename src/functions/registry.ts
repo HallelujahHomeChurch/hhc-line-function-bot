@@ -1,22 +1,19 @@
-import { createGraphDriveClient } from "../clients/graph.js";
-import { createLineSdkContentClient } from "../clients/line.js";
 import type { AgentJobStore } from "../agent/jobs.js";
 import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
-import { createNotionDatabaseClient } from "../clients/notion.js";
-import { createWikipediaClient, type WikipediaClient } from "../wikipedia/client.js";
+import type { WikipediaClient } from "../wikipedia/client.js";
 import type { AccessStore } from "../access/types.js";
 import { createCatalogAdminHandlers } from "../catalog/admin-handlers.js";
 import type { WikipediaSummarizer } from "../wikipedia/lookup.js";
 import type { SheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
-import { InMemoryAgentMemoryStore, type AgentMemoryStore } from "../agent/memory-store.js";
-import { MemoryCacheStore, type CacheStore } from "../cache/cache-store.js";
-import { InMemoryCatalogStore, type CatalogStore } from "../catalog/store.js";
+import type { AgentMemoryStore } from "../agent/memory-store.js";
+import type { CacheStore } from "../cache/cache-store.js";
+import type { CatalogStore } from "../catalog/store.js";
 import type { EmbeddingClient } from "../clients/embedding.js";
-import { InMemoryKnowledgeStore, type KnowledgeStore } from "../knowledge/store.js";
+import type { KnowledgeStore } from "../knowledge/store.js";
 import { createLlmStatusAdminHandler } from "../llm-diagnostics.js";
-import { InMemoryScheduleStore, type ScheduleStore } from "../schedules/store.js";
-import { InMemorySessionStore, type SessionStore } from "../state/session-store.js";
+import type { ScheduleStore } from "../schedules/store.js";
+import type { SessionStore } from "../state/session-store.js";
 import type {
   AppConfig,
   AdminHandlerRegistry,
@@ -29,24 +26,24 @@ import type {
   TextMessageHandlerRegistry,
   WebSearchClient
 } from "../types.js";
-import { FUNCTION_MODULES } from "./modules.js";
+import { FUNCTION_MODULES, type FunctionModule } from "./modules.js";
 import { createPendingFunctionTextMessageHandler } from "./pending-function.js";
 import { createPendingResolutionTextMessageHandler } from "./pending-resolution.js";
 
 export interface RegistryClients {
   graph?: GraphDriveClient;
   notion?: NotionDatabaseClient;
-  sessionStore?: SessionStore;
-  cache?: CacheStore;
-  memoryStore?: AgentMemoryStore;
-  catalog?: CatalogStore;
-  scheduleStore?: ScheduleStore;
-  lineContent?: LineContentClient;
+  sessionStore: SessionStore;
+  cache: CacheStore;
+  memoryStore: AgentMemoryStore;
+  catalog: CatalogStore;
+  scheduleStore: ScheduleStore;
+  lineContent: LineContentClient;
   wikipedia?: WikipediaClient;
   wikipediaSummarizer?: WikipediaSummarizer;
   webSearch?: WebSearchClient;
   sheetMusicExternalSearchSummarizer?: SheetMusicExternalSearchSummarizer;
-  knowledgeStore?: KnowledgeStore;
+  knowledgeStore: KnowledgeStore;
   embedding?: EmbeddingClient;
   knowledgeTextGenerator?: TextGenerationProvider;
   accessStore?: AccessStore;
@@ -67,30 +64,23 @@ export interface FunctionRegistries {
 
 export function createFunctionRegistries(
   config: AppConfig,
-  clients: RegistryClients = {}
+  clients: RegistryClients,
+  modules: FunctionModule[] = FUNCTION_MODULES
 ): FunctionRegistries {
+  assertExplicitStores(clients);
   const functions: FunctionRegistry = {};
   const postbacks: PostbackHandlerRegistry = {};
   const textMessages: TextMessageHandlerRegistry = {};
   const adminHandlers: AdminHandlerRegistry = {};
-  const sessionStore = clients.sessionStore ?? new InMemorySessionStore();
-  const cache = clients.cache ?? new MemoryCacheStore();
-  const memoryStore = clients.memoryStore ?? new InMemoryAgentMemoryStore({ now: clients.now });
-  const catalog = clients.catalog ?? new InMemoryCatalogStore();
-  const knowledgeStore = clients.knowledgeStore ?? new InMemoryKnowledgeStore(clients.now);
-  const scheduleStore = clients.scheduleStore ?? new InMemoryScheduleStore();
-  const lineContent = clients.lineContent ?? createLineSdkContentClient();
+  const { sessionStore, cache, memoryStore, catalog, knowledgeStore, scheduleStore, lineContent } =
+    clients;
 
   const moduleContext = {
     config,
     clients: {
-      graph: config.graph ? (clients.graph ?? createGraphDriveClient(config.graph)) : undefined,
-      notion: config.notion
-        ? (clients.notion ?? createNotionDatabaseClient(config.notion))
-        : undefined,
-      wikipedia: config.wikipedia
-        ? (clients.wikipedia ?? createWikipediaClient(config.wikipedia))
-        : undefined,
+      graph: clients.graph,
+      notion: clients.notion,
+      wikipedia: clients.wikipedia,
       wikipediaSummarizer: clients.wikipediaSummarizer,
       webSearch: clients.webSearch,
       sheetMusicExternalSearchSummarizer: clients.sheetMusicExternalSearchSummarizer,
@@ -111,7 +101,7 @@ export function createFunctionRegistries(
     }
   };
 
-  for (const module of FUNCTION_MODULES) {
+  for (const module of modules) {
     const registrations = module.register(moduleContext);
     Object.assign(functions, registrations.functions);
     Object.assign(postbacks, registrations.postbacks);
@@ -191,7 +181,22 @@ export function createFunctionRegistries(
 
 export function createFunctionRegistry(
   config: AppConfig,
-  clients: RegistryClients = {}
+  clients: RegistryClients,
+  modules?: FunctionModule[]
 ): FunctionRegistry {
-  return createFunctionRegistries(config, clients).functions;
+  return createFunctionRegistries(config, clients, modules).functions;
+}
+
+function assertExplicitStores(clients: RegistryClients): void {
+  if (
+    !clients.sessionStore ||
+    !clients.cache ||
+    !clients.memoryStore ||
+    !clients.catalog ||
+    !clients.knowledgeStore ||
+    !clients.scheduleStore ||
+    !clients.lineContent
+  ) {
+    throw new Error("Function registry requires explicitly constructed stores");
+  }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { signLineBody } from "../line-signature.js";
-import { createApp } from "../server.js";
+import { createTestApp as createApp } from "../testing/create-test-app.js";
 import type { AppConfig, AppDiagnostics, FunctionRouterPort, LineReplyClient } from "../types.js";
 
 function config(): AppConfig {

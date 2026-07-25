@@ -43,18 +43,51 @@ The service is lane-based and authority-first for controlled routing:
   `PROFILE_CONFIG_PATH=/app/config/profiles.json`. ACA supplies only the
   credential values named by that file; it must not supply profile JSON.
 
+## Modular Monolith Boundaries
+
+The service remains one deployed modular monolith. The source boundaries are:
+
+- `src/bootstrap/*`: the sole production composition root. It constructs
+  concrete PostgreSQL, Redis, Graph, Notion, LINE, DeepSeek, Azure embedding,
+  queue, store, and capability adapters.
+- `src/transport/*`: Fastify and LINE adapters for health/readiness, canonical
+  webhooks, public access commands, admin commands, and postbacks.
+- `src/application/*`: use-case contracts and the controlled turn coordinator.
+  Turn stages own text continuation, capability resolution, admin actions,
+  controlled planning, and function execution in that order.
+- `src/capabilities/*`: vertical product slices. `query-schedule` is the
+  reference slice and owns its definition, eval cases, ports, handler, and
+  module factory.
+- `src/infrastructure/*`: future concrete port implementations. Existing
+  concrete adapters migrate here only when touched; bootstrap remains their
+  only construction owner.
+
+`pnpm architecture:check` enforces dependency direction in PR CI. Production
+construction is explicit and fails closed without PostgreSQL and Redis. Tests
+use the visibly separate builders in `src/testing/*`; production code never
+silently selects an in-memory store. Compatibility files such as
+`src/server.ts`, `src/agent/turn-runtime.ts`, and
+`src/functions/query-schedule.ts` contain re-exports only.
+
+New types belong beside the invariants they describe. Cross-capability
+execution and routing contracts live in `src/application/contracts/*`; do not
+add new behavior to the compatibility catch-all `src/types.ts`.
+
 ## Request Flow
 
 For normal LINE webhook messages, read the flow in this order:
 
-1. `src/index.ts` wires config, clients, stores, function registry, and routers.
-2. `src/server.ts` receives the Fastify webhook route.
+1. `src/index.ts` loads configuration and starts the runtime built by
+   `src/bootstrap/create-production-runtime.ts`.
+2. `src/transport/line/webhook-routes.ts` receives the Fastify webhook route;
+   `src/server.ts` is only a compatibility re-export.
 3. LINE signature and profile path select the `BotProfileConfig`.
 4. Access policy checks direct user, group, registration, and admin identity.
 5. Group engagement decides whether the bot was actually addressed.
 6. A short requester-scoped group conversation window may allow the same user to
    continue without repeating the wake word.
-7. Slash commands stay in `src/server.ts`; normal text turns enter
+7. Slash commands are adapted under `src/transport/line/*`; normal text turns
+   enter `src/application/turn/runtime.ts` through the compatibility export in
    `src/agent/turn-runtime.ts`.
 8. Text continuation handlers declare a controlled workflow stage. The kernel
    orders pending confirmation/cancellation and slot collection first, then
@@ -91,8 +124,8 @@ Controlled routing is the only production text-routing path. Deprecated
 `controlledAgent.enabled` and `controlledAgent.shadow` configuration is rejected
 at startup so a deployment cannot silently return to the removed router.
 
-The main entrance behavior lives in `src/server.ts`; tests for it live mostly in
-`src/__tests__/entrance.test.ts`.
+The main entrance behavior lives in `src/transport/line/*`; tests for it live
+mostly in `src/__tests__/entrance.test.ts`.
 
 For provider diagnostics, the bootstrap superadmin sends `/llm-use` or
 `/llm-status` in direct chat. Profile provider policy decides which providers
@@ -142,7 +175,7 @@ Profiles are independent bot configurations served by one process. In practice:
 When debugging "why did the bot ignore this?", check:
 
 - profile path and webhook path validation in `src/profile-path.ts`
-- direct/group access policy in `src/server.ts`
+- direct/group access policy in `src/transport/line/webhook-routes.ts`
 - managed access state in `src/access/*`
 - registration settings and invite-code store
 - group wake word and engagement classification in `src/engagement.ts`
@@ -158,10 +191,11 @@ Routing is deliberately layered:
   with strict sanitization. Its persona, conversation, safety, and format
   rules are profile-owned configuration; code owns only operational limits and
   provider invocation.
-- `src/agent/turn-runtime.ts`: shared text-turn pipeline for pending workflows,
-  memory prechecks, admin natural-language actions, controlled routing,
-  resolver selection, slot clarification, in-flight locks, function execution,
-  active-task transitions, and sanitized traces.
+- `src/application/turn/runtime.ts` and `src/application/turn/stages/*`: shared
+  text-turn coordinator and focused workflow stages for pending workflows,
+  admin natural-language actions, controlled routing, resolver selection, slot
+  clarification, in-flight locks, function execution, active-task transitions,
+  and sanitized traces.
 - `src/agent/capability-candidates.ts`: deterministic, bounded candidates from
   enabled function contracts, active-task evidence, and approved read-only
   evidence providers.
@@ -192,9 +226,8 @@ start with `agent/capability-candidates.ts`, `agent/controlled-agent-router.ts`,
 To add or change a user function:
 
 1. Add the name to `FUNCTION_NAMES`.
-2. Add or update the function definition in `src/functions/definitions.ts`,
-   including side-effect level, allowed sources, required slots, resource policy,
-   and memory policy.
+2. Add a capability slice in `src/capabilities/<name>/*` containing its
+   definition, eval cases, narrow ports, handler, and module factory.
 3. For every enabled read function, declare `agentCapability`: current-message
    intents/hints, operations, entity types, refinable fields, ambiguity policy,
    and field-local active-evidence rules. Add a bounded read-only evidence
@@ -202,8 +235,10 @@ To add or change a user function:
 4. Add argument schema and normalization. Add a source-technology adapter only
    when integrating a genuinely new storage/API format; keep that adapter behind
    the existing product capability and out of the generic planner/turn runtime.
-5. Add a module in `src/functions/modules.ts` with router eval cases.
-6. Register the handler in `src/functions/registry.ts`.
+5. Aggregate its metadata in `src/functions/definitions.ts` and
+   `src/functions/modules.ts`; do not put capability behavior there.
+6. Construct the module explicitly in
+   `src/bootstrap/create-production-runtime.ts` and pass it to the registry.
 7. Return a structured `agentResult` from read outcomes. A success envelope may
    contain only declared safe entities, canonical anchors, opaque references,
    supported operations, and reply data; never put raw secrets, URLs, prompts,
@@ -226,8 +261,9 @@ Run `pnpm eval:agent` after changing function routing.
 
 ## Agent Runtime Cookbook
 
-The controlled agent runtime lives in `src/agent/*` and is wired from
-`src/index.ts` into `src/server.ts`.
+The controlled agent runtime uses kernel contracts in `src/agent/*`, focused
+stages in `src/application/turn/*`, and production wiring in
+`src/bootstrap/create-production-runtime.ts`.
 
 The generic turn contract is:
 
@@ -570,12 +606,13 @@ Use this map for common issues:
 - Group clarification or selection goes to the wrong person:
   `src/state/session-safety.ts`, `src/requester-personalization.ts`, and
   requester-scoped session tests.
-- Duplicate long task replies: `src/in-flight/*` and the in-flight block in
-  `src/agent/turn-runtime.ts`.
+- Duplicate long task replies: `src/in-flight/*` and
+  `src/application/turn/stages/function-execution-stage.ts`.
 - User asks twice because a task is slow: `src/agent/jobs.ts` and
-  `handleAgentTextTurnWithLongJob` in `src/server.ts`.
+  `handleAgentTextTurnWithLongJob` in `src/transport/line/postbacks.ts`.
 - Follow-up without wake word fails for same user: `src/agent/context-manager.ts`
-  and the conversation window checks in `src/server.ts`.
+  and the conversation window checks in
+  `src/transport/line/webhook-routes.ts`.
 - Wikipedia lookup has no result: `src/wikipedia/client.ts` and
   `src/wikipedia/lookup.ts`.
 - Follow-up recall or aliases fail: `src/agent/agent-runtime.ts`,

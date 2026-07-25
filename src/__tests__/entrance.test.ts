@@ -9,7 +9,7 @@ import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
 import { signLineBody } from "../line-signature.js";
-import { createApp } from "../server.js";
+import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   AppConfig,

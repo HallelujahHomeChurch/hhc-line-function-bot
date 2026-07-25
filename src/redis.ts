@@ -30,6 +30,7 @@ export interface RedisRuntime {
     RedisWebhookEventClient &
     RedisConversationWindowClient;
   keyPrefix: string;
+  close(): Promise<void>;
 }
 
 export async function createRedisRuntime(
@@ -52,6 +53,9 @@ export async function createRedisRuntime(
 
   return {
     client: client as unknown as RedisRuntime["client"],
-    keyPrefix: config.keyPrefix
+    keyPrefix: config.keyPrefix,
+    close: async () => {
+      await client.quit();
+    }
   };
 }

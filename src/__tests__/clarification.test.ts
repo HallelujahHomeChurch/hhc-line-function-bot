@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
-import { createFunctionRegistries } from "../functions/registry.js";
+import { createTestFunctionRegistries } from "../testing/create-test-function-registries.js";
 import { signLineBody } from "../line-signature.js";
-import { createApp } from "../server.js";
+import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import type {
@@ -165,7 +165,7 @@ describe("clarification flow", () => {
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/amazing-grace")
     };
     const config = testConfig();
-    const registries = createFunctionRegistries(config, {
+    const registries = createTestFunctionRegistries(config, {
       graph,
       catalog: await sheetMusicCatalog(),
       sessionStore: new InMemorySessionStore()
@@ -248,7 +248,7 @@ describe("clarification flow", () => {
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/amazing-grace")
     };
     const config = testConfig();
-    const registries = createFunctionRegistries(config, {
+    const registries = createTestFunctionRegistries(config, {
       graph,
       catalog: await sheetMusicCatalog(),
       sessionStore: new InMemorySessionStore()
@@ -316,7 +316,7 @@ describe("clarification flow", () => {
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/yesterday")
     };
     const config = testConfig();
-    const registries = createFunctionRegistries(config, {
+    const registries = createTestFunctionRegistries(config, {
       graph,
       catalog: await sheetMusicCatalog(),
       sessionStore: new InMemorySessionStore()
@@ -390,7 +390,7 @@ describe("clarification flow", () => {
       createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/yesterday")
     };
     const config = testConfig();
-    const registries = createFunctionRegistries(config, {
+    const registries = createTestFunctionRegistries(config, {
       graph,
       catalog: await sheetMusicCatalog(),
       sessionStore: new InMemorySessionStore()
@@ -487,7 +487,7 @@ describe("clarification flow", () => {
         person: "Person"
       }
     };
-    const registries = createFunctionRegistries(config, {
+    const registries = createTestFunctionRegistries(config, {
       graph,
       notion,
       sessionStore: new InMemorySessionStore({

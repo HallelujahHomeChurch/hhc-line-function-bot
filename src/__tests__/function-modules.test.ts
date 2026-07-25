@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { FUNCTION_NAMES } from "../types.js";
 import { FUNCTION_MODULES, getRouterEvalCases } from "../functions/modules.js";
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
+import {
+  createQueryScheduleModule,
+  queryScheduleDefinition,
+  queryScheduleRouterEvalCases
+} from "../capabilities/query-schedule/index.js";
 
 const requiredEvalKinds = [
   "positive",
@@ -49,5 +55,48 @@ describe("function modules", () => {
       expect.arrayContaining(["find_ppt_slides", "query_schedule", "find_sheet_music"])
     );
     expect(cases.every((entry) => entry.text.trim())).toBe(true);
+  });
+
+  it("constructs query_schedule from its narrow explicit dependencies", async () => {
+    const module = createQueryScheduleModule({
+      memoryStore: new InMemoryAgentMemoryStore()
+    });
+    const registrations = module.register({} as never);
+    const handler = registrations.functions?.query_schedule;
+
+    expect(module.definition).toBe(queryScheduleDefinition);
+    expect(module.routerEvalCases).toBe(queryScheduleRouterEvalCases);
+    expect(handler).toBeDefined();
+    await expect(
+      handler?.(
+        { query: "列出服事表" },
+        {
+          profile: {
+            name: "helper",
+            webhookPath: "/api/line/webhook/helper",
+            channelSecret: "secret",
+            channelAccessToken: "token",
+            allowDirectUser: true,
+            allowRooms: false,
+            allowedMessageTypes: ["text"],
+            groupRequireWakeWord: true,
+            wakeKeywords: ["小哈"],
+            acceptMention: true,
+            enabledFunctions: ["query_schedule"]
+          },
+          event: {
+            type: "message",
+            source: { type: "user", userId: "U1" },
+            message: { type: "text", text: "列出服事表" }
+          }
+        }
+      )
+    ).resolves.toMatchObject({ ok: true, replyText: "查不到符合的服事表。" });
+  });
+
+  it("rejects query_schedule construction without its required memory port", () => {
+    expect(() => createQueryScheduleModule({ memoryStore: undefined } as never)).toThrow(
+      "query_schedule requires memoryStore"
+    );
   });
 });
