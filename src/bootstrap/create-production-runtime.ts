@@ -42,6 +42,8 @@ import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createFunctionRegistries } from "../functions/registry.js";
+import { FUNCTION_MODULES } from "../functions/modules.js";
+import { createQueryScheduleModule } from "../capabilities/query-schedule/module.js";
 import { createInFlightStore } from "../in-flight/create-in-flight-store.js";
 import { createWebhookEventStore } from "../idempotency/create-webhook-event-store.js";
 import { createKnowledgeStore } from "../knowledge/create-store.js";
@@ -255,31 +257,47 @@ export async function createProductionRuntime(config: AppConfig): Promise<Produc
     redis,
     config: config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
   });
-  const registries = createFunctionRegistries(config, {
-    graph,
-    notion,
-    wikipedia,
-    lineContent,
-    sessionStore,
-    cache,
-    catalog,
-    scheduleStore,
-    knowledgeStore,
-    embedding: knowledgeEmbedding,
-    knowledgeTextGenerator: smartTalkPrimary,
-    memoryStore,
-    accessStore,
-    agentJobStore,
-    attachmentScanWorkStore,
-    attachmentScanQueue,
-    webSearch,
-    sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
-      primary: wikipediaSummaryPrimary
-    }),
-    wikipediaSummarizer: createWikipediaSummarizer({
-      primary: wikipediaSummaryPrimary
-    })
-  });
+  const registries = createFunctionRegistries(
+    config,
+    {
+      graph,
+      notion,
+      wikipedia,
+      lineContent,
+      sessionStore,
+      cache,
+      catalog,
+      scheduleStore,
+      knowledgeStore,
+      embedding: knowledgeEmbedding,
+      knowledgeTextGenerator: smartTalkPrimary,
+      memoryStore,
+      accessStore,
+      agentJobStore,
+      attachmentScanWorkStore,
+      attachmentScanQueue,
+      webSearch,
+      sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
+        primary: wikipediaSummaryPrimary
+      }),
+      wikipediaSummarizer: createWikipediaSummarizer({
+        primary: wikipediaSummaryPrimary
+      })
+    },
+    FUNCTION_MODULES.map((module) =>
+      module.name === "query_schedule"
+        ? createQueryScheduleModule({
+            memoryStore,
+            scheduleStore,
+            notion,
+            databaseId: config.notion?.databaseId,
+            properties: config.notion?.properties,
+            timeZone: config.timeZone,
+            sessionStore
+          })
+        : module
+    )
+  );
   const app = createApp(config, {
     adminActionRouter,
     adminActionRegistry: knowledgeAdminActionRegistry,

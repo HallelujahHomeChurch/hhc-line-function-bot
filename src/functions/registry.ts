@@ -26,7 +26,7 @@ import type {
   TextMessageHandlerRegistry,
   WebSearchClient
 } from "../types.js";
-import { FUNCTION_MODULES } from "./modules.js";
+import { FUNCTION_MODULES, type FunctionModule } from "./modules.js";
 import { createPendingFunctionTextMessageHandler } from "./pending-function.js";
 import { createPendingResolutionTextMessageHandler } from "./pending-resolution.js";
 
@@ -64,7 +64,8 @@ export interface FunctionRegistries {
 
 export function createFunctionRegistries(
   config: AppConfig,
-  clients: RegistryClients
+  clients: RegistryClients,
+  modules: FunctionModule[] = FUNCTION_MODULES
 ): FunctionRegistries {
   assertExplicitStores(clients);
   const functions: FunctionRegistry = {};
@@ -100,7 +101,7 @@ export function createFunctionRegistries(
     }
   };
 
-  for (const module of FUNCTION_MODULES) {
+  for (const module of modules) {
     const registrations = module.register(moduleContext);
     Object.assign(functions, registrations.functions);
     Object.assign(postbacks, registrations.postbacks);
@@ -180,9 +181,10 @@ export function createFunctionRegistries(
 
 export function createFunctionRegistry(
   config: AppConfig,
-  clients: RegistryClients
+  clients: RegistryClients,
+  modules?: FunctionModule[]
 ): FunctionRegistry {
-  return createFunctionRegistries(config, clients).functions;
+  return createFunctionRegistries(config, clients, modules).functions;
 }
 
 function assertExplicitStores(clients: RegistryClients): void {
