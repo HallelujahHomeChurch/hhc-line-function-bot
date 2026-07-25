@@ -90,17 +90,23 @@ export function createKernelLocalLiveApp(options: KernelLocalLiveAppOptions) {
       done();
       return;
     }
-    const caseId = kernelLocalLiveCaseIdFromBody(request.body);
-    if (!caseId) {
+    const eventContext = kernelLocalLiveEventContextFromBody(request.body);
+    if (!eventContext) {
       done(new Error("kernel_local_live_event_case_invalid"));
       return;
     }
-    options.caseContext.run(caseId, done);
+    options.caseContext.run(eventContext.caseId, done, eventContext.turnIndex);
   });
   return app;
 }
 
 export function kernelLocalLiveCaseIdFromBody(body: unknown): KernelLocalLiveCaseId | undefined {
+  return kernelLocalLiveEventContextFromBody(body)?.caseId;
+}
+
+export function kernelLocalLiveEventContextFromBody(
+  body: unknown
+): { caseId: KernelLocalLiveCaseId; turnIndex: number } | undefined {
   let parsed = body;
   if (Buffer.isBuffer(body) || typeof body === "string") {
     try {
@@ -114,5 +120,11 @@ export function kernelLocalLiveCaseIdFromBody(body: unknown): KernelLocalLiveCas
   if (!Array.isArray(events) || events.length !== 1) return undefined;
   const eventId = (events[0] as { webhookEventId?: unknown } | undefined)?.webhookEventId;
   if (typeof eventId !== "string") return undefined;
-  return KERNEL_LOCAL_LIVE_CASE_IDS.find((caseId) => eventId.startsWith(`${caseId}:`));
+  const caseId = KERNEL_LOCAL_LIVE_CASE_IDS.find((candidate) =>
+    eventId.startsWith(`${candidate}:`)
+  );
+  if (!caseId) return undefined;
+  const match = new RegExp(`^${caseId}:turn-(\\d+)$`, "u").exec(eventId);
+  const ordinal = Number(match?.[1]);
+  return Number.isInteger(ordinal) && ordinal > 0 ? { caseId, turnIndex: ordinal - 1 } : undefined;
 }

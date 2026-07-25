@@ -100,6 +100,11 @@ trap on_signal INT TERM
 
 cd "$ROOT_DIRECTORY"
 CURRENT_STAGE="image_build"
+if [[ "${KERNEL_LOCAL_LIVE_TEST_MODE:-}" != "1" ]] &&
+  [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  printf '%s\n' "kernel_local_live_worktree_not_clean" >&2
+  exit 2
+fi
 COMMIT="$(git rev-parse HEAD)"
 IMAGE="kernel-local-live:${COMMIT:0:12}"
 RUN_ID="run-$(date -u +%Y%m%d%H%M%S)-$$"

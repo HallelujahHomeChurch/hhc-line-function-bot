@@ -6,6 +6,7 @@ import { createProviderBudget } from "../evals/kernel/local-live/budget.js";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { createQueryScheduleHandler } from "../capabilities/query-schedule/handler.js";
 import { createKernelLocalLiveApp } from "../testing/kernel-local-live/create-app.js";
+import { kernelLocalLiveEventContextFromBody } from "../testing/kernel-local-live/create-app.js";
 import {
   createKernelLocalLiveConfig,
   readKernelLocalLiveSecrets,
@@ -247,6 +248,19 @@ describe("Kernel local live provider clients", () => {
 });
 
 describe("Kernel local live application composition", () => {
+  it("derives the bounded case and zero-based turn from an exact event ID", () => {
+    expect(
+      kernelLocalLiveEventContextFromBody({
+        events: [{ webhookEventId: "schedule-refinement:turn-2" }]
+      })
+    ).toEqual({ caseId: "schedule-refinement", turnIndex: 1 });
+    expect(
+      kernelLocalLiveEventContextFromBody({
+        events: [{ webhookEventId: "schedule-refinement:unexpected" }]
+      })
+    ).toBeUndefined();
+  });
+
   it("uses the real signed webhook transport and a local reply adapter", async () => {
     const config = createKernelLocalLiveConfig(
       {
@@ -314,7 +328,7 @@ describe("Kernel local live application composition", () => {
       events: [
         {
           type: "message",
-          webhookEventId: "schedule-explicit:event-1",
+          webhookEventId: "schedule-explicit:turn-1",
           replyToken: "reply-token-1",
           source: { type: "user", userId: "U_KERNEL_ADMIN" },
           message: { type: "text", id: "message-1", text: "/help" }

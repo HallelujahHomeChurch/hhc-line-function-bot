@@ -159,11 +159,22 @@ describe("Kernel local live journey outcome evaluation", () => {
       expected: { passed: true, capability: "save_resource" }
     }
   ])("accepts the bounded $caseId evidence", ({ caseId, steps, observations, expected }) => {
+    const traces =
+      caseId === "schedule-refinement"
+        ? [successfulTrace("query_schedule"), trace(steps)]
+        : caseId === "capability-switch"
+          ? [successfulTrace("query_schedule"), trace(steps)]
+          : caseId === "knowledge-follow-up"
+            ? [successfulTrace("query_knowledge"), trace(steps)]
+            : caseId === "write-preview-confirm"
+              ? Array.from({ length: 5 }, () => trace(steps))
+              : [trace(steps)];
     expect(
       evaluateKernelLocalLiveOutcome({
         caseId,
-        traces: [trace(steps)],
-        observations
+        traces,
+        observations,
+        preFinalQueueDetected: false
       })
     ).toMatchObject(expected);
   });
@@ -189,6 +200,39 @@ describe("Kernel local live journey outcome evaluation", () => {
           ])
         ],
         observations: []
+      })
+    ).toMatchObject({
+      passed: false,
+      failureCode: "journey_assertion_failed"
+    });
+  });
+
+  it("rejects partial multi-turn evidence and a queue emitted before confirmation", () => {
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "capability-switch",
+        traces: [successfulTrace("query_knowledge")],
+        observations: []
+      })
+    ).toMatchObject({
+      passed: false,
+      failureCode: "journey_assertion_failed"
+    });
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "write-preview-confirm",
+        traces: Array.from({ length: 5 }, () =>
+          trace([{ phase: "text_handler", action: "save_resource", outcome: "handled" }])
+        ),
+        observations: [
+          {
+            caseId: "write-preview-confirm",
+            kind: "queue",
+            ordinal: 1,
+            outcome: "queued"
+          }
+        ],
+        preFinalQueueDetected: true
       })
     ).toMatchObject({
       passed: false,
@@ -273,4 +317,16 @@ function trace(steps: AgentTurnTraceStep[]): AgentTurnTraceRecord {
     sourceType: "user",
     steps
   };
+}
+
+function successfulTrace(action: "query_schedule" | "query_knowledge"): AgentTurnTraceRecord {
+  return trace([
+    {
+      phase: "plan_validation",
+      disposition: "execute",
+      action,
+      validatorReason: "explicit_intent"
+    },
+    { phase: "result_envelope", resultStatus: "success", lifecycleOutcome: "write" }
+  ]);
 }

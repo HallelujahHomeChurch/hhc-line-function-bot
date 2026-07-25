@@ -194,7 +194,8 @@ The default suite contains eight versioned journeys:
    - Maximum live cost: 1 DeepSeek request, 0 embedding batches.
    - Uses a granted synthetic requester, a synthetic attachment, and local
      attachment-work/outbox adapters.
-   - Proves preview, confirmation, audit, idempotency, and outbox behavior
+   - Proves preview, confirmation, controlled write tracing, idempotency, and
+     outbox behavior
      without publishing externally.
 
 The synthetic knowledge seed batch also includes the exact initial query
@@ -205,9 +206,11 @@ still makes a second live embedding request.
 
 No journey may contain loops. A journey has a statically bounded number of
 turns and declares its maximum DeepSeek and embedding cost next to the case
-definition. The default suite therefore has a static ceiling of 10 DeepSeek
-requests and 3 embedding batches. Static suite validation must prove the sum
-fits the global budget before secrets are read.
+definition. Runtime enforcement applies both the per-case ceiling and the
+global ceiling, and permits at most one DeepSeek request per webhook turn. The
+default suite therefore has a static ceiling of 10 DeepSeek requests and 3
+embedding batches. Static suite validation must prove the sum fits the global
+budget before secrets are read.
 
 ## Webhook And Reply Flow
 

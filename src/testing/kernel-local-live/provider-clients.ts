@@ -11,8 +11,9 @@ import type {
 import type { AppConfig, ChatProvider, TextGenerationProvider } from "../../types.js";
 
 export interface KernelLocalLiveCaseContext {
-  run<T>(caseId: KernelLocalLiveCaseId, operation: () => T): T;
+  run<T>(caseId: KernelLocalLiveCaseId, operation: () => T, turnIndex?: number): T;
   current(): KernelLocalLiveCaseId | undefined;
+  currentTurnIndex(): number | undefined;
 }
 
 export interface BudgetedProviderClients {
@@ -21,10 +22,15 @@ export interface BudgetedProviderClients {
 }
 
 export function createKernelLocalLiveCaseContext(): KernelLocalLiveCaseContext {
-  const storage = new AsyncLocalStorage<KernelLocalLiveCaseId>();
+  const storage = new AsyncLocalStorage<{
+    caseId: KernelLocalLiveCaseId;
+    turnIndex?: number;
+  }>();
   return {
-    run: (caseId, operation) => storage.run(caseId, operation),
-    current: () => storage.getStore()
+    run: (caseId, operation, turnIndex) =>
+      storage.run({ caseId, ...(turnIndex === undefined ? {} : { turnIndex }) }, operation),
+    current: () => storage.getStore()?.caseId,
+    currentTurnIndex: () => storage.getStore()?.turnIndex
   };
 }
 
@@ -70,7 +76,7 @@ export function createBudgetedProviderClients(options: {
       throw new Error("kernel_local_live_forced_provider_unavailable");
     }
     try {
-      return await options.budget.runDeepSeek(caseId, call);
+      return await options.budget.runDeepSeek(caseId, call, options.caseContext.currentTurnIndex());
     } finally {
       await emitLatestObservation();
     }

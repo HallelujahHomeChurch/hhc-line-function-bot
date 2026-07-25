@@ -124,6 +124,7 @@ export async function runKernelLocalLiveDriver(
         await seedRequesterAActiveTask(conversationStore);
       }
       const traces: AgentTurnTraceRecord[] = [];
+      let preFinalQueueDetected = false;
       for (const turn of journey.turns) {
         const request = createSignedLineWebhook(turn, "kernel-local-live-channel-secret");
         if (!entranceChecked) {
@@ -149,6 +150,16 @@ export async function runKernelLocalLiveDriver(
         const captured = await channel.readReply(request.replyToken);
         if (!captured) throw new Error("kernel_local_live_reply_missing");
         traces.push(...(await traceStore.list(1)));
+        if (
+          journey.caseId === "write-preview-confirm" &&
+          turn.turnIndex < journey.turns.length - 1 &&
+          (await channel.readObservations()).some(
+            ({ caseId, kind, outcome }) =>
+              caseId === journey.caseId && kind === "queue" && outcome === "queued"
+          )
+        ) {
+          preFinalQueueDetected = true;
+        }
         if (!entranceChecked) {
           await assertDuplicate(fetchImpl, appBaseUrl, request, channel);
           entranceChecked = true;
@@ -158,7 +169,8 @@ export async function runKernelLocalLiveDriver(
       const result = evaluateKernelLocalLiveOutcome({
         caseId: journey.caseId,
         traces,
-        observations
+        observations,
+        preFinalQueueDetected
       });
       caseReports.push(result);
       if (!result.passed) break;
@@ -238,6 +250,7 @@ export function evaluateKernelLocalLiveOutcome(input: {
   caseId: KernelLocalLiveCaseId;
   traces: AgentTurnTraceRecord[];
   observations: KernelLocalLiveObservation[];
+  preFinalQueueDetected?: boolean;
 }): InternalCaseReport {
   const steps = input.traces.flatMap(({ steps }) => steps);
   const disposition = lastValue(steps, "disposition");
@@ -266,7 +279,9 @@ export function evaluateKernelLocalLiveOutcome(input: {
     resultClass,
     lifecycleOutcome,
     caseObservations,
-    providerCounts
+    providerCounts,
+    turns: input.traces.map(({ steps: turnSteps }) => turnEvidence(turnSteps)),
+    preFinalQueueDetected: input.preFinalQueueDetected === true
   });
   return {
     caseId: input.caseId,
@@ -338,34 +353,44 @@ function outcomePassed(
     lifecycleOutcome?: string;
     caseObservations: KernelLocalLiveObservation[];
     providerCounts: { deepseek: number; azure_openai: number };
+    turns: ReturnType<typeof turnEvidence>[];
+    preFinalQueueDetected: boolean;
   }
 ): boolean {
   switch (caseId) {
     case "schedule-explicit":
-      return evidence.capability === "query_schedule" && evidence.resultClass === "success";
+      return evidence.turns.length === 1 && turnSucceeded(evidence.turns[0], "query_schedule");
     case "schedule-refinement":
       return (
-        evidence.capability === "query_schedule" &&
-        evidence.validatorReason === "active_task_refinement" &&
-        evidence.resultClass === "success"
+        evidence.turns.length === 2 &&
+        turnSucceeded(evidence.turns[0], "query_schedule") &&
+        turnSucceeded(evidence.turns[1], "query_schedule") &&
+        evidence.turns[1]?.validatorReason === "active_task_refinement"
       );
     case "schedule-ambiguity":
-      return evidence.disposition === "collect" || evidence.resultClass === "ambiguous";
+      return (
+        evidence.turns.length === 1 &&
+        (evidence.disposition === "collect" || evidence.resultClass === "ambiguous")
+      );
     case "capability-switch":
       return (
-        evidence.capability === "query_knowledge" &&
-        (evidence.validatorReason === "explicit_capability_switch" ||
-          evidence.validatorReason === "explicit_intent") &&
-        evidence.resultClass === "success"
+        evidence.turns.length === 2 &&
+        turnSucceeded(evidence.turns[0], "query_schedule") &&
+        turnSucceeded(evidence.turns[1], "query_knowledge") &&
+        (evidence.turns[1]?.validatorReason === "explicit_capability_switch" ||
+          evidence.turns[1]?.validatorReason === "explicit_intent")
       );
     case "knowledge-follow-up":
       return (
-        evidence.capability === "query_knowledge" &&
-        evidence.resultClass === "success" &&
+        evidence.turns.length === 2 &&
+        turnSucceeded(evidence.turns[0], "query_knowledge") &&
+        turnSucceeded(evidence.turns[1], "query_knowledge") &&
+        evidence.turns[1]?.validatorReason === "active_task_refinement" &&
         evidence.providerCounts.azure_openai === 2
       );
     case "group-requester-isolation":
       return (
+        evidence.turns.length === 1 &&
         evidence.steps.some(
           ({ phase, outcome }) => phase === "active_task" && outcome === "missing"
         ) &&
@@ -379,15 +404,36 @@ function outcomePassed(
       );
     case "provider-unavailable":
       return (
-        evidence.validatorReason === "planner_unavailable" && evidence.providerCounts.deepseek === 0
+        evidence.turns.length === 1 &&
+        evidence.validatorReason === "planner_unavailable" &&
+        evidence.providerCounts.deepseek === 0
       );
     case "write-preview-confirm":
       return (
         evidence.caseObservations.filter(
           ({ kind, outcome }) => kind === "queue" && outcome === "queued"
-        ).length === 1
+        ).length === 1 &&
+        evidence.turns.length === 5 &&
+        evidence.turns.every(({ steps }) => steps.length > 0) &&
+        !evidence.preFinalQueueDetected
       );
   }
+}
+
+function turnEvidence(steps: AgentTurnTraceStep[]) {
+  return {
+    steps,
+    capability: lastValue(steps, "action"),
+    validatorReason: lastValue(steps, "validatorReason"),
+    resultClass: lastValue(steps, "resultStatus")
+  };
+}
+
+function turnSucceeded(
+  turn: ReturnType<typeof turnEvidence> | undefined,
+  capability: string
+): boolean {
+  return turn?.capability === capability && turn.resultClass === "success";
 }
 
 async function assertInvalidSignature(

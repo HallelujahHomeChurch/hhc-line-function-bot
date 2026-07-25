@@ -100,6 +100,28 @@ describe("Kernel local live provider budget", () => {
     );
   });
 
+  it("enforces each case ceiling and one DeepSeek request per webhook turn", async () => {
+    const caseBudget = createProviderBudget({ deepSeekMax: 3, embeddingBatchMax: 0 });
+    await caseBudget.runDeepSeek("schedule-explicit", async () => "first", 0);
+    await expect(
+      caseBudget.runDeepSeek("schedule-explicit", async () => "second", 1)
+    ).rejects.toThrow("kernel_local_live_deepseek_budget_exhausted");
+
+    const turnBudget = createProviderBudget({ deepSeekMax: 2, embeddingBatchMax: 0 });
+    await turnBudget.runDeepSeek("schedule-refinement", async () => "first", 0);
+    await expect(
+      turnBudget.runDeepSeek("schedule-refinement", async () => "duplicate", 0)
+    ).rejects.toThrow("kernel_local_live_deepseek_budget_exhausted");
+    await turnBudget.runDeepSeek("schedule-refinement", async () => "second-turn", 1);
+    expect(turnBudget.snapshot().deepSeekRequests).toBe(2);
+
+    const embeddingBudget = createProviderBudget({ deepSeekMax: 0, embeddingBatchMax: 3 });
+    await embeddingBudget.runEmbedding("capability-switch", async () => "first");
+    await expect(
+      embeddingBudget.runEmbedding("capability-switch", async () => "second")
+    ).rejects.toThrow("kernel_local_live_embedding_budget_exhausted");
+  });
+
   it("serializes provider calls across both live providers", async () => {
     const budget = createProviderBudget({ deepSeekMax: 1, embeddingBatchMax: 1 });
     const order: string[] = [];

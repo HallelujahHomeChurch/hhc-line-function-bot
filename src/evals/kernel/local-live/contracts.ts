@@ -51,7 +51,11 @@ export interface KernelLocalLiveBudgetSnapshot {
 }
 
 export interface ProviderBudget {
-  runDeepSeek<T>(caseId: KernelLocalLiveCaseId, call: () => Promise<T>): Promise<T>;
+  runDeepSeek<T>(
+    caseId: KernelLocalLiveCaseId,
+    call: () => Promise<T>,
+    turnIndex?: number
+  ): Promise<T>;
   runEmbedding<T>(caseId: KernelLocalLiveCaseId, call: () => Promise<T>): Promise<T>;
   snapshot(): KernelLocalLiveBudgetSnapshot;
 }
