@@ -26,6 +26,7 @@
 ### Task 1: Encode The ACA Resource And Schedule Contract
 
 **Files:**
+
 - Modify: `src/__tests__/profile-config-deployment-contract.test.ts`
 - Modify: `aca.searxng.containerapp.yaml`
 - Modify: `aca.clamav-signature-refresh-job.yaml`
@@ -33,6 +34,7 @@
 - Modify: `docs/runbooks/production-operations.md`
 
 **Interfaces:**
+
 - Consumes: the existing release workflow, which renders and applies both ACA manifests.
 - Produces: a repository contract that always deploys SearXNG at `0.25` CPU/`0.5Gi` and ClamAV refresh at `10 19 * * 0`.
 
@@ -73,18 +75,18 @@ Expected: FAIL because the SearXNG manifest has no requested resource block and 
 Add this block under the SearXNG container's existing environment block:
 
 ```yaml
-        resources:
-          cpu: 0.25
-          memory: 0.5Gi
+resources:
+  cpu: 0.25
+  memory: 0.5Gi
 ```
 
 Change the ClamAV schedule to:
 
 ```yaml
-    scheduleTriggerConfig:
-      cronExpression: "10 19 * * 0"
-      parallelism: 1
-      replicaCompletionCount: 1
+scheduleTriggerConfig:
+  cronExpression: "10 19 * * 0"
+  parallelism: 1
+  replicaCompletionCount: 1
 ```
 
 Do not change replica counts, ingress, images, identities, storage mounts, or scan-job resources.
@@ -127,12 +129,14 @@ git commit -m "ops: right-size SearXNG and schedule weekly ClamAV refresh"
 ### Task 2: Verify, Publish, And Deploy The Repository Changes
 
 **Files:**
+
 - Verify: `.github/workflows/ci.yml`
 - Verify: `.github/workflows/release.yml`
 - Verify: `scripts/deploy-aca.sh`
 - Verify: all files changed on `codex/retire-office-local-runtime`
 
 **Interfaces:**
+
 - Consumes: Task 1's manifest and deployment-contract changes.
 - Produces: a merged `main` commit and a successful Production Release that applies the requested ACA configuration.
 
@@ -245,11 +249,13 @@ Expected: Production Release concludes `success`.
 ### Task 3: Verify Cloud State And Apply The Hermes Dependency Gate
 
 **Files:**
+
 - Inspect: active repository files and GitHub workflows
 - Inspect: Azure resource group `alive`
 - Delete conditionally: `alive/Microsoft.App/containerApps/hermes-line-proxy`
 
 **Interfaces:**
+
 - Consumes: Task 2's successful production release.
 - Produces: verified ACA runtime state and either a safely deleted Hermes proxy or a user-visible dependency report with no deletion.
 
@@ -386,12 +392,14 @@ Expected: delete succeeds, then `show` returns a resource-not-found error. Re-qu
 ### Task 4: Remove The Exact Office Docker And Ollama Assets
 
 **Files:**
+
 - Remove to Windows Recycle Bin: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\HHC Line Bot Local Services.lnk`
 - Remove to Windows Recycle Bin: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Ollama.lnk`
 - Preserve: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Docker Desktop`
 - Preserve: `%LOCALAPPDATA%\Programs\Ollama`
 
 **Interfaces:**
+
 - Consumes: Task 3's known-good Azure replacement services.
 - Produces: an office workstation with no retired HHC containers, images, volumes, models, or startup shortcuts.
 
@@ -494,11 +502,13 @@ Expected: both executables exist and the Docker Desktop Run entry still resolves
 ### Task 5: Run The Final Cross-Boundary Verification
 
 **Files:**
+
 - Verify: repository and GitHub Actions state
 - Verify: Azure resource group `alive`
 - Verify: office Docker, Ollama, Startup, and Run state
 
 **Interfaces:**
+
 - Consumes: Tasks 1–4.
 - Produces: fresh evidence that the cloud runtime is healthy and the office runtime is retired without unrelated deletion.
 
@@ -556,7 +566,7 @@ Resolve the `api-gateway` FQDN and POST unsigned JSON `{}` to:
 
 Expected: HTTP `400` with the exact body:
 
-```json
+```text
 {"ok":false,"error":"missing_line_signature"}
 ```
 
