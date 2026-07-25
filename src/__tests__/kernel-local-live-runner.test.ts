@@ -20,6 +20,7 @@ describe("Kernel local live disposable runner", () => {
     ]);
 
     expect(shell.indexOf("set +x")).toBeLessThan(shell.indexOf("az containerapp secret list"));
+    expect(shell).toContain('COMPOSE_FILE="compose.kernel-local-live.yml"');
     expect(shell.indexOf("trap ")).toBeLessThan(
       shell.indexOf('docker compose -f "$COMPOSE_FILE" up')
     );

@@ -17,7 +17,7 @@ else
 fi
 
 ROOT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_FILE="${ROOT_DIRECTORY}/compose.kernel-local-live.yml"
+COMPOSE_FILE="compose.kernel-local-live.yml"
 CASE_ID=""
 if (($# == 0)); then
   :
