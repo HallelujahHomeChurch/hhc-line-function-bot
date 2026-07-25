@@ -7,6 +7,7 @@ if [[ "${KERNEL_LOCAL_LIVE_TEST_MODE:-}" == "1" ]]; then
   az() { bash "${FAKE_BIN_DIRECTORY}/az" "$@"; }
   docker() { bash "${FAKE_BIN_DIRECTORY}/docker" "$@"; }
   timeout() { bash "${FAKE_BIN_DIRECTORY}/timeout" "$@"; }
+  DOCKER_TIMEOUT_COMMAND=(bash "${FAKE_BIN_DIRECTORY}/docker")
 else
   DOCKER_EXECUTABLE="$(command -v docker.exe || command -v docker || true)"
   [[ -n "$DOCKER_EXECUTABLE" ]] || {
@@ -14,6 +15,7 @@ else
     exit 2
   }
   docker() { "$DOCKER_EXECUTABLE" "$@"; }
+  DOCKER_TIMEOUT_COMMAND=("$DOCKER_EXECUTABLE")
 fi
 
 ROOT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -193,7 +195,7 @@ COMPOSE_STARTED=true
 CURRENT_STAGE="compose_run"
 set +e
 timeout --signal=TERM --kill-after=15s 10m \
-  docker compose -f "$COMPOSE_FILE" up --abort-on-container-exit --exit-code-from acceptance-driver \
+  "${DOCKER_TIMEOUT_COMMAND[@]}" compose -f "$COMPOSE_FILE" up --abort-on-container-exit --exit-code-from acceptance-driver \
   >"$CONSOLE_FILE" 2>&1
 DRIVER_STATUS=$?
 set -e

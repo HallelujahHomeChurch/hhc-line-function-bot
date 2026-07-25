@@ -22,7 +22,7 @@ describe("Kernel local live disposable runner", () => {
     expect(shell.indexOf("set +x")).toBeLessThan(shell.indexOf("az containerapp secret list"));
     expect(shell).toContain('COMPOSE_FILE="compose.kernel-local-live.yml"');
     expect(shell.indexOf("trap ")).toBeLessThan(
-      shell.indexOf('docker compose -f "$COMPOSE_FILE" up')
+      shell.indexOf('"${DOCKER_TIMEOUT_COMMAND[@]}" compose -f "$COMPOSE_FILE" up')
     );
     expect(shell).toContain("mktemp -d /dev/shm/kernel-local-live.XXXXXXXX");
     expect(shell).toContain("chmod 0700");
@@ -34,6 +34,7 @@ describe("Kernel local live disposable runner", () => {
     expect(shell).toContain("azure-openai-embedding-key");
     expect(shell.match(/--show-values/gu)).toHaveLength(2);
     expect(shell).toContain("timeout --signal=TERM --kill-after=15s 10m");
+    expect(shell).toContain('"${DOCKER_TIMEOUT_COMMAND[@]}" compose');
     expect(shell).toContain("down --volumes --remove-orphans");
     expect(shell).toContain("kernel_local_live_failed_stage:");
     expect(shell).not.toMatch(/\b(for|while)\b.*\b(retry|rerun)\b/u);
