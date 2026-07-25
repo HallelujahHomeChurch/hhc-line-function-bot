@@ -463,8 +463,8 @@ async function namespaceIsEmpty(
   client: KernelLocalLiveRedisClient,
   keyPrefix: string
 ): Promise<boolean> {
-  for await (const _key of client.scanIterator({ MATCH: `${keyPrefix}:*` })) {
-    return false;
+  for await (const batch of client.scanIterator({ MATCH: `${keyPrefix}:*` })) {
+    if (batch.length > 0) return false;
   }
   return true;
 }

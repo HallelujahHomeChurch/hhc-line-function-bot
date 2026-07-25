@@ -21,7 +21,7 @@ export interface KernelLocalLiveRedisClient {
   getDel(key: string): Promise<string | null>;
   rPush(key: string, value: string): Promise<number>;
   lRange(key: string, start: number, stop: number): Promise<string[]>;
-  scanIterator(options: { MATCH: string }): AsyncIterable<string>;
+  scanIterator(options: { MATCH: string }): AsyncIterable<string[]>;
   del(keys: string[]): Promise<number>;
 }
 
@@ -80,8 +80,8 @@ export class RedisKernelLocalLiveChannel {
 
   async cleanup(): Promise<void> {
     const keys: string[] = [];
-    for await (const key of this.client.scanIterator({ MATCH: `${this.keyPrefix}:*` })) {
-      keys.push(key);
+    for await (const batch of this.client.scanIterator({ MATCH: `${this.keyPrefix}:*` })) {
+      keys.push(...batch);
     }
     if (keys.length > 0) await this.client.del(keys);
   }

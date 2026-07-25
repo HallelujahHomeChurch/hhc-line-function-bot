@@ -40,6 +40,13 @@ describe("Kernel local live Redis capture", () => {
       replyHash: "b".repeat(64),
       quickReplyLabels: []
     });
+    await first.appendObservation({
+      caseId: "schedule-explicit",
+      kind: "provider",
+      provider: "deepseek",
+      ordinal: 1,
+      outcome: "success"
+    });
 
     await first.cleanup();
 
@@ -88,12 +95,12 @@ class FakeRedisClient implements KernelLocalLiveRedisClient {
     return list.slice(start, stop < 0 ? undefined : stop + 1);
   }
 
-  async *scanIterator(options: { MATCH: string }): AsyncGenerator<string> {
+  async *scanIterator(options: { MATCH: string }): AsyncGenerator<string[]> {
     const prefix = options.MATCH.replace(/\*$/u, "");
     const keys = [...this.values.keys(), ...this.lists.keys()].filter((key) =>
       key.startsWith(prefix)
     );
-    for (const key of keys) yield key;
+    if (keys.length > 0) yield keys;
   }
 
   async del(keys: string[]): Promise<number> {
