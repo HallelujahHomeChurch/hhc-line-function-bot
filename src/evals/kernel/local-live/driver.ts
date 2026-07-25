@@ -441,7 +441,8 @@ function providerCount(
 }
 
 function stripInternalProviderCounts(report: InternalCaseReport): KernelLocalLiveCaseReport {
-  const { providerCounts: _providerCounts, ...safe } = report;
+  const safe = { ...report };
+  delete safe.providerCounts;
   return safe;
 }
 

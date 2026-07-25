@@ -32,7 +32,7 @@ describe("Kernel local live disposable runner", () => {
     expect(shell).toContain("down --volumes --remove-orphans");
     expect(shell).not.toMatch(/\b(for|while)\b.*\b(retry|rerun)\b/u);
 
-    expect(compose.match(/^  [a-z][a-z-]+:\s*$/gmu)?.length).toBeGreaterThanOrEqual(4);
+    expect(compose.match(/^ {2}[a-z][a-z-]+:\s*$/gmu)?.length).toBeGreaterThanOrEqual(4);
     for (const service of ["acceptance-app", "acceptance-driver", "postgres", "redis"]) {
       expect(compose).toContain(`  ${service}:`);
     }
