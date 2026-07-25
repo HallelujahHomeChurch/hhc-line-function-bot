@@ -98,13 +98,6 @@ describe("Kernel local live journey outcome evaluation", () => {
           provider: "azure_openai",
           ordinal: 2,
           outcome: "success"
-        },
-        {
-          caseId: "knowledge-follow-up" as const,
-          kind: "provider",
-          provider: "azure_openai",
-          ordinal: 3,
-          outcome: "success"
         }
       ],
       expected: {

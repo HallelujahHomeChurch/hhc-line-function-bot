@@ -98,14 +98,19 @@ export async function runKernelLocalLiveApp(
       });
     }
   };
-  await caseContext.run("knowledge-follow-up", () =>
+  const knowledgeFixtureCase = selectedCases.some(({ id }) => id === "capability-switch")
+    ? "capability-switch"
+    : "knowledge-follow-up";
+  await caseContext.run(knowledgeFixtureCase, () =>
     seedKernelLocalLiveFixtures({
       accessStore,
       catalogStore: catalog,
       scheduleStore,
       knowledgeStore,
       embedding: providers.embedding,
-      seedKnowledge: selectedCases.some(({ id }) => id === "knowledge-follow-up")
+      seedKnowledge: selectedCases.some(
+        ({ id }) => id === "capability-switch" || id === "knowledge-follow-up"
+      )
     })
   );
 

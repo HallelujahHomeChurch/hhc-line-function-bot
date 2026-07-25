@@ -37,14 +37,14 @@ export const KERNEL_LOCAL_LIVE_CASES: readonly Readonly<KernelLocalLiveCase>[] =
         version: 1,
         journey: "capability_switch",
         deepSeekMax: 2,
-        embeddingBatchMax: 0
+        embeddingBatchMax: 1
       },
       {
         id: "knowledge-follow-up",
         version: 1,
         journey: "knowledge_follow_up",
         deepSeekMax: 2,
-        embeddingBatchMax: 3
+        embeddingBatchMax: 2
       },
       {
         id: "group-requester-isolation",

@@ -124,7 +124,10 @@ export async function seedKernelLocalLiveFixtures(options: {
     topics: ["synthetic procedure"],
     sampleQueries: ["synthetic alpha procedure"]
   });
-  const vectors = await options.embedding.embed(KNOWLEDGE_CHUNKS.map(({ content }) => content));
+  const vectors = await options.embedding.embed([
+    ...KNOWLEDGE_CHUNKS.map(({ content }) => content),
+    "synthetic alpha procedure"
+  ]);
   const documents = [
     {
       externalId: "synthetic-document",

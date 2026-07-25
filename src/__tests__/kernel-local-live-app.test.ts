@@ -204,6 +204,46 @@ describe("Kernel local live provider clients", () => {
     expect(requests).toBe(0);
     expect(budget.snapshot().deepSeekRequests).toBe(0);
   });
+
+  it("reuses an exact seeded embedding without another provider request", async () => {
+    let requests = 0;
+    const budget = createProviderBudget({ deepSeekMax: 0, embeddingBatchMax: 1 });
+    const caseContext = createKernelLocalLiveCaseContext();
+    const config = createKernelLocalLiveConfig(
+      {
+        KERNEL_LOCAL_LIVE_RUN_ID: "run-123",
+        KERNEL_LOCAL_LIVE_POSTGRES_URL:
+          "postgresql://kernel:kernel@postgres:5432/hhc_line_acceptance",
+        KERNEL_LOCAL_LIVE_REDIS_URL: "redis://redis:6379"
+      },
+      safeSecrets()
+    );
+    const clients = createBudgetedProviderClients({
+      config,
+      budget,
+      caseContext,
+      fetchImpl: async () => {
+        requests += 1;
+        return new Response(
+          JSON.stringify({
+            data: [{ index: 0, embedding: Array.from({ length: 1536 }, () => 0.25) }]
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+    });
+
+    const first = await caseContext.run("capability-switch", () =>
+      clients.embedding.embed(["synthetic alpha procedure"])
+    );
+    const second = await caseContext.run("capability-switch", () =>
+      clients.embedding.embed(["synthetic alpha procedure"])
+    );
+
+    expect(second).toEqual(first);
+    expect(requests).toBe(1);
+    expect(budget.snapshot().embeddingBatches).toBe(1);
+  });
 });
 
 describe("Kernel local live application composition", () => {
@@ -312,6 +352,7 @@ describe("Kernel local live fixtures", () => {
   it("seeds only synthetic access, schedule, and promoted knowledge data", async () => {
     const runtime = createTestRuntime();
     const accessStore = new InMemoryAccessStore();
+    let embeddingCalls = 0;
 
     await seedKernelLocalLiveFixtures({
       accessStore,
@@ -323,6 +364,8 @@ describe("Kernel local live fixtures", () => {
         model: "text-embedding-3-small",
         dimensions: 1536,
         async embed(input) {
+          embeddingCalls += 1;
+          expect(input).toHaveLength(3);
           return input.map((_, index) =>
             Array.from({ length: 1536 }, (__, dimension) => (dimension === index ? 1 : 0))
           );
@@ -330,6 +373,7 @@ describe("Kernel local live fixtures", () => {
       },
       now: () => new Date("2026-07-26T00:00:00.000Z")
     });
+    expect(embeddingCalls).toBe(1);
 
     await expect(
       accessStore.hasActivePrincipal("acceptance", "user", "U_KERNEL_USER_A")

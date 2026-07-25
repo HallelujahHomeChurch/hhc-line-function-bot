@@ -56,6 +56,7 @@ export function createBudgetedProviderClients(options: {
     timeoutMs: embeddingConfig.timeoutMs,
     fetchImpl: options.fetchImpl
   });
+  const embeddingCache = new Map<string, number[]>();
 
   function currentCase(): KernelLocalLiveCaseId {
     const caseId = options.caseContext.current();
@@ -99,11 +100,19 @@ export function createBudgetedProviderClients(options: {
       dimensions: embedding.dimensions,
       async embed(input) {
         const caseId = currentCase();
-        if (caseId !== "knowledge-follow-up") {
+        if (caseId !== "knowledge-follow-up" && caseId !== "capability-switch") {
           throw new Error("kernel_local_live_embedding_case_rejected");
         }
+        const cached = input.map((value) => embeddingCache.get(value));
+        if (cached.every((value): value is number[] => value !== undefined)) {
+          return cached.map((value) => [...value]);
+        }
         try {
-          return await options.budget.runEmbedding(caseId, () => embedding.embed(input));
+          const vectors = await options.budget.runEmbedding(caseId, () => embedding.embed(input));
+          input.forEach((value, index) => {
+            embeddingCache.set(value, [...vectors[index]!]);
+          });
+          return vectors;
         } finally {
           await emitLatestObservation();
         }

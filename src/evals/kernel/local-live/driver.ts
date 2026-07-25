@@ -361,7 +361,7 @@ function outcomePassed(
       return (
         evidence.capability === "query_knowledge" &&
         evidence.resultClass === "success" &&
-        evidence.providerCounts.azure_openai === 3
+        evidence.providerCounts.azure_openai === 2
       );
     case "group-requester-isolation":
       return (

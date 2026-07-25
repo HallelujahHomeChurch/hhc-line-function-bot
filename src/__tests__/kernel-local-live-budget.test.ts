@@ -48,8 +48,8 @@ describe("Kernel local live case costs", () => {
       ["schedule-explicit", 1, 0],
       ["schedule-refinement", 2, 0],
       ["schedule-ambiguity", 1, 0],
-      ["capability-switch", 2, 0],
-      ["knowledge-follow-up", 2, 3],
+      ["capability-switch", 2, 1],
+      ["knowledge-follow-up", 2, 2],
       ["group-requester-isolation", 1, 0],
       ["provider-unavailable", 0, 0],
       ["write-preview-confirm", 1, 0]
