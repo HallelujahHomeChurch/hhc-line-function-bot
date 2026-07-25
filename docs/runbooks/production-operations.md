@@ -206,6 +206,8 @@ The bot does not perform arbitrary web browsing or maintain an administrator web
 
 Sheet music has one controlled public-search fallback. If `SEARXNG_BASE_URL` points to an internal SearXNG service and local sheet music lookup finds nothing, the bot asks the requester whether to search public results. It calls SearXNG only after consent, uses only title/snippet/url fields, sends those fields to the `web_summarization` provider for summary/ranking, and does not fetch pages, download files, or save the results. Leave `SEARXNG_BASE_URL` unset to disable this fallback.
 
+Production deploys `hhc-searxng` with internal-only ingress, one replica, `0.25` CPU, and `0.5Gi` memory. The ClamAV signature refresh job runs every Monday at `10 19 * * 0` UTC, which is 03:10 Monday in Asia/Taipei. The deployment still starts and waits for one refresh execution before enabling the queue scanner, independently of the weekly schedule.
+
 ## Attachment Save Gate
 
 Do not add `image` or `file` to a production profile's `allowedMessageTypes` until all attachment prerequisites are configured:

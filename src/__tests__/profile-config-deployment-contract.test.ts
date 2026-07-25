@@ -26,6 +26,9 @@ describe("production profile configuration deployment contract", () => {
     expect(searxng).toContain("external: false");
     expect(searxng).toContain("targetPort: 8080");
     expect(searxng).toContain("minReplicas: 1");
+    expect(searxng).toContain("resources:");
+    expect(searxng).toContain("cpu: 0.25");
+    expect(searxng).toContain("memory: 0.5Gi");
     expect(searxng).toContain("searxng/searxng@sha256:");
     expect(searxng).toContain("storageType: Secret");
     expect(searxng).toContain("mountPath: /etc/searxng");
@@ -311,7 +314,7 @@ describe("production profile configuration deployment contract", () => {
 
     expect(refreshJob).toContain("type: Microsoft.App/jobs");
     expect(refreshJob).toContain("triggerType: Schedule");
-    expect(refreshJob).toContain('cronExpression: "10 19 */2 * *"');
+    expect(refreshJob).toContain('cronExpression: "10 19 * * 0"');
     expect(refreshJob).toContain("parallelism: 1");
     expect(refreshJob).toContain("replicaCompletionCount: 1");
     expect(refreshJob).toContain("dist/tools/refresh-clamav-signatures.js");

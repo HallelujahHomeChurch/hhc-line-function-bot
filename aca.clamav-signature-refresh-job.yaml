@@ -15,7 +15,7 @@ properties:
     replicaTimeout: 900
     replicaRetryLimit: 1
     scheduleTriggerConfig:
-      cronExpression: "10 19 */2 * *"
+      cronExpression: "10 19 * * 0"
       parallelism: 1
       replicaCompletionCount: 1
   template:
