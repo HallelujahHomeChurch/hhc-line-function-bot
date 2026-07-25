@@ -761,6 +761,6 @@ function mapSearchResult(row: Record<string, unknown>): KnowledgeSearchResult {
       title: String(row.title),
       url: String(row.url)
     },
-    source: mapSource(row)
+    source: mapSource({ ...row, id: row.source_id })
   };
 }
