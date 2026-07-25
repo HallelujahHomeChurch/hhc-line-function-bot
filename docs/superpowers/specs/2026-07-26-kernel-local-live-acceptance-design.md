@@ -69,8 +69,10 @@ One Compose project owns four disposable services:
      allowlisted observations.
 
 The project name includes an opaque run ID. Host ports bind only to loopback
-when a host port is required. The application and driver communicate on an
-internal Compose network.
+when a host port is required. The application, driver, PostgreSQL, and Redis
+communicate on an internal Compose network. Only the application also joins a
+separate provider-egress network so the validated DeepSeek and Azure embedding
+clients can make outbound HTTPS calls; that network publishes no inbound port.
 
 ## Composition And Dependency Direction
 
@@ -190,7 +192,8 @@ The default suite contains eight versioned journeys:
 
 8. `write-preview-confirm`
    - Maximum live cost: 1 DeepSeek request, 0 embedding batches.
-   - Uses a granted synthetic requester and a local write adapter.
+   - Uses a granted synthetic requester, a synthetic attachment, and local
+     attachment-work/outbox adapters.
    - Proves preview, confirmation, audit, idempotency, and outbox behavior
      without publishing externally.
 
