@@ -28,6 +28,7 @@ describe("Kernel local live disposable runner", () => {
     expect(shell).toContain("chmod 0600");
     expect(shell).toContain("deepseek-api-key");
     expect(shell).toContain("azure-openai-embedding-key");
+    expect(shell.match(/--show-values/gu)).toHaveLength(2);
     expect(shell).toContain("timeout --signal=TERM --kill-after=15s 10m");
     expect(shell).toContain("down --volumes --remove-orphans");
     expect(shell).not.toMatch(/\b(for|while)\b.*\b(retry|rerun)\b/u);

@@ -108,6 +108,7 @@ deepseek_secret="$(
   az containerapp secret list \
     --resource-group alive \
     --name hhc-line-function-bot \
+    --show-values \
     --query "[?name=='deepseek-api-key'].value | [0]" \
     --output tsv
 )" || exit 2
@@ -115,6 +116,7 @@ azure_embedding_secret="$(
   az containerapp secret list \
     --resource-group alive \
     --name hhc-line-function-bot \
+    --show-values \
     --query "[?name=='azure-openai-embedding-key'].value | [0]" \
     --output tsv
 )" || exit 2
