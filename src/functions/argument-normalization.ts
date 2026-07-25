@@ -260,14 +260,31 @@ function normalizeServiceScheduleArguments(
   );
   const groundedModelQuery =
     query && input.text.normalize("NFKC").includes(query.normalize("NFKC")) ? query : undefined;
+  const groundedRole = normalizeGroundedScheduleRole(stringArg(args, "role"), role);
   return {
     ...structured,
-    ...(role ? { role } : {}),
     ...args,
+    ...(groundedRole ? { role: groundedRole } : {}),
     query:
       groundedModelQuery ??
       (currentQuery === "主日" ? "主日服事" : refinement.residualQuery || currentQuery)
   };
+}
+
+function normalizeGroundedScheduleRole(
+  modelRole: string | undefined,
+  deterministicRole: string | undefined
+): string | undefined {
+  if (!deterministicRole) return modelRole;
+  if (!modelRole) return deterministicRole;
+  const normalizedModelRole = modelRole.normalize("NFKC").replace(/\s+/gu, "");
+  const normalizedDeterministicRole = deterministicRole.normalize("NFKC").replace(/\s+/gu, "");
+  return normalizedModelRole === normalizedDeterministicRole ||
+    ["服事", "人員", "安排"].some(
+      (suffix) => normalizedModelRole === `${normalizedDeterministicRole}${suffix}`
+    )
+    ? deterministicRole
+    : modelRole;
 }
 
 function relativeScheduleDateIntent(

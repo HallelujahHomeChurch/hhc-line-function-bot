@@ -60,20 +60,45 @@ azure_embedding_secret=""
 CURRENT_STAGE="initialization"
 
 cleanup() {
+  local loader_matches=""
+  local volume_matches=""
+  local compose_container_matches=""
+  local compose_network_matches=""
+  local compose_volume_matches=""
   if [[ "$CLEANUP_RAN" == "true" ]]; then return 0; fi
   CLEANUP_RAN=true
   if [[ "$COMPOSE_STARTED" == "true" ]]; then
-    if ! docker compose -f "$COMPOSE_FILE" down --volumes --remove-orphans >/dev/null 2>&1; then
+    docker compose -f "$COMPOSE_FILE" down --volumes --remove-orphans >/dev/null 2>&1 || :
+    if ! compose_container_matches="$(
+      docker container ls -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" 2>/dev/null
+    )" ||
+      ! compose_network_matches="$(
+        docker network ls -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" 2>/dev/null
+      )" ||
+      ! compose_volume_matches="$(
+        docker volume ls -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" 2>/dev/null
+      )" ||
+      [[ -n "$compose_container_matches" || -n "$compose_network_matches" || -n "$compose_volume_matches" ]]; then
       CLEANUP_FAILED=true
     fi
   fi
   if [[ -n "$SECRET_LOADER_CONTAINER" ]]; then
-    if ! docker rm -f "$SECRET_LOADER_CONTAINER" >/dev/null 2>&1; then
+    if ! loader_matches="$(
+      docker container ls -aq --filter "name=^/${SECRET_LOADER_CONTAINER}$" 2>/dev/null
+    )"; then
+      CLEANUP_FAILED=true
+    elif [[ -n "$loader_matches" ]] &&
+      ! docker rm -f "$SECRET_LOADER_CONTAINER" >/dev/null 2>&1; then
       CLEANUP_FAILED=true
     fi
   fi
   if [[ -n "$SECRET_VOLUME" ]]; then
-    if ! docker volume rm "$SECRET_VOLUME" >/dev/null 2>&1; then
+    if ! volume_matches="$(
+      docker volume ls -q --filter "name=^${SECRET_VOLUME}$" 2>/dev/null
+    )"; then
+      CLEANUP_FAILED=true
+    elif [[ -n "$volume_matches" ]] &&
+      ! docker volume rm "$SECRET_VOLUME" >/dev/null 2>&1; then
       CLEANUP_FAILED=true
     fi
   fi

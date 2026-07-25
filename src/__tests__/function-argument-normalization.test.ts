@@ -206,6 +206,31 @@ describe("function argument normalization", () => {
     });
   });
 
+  it("normalizes a generic suffix from a current-message schedule role", () => {
+    expect(
+      normalizeFunctionArguments(
+        "query_schedule",
+        {
+          query: "synthetic service",
+          dateIntent: "specific_date",
+          specificDate: "2026-07-27",
+          role: "投影服事"
+        },
+        {
+          text: "查 synthetic service 2026-07-27 投影服事",
+          inferStructuredEvidence: true,
+          now: new Date("2026-07-26T00:00:00.000Z"),
+          timeZone: "Asia/Taipei"
+        }
+      )
+    ).toMatchObject({
+      query: "synthetic service",
+      dateIntent: "specific_date",
+      specificDate: "2026-07-27",
+      role: "投影"
+    });
+  });
+
   it("clears model-inferred content when the user only asks to remember a schedule", () => {
     expect(
       normalizeFunctionArguments(

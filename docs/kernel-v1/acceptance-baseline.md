@@ -40,16 +40,24 @@ requester-isolated independent execution, and confirmed local attachment
 outbox behavior. Every run cleaned its Redis namespace, Compose resources, and
 memory-backed secret files.
 
-Final Kernel v1 acceptance is not yet recorded because the approved no-retry
-budget was exhausted before one consolidated post-fix eight-case local-live
-report could be produced. Do not mark R4 implementation started until an
-operator explicitly authorizes one new bounded full run and
-`artifacts/kernel-v1/local-live-report.json` reports all eight cases `PASS`
-with exactly 9 successful DeepSeek requests, 3 successful embedding batches,
-no provider failure/budget-exhaustion observation, and successful cleanup.
-That bounded local report is the approved privacy-safe replacement for the
-previously pending production observation window; no raw LINE conversation or
-human tester is required.
+A newly authorized full run against commit
+`2c124f3f13c03a4a7a7e4b31b59b30e6395f43f0` stopped after
+`schedule-explicit` returned `not_found`; it made 1 DeepSeek request and 0
+embedding batches, and did not execute the remaining cases. The run also
+exposed an idempotency defect where cleanup treated already-absent secret
+resources as failure even though a host inspection found no remaining
+containers or volumes. The deterministic current-message schedule role
+normalizer and cleanup idempotency are corrected on the branch, but have not
+been reverified with live providers.
+
+Final Kernel v1 acceptance is therefore not recorded. Do not mark R4
+implementation started until an operator explicitly authorizes another bounded
+full run and `artifacts/kernel-v1/local-live-report.json` reports all eight
+cases `PASS` with exactly 9 successful DeepSeek requests, 3 successful
+embedding batches, no provider failure/budget-exhaustion observation, and
+successful cleanup. That bounded local report is the approved privacy-safe
+replacement for the previously pending production observation window; no raw
+LINE conversation or human tester is required.
 
 The local simulation cannot prove LINE platform delivery or reply-token
 behavior, production latency, production PostgreSQL/Redis failover, or Graph,

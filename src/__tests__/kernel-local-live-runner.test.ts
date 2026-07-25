@@ -65,7 +65,9 @@ describe("Kernel local live disposable runner", () => {
     ["azure failure", "az", 2],
     ["compose failure", "compose-up", 2],
     ["cleanup failure", "compose-down", 2],
-    ["secret cleanup failure", "secret-volume-rm", 2]
+    ["secret cleanup failure", "secret-volume-rm", 2],
+    ["secret resource listing failure", "resource-list-failure", 2],
+    ["already-clean secret resources", "resources-absent", 0]
   ])("executes the %s cleanup path with fake binaries", async (_name, failure, expectedExit) => {
     const fixture = await createFakeRuntime(failure);
     const result = fixture.run();
@@ -74,8 +76,13 @@ describe("Kernel local live disposable runner", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}\n${log}`).toBe(expectedExit);
     if (failure !== "az") {
       expect(log).toMatch(/compose .* down --volumes --remove-orphans/u);
-      expect(log).toMatch(/rm -f kernel-local-live-secret-loader-/u);
-      expect(log).toMatch(/volume rm kernel-local-live-secrets-/u);
+      if (failure === "resources-absent" || failure === "resource-list-failure") {
+        expect(log).not.toMatch(/rm -f kernel-local-live-secret-loader-/u);
+        expect(log).not.toMatch(/volume rm kernel-local-live-secrets-/u);
+      } else {
+        expect(log).toMatch(/rm -f kernel-local-live-secret-loader-/u);
+        expect(log).toMatch(/volume rm kernel-local-live-secrets-/u);
+      }
     }
   });
 });
@@ -126,6 +133,29 @@ if [[ "$1" == "compose" && "$*" == *" down "* ]]; then
   exit 0
 fi
 if [[ "$1" == "compose" && "$*" == *" config "* ]]; then printf 'safe compose'; exit 0; fi
+if [[ "$1" == "container" && "$2" == "ls" && "$*" == *"label=com.docker.compose.project="* ]]; then
+  [[ "\${FAKE_FAILURE:-}" == "resource-list-failure" ]] && exit 8
+  [[ "\${FAKE_FAILURE:-}" == "compose-down" ]] && printf 'compose-container-id'
+  exit 0
+fi
+if [[ "$1" == "network" && "$2" == "ls" ]]; then
+  [[ "\${FAKE_FAILURE:-}" == "resource-list-failure" ]] && exit 8
+  exit 0
+fi
+if [[ "$1" == "volume" && "$2" == "ls" && "$*" == *"label=com.docker.compose.project="* ]]; then
+  [[ "\${FAKE_FAILURE:-}" == "resource-list-failure" ]] && exit 8
+  exit 0
+fi
+if [[ "$1" == "container" && "$2" == "ls" ]]; then
+  [[ "\${FAKE_FAILURE:-}" == "resource-list-failure" ]] && exit 8
+  [[ "\${FAKE_FAILURE:-}" == "resources-absent" ]] || printf 'loader-id'
+  exit 0
+fi
+if [[ "$1" == "volume" && "$2" == "ls" ]]; then
+  [[ "\${FAKE_FAILURE:-}" == "resource-list-failure" ]] && exit 8
+  [[ "\${FAKE_FAILURE:-}" == "resources-absent" ]] || printf 'volume-name'
+  exit 0
+fi
 if [[ "$1" == "volume" && "$2" == "rm" && "\${FAKE_FAILURE:-}" == "secret-volume-rm" ]]; then exit 8; fi
 if [[ "$1" == "run" && "$*" == *"--finalize-cleanup"* ]]; then
   printf '{"passed":true}' > "\${KERNEL_LOCAL_LIVE_ARTIFACT_ROOT}/artifacts/kernel-v1/local-live-report.json"
