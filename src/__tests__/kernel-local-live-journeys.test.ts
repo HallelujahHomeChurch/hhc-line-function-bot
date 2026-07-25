@@ -25,6 +25,10 @@ describe("Kernel local live journeys", () => {
     ]);
     expect(Object.isFrozen(KERNEL_LOCAL_LIVE_JOURNEYS)).toBe(true);
     expect(KERNEL_LOCAL_LIVE_JOURNEYS.every(({ turns }) => Object.isFrozen(turns))).toBe(true);
+    expect(
+      KERNEL_LOCAL_LIVE_JOURNEYS.find(({ caseId }) => caseId === "knowledge-follow-up")?.turns[1]
+        ?.message
+    ).toEqual({ type: "text", text: "那最後由哪個角色驗證？" });
   });
 
   it("contains no loop, retry, random, or dynamically generated turn contract", () => {

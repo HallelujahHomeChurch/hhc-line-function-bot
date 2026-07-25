@@ -41,7 +41,7 @@ export const KERNEL_LOCAL_LIVE_JOURNEYS: readonly Readonly<KernelLocalLiveJourne
     ]),
     journey("knowledge-follow-up", "grounded_follow_up", [
       textTurn("knowledge-follow-up", 0, USER_A, "查知識 synthetic alpha procedure"),
-      textTurn("knowledge-follow-up", 1, USER_A, "最後由哪個 role 驗證？")
+      textTurn("knowledge-follow-up", 1, USER_A, "那最後由哪個角色驗證？")
     ]),
     journey("group-requester-isolation", "requester_isolated", [
       textTurn("group-requester-isolation", 0, GROUP_USER_B, "只看投影")
