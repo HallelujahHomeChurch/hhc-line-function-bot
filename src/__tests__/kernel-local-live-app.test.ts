@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { createProviderBudget } from "../evals/kernel/local-live/budget.js";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
+import { createQueryScheduleHandler } from "../capabilities/query-schedule/handler.js";
 import { createKernelLocalLiveApp } from "../testing/kernel-local-live/create-app.js";
 import {
   createKernelLocalLiveConfig,
@@ -357,6 +358,43 @@ describe("Kernel local live fixtures", () => {
         assignee: "Synthetic A"
       })
     ]);
+    const config = createKernelLocalLiveConfig(
+      {
+        KERNEL_LOCAL_LIVE_RUN_ID: "run-123",
+        KERNEL_LOCAL_LIVE_POSTGRES_URL:
+          "postgresql://kernel:kernel@postgres:5432/hhc_line_acceptance",
+        KERNEL_LOCAL_LIVE_REDIS_URL: "redis://redis:6379"
+      },
+      safeSecrets()
+    );
+    const querySchedule = createQueryScheduleHandler({
+      memoryStore: runtime.stores.memory,
+      scheduleStore: runtime.stores.schedule,
+      now: () => new Date("2026-07-26T00:00:00.000Z"),
+      timeZone: "Asia/Taipei"
+    });
+    await expect(
+      querySchedule(
+        {
+          query: "synthetic service",
+          dateIntent: "specific_date",
+          specificDate: "2026-07-27",
+          meeting: "Synthetic Service",
+          role: "投影",
+          domainKey: "synthetic_service"
+        },
+        {
+          profile: config.profiles[0],
+          event: {
+            type: "message",
+            source: { type: "user", userId: "U_KERNEL_USER_A" },
+            message: { type: "text", text: "查 synthetic service 2026-07-27 投影服事" }
+          }
+        }
+      )
+    ).resolves.toMatchObject({
+      agentResult: { status: "success" }
+    });
     await expect(
       runtime.stores.catalog.listSources({
         profileName: "acceptance",

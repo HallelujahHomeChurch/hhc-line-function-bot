@@ -86,7 +86,7 @@ export async function seedKernelLocalLiveFixtures(options: {
         sourceKey: "synthetic-schedule",
         origin: "line",
         serviceDate: "2026-07-27",
-        meeting: "Synthetic Morning",
+        meeting: "Synthetic Service",
         role: "投影",
         assignee: "Synthetic A"
       },
@@ -95,7 +95,7 @@ export async function seedKernelLocalLiveFixtures(options: {
         sourceKey: "synthetic-schedule",
         origin: "line",
         serviceDate: "2026-07-27",
-        meeting: "Synthetic Morning",
+        meeting: "Synthetic Service",
         role: "音控",
         assignee: "Synthetic B"
       },
@@ -104,7 +104,7 @@ export async function seedKernelLocalLiveFixtures(options: {
         sourceKey: "synthetic-schedule",
         origin: "line",
         serviceDate: "2026-08-03",
-        meeting: "Synthetic Evening",
+        meeting: "Synthetic Service",
         role: "投影",
         assignee: "Synthetic C"
       }
