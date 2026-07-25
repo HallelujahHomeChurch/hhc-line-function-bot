@@ -27,6 +27,9 @@ describe("Kernel local live disposable runner", () => {
     expect(shell).toContain("mktemp -d /dev/shm/kernel-local-live.XXXXXXXX");
     expect(shell).toContain("chmod 0700");
     expect(shell).toContain("chmod 0600");
+    expect(shell).toContain("--opt type=tmpfs");
+    expect(shell).toContain("docker exec -i");
+    expect(shell).toContain('docker volume rm "$SECRET_VOLUME"');
     expect(shell).toContain("deepseek-api-key");
     expect(shell).toContain("azure-openai-embedding-key");
     expect(shell.match(/--show-values/gu)).toHaveLength(2);
@@ -40,8 +43,11 @@ describe("Kernel local live disposable runner", () => {
     }
     expect(compose).toContain("provider-egress");
     expect(compose).toContain("internal: true");
-    expect(compose).toContain("target: deepseek-api-key");
-    expect(compose).toContain("target: azure-openai-embedding-key");
+    expect(compose).toContain("target: /run/secrets");
+    expect(compose).toContain("read_only: true");
+    expect(compose).toContain("secret-data");
+    expect(compose).not.toContain("KERNEL_DEEPSEEK_SECRET_FILE");
+    expect(compose).not.toContain("KERNEL_AZURE_EMBEDDING_SECRET_FILE");
     expect(compose).not.toMatch(/^\s+ports:/mu);
     expect(compose).not.toMatch(/\brestart:\s*(always|on-failure)/u);
     expect(dockerfile).toContain("AS kernel-local-live");
@@ -52,7 +58,8 @@ describe("Kernel local live disposable runner", () => {
     ["success", "", 0],
     ["azure failure", "az", 2],
     ["compose failure", "compose-up", 2],
-    ["cleanup failure", "compose-down", 2]
+    ["cleanup failure", "compose-down", 2],
+    ["secret cleanup failure", "secret-volume-rm", 2]
   ])("executes the %s cleanup path with fake binaries", async (_name, failure, expectedExit) => {
     const fixture = await createFakeRuntime(failure);
     const result = fixture.run();
@@ -61,6 +68,8 @@ describe("Kernel local live disposable runner", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}\n${log}`).toBe(expectedExit);
     if (failure !== "az") {
       expect(log).toMatch(/compose .* down --volumes --remove-orphans/u);
+      expect(log).toMatch(/rm -f kernel-local-live-secret-loader-/u);
+      expect(log).toMatch(/volume rm kernel-local-live-secrets-/u);
     }
   });
 });
@@ -111,6 +120,7 @@ if [[ "$1" == "compose" && "$*" == *" down "* ]]; then
   exit 0
 fi
 if [[ "$1" == "compose" && "$*" == *" config "* ]]; then printf 'safe compose'; exit 0; fi
+if [[ "$1" == "volume" && "$2" == "rm" && "\${FAKE_FAILURE:-}" == "secret-volume-rm" ]]; then exit 8; fi
 if [[ "$1" == "run" && "$*" == *"--finalize-cleanup"* ]]; then
   printf '{"passed":true}' > "\${KERNEL_LOCAL_LIVE_ARTIFACT_ROOT}/artifacts/kernel-v1/local-live-report.json"
   printf '# safe report\\n' > "\${KERNEL_LOCAL_LIVE_ARTIFACT_ROOT}/artifacts/kernel-v1/local-live-report.md"

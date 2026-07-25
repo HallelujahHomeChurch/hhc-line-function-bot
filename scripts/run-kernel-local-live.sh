@@ -51,6 +51,8 @@ TEMP_DIRECTORY=""
 COMPOSE_STARTED=false
 CLEANUP_RAN=false
 CLEANUP_FAILED=false
+SECRET_VOLUME=""
+SECRET_LOADER_CONTAINER=""
 deepseek_secret=""
 azure_embedding_secret=""
 
@@ -59,6 +61,16 @@ cleanup() {
   CLEANUP_RAN=true
   if [[ "$COMPOSE_STARTED" == "true" ]]; then
     if ! docker compose -f "$COMPOSE_FILE" down --volumes --remove-orphans >/dev/null 2>&1; then
+      CLEANUP_FAILED=true
+    fi
+  fi
+  if [[ -n "$SECRET_LOADER_CONTAINER" ]]; then
+    if ! docker rm -f "$SECRET_LOADER_CONTAINER" >/dev/null 2>&1; then
+      CLEANUP_FAILED=true
+    fi
+  fi
+  if [[ -n "$SECRET_VOLUME" ]]; then
+    if ! docker volume rm "$SECRET_VOLUME" >/dev/null 2>&1; then
       CLEANUP_FAILED=true
     fi
   fi
@@ -125,16 +137,38 @@ printf '%s' "$deepseek_secret" >"$DEEPSEEK_FILE"
 printf '%s' "$azure_embedding_secret" >"$AZURE_EMBEDDING_FILE"
 chmod 0600 "$DEEPSEEK_FILE" "$AZURE_EMBEDDING_FILE"
 
+SECRET_VOLUME="kernel-local-live-secrets-${RUN_ID}"
+SECRET_LOADER_CONTAINER="kernel-local-live-secret-loader-${RUN_ID}"
+docker volume create \
+  --driver local \
+  --opt type=tmpfs \
+  --opt device=tmpfs \
+  --opt o=size=65536,mode=0755 \
+  "$SECRET_VOLUME" >/dev/null || exit 2
+docker run -d \
+  --name "$SECRET_LOADER_CONTAINER" \
+  --user root \
+  -v "${SECRET_VOLUME}:/run/secrets" \
+  "$IMAGE" sleep 600 >/dev/null || exit 2
+docker exec -i "$SECRET_LOADER_CONTAINER" sh -c \
+  'umask 077; dd of=/run/secrets/deepseek-api-key status=none; chown 1000:1000 /run/secrets/deepseek-api-key; chmod 0600 /run/secrets/deepseek-api-key' \
+  <"$DEEPSEEK_FILE" || exit 2
+docker exec -i "$SECRET_LOADER_CONTAINER" sh -c \
+  'umask 077; dd of=/run/secrets/azure-openai-embedding-key status=none; chown 1000:1000 /run/secrets/azure-openai-embedding-key; chmod 0600 /run/secrets/azure-openai-embedding-key' \
+  <"$AZURE_EMBEDDING_FILE" || exit 2
+docker exec "$SECRET_LOADER_CONTAINER" sh -c \
+  'test "$(find /run/secrets -maxdepth 1 -type f | wc -l)" -eq 2 && test "$(stat -c %a /run/secrets/deepseek-api-key)" = 600 && test "$(stat -c %a /run/secrets/azure-openai-embedding-key)" = 600' ||
+  exit 2
+
 export COMPOSE_PROJECT_NAME="kernel-local-live-${RUN_ID}"
 export KERNEL_LOCAL_LIVE_IMAGE="$IMAGE"
 export KERNEL_LOCAL_LIVE_RUN_ID="$RUN_ID"
 export KERNEL_LOCAL_LIVE_COMMIT="$COMMIT"
 export KERNEL_LOCAL_LIVE_CASE_ID="$CASE_ID"
 export KERNEL_LOCAL_LIVE_ARTIFACT_DIRECTORY="$ARTIFACT_DIRECTORY"
-export KERNEL_DEEPSEEK_SECRET_FILE="$DEEPSEEK_FILE"
-export KERNEL_AZURE_EMBEDDING_SECRET_FILE="$AZURE_EMBEDDING_FILE"
+export KERNEL_LOCAL_LIVE_SECRET_VOLUME="$SECRET_VOLUME"
 if [[ "${DOCKER_EXECUTABLE:-}" == *.exe ]]; then
-  export WSLENV="${WSLENV:+${WSLENV}:}COMPOSE_PROJECT_NAME:KERNEL_LOCAL_LIVE_IMAGE:KERNEL_LOCAL_LIVE_RUN_ID:KERNEL_LOCAL_LIVE_COMMIT:KERNEL_LOCAL_LIVE_CASE_ID:KERNEL_LOCAL_LIVE_ARTIFACT_DIRECTORY/p:KERNEL_DEEPSEEK_SECRET_FILE/p:KERNEL_AZURE_EMBEDDING_SECRET_FILE/p"
+  export WSLENV="${WSLENV:+${WSLENV}:}COMPOSE_PROJECT_NAME:KERNEL_LOCAL_LIVE_IMAGE:KERNEL_LOCAL_LIVE_RUN_ID:KERNEL_LOCAL_LIVE_COMMIT:KERNEL_LOCAL_LIVE_CASE_ID:KERNEL_LOCAL_LIVE_ARTIFACT_DIRECTORY/p:KERNEL_LOCAL_LIVE_SECRET_VOLUME"
 fi
 
 COMPOSE_CONFIG_FILE="${TEMP_DIRECTORY}/compose-config.txt"
@@ -159,11 +193,15 @@ export KERNEL_LOCAL_LIVE_ARTIFACT_ROOT="$ARTIFACT_ROOT"
 export KERNEL_LOCAL_LIVE_COMPOSE_CLEAN=true
 export KERNEL_LOCAL_LIVE_SECRET_FILES_CLEAN=true
 if ((DRIVER_STATUS == 0)); then
+  ARTIFACT_MOUNT_SOURCE="$ARTIFACT_DIRECTORY"
+  if [[ "${DOCKER_EXECUTABLE:-}" == *.exe ]]; then
+    ARTIFACT_MOUNT_SOURCE="$(wslpath -w "$ARTIFACT_DIRECTORY")"
+  fi
   docker run --rm \
     -e KERNEL_LOCAL_LIVE_ARTIFACT_ROOT=/app \
     -e KERNEL_LOCAL_LIVE_COMPOSE_CLEAN=true \
     -e KERNEL_LOCAL_LIVE_SECRET_FILES_CLEAN=true \
-    -v "${ARTIFACT_DIRECTORY}:/app/artifacts/kernel-v1" \
+    -v "${ARTIFACT_MOUNT_SOURCE}:/app/artifacts/kernel-v1" \
     "$IMAGE" node dist/tools/eval-kernel-local-live.js --finalize-cleanup
 else
   ((DRIVER_STATUS == 1)) && exit 1

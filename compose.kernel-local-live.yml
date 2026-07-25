@@ -7,13 +7,11 @@ services:
       KERNEL_LOCAL_LIVE_CASE_ID: ${KERNEL_LOCAL_LIVE_CASE_ID:-}
       KERNEL_LOCAL_LIVE_POSTGRES_URL: postgresql://kernel:kernel@postgres:5432/hhc_line_acceptance
       KERNEL_LOCAL_LIVE_REDIS_URL: redis://redis:6379
-    secrets:
-      - source: deepseek-api-key
-        target: deepseek-api-key
-        mode: 0600
-      - source: azure-openai-embedding-key
-        target: azure-openai-embedding-key
-        mode: 0600
+    volumes:
+      - type: volume
+        source: secret-data
+        target: /run/secrets
+        read_only: true
     networks:
       - acceptance-internal
       - provider-egress
@@ -93,17 +91,14 @@ services:
       retries: 60
       start_period: 2s
 
-secrets:
-  deepseek-api-key:
-    file: ${KERNEL_DEEPSEEK_SECRET_FILE:?}
-  azure-openai-embedding-key:
-    file: ${KERNEL_AZURE_EMBEDDING_SECRET_FILE:?}
-
 networks:
   acceptance-internal:
     internal: true
   provider-egress:
 
 volumes:
+  secret-data:
+    external: true
+    name: ${KERNEL_LOCAL_LIVE_SECRET_VOLUME:?}
   postgres-data:
   redis-data:
