@@ -369,8 +369,12 @@ function outcomePassed(
         evidence.steps.some(
           ({ phase, outcome }) => phase === "active_task" && outcome === "missing"
         ) &&
+        evidence.capability === "query_schedule" &&
+        evidence.validatorReason === "explicit_intent" &&
+        evidence.resultClass === "success" &&
         !evidence.steps.some(
-          ({ phase, action }) => phase === "function" && action === "query_schedule"
+          ({ phase, validatorReason }) =>
+            phase === "plan_validation" && validatorReason === "active_task_refinement"
         )
       );
     case "provider-unavailable":

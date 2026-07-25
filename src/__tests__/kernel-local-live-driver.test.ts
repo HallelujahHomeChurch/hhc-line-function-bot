@@ -110,10 +110,21 @@ describe("Kernel local live journey outcome evaluation", () => {
       caseId: "group-requester-isolation" as const,
       steps: [
         { phase: "active_task", outcome: "missing", lifecycleOutcome: "missing" },
-        { phase: "controlled_route", disposition: "chat" }
+        {
+          phase: "plan_validation",
+          disposition: "execute",
+          action: "query_schedule",
+          validatorReason: "explicit_intent"
+        },
+        { phase: "result_envelope", resultStatus: "success", lifecycleOutcome: "write" }
       ] satisfies AgentTurnTraceStep[],
       observations: [],
-      expected: { passed: true, lifecycleOutcome: "missing" }
+      expected: {
+        passed: true,
+        capability: "query_schedule",
+        validatorReason: "explicit_intent",
+        resultClass: "success"
+      }
     },
     {
       caseId: "provider-unavailable" as const,
