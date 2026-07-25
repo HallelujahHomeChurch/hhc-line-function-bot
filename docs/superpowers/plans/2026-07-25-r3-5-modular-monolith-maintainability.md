@@ -23,6 +23,7 @@
 ### Task 1: Mechanically enforce dependency direction
 
 **Files:**
+
 - Create: `src/architecture/dependency-rules.ts`
 - Create: `src/tools/check-dependency-boundaries.ts`
 - Create: `src/__tests__/dependency-rules.test.ts`
@@ -30,6 +31,7 @@
 - Modify: `.github/workflows/ci.yml`
 
 **Interfaces:**
+
 - Produces: `checkDependencyBoundaries(files: SourceFile[]): BoundaryViolation[]`
 - Produces: `architecture:check` package script used locally and by PR CI.
 
@@ -118,6 +120,7 @@ git commit -m "test: enforce modular dependency boundaries"
 ### Task 2: Make production and test composition explicit
 
 **Files:**
+
 - Create: `src/bootstrap/create-production-runtime.ts`
 - Create: `src/bootstrap/runtime-contracts.ts`
 - Create: `src/testing/create-test-runtime.ts`
@@ -126,6 +129,7 @@ git commit -m "test: enforce modular dependency boundaries"
 - Modify: `src/functions/registry.ts`
 
 **Interfaces:**
+
 - Produces: `createProductionRuntime(config: AppConfig): Promise<ProductionRuntime>`
 - Produces: `createTestRuntime(overrides?: TestRuntimeOverrides): TestRuntime`
 - Produces: `ProductionRuntime` with `app`, `close()`, and scheduled maintenance handles.
@@ -185,6 +189,7 @@ git commit -m "refactor: make runtime composition explicit"
 ### Task 3: Split Fastify and LINE transport adapters
 
 **Files:**
+
 - Create: `src/transport/http/health-routes.ts`
 - Create: `src/transport/line/webhook-routes.ts`
 - Create: `src/transport/line/public-access-commands.ts`
@@ -197,6 +202,7 @@ git commit -m "refactor: make runtime composition explicit"
 - Modify: `src/__tests__/webhook-smoke.test.ts`
 
 **Interfaces:**
+
 - Produces: `registerHealthRoutes(app, config, dependencies): void`
 - Produces: `registerWebhookRoutes(app, config, dependencies): void`
 - Produces: `handlePublicAccessCommand(command): Promise<FunctionExecutionResult | undefined>`
@@ -246,6 +252,7 @@ git commit -m "refactor: split Fastify LINE transport adapters"
 ### Task 4: Split the controlled turn runtime into ordered stages
 
 **Files:**
+
 - Create: `src/application/turn/contracts.ts`
 - Create: `src/application/turn/coordinator.ts`
 - Create: `src/application/turn/stages/text-continuation-stage.ts`
@@ -259,6 +266,7 @@ git commit -m "refactor: split Fastify LINE transport adapters"
 - Modify: `src/__tests__/turn-state-machine.test.ts`
 
 **Interfaces:**
+
 - Produces: `TurnStage` with an explicit `name`, `order`, and `run(context)` contract.
 - Produces: `createTurnCoordinator(stages, telemetry): AgentTurnRuntime`
 - Keeps: `createAgentTurnRuntime(options): AgentTurnRuntime` as a compatibility factory.
@@ -331,6 +339,7 @@ git commit -m "refactor: make controlled turn stages explicit"
 ### Task 5: Migrate `query_schedule` as the reference capability slice
 
 **Files:**
+
 - Create: `src/capabilities/query-schedule/definition.ts`
 - Create: `src/capabilities/query-schedule/eval-cases.ts`
 - Create: `src/capabilities/query-schedule/ports.ts`
@@ -346,6 +355,7 @@ git commit -m "refactor: make controlled turn stages explicit"
 - Modify: `src/__tests__/registry.test.ts`
 
 **Interfaces:**
+
 - Produces: `QueryScheduleDependencies` containing only memory, schedule, optional Notion/session/time/request-id ports.
 - Produces: `createQueryScheduleModule(dependencies): FunctionModule`
 - Keeps: old `src/functions/query-schedule.ts` exports as compatibility re-exports.
@@ -399,6 +409,7 @@ git commit -m "refactor: migrate query schedule capability slice"
 ### Task 6: Close type ownership and documentation drift
 
 **Files:**
+
 - Create: `src/application/contracts/function-execution.ts`
 - Create: `src/application/contracts/routing.ts`
 - Modify: `src/types.ts`
@@ -408,6 +419,7 @@ git commit -m "refactor: migrate query schedule capability slice"
 - Create: `src/__tests__/modular-monolith-docs.test.ts`
 
 **Interfaces:**
+
 - Produces bounded application contracts re-exported from `src/types.ts`.
 - Documents the approved dependency direction and migration path.
 
@@ -462,9 +474,11 @@ git commit -m "docs: define modular monolith ownership"
 ### Task 7: Run the R3.5 acceptance boundary and publish the PR
 
 **Files:**
+
 - Modify only files required by failures attributable to R3.5.
 
 **Interfaces:**
+
 - Produces a reviewable `codex/r3-5-modular-monolith` pull request with all required checks green.
 
 - [ ] **Step 1: Run local quality gates**
