@@ -62,7 +62,7 @@ describe("Kernel local live journey outcome evaluation", () => {
           phase: "plan_validation",
           disposition: "execute",
           action: "query_knowledge",
-          validatorReason: "explicit_capability_switch"
+          validatorReason: "explicit_intent"
         },
         { phase: "result_envelope", resultStatus: "success", lifecycleOutcome: "replace" }
       ] satisfies AgentTurnTraceStep[],
@@ -70,7 +70,7 @@ describe("Kernel local live journey outcome evaluation", () => {
       expected: {
         passed: true,
         capability: "query_knowledge",
-        validatorReason: "explicit_capability_switch"
+        validatorReason: "explicit_intent"
       }
     },
     {

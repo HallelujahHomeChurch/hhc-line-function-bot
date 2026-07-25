@@ -458,6 +458,24 @@ describe("Kernel local live fixtures", () => {
         syncStatus: "ready"
       })
     ]);
+    await expect(
+      runtime.stores.knowledge.search({
+        profileName: "acceptance",
+        query: "synthetic alpha procedure",
+        queryEmbedding: Array.from({ length: 1536 }, (_, dimension) =>
+          dimension === 2 ? 1 : 0
+        ),
+        embeddingProvider: "azure_openai",
+        embeddingModel: "text-embedding-3-small",
+        embeddingDimensions: 1536,
+        limit: 1
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        ordinal: 0,
+        score: expect.any(Number)
+      })
+    ]);
   });
 
   it("skips knowledge seeding for a single non-knowledge case without embedding calls", async () => {

@@ -157,7 +157,7 @@ export async function seedKernelLocalLiveFixtures(options: {
       provider: options.embedding.provider,
       model: options.embedding.model,
       dimensions: options.embedding.dimensions,
-      embedding: vectors[index]!
+      embedding: vectors[index === 0 ? 2 : index]!
     }))
   });
 }

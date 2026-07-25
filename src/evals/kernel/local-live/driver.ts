@@ -354,7 +354,8 @@ function outcomePassed(
     case "capability-switch":
       return (
         evidence.capability === "query_knowledge" &&
-        evidence.validatorReason === "explicit_capability_switch" &&
+        (evidence.validatorReason === "explicit_capability_switch" ||
+          evidence.validatorReason === "explicit_intent") &&
         evidence.resultClass === "success"
       );
     case "knowledge-follow-up":
