@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   classifyKernelLocalLiveInfrastructureFailure,
   evaluateKernelLocalLiveOutcome,
-  finalizeKernelLocalLiveSuiteResult
+  finalizeKernelLocalLiveSuiteResult,
+  isKernelLocalLiveDuplicateAcknowledgement
 } from "../evals/kernel/local-live/driver.js";
 import type { AgentTurnTraceRecord, AgentTurnTraceStep } from "../agent/trace-store.js";
 
@@ -242,6 +243,22 @@ describe("Kernel local live journey outcome evaluation", () => {
     expect(classifyKernelLocalLiveInfrastructureFailure(new Error("raw provider response"))).toBe(
       "dependency_unavailable"
     );
+  });
+
+  it("accepts the production duplicate webhook acknowledgement contract", () => {
+    expect(
+      isKernelLocalLiveDuplicateAcknowledgement({
+        ok: true,
+        allowedEvents: 1,
+        ignored: "duplicate_webhook_event"
+      })
+    ).toBe(true);
+    expect(
+      isKernelLocalLiveDuplicateAcknowledgement({
+        ok: true,
+        allowedEvents: 1
+      })
+    ).toBe(false);
   });
 });
 

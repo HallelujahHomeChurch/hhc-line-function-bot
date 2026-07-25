@@ -415,13 +415,21 @@ async function assertDuplicate(
     },
     body: request.body
   });
-  const payload = (await response.json()) as { ok?: unknown; allowedEvents?: unknown };
-  if (!response.ok || payload.ok !== true || payload.allowedEvents !== 0) {
+  const payload = (await response.json()) as unknown;
+  if (!response.ok || !isKernelLocalLiveDuplicateAcknowledgement(payload)) {
     throw new Error("kernel_local_live_duplicate_failed");
   }
   if (await channel.readReply(request.replyToken)) {
     throw new Error("kernel_local_live_duplicate_reply_detected");
   }
+}
+
+export function isKernelLocalLiveDuplicateAcknowledgement(input: unknown): boolean {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+  const value = input as Record<string, unknown>;
+  return (
+    value.ok === true && value.allowedEvents === 1 && value.ignored === "duplicate_webhook_event"
+  );
 }
 
 async function seedRequesterAActiveTask(store: RedisConversationWindowStore): Promise<void> {
