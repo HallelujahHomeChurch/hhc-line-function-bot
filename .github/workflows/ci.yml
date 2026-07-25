@@ -37,6 +37,8 @@ jobs:
         run: pnpm typecheck
       - name: Lint
         run: pnpm lint
+      - name: Check architecture boundaries
+        run: pnpm architecture:check
       - name: Test
         run: pnpm test
       - name: Validate production profile config
