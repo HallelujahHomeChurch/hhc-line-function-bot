@@ -29,6 +29,13 @@ describe("Kernel local live journeys", () => {
       KERNEL_LOCAL_LIVE_JOURNEYS.find(({ caseId }) => caseId === "knowledge-follow-up")?.turns[1]
         ?.message
     ).toEqual({ type: "text", text: "那最後由哪個角色驗證？" });
+    expect(
+      KERNEL_LOCAL_LIVE_JOURNEYS.find(({ caseId }) => caseId === "provider-unavailable")?.turns[0]
+        ?.message
+    ).toEqual({
+      type: "text",
+      text: "查 synthetic service 2026-07-27 Projection 服事"
+    });
   });
 
   it("contains no loop, retry, random, or dynamically generated turn contract", () => {
