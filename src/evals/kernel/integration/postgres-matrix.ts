@@ -633,10 +633,7 @@ async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): P
       }
     }
   );
-  assert(
-    followUp.agentResult?.status === "success",
-    "knowledge_anchored_follow_up_unavailable"
-  );
+  assert(followUp.agentResult?.status === "success", "knowledge_anchored_follow_up_unavailable");
 }
 
 function oneHotVector(): number[] {

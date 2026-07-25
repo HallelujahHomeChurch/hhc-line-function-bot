@@ -168,12 +168,12 @@ The default suite contains eight versioned journeys:
    - Proves the model cannot choose an undeclared entity.
 
 4. `capability-switch`
-   - Maximum live cost: 2 DeepSeek requests, 0 embedding batches.
+   - Maximum live cost: 2 DeepSeek requests, 1 embedding batch.
    - Starts with one read task and explicitly switches capability.
    - Proves current-message evidence supersedes the active task.
 
 5. `knowledge-follow-up`
-   - Maximum live cost: 2 DeepSeek requests, 3 embedding batches.
+   - Maximum live cost: 2 DeepSeek requests, 2 embedding batches.
    - Queries a small seeded knowledge source and asks one elliptical follow-up.
    - Uses one small embedding seed batch plus bounded query embedding.
    - Proves pgvector retrieval, opaque anchoring, and grounded continuation.
@@ -196,6 +196,12 @@ The default suite contains eight versioned journeys:
      attachment-work/outbox adapters.
    - Proves preview, confirmation, audit, idempotency, and outbox behavior
      without publishing externally.
+
+The synthetic knowledge seed batch also includes the exact initial query
+embedding. The acceptance-only embedding adapter reuses that vector within the
+same run, so capability switching and the first knowledge query exercise the
+same pgvector space without another provider call; the elliptical follow-up
+still makes a second live embedding request.
 
 No journey may contain loops. A journey has a statically bounded number of
 turns and declares its maximum DeepSeek and embedding cost next to the case

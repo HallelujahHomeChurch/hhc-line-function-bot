@@ -47,12 +47,7 @@ export const KERNEL_LOCAL_LIVE_JOURNEYS: readonly Readonly<KernelLocalLiveJourne
       textTurn("group-requester-isolation", 0, GROUP_USER_B, "只看投影")
     ]),
     journey("provider-unavailable", "providers_unavailable", [
-      textTurn(
-        "provider-unavailable",
-        0,
-        USER_A,
-        "查 synthetic service 2026-07-27 Projection 服事"
-      )
+      textTurn("provider-unavailable", 0, USER_A, "查 synthetic service 2026-07-27 Projection 服事")
     ]),
     journey("write-preview-confirm", "confirmed_local_write", [
       fileTurn("write-preview-confirm", 0, USER_A),

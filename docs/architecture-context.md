@@ -646,6 +646,14 @@ pnpm build
 Run `pnpm eval:agent:live` manually when DeepSeek credentials are available. It
 is an acceptance check, not a CI dependency.
 
+Run `pnpm eval:kernel:local-live` manually for the disposable signed-webhook
+Kernel gate. It composes only synthetic local app/PostgreSQL/Redis state, uses
+real DeepSeek routing and Azure embeddings under a serialized 10/3 request
+ceiling, captures replies locally, and never calls production LINE, Graph,
+Notion, OneDrive, queues, or ClamAV. Its secrets are fetched from ACA into
+memory-backed mode-`0600` files and are removed with the run-scoped Compose
+resources on every exit. This gate is intentionally excluded from CI.
+
 For docs-only changes, `pnpm format:check` is usually enough.
 
 ## Deployment Safety

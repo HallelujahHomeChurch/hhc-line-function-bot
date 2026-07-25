@@ -462,9 +462,7 @@ describe("Kernel local live fixtures", () => {
       runtime.stores.knowledge.search({
         profileName: "acceptance",
         query: "synthetic alpha procedure",
-        queryEmbedding: Array.from({ length: 1536 }, (_, dimension) =>
-          dimension === 2 ? 1 : 0
-        ),
+        queryEmbedding: Array.from({ length: 1536 }, (_, dimension) => (dimension === 2 ? 1 : 0)),
         embeddingProvider: "azure_openai",
         embeddingModel: "text-embedding-3-small",
         embeddingDimensions: 1536,
