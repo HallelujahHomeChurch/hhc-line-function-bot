@@ -1204,6 +1204,7 @@ restore_changed_job() {
   local existed="$2"
   local known_image="$3"
   local known_manifest="$4"
+  local observed_image
   local observed_json
   local observed_manifest
   if [[ "${existed}" == "false" ]]; then
@@ -1222,10 +1223,13 @@ restore_changed_job() {
     --yaml "${known_manifest}" \
     --only-show-errors \
     --output none || return
+  observed_image="$(release_job_image "${job_name}")" || return
+  observed_image="$(resolve_release_image "${observed_image}")" || return
+  [[ "${observed_image}" == "${known_image}" ]] || return
   observed_json="$(release_job_manifest_json "${job_name}")" || return
   observed_manifest="$(mktemp)"
   RELEASE_CLEANUP_FILES+=("${observed_manifest}")
-  normalize_release_job_manifest "${observed_json}" "${known_image}" "${observed_manifest}" || return
+  normalize_release_job_manifest "${observed_json}" "${observed_image}" "${observed_manifest}" || return
   cmp -s -- "${known_manifest}" "${observed_manifest}"
 }
 

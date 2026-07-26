@@ -371,6 +371,16 @@ describe("release assurance shell transaction", () => {
     );
   }, 15_000);
 
+  it("does not report restored when a job keeps the wrong image", async () => {
+    const fixture = await createFixture("job_restore_image_mismatch");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    expect(report.rollback.status).toBe("failed");
+  }, 15_000);
+
   it("restores the snapshotted SearXNG revision before reporting rollback restored", async () => {
     const fixture = await createFixture("searxng_restore");
     const result = fixture.run();
@@ -923,7 +933,15 @@ if (command("containerapp", "job", "show")) {
         (scenario === "empty_refresh_snapshot" && name === "hhc-line-bot-clamav-refresh");
       output(emptySnapshot ? "" : oldImages[name]);
     } else {
-      output(restored ? oldImages[name] : targetImages[name]);
+      output(
+        scenario === "job_restore_image_mismatch" &&
+          restored &&
+          name === "hhc-line-bot-catalog-sync"
+          ? "registry.example/fixture-secret/catalog@sha256:${"4".repeat(64)}"
+          : restored
+            ? oldImages[name]
+            : targetImages[name]
+      );
     }
     process.exit(0);
   }
@@ -1171,6 +1189,7 @@ if (command("containerapp", "job", "execution", "show")) {
       scenario === "release_probe_child_failure" ||
       scenario === "known_good_tag" ||
       scenario === "job_restore_definition_mismatch" ||
+      scenario === "job_restore_image_mismatch" ||
       scenario === "searxng_restore" ||
       scenario === "searxng_restore_contract_mismatch" ||
       scenario === "absent_assurance_jobs"
