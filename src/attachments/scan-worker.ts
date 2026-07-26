@@ -2,6 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 
+import {
+  assessClamAvSignatureManifest,
+  CLAMAV_SIGNATURE_WARNING_AGE_MS,
+  type ClamAvSignatureManifest
+} from "./clamav-signature-policy.js";
 import type {
   AttachmentScanFailureCode,
   AttachmentScanWork,
@@ -16,15 +21,9 @@ import {
 } from "../functions/resource-binary-publisher.js";
 import type { LineContentClient } from "../types.js";
 
-const DEFAULT_SIGNATURE_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const DEFAULT_SCAN_TIMEOUT_MS = 15_000;
 
-export interface ClamAvSignatureManifest {
-  version: 1;
-  signatureVersion: string;
-  lastSuccessfulAt: string;
-  databaseDirectory?: string;
-}
+export type { ClamAvSignatureManifest } from "./clamav-signature-policy.js";
 
 export interface AttachmentFileScanner {
   scan(input: {
@@ -76,15 +75,13 @@ export async function runAttachmentScanWorker(
   try {
     const signatureManifest = await options.readSignatureManifest();
     const now = options.now?.() ?? new Date();
-    if (
-      !isCurrentClamAvSignatureManifest(
-        signatureManifest,
-        now,
-        options.signatureMaxAgeMs ?? DEFAULT_SIGNATURE_MAX_AGE_MS
-      )
-    ) {
+    const signatureAssessment = assessClamAvSignatureManifest(signatureManifest, now, {
+      warningAgeMs: options.signatureMaxAgeMs ?? CLAMAV_SIGNATURE_WARNING_AGE_MS
+    });
+    if (signatureAssessment.status !== "usable") {
       return failWork(options.workStore, work, "signature_stale", true);
     }
+    const validatedSignatureManifest = signatureAssessment.manifest;
 
     const profile = options.profiles.find((candidate) => candidate.name === work.scope.profileName);
     if (!profile || !isResourcePublishItemKind(work.target.itemKind)) {
@@ -163,7 +160,7 @@ export async function runAttachmentScanWorker(
         scan = await options.scanner.scan({
           filePath,
           databaseDirectory: databaseDirectoryForManifest(
-            signatureManifest,
+            validatedSignatureManifest,
             options.databaseDirectory
           ),
           timeoutMs: options.scanTimeoutMs ?? DEFAULT_SCAN_TIMEOUT_MS
@@ -181,14 +178,17 @@ export async function runAttachmentScanWorker(
 
       const publicationNow = options.now?.() ?? new Date();
       const publicationSignatureManifest = await options.readSignatureManifest();
+      const publicationSignatureAssessment = assessClamAvSignatureManifest(
+        publicationSignatureManifest,
+        publicationNow,
+        { warningAgeMs: options.signatureMaxAgeMs ?? CLAMAV_SIGNATURE_WARNING_AGE_MS }
+      );
       if (
-        !isCurrentClamAvSignatureManifest(
-          publicationSignatureManifest,
-          publicationNow,
-          options.signatureMaxAgeMs ?? DEFAULT_SIGNATURE_MAX_AGE_MS
-        ) ||
-        publicationSignatureManifest.signatureVersion !== signatureManifest.signatureVersion ||
-        publicationSignatureManifest.databaseDirectory !== signatureManifest.databaseDirectory
+        publicationSignatureAssessment.status !== "usable" ||
+        publicationSignatureAssessment.manifest.signatureVersion !==
+          validatedSignatureManifest.signatureVersion ||
+        publicationSignatureAssessment.manifest.databaseDirectory !==
+          validatedSignatureManifest.databaseDirectory
       ) {
         return failWork(options.workStore, work, "signature_stale", true);
       }
@@ -209,7 +209,7 @@ export async function runAttachmentScanWorker(
         resource: preparation.resource,
         scan: {
           status: "clean",
-          signatureVersion: publicationSignatureManifest.signatureVersion
+          signatureVersion: publicationSignatureAssessment.manifest.signatureVersion
         },
         now: publicationNow
       });
@@ -242,27 +242,9 @@ export async function runAttachmentScanWorker(
 export function isCurrentClamAvSignatureManifest(
   manifest: unknown,
   now: Date,
-  maxAgeMs = DEFAULT_SIGNATURE_MAX_AGE_MS
+  warningAgeMs = CLAMAV_SIGNATURE_WARNING_AGE_MS
 ): manifest is ClamAvSignatureManifest {
-  if (!manifest || typeof manifest !== "object") return false;
-  const value = manifest as Partial<ClamAvSignatureManifest>;
-  if (
-    value.version !== 1 ||
-    typeof value.signatureVersion !== "string" ||
-    !/^[A-Za-z0-9._-]{1,120}$/u.test(value.signatureVersion) ||
-    typeof value.lastSuccessfulAt !== "string" ||
-    (value.databaseDirectory !== undefined &&
-      (typeof value.databaseDirectory !== "string" ||
-        !/^sets\/[A-Za-z0-9._-]{1,120}$/u.test(value.databaseDirectory)))
-  ) {
-    return false;
-  }
-  const timestamp = Date.parse(value.lastSuccessfulAt);
-  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value.lastSuccessfulAt) {
-    return false;
-  }
-  const ageMs = now.getTime() - timestamp;
-  return ageMs >= 0 && ageMs <= maxAgeMs;
+  return assessClamAvSignatureManifest(manifest, now, { warningAgeMs }).status === "usable";
 }
 
 function databaseDirectoryForManifest(

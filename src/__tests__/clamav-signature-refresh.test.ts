@@ -10,10 +10,22 @@ import {
   refreshClamAvSignatures,
   type ClamAvRefreshExecFile
 } from "../tools/refresh-clamav-signatures.js";
-import { isCurrentClamAvSignatureManifest } from "../attachments/scan-worker.js";
+import {
+  assessClamAvSignatureManifest,
+  CLAMAV_SIGNATURE_WARNING_AGE_MS
+} from "../attachments/clamav-signature-policy.js";
 
 const temporaryRoots: string[] = [];
 const fixedNow = new Date("2026-07-24T04:00:00.000Z");
+
+function validManifest(lastSuccessfulAt: Date, databaseDirectory?: string) {
+  return {
+    version: 1 as const,
+    signatureVersion: "daily-20260724",
+    lastSuccessfulAt: lastSuccessfulAt.toISOString(),
+    ...(databaseDirectory === undefined ? {} : { databaseDirectory })
+  };
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -81,23 +93,36 @@ describe("ClamAV signature refresh", () => {
     );
   });
 
-  it.each([
-    undefined,
-    {},
-    {
-      version: 1,
-      signatureVersion: "daily-20260724",
-      lastSuccessfulAt: "not-a-timestamp"
-    },
-    {
-      version: 1,
-      signatureVersion: "daily-20260724",
-      lastSuccessfulAt: "2026-07-21T03:59:59.999Z"
-    }
-  ])("rejects a missing, malformed, or over-72-hour manifest", (manifest) => {
-    expect(isCurrentClamAvSignatureManifest(manifest, new Date("2026-07-24T04:00:00.000Z"))).toBe(
-      false
-    );
+  it("classifies valid signature manifests as current or warning without expiring them", () => {
+    const now = new Date("2026-07-24T04:00:00.000Z");
+    const nowMinus = (milliseconds: number) => new Date(now.getTime() - milliseconds);
+
+    expect(assessClamAvSignatureManifest(validManifest(now), now)).toMatchObject({
+      status: "usable",
+      health: "current"
+    });
+    expect(
+      assessClamAvSignatureManifest(validManifest(nowMinus(CLAMAV_SIGNATURE_WARNING_AGE_MS)), now)
+    ).toMatchObject({ status: "usable", health: "warning" });
+    expect(
+      assessClamAvSignatureManifest(validManifest(nowMinus(30 * 24 * 60 * 60 * 1000)), now)
+    ).toMatchObject({ status: "usable", health: "warning" });
+  });
+
+  it("rejects missing, malformed, future, and invalid immutable-directory manifests", () => {
+    const now = new Date("2026-07-24T04:00:00.000Z");
+
+    expect(assessClamAvSignatureManifest(undefined, now)).toEqual({ status: "invalid" });
+    expect(assessClamAvSignatureManifest({ version: 2 }, now)).toEqual({ status: "invalid" });
+    expect(assessClamAvSignatureManifest(validManifest(new Date(now.getTime() + 1)), now)).toEqual({
+      status: "invalid"
+    });
+    expect(
+      assessClamAvSignatureManifest(validManifest(now, "sets/daily-20260724"), now)
+    ).toMatchObject({ status: "usable" });
+    expect(assessClamAvSignatureManifest(validManifest(now, "current"), now)).toEqual({
+      status: "invalid"
+    });
   });
 
   it("downloads and validates a complete staged set before atomically promoting its manifest", async () => {

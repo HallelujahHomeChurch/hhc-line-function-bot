@@ -233,7 +233,7 @@ describe("attachment scan worker", () => {
     expect(graph.uploadFile).not.toHaveBeenCalled();
   });
 
-  it("rejects a stale signature before scanning or publishing", async () => {
+  it("uses a structurally valid warning-age signature before scanning and publishing", async () => {
     const { graph, scanner, work, workerOptions } = await setup({
       signatureManifest: {
         ...freshSignature,
@@ -241,17 +241,15 @@ describe("attachment scan worker", () => {
       }
     });
 
-    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toMatchObject({
-      status: "failed",
-      failureCode: "signature_stale",
-      infrastructureFailure: true
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed"
     });
 
-    expect(scanner.scan).not.toHaveBeenCalled();
-    expect(graph.uploadFile).not.toHaveBeenCalled();
+    expect(scanner.scan).toHaveBeenCalledTimes(1);
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
   });
 
-  it("re-reads the replaced signature manifest immediately before publishing", async () => {
+  it("re-reads a valid warning-age signature manifest immediately before publishing", async () => {
     const { graph, scanner, work, workerOptions } = await setup();
     const readSignatureManifest = vi
       .fn<() => Promise<unknown>>()
@@ -262,14 +260,12 @@ describe("attachment scan worker", () => {
       });
     workerOptions.readSignatureManifest = readSignatureManifest;
 
-    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toMatchObject({
-      status: "failed",
-      failureCode: "signature_stale",
-      infrastructureFailure: true
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed"
     });
 
     expect(scanner.scan).toHaveBeenCalledTimes(1);
-    expect(graph.uploadFile).not.toHaveBeenCalled();
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
     expect(readSignatureManifest).toHaveBeenCalledTimes(2);
   });
 
