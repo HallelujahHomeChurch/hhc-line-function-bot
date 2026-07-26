@@ -246,6 +246,45 @@ describe("Kernel local live provider clients", () => {
     expect(requests).toBe(1);
     expect(budget.snapshot().embeddingBatches).toBe(1);
   });
+
+  it("does not reuse an embedding across independently budgeted cases", async () => {
+    let requests = 0;
+    const budget = createProviderBudget({ deepSeekMax: 0, embeddingBatchMax: 3 });
+    const caseContext = createKernelLocalLiveCaseContext();
+    const config = createKernelLocalLiveConfig(
+      {
+        KERNEL_LOCAL_LIVE_RUN_ID: "run-123",
+        KERNEL_LOCAL_LIVE_POSTGRES_URL:
+          "postgresql://kernel:kernel@postgres:5432/hhc_line_acceptance",
+        KERNEL_LOCAL_LIVE_REDIS_URL: "redis://redis:6379"
+      },
+      safeSecrets()
+    );
+    const clients = createBudgetedProviderClients({
+      config,
+      budget,
+      caseContext,
+      fetchImpl: async () => {
+        requests += 1;
+        return new Response(
+          JSON.stringify({
+            data: [{ index: 0, embedding: Array.from({ length: 1536 }, () => 0.25) }]
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+    });
+
+    await caseContext.run("capability-switch", () =>
+      clients.embedding.embed(["synthetic alpha procedure"])
+    );
+    await caseContext.run("knowledge-follow-up", () =>
+      clients.embedding.embed(["synthetic alpha procedure"])
+    );
+
+    expect(requests).toBe(2);
+    expect(budget.snapshot().embeddingBatches).toBe(2);
+  });
 });
 
 describe("Kernel local live application composition", () => {

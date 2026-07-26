@@ -109,14 +109,15 @@ export function createBudgetedProviderClients(options: {
         if (caseId !== "knowledge-follow-up" && caseId !== "capability-switch") {
           throw new Error("kernel_local_live_embedding_case_rejected");
         }
-        const cached = input.map((value) => embeddingCache.get(value));
+        const cacheKeys = input.map((value) => `${caseId}\0${value}`);
+        const cached = cacheKeys.map((key) => embeddingCache.get(key));
         if (cached.every((value): value is number[] => value !== undefined)) {
           return cached.map((value) => [...value]);
         }
         try {
           const vectors = await options.budget.runEmbedding(caseId, () => embedding.embed(input));
-          input.forEach((value, index) => {
-            embeddingCache.set(value, [...vectors[index]!]);
+          cacheKeys.forEach((key, index) => {
+            embeddingCache.set(key, [...vectors[index]!]);
           });
           return vectors;
         } finally {
