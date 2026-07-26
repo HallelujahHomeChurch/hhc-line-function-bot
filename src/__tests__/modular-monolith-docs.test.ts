@@ -80,9 +80,7 @@ describe("R3.5 modular monolith documentation", () => {
       "Historical baseline approved on 2026-07-19; remaining direction superseded on 2026-07-26."
     );
     expect(currentRoadmap).toContain("This design replaces the remaining R4 through R8 direction");
-    expect(currentRoadmap).toContain(
-      "-> R4.1 Local Acceptance Complete (Production Verification Pending)"
-    );
+    expect(currentRoadmap).toContain("-> Completed R4.1 Production Verification");
     expect(currentRoadmap).not.toContain("-> Completed R4.1 Internal Product Experience");
 
     expect(implementationPlan).not.toContain("// prettier-ignore");
@@ -100,5 +98,46 @@ describe("R3.5 modular monolith documentation", () => {
 
     expect(readme).toContain("owns environment-specific values");
     expect(readme).toContain("applies and verifies Dapr configuration");
+  });
+});
+
+describe("R5.0 release-assurance documentation", () => {
+  it("keeps the final roadmap state and operational evidence boundaries explicit", async () => {
+    const [readme, agents, architecture, operations, roadmap] = await Promise.all([
+      readFile("README.md", "utf8"),
+      readFile("AGENTS.md", "utf8"),
+      readFile("docs/architecture-context.md", "utf8"),
+      readFile("docs/runbooks/production-operations.md", "utf8"),
+      readFile(
+        "docs/superpowers/specs/2026-07-26-single-church-optimization-roadmap-design.md",
+        "utf8"
+      )
+    ]);
+
+    expect(roadmap).toContain("R4.1 production verification is complete.");
+    expect(roadmap).toMatch(
+      /R5\.0 implementation is complete; PR CI,\s+production release acceptance, and the first periodic assurance run remain\s+pending\./
+    );
+    expect(roadmap).toContain("Stable Maintenance is the only successor to R5.0.");
+    expect(roadmap).toMatch(/No R5\.1\/R5\.2, SaaS,\s+or local-model follow-up is planned\./);
+
+    expect(operations).toContain("hhc-line-bot-release-probe");
+    expect(operations).toContain("artifacts/release-assurance/report.json");
+    expect(operations).toContain("hhc-line-bot-periodic-assurance");
+    expect(operations).toContain("artifacts/release-assurance/periodic-report.json");
+    expect(operations).toContain("az containerapp revision copy");
+    expect(operations).toContain("--from-revision");
+    expect(operations).toContain("providerRequests: { deepseek: 0, embedding: 0 }");
+    expect(operations).toContain("does not prove LINE delivery or reply-token behavior");
+
+    for (const [name, content] of [
+      ["README.md", readme],
+      ["AGENTS.md", agents],
+      ["docs/architecture-context.md", architecture],
+      ["docs/runbooks/production-operations.md", operations]
+    ]) {
+      expect(content, name).toContain("R5.0");
+      expect(content, name).toContain("Stable Maintenance");
+    }
   });
 });

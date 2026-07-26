@@ -168,25 +168,77 @@ The sync output is JSON and includes catalog/schedule counters plus a `knowledge
 
 Before enabling `query_knowledge`, confirm `select extversion from pg_extension where extname='vector'`, verify the existing `bible-text-embedding-resource` deployment is healthy, and verify `/diag` reports `embedding: ok`. The release copies an Azure account key directly into the workload-scoped `azure-openai-embedding-key` ACA secret without printing or rotating it. Bulk knowledge synchronization is single-threaded in batches of 16 and should be scheduled off peak.
 
+## R5.0 Release Assurance
+
+R4.1 production verification is complete. R5.0 implementation is complete, but PR CI, production release acceptance, and the first periodic assurance run remain pending. Stable Maintenance is the only successor; no R5.1/R5.2, SaaS, or local-model follow-up is planned.
+
+`Production Release` runs `scripts/deploy-aca.sh` as one bounded transaction.
+It snapshots the known-good bot revision and immutable image, applies the new
+bot and finite-job definitions, waits for the target, and runs
+`hhc-line-bot-release-probe`. The release report is always written to
+`artifacts/release-assurance/report.json`; its allowlisted fields are release
+and commit identifiers, start/completion timestamps, target and known-good
+revision/image identities, check name/status/time/code, `failureCode`, and
+rollback status/revision/image. The normal success attestation includes
+`providerRequests: { deepseek: 0, embedding: 0 }`.
+
+The release probe sends a signed empty `events: []` request through the public
+gateway. It verifies the gateway/Dapr/bot route and signature handling, but
+does not prove LINE delivery or reply-token behavior. Do not infer a human LINE
+reply from this probe; inspect sanitized naturally occurring success telemetry
+in a separately declared acceptance window for that evidence.
+
+Release check failures use bounded codes such as `network_failed`, `timeout`,
+`http_mismatch`, `malformed_json`, or `clamav_manifest_invalid`. Treat any
+non-`none` `failureCode` as a failed release: retain the report artifact,
+inspect the named check and Azure execution state, and correct the manifest,
+network, or dependency condition in a reviewed pull request. Never retry by
+changing production state manually before the transaction has completed its
+rollback decision.
+
 ## Rollback
 
-Use Azure CLI to point the Container App back to a previous known-good image:
+In single-revision mode the automatic rollback is copy-based: it creates a new
+revision from the known-good revision, rather than mutating traffic back to an
+old image tag. The transaction also restores each changed finite-job image.
+
+```powershell
+az containerapp revision copy `
+  --resource-group PLACEHOLDER_RESOURCE_GROUP `
+  --name hhc-line-function-bot `
+  --from-revision PLACEHOLDER_KNOWN_GOOD_REVISION
+```
+
+Verify the copied revision becomes latest and ready, serves the expected
+immutable image, and has the required ingress/Dapr contract. The release report
+must record `rollback.status: "restored"` with the copied revision and image.
+If revision copy itself fails, preserve the failed report and use the following
+manual image update only as an emergency fallback while restoring service:
 
 ```powershell
 az containerapp update `
-  --name PLACEHOLDER_CONTAINER_APP_NAME `
+  --name hhc-line-function-bot `
   --resource-group PLACEHOLDER_RESOURCE_GROUP `
-  --image alive.azurecr.io/alive/hhc-line-function-bot:PLACEHOLDER_TAG
+  --image PLACEHOLDER_KNOWN_GOOD_IMMUTABLE_IMAGE
 ```
 
-After rollback, verify:
+After either path, verify `GET /healthz`, `GET /readyz`, and direct-admin
+`/diag`; then capture the observed state in the incident record.
 
-```text
-GET /healthz
-GET /readyz
-```
+## Weekly Dependency Assurance
 
-Then send `/diag` from a direct admin LINE chat.
+The scheduled GitHub workflow runs `hhc-line-bot-periodic-assurance` weekly
+and uploads `artifacts/release-assurance/periodic-report.json`. It is distinct
+from release acceptance: it executes bounded Graph/Notion metadata checks,
+attachment-queue and recent-scan checks, ClamAV clean/EICAR checks, and a
+dedicated diagnostics-folder write/delete check. Its report has the same
+allowlisted identity, timestamp, check, `failureCode`, target, known-good, and
+rollback fields, with `providerRequests: { deepseek: 0, embedding: 0 }`.
+
+For a failed weekly report, preserve the artifact, identify the failed check,
+and repair the named dependency or job definition through a reviewed change.
+Do not use a passing release smoke as a substitute for the first periodic run,
+and do not use a periodic pass as proof of LINE delivery or reply-token use.
 
 ## Do Not Paste
 
