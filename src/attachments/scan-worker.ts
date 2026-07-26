@@ -5,7 +5,9 @@ import { join, posix } from "node:path";
 import {
   assessClamAvSignatureManifest,
   CLAMAV_SIGNATURE_WARNING_AGE_MS,
-  type ClamAvSignatureManifest
+  type ClamAvSignatureHealth,
+  type ClamAvSignatureManifest,
+  type ClamAvSignaturePolicy
 } from "./clamav-signature-policy.js";
 import type {
   AttachmentScanFailureCode,
@@ -47,14 +49,19 @@ export interface AttachmentScanWorkerOptions {
   externalDownloadTimeoutMs?: number;
   externalMaxRedirects?: number;
   scanTimeoutMs?: number;
-  signatureMaxAgeMs?: number;
+  signaturePolicy?: ClamAvSignaturePolicy;
   now?: () => Date;
   publicationDeadline?: Date;
   temporaryRoot?: string;
 }
 
+export type CompletedAttachmentScanWorkerResult = {
+  status: "completed";
+  signatureHealth: ClamAvSignatureHealth;
+};
+
 export type AttachmentScanWorkerResult =
-  | { status: "completed" }
+  | CompletedAttachmentScanWorkerResult
   | { status: "ignored"; reason: "active" | "terminal" | "missing" }
   | {
       status: "failed";
@@ -75,9 +82,11 @@ export async function runAttachmentScanWorker(
   try {
     const signatureManifest = await options.readSignatureManifest();
     const now = options.now?.() ?? new Date();
-    const signatureAssessment = assessClamAvSignatureManifest(signatureManifest, now, {
-      warningAgeMs: options.signatureMaxAgeMs ?? CLAMAV_SIGNATURE_WARNING_AGE_MS
-    });
+    const signatureAssessment = assessClamAvSignatureManifest(
+      signatureManifest,
+      now,
+      options.signaturePolicy
+    );
     if (signatureAssessment.status !== "usable") {
       return failWork(options.workStore, work, "signature_stale", true);
     }
@@ -181,7 +190,7 @@ export async function runAttachmentScanWorker(
       const publicationSignatureAssessment = assessClamAvSignatureManifest(
         publicationSignatureManifest,
         publicationNow,
-        { warningAgeMs: options.signatureMaxAgeMs ?? CLAMAV_SIGNATURE_WARNING_AGE_MS }
+        options.signaturePolicy
       );
       if (
         publicationSignatureAssessment.status !== "usable" ||
@@ -228,7 +237,7 @@ export async function runAttachmentScanWorker(
           infrastructureFailure: true
         };
       }
-      return { status: "completed" };
+      return { status: "completed", signatureHealth: publicationSignatureAssessment.health };
     } finally {
       if (ephemeralDirectory) {
         await rm(ephemeralDirectory, { recursive: true, force: true });
