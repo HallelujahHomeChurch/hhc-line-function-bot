@@ -711,3 +711,17 @@ immutable ACR image and runs `scripts/deploy-aca.sh`; it does not repeat the
 pnpm validation suite. Documentation-only merges do not trigger production
 release. GitHub Actions is the sole CI/CD system; the obsolete Azure DevOps
 pipeline and YAML definition have been removed.
+
+## R5.0 Release Assurance
+
+R4.1 production verification is complete. R5.0 implementation is complete, but PR CI, production release acceptance, and the first periodic assurance run remain pending. Stable Maintenance is the only successor; no R5.1/R5.2, SaaS, or local-model follow-up is planned.
+
+The deploy transaction snapshots a known-good revision and image, deploys the
+target, and writes `artifacts/release-assurance/report.json`. Its release probe
+uses a signed empty `events: []` webhook and records zero provider calls. That
+is gateway/Dapr/bot contract evidence only: it does not prove LINE delivery or
+reply-token behavior. Failed release gates copy the known-good revision into a
+new rollback revision and restore changed job images; a manual image update is
+only the bounded emergency fallback. Weekly dependency evidence is separate:
+`hhc-line-bot-periodic-assurance` writes
+`artifacts/release-assurance/periodic-report.json` after its own run.

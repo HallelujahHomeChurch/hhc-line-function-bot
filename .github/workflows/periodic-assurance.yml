@@ -1,0 +1,49 @@
+name: Weekly Production Assurance
+
+on:
+  schedule:
+    - cron: "30 20 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hhc-line-function-bot-periodic-assurance
+  cancel-in-progress: false
+
+jobs:
+  periodic-assurance:
+    name: Run periodic assurance
+    runs-on: ubuntu-latest
+    env:
+      RESOURCE_GROUP: alive
+      PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
+      ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-scan
+      PERIODIC_REPORT_PATH: artifacts/release-assurance/periodic-report.json
+      PERIODIC_RUN_ID: periodic-${{ github.run_id }}
+      PERIODIC_COMMIT_SHA: ${{ github.sha }}
+      PERIODIC_POLL_ATTEMPTS: "120"
+      PERIODIC_POLL_INTERVAL_SECONDS: "5"
+      PERIODIC_RECENT_SCAN_MAX_AGE_SECONDS: "604800"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --yes
+      - name: Run weekly assurance
+        if: always()
+        run: bash scripts/run-periodic-assurance.sh
+      - name: Upload periodic assurance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: periodic-assurance-${{ github.run_id }}
+          path: artifacts/release-assurance/periodic-report.json
+          if-no-files-found: error

@@ -21,6 +21,8 @@ on:
       - aca.catalog-sync-job.yaml
       - aca.attachment-scan-job.yaml
       - aca.clamav-signature-refresh-job.yaml
+      - aca.release-probe-job.yaml
+      - aca.periodic-assurance-job.yaml
       - infra/searxng/**
   workflow_dispatch:
 
@@ -47,10 +49,13 @@ jobs:
       CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
       ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-scan
       CLAMAV_SIGNATURE_REFRESH_JOB_NAME: hhc-line-bot-clamav-refresh
+      RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe
+      PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
       ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME: ${{ vars.ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME }}
       ATTACHMENT_SCAN_QUEUE_NAME: ${{ vars.ATTACHMENT_SCAN_QUEUE_NAME }}
       CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME: ${{ vars.CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME }}
       CLAMAV_SIGNATURE_FILE_SHARE_NAME: ${{ vars.CLAMAV_SIGNATURE_FILE_SHARE_NAME }}
+      RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
     steps:
       - uses: actions/checkout@v4
       - name: Sign in to Azure with OIDC
@@ -78,3 +83,10 @@ jobs:
             .
       - name: Deploy image and wait for healthy revision
         run: bash scripts/deploy-aca.sh
+      - name: Upload release assurance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assurance-${{ github.run_id }}
+          path: artifacts/release-assurance/report.json
+          if-no-files-found: error

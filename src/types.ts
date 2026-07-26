@@ -565,6 +565,7 @@ export interface GraphDriveClient {
     data: Uint8Array,
     contentType: string
   ): Promise<DriveItem>;
+  ensureFolder?(driveId: string, parentItemId: string, name: string): Promise<DriveItem>;
   deleteItem?(driveId: string, itemId: string): Promise<void>;
 }
 

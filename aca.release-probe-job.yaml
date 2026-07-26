@@ -1,0 +1,49 @@
+name: hhc-line-bot-release-probe
+type: Microsoft.App/jobs
+location: PLACEHOLDER_AZURE_REGION
+identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}
+properties:
+  environmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
+  configuration:
+    registries:
+      - server: alive.azurecr.io
+        identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID
+    triggerType: Manual
+    replicaTimeout: 300
+    replicaRetryLimit: 0
+    manualTriggerConfig:
+      parallelism: 1
+      replicaCompletionCount: 1
+    secrets:
+      - name: line-helper-channel-secret
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+  template:
+    containers:
+      - name: release-probe
+        image: alive.azurecr.io/alive/hhc-line-function-bot:latest
+        args:
+          - dist/tools/run-release-probe.js
+        env:
+          - name: BOT_BASE_URL
+            value: PLACEHOLDER_BOT_BASE_URL
+          - name: SEARXNG_BASE_URL
+            value: PLACEHOLDER_SEARXNG_BASE_URL
+          - name: GATEWAY_WEBHOOK_URL
+            value: PLACEHOLDER_GATEWAY_WEBHOOK_URL
+          - name: LINE_HELPER_CHANNEL_SECRET
+            secretRef: line-helper-channel-secret
+          - name: CLAMAV_SIGNATURE_MANIFEST_PATH
+            value: /var/lib/clamav/current/manifest.json
+        volumeMounts:
+          - volumeName: clamav-signatures
+            mountPath: /var/lib/clamav
+        resources:
+          cpu: 0.25
+          memory: 0.5Gi
+    volumes:
+      - name: clamav-signatures
+        storageType: AzureFile
+        storageName: clamav-signatures-readonly

@@ -1,0 +1,65 @@
+name: hhc-line-bot-periodic-assurance
+type: Microsoft.App/jobs
+location: PLACEHOLDER_AZURE_REGION
+identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}
+properties:
+  environmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
+  configuration:
+    registries:
+      - server: alive.azurecr.io
+        identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID
+    triggerType: Manual
+    replicaTimeout: 600
+    replicaRetryLimit: 0
+    manualTriggerConfig:
+      parallelism: 1
+      replicaCompletionCount: 1
+    secrets:
+      - name: graph-client-secret
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: notion-token
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: attachment-scan-queue-connection-string
+        value: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING
+  template:
+    containers:
+      - name: periodic-assurance
+        image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest
+        args:
+          - dist/tools/run-periodic-assurance.js
+        env:
+          - name: GRAPH_TENANT_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_CLIENT_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_CLIENT_SECRET
+            secretRef: graph-client-secret
+          - name: GRAPH_DRIVE_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: NOTION_TOKEN
+            secretRef: notion-token
+          - name: NOTION_SERVICE_DATABASE_ID
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING
+            secretRef: attachment-scan-queue-connection-string
+          - name: ATTACHMENT_SCAN_QUEUE_NAME
+            value: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
+          - name: CLAMAV_SIGNATURE_MANIFEST_PATH
+            value: /var/lib/clamav/current/manifest.json
+          - name: CLAMAV_SCAN_TIMEOUT_MS
+            value: "15000"
+        volumeMounts:
+          - volumeName: clamav-signatures
+            mountPath: /var/lib/clamav
+        resources:
+          cpu: 0.25
+          memory: 0.5Gi
+    volumes:
+      - name: clamav-signatures
+        storageType: AzureFile
+        storageName: clamav-signatures-readonly

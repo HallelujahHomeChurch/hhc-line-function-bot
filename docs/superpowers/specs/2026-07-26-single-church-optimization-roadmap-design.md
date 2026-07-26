@@ -4,9 +4,11 @@
 
 Approved direction on 2026-07-26.
 
-The approved delivery finish line is R5.0 Lean Release Assurance. After R5.0,
-the product enters stable maintenance; R5.1 and R5.2 are not required roadmap
-milestones.
+The approved delivery finish line is R5.0 Lean Release Assurance. R4.1
+production verification is complete. R5.0 implementation is complete; PR CI,
+production release acceptance, and the first periodic assurance run remain
+pending. Stable Maintenance is the only successor to R5.0. No R5.1/R5.2, SaaS,
+or local-model follow-up is planned.
 
 This design replaces the remaining R4 through R8 direction in
 `2026-07-19-controlled-retrieval-product-roadmap-design.md`. The completed R0,
@@ -171,8 +173,8 @@ Completed R0-R3
   -> Completed Controlled Retrieval Kernel v1
   -> Completed R3.5
   -> Completed R4.0 Production Contract Correction
-  -> R4.1 Local Acceptance Complete (Production Verification Pending)
-  -> R5.0 Lean Release Assurance
+  -> Completed R4.1 Production Verification
+  -> R5.0 Lean Release Assurance (Implementation Complete; Acceptance Pending)
   -> Stable Maintenance
 ```
 
@@ -232,9 +234,9 @@ passes 113 cases, including the seven versioned R4.1 boundaries, and the owned
 Redis/pgvector PostgreSQL integration gate passes without skipped dependencies.
 No DeepSeek or Azure embedding call was used for this acceptance.
 
-Production verification remains pending the Task 9 pull-request, deployment,
-and live production checks. This status does not claim LINE-platform delivery,
-production adoption, or any other external acceptance evidence.
+R4.1 production verification is complete. This historical completion does not
+turn the separate R5.0 release probe into LINE-platform delivery or reply-token
+evidence.
 
 ### Outcome
 
@@ -287,6 +289,12 @@ an honest next step for every controlled result class.
   recruited human acceptance session is required.
 
 ## R5.0 — Lean Release Assurance
+
+### Status
+
+R5.0 implementation is complete; PR CI, production release acceptance, and the
+first periodic assurance run remain pending. Do not claim that release or live
+LINE acceptance has happened until those external observations are recorded.
 
 ### Outcome
 
@@ -367,9 +375,9 @@ R4.0 must complete before R4.1 because it corrects a current attachment
 availability defect. R5.0 is the final delivery milestone and establishes the
 release probes and rollback evidence required before stable maintenance.
 
-R4.1 implementation and local acceptance are complete; its production
-verification remains pending Task 9. R5.0 is the only remaining roadmap
-milestone, followed by Stable Maintenance.
+R4.1 production verification is complete. R5.0 implementation is complete, but
+PR CI, production release acceptance, and the first periodic assurance run
+remain pending. Stable Maintenance is the only successor to R5.0.
 
 Each behavior or lifecycle change after R3 must update the versioned Kernel
 corpus and run the applicable deterministic, Redis/PostgreSQL integration, and

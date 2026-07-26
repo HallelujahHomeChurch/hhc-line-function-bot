@@ -519,6 +519,12 @@ Documentation-only merges do not trigger `Production Release`. GitHub Actions is
 
 Agents should create a `codex/*` branch, push it, open a PR, and request auto-merge. They must not push directly to `main`, force push the protected branch, or add a ruleset bypass. A failed `PR CI` run is a validation failure; a failed post-merge `Production Release` run is a distinct production build or deployment failure.
 
+### R5.0 release assurance status
+
+R4.1 production verification is complete. R5.0 implementation is complete, but PR CI, production release acceptance, and the first periodic assurance run remain pending. After those observations are recorded, Stable Maintenance is the only successor; this roadmap does not create R5.1/R5.2, SaaS, or local-model follow-up work.
+
+`Production Release` records its provider-free deployment transaction in `artifacts/release-assurance/report.json`. The `hhc-line-bot-release-probe` sends a signed empty `events: []` webhook through the public gateway, while the report attests `providerRequests: { deepseek: 0, embedding: 0 }`. That proves the bounded release route and checks, not real LINE delivery or reply-token behavior. The weekly `hhc-line-bot-periodic-assurance` job writes `artifacts/release-assurance/periodic-report.json` with dependency evidence independent of release acceptance.
+
 ## Verification
 
 ```powershell
