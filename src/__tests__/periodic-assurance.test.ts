@@ -27,6 +27,17 @@ const MANIFEST = {
   lastSuccessfulAt: "2026-07-27T00:00:00.000Z",
   databaseDirectory: "sets/20260727"
 };
+const PERIODIC_FAILURE_CODES = [
+  "graph_metadata_failed",
+  "notion_query_failed",
+  "attachment_queue_failed",
+  "clamav_manifest_invalid",
+  "clamav_clean_failed",
+  "clamav_eicar_failed",
+  "diagnostic_folder_failed",
+  "diagnostic_upload_failed",
+  "diagnostic_delete_failed"
+] as const;
 
 function dependencies(): PeriodicAssuranceDependencies {
   return {
@@ -315,9 +326,51 @@ describe("periodic assurance", () => {
       providerRequests: result.providerRequests
     });
 
-    expect(report.failureCode).toBe("network_failed");
-    expect(report.checks.at(-1)?.code).toBe("network_failed");
+    expect(report.failureCode).toBe("diagnostic_delete_failed");
+    expect(report.checks.at(-1)?.code).toBe("diagnostic_delete_failed");
   });
+
+  it.each(PERIODIC_FAILURE_CODES)(
+    "preserves periodic failure code %s through the versioned report allowlist",
+    (code) => {
+      const observedAt = NOW.toISOString();
+      const mapped = mapPeriodicAssuranceCodeToReport(code);
+
+      const report = buildAssuranceReport({
+        version: 1,
+        kind: "periodic",
+        releaseId: "periodic-20260727",
+        commitSha: "a".repeat(40),
+        startedAt: observedAt,
+        completedAt: observedAt,
+        status: "failed",
+        failureCode: mapped,
+        target: {
+          resource: "periodic_assurance",
+          revision: "weekly",
+          image: `sha256:${"b".repeat(64)}`,
+          status: "failed"
+        },
+        knownGood: {
+          revision: "weekly-previous",
+          image: `sha256:${"c".repeat(64)}`
+        },
+        checks: [
+          {
+            name: "graph_metadata",
+            status: "failed",
+            observedAt,
+            code: mapped
+          }
+        ],
+        rollback: { status: "not_required" },
+        providerRequests: { deepseek: 0, embedding: 0 }
+      });
+
+      expect(report.failureCode).toBe(code);
+      expect(report.checks[0]?.code).toBe(code);
+    }
+  );
 });
 
 describe("periodic assurance CLI", () => {

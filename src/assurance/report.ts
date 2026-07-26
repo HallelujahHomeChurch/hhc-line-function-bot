@@ -9,6 +9,14 @@ export type AssuranceFailureCode =
   | "searxng_root_failed"
   | "gateway_webhook_failed"
   | "clamav_manifest_invalid"
+  | "graph_metadata_failed"
+  | "notion_query_failed"
+  | "attachment_queue_failed"
+  | "clamav_clean_failed"
+  | "clamav_eicar_failed"
+  | "diagnostic_folder_failed"
+  | "diagnostic_upload_failed"
+  | "diagnostic_delete_failed"
   | "network_failed"
   | "timeout"
   | "http_mismatch"
@@ -92,6 +100,14 @@ const failureCodes = new Set<AssuranceFailureCode>([
   "searxng_root_failed",
   "gateway_webhook_failed",
   "clamav_manifest_invalid",
+  "graph_metadata_failed",
+  "notion_query_failed",
+  "attachment_queue_failed",
+  "clamav_clean_failed",
+  "clamav_eicar_failed",
+  "diagnostic_folder_failed",
+  "diagnostic_upload_failed",
+  "diagnostic_delete_failed",
   "network_failed",
   "timeout",
   "http_mismatch",

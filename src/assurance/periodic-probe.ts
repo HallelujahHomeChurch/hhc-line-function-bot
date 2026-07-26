@@ -75,9 +75,8 @@ export interface PeriodicAssuranceResult {
 export function mapPeriodicAssuranceCodeToReport(
   code: PeriodicAssuranceFailureCode
 ): AssuranceCheck["code"] {
-  if (code === "none" || code === "clamav_manifest_invalid") return code;
   if (code === "signature_warning") return code;
-  return "network_failed" satisfies AssuranceFailureCode;
+  return code satisfies AssuranceFailureCode;
 }
 
 const DIAGNOSTICS_FOLDER_NAME = "assurance-diagnostics";
