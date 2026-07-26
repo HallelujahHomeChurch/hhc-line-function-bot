@@ -37,7 +37,7 @@ export function assessClamAvSignatureManifest(
     typeof manifest.signatureVersion !== "string" ||
     !/^[A-Za-z0-9._-]{1,120}$/u.test(manifest.signatureVersion) ||
     typeof manifest.lastSuccessfulAt !== "string" ||
-    !isValidDatabaseDirectory(manifest.databaseDirectory)
+    !isValidDatabaseDirectory(manifest.databaseDirectory, manifest.signatureVersion)
   ) {
     return { status: "invalid" };
   }
@@ -75,9 +75,9 @@ function isValidPolicy(policy: ClamAvSignaturePolicy): boolean {
   );
 }
 
-function isValidDatabaseDirectory(value: unknown): value is string | undefined {
-  return (
-    value === undefined ||
-    (typeof value === "string" && /^sets\/[A-Za-z0-9._-]{1,120}$/u.test(value))
-  );
+function isValidDatabaseDirectory(
+  value: unknown,
+  signatureVersion: string
+): value is string | undefined {
+  return value === undefined || (typeof value === "string" && value === `sets/${signatureVersion}`);
 }

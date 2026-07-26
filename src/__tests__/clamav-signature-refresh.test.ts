@@ -125,6 +125,14 @@ describe("ClamAV signature refresh", () => {
     });
   });
 
+  it("rejects an immutable-directory reference for a different signature version", () => {
+    const now = new Date("2026-07-24T04:00:00.000Z");
+
+    expect(assessClamAvSignatureManifest(validManifest(now, "sets/daily-20260723"), now)).toEqual({
+      status: "invalid"
+    });
+  });
+
   it("downloads and validates a complete staged set before atomically promoting its manifest", async () => {
     const root = await createSignatureRoot();
     const execFile = successfulExec();
