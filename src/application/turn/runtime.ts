@@ -675,6 +675,13 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             result: controlledResult
           });
           const result = guideControlledResult(controlledResult, route.action);
+          await recordGroupSuccessSummary(
+            options.accessStore,
+            context,
+            route.action,
+            result,
+            now()
+          );
           const durationMs = elapsedMs(functionStartedAt);
           steps.push({
             phase: "function",
@@ -808,6 +815,35 @@ function productResultClass(
 ): "success" | "not_found" | "ambiguous" | "unavailable" | "error" {
   if (!result.ok) return "error";
   return result.agentResult?.status ?? "success";
+}
+
+async function recordGroupSuccessSummary(
+  accessStore: AccessStore | undefined,
+  context: FunctionHandlerContext,
+  action: FunctionName,
+  result: FunctionExecutionResult,
+  occurredAt: Date
+): Promise<void> {
+  const groupId = context.event.source.groupId;
+  if (
+    !accessStore ||
+    context.event.source.type !== "group" ||
+    !groupId ||
+    productResultClass(result) !== "success"
+  ) {
+    return;
+  }
+  try {
+    await accessStore.recordPrincipalSuccess({
+      profileName: context.profile.name,
+      type: "group",
+      principalId: groupId,
+      functionName: action,
+      occurredAt: occurredAt.toISOString()
+    });
+  } catch {
+    // Group success summaries are observational and must never change the reply.
+  }
 }
 
 async function recordFunctionWriteAudit(

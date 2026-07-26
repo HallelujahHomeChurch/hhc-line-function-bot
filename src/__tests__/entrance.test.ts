@@ -649,6 +649,162 @@ describe("LINE entrance", () => {
     );
   });
 
+  it("records only successful controlled group function metadata", async () => {
+    const route = vi
+      .fn<FunctionRouterPort["route"]>()
+      .mockResolvedValueOnce({
+        type: "execute",
+        action: "find_ppt_slides",
+        arguments: { query: "private-query" },
+        provider: "deepseek"
+      })
+      .mockResolvedValueOnce({
+        type: "execute",
+        action: "query_schedule",
+        arguments: { query: "服事表" },
+        provider: "deepseek"
+      })
+      .mockResolvedValueOnce({
+        type: "execute",
+        action: "query_schedule",
+        arguments: { query: "服事表" },
+        provider: "deepseek"
+      });
+    const accessStore = defaultAccessStore();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      accessStore,
+      functionRegistry: {
+        find_ppt_slides: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "private-result",
+          agentResult: {
+            status: "success",
+            replyText: "private-result",
+            supportedOperations: []
+          }
+        }),
+        query_schedule: vi
+          .fn()
+          .mockResolvedValueOnce({
+            ok: true,
+            replyText: "找不到",
+            agentResult: { status: "not_found", replyText: "找不到" }
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            replyText: "direct success",
+            agentResult: {
+              status: "success",
+              replyText: "direct success",
+              supportedOperations: []
+            }
+          })
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const send = async (
+      replyToken: string,
+      source: { type: "group"; groupId: string; userId: string } | { type: "user"; userId: string },
+      text: string
+    ) => {
+      const body = lineBody({
+        type: "message",
+        replyToken,
+        source,
+        message: { type: "text", text }
+      });
+      return app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+    };
+
+    expect(
+      (
+        await send(
+          "reply-success",
+          { type: "group", groupId: "Cmain", userId: "Uprivate" },
+          "小哈 查投影片 private-query"
+        )
+      ).statusCode
+    ).toBe(200);
+    expect(
+      (
+        await send(
+          "reply-not-found",
+          { type: "group", groupId: "Cmain", userId: "Uprivate" },
+          "小哈 查不存在的服事表"
+        )
+      ).statusCode
+    ).toBe(200);
+    expect(
+      (await send("reply-direct", { type: "user", userId: "Uallowed" }, "小哈 查服事表")).statusCode
+    ).toBe(200);
+
+    const principals = await accessStore.listPrincipals("main");
+    expect(principals.find((principal) => principal.principalId === "Cmain")).toMatchObject({
+      lastSuccessFunctionName: "find_ppt_slides",
+      lastSuccessAt: expect.any(String)
+    });
+    expect(principals.find((principal) => principal.principalId === "Uallowed")).not.toHaveProperty(
+      "lastSuccessFunctionName"
+    );
+    expect(JSON.stringify(principals)).not.toContain("Uprivate");
+    expect(JSON.stringify(principals)).not.toContain("private-query");
+    expect(JSON.stringify(principals)).not.toContain("private-result");
+  });
+
+  it("keeps a successful group reply when success-summary persistence fails", async () => {
+    const accessStore = defaultAccessStore();
+    vi.spyOn(accessStore, "recordPrincipalSuccess").mockRejectedValue(
+      new Error("summary unavailable")
+    );
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: {
+        route: vi.fn().mockResolvedValue({
+          type: "execute",
+          action: "find_ppt_slides",
+          arguments: { query: "奇異恩典" },
+          provider: "deepseek"
+        })
+      },
+      accessStore,
+      functionRegistry: {
+        find_ppt_slides: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "已找到投影片",
+          agentResult: {
+            status: "success",
+            replyText: "已找到投影片",
+            supportedOperations: []
+          }
+        })
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查投影片 奇異恩典" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(replyText.mock.calls[0]?.[1]).toBe("已找到投影片");
+  });
+
   it("ignores a group message without wake word before calling the router", async () => {
     const router: FunctionRouterPort = { route: vi.fn() };
     const app = createTestApp(testConfig(), { router });
@@ -3152,6 +3308,86 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(replyText.mock.calls[0]?.[1]).toContain("group: Callowed");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("user: Uallowed");
+  });
+
+  it("summarizes active and disabled groups with effective display names and last success", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const accessStore = new InMemoryAccessStore();
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cactive",
+      displayName: "影音同工群",
+      createdBy: "Uroot"
+    });
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cdisabled",
+      displayName: "舊服事群",
+      createdBy: "Uroot"
+    });
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "user",
+      principalId: "Udisabled",
+      displayName: "舊使用者",
+      createdBy: "Uroot"
+    });
+    await accessStore.addGroupFunctionGrant({
+      profileName: "helper",
+      groupId: "Cactive",
+      functionName: "find_resource",
+      createdBy: "Uroot"
+    });
+    await accessStore.recordPrincipalSuccess({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cactive",
+      functionName: "find_ppt_slides",
+      occurredAt: "2026-07-26T10:00:00.000Z"
+    });
+    await accessStore.disablePrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cdisabled",
+      disabledBy: "Uroot"
+    });
+    await accessStore.disablePrincipal({
+      profileName: "helper",
+      type: "user",
+      principalId: "Udisabled",
+      disabledBy: "Uroot"
+    });
+    const app = createApp(accessConfig(), {
+      router: { route },
+      accessStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "/access-list" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    const reply = String(replyText.mock.calls[0]?.[1]);
+    expect(reply).toContain("group: Cactive (影音同工群)");
+    expect(reply).toContain("state: active");
+    expect(reply).toContain("effective: 查投影片, 查服事表, 查教會資料");
+    expect(reply).toContain("last-success: 查投影片 @ 2026-07-26T10:00:00.000Z");
+    expect(reply).toContain("group: Cdisabled (舊服事群)");
+    expect(reply).toContain("state: disabled");
+    expect(reply).not.toContain("user: Udisabled");
   });
 
   it("lists recent access audit events with a capped limit", async () => {

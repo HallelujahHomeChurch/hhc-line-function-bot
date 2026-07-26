@@ -3,6 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import { runAccessMigrations } from "../access/migrations.js";
 
 describe("access migrations", () => {
+  it("adds privacy-safe last-success columns to existing principals", async () => {
+    const query = vi.fn().mockResolvedValue(undefined);
+
+    await runAccessMigrations({ query });
+
+    const sql = query.mock.calls.map(([statement]) => statement).join("\n");
+    expect(sql).toContain("last_success_function_name text");
+    expect(sql).toContain("last_success_at timestamptz");
+    expect(sql).toContain("alter table access_principals");
+    expect(sql).toContain("add column if not exists last_success_function_name");
+    expect(sql).toContain("add column if not exists last_success_at");
+  });
+
   it("migrates every retired capability grant to its canonical name", async () => {
     const query = vi.fn().mockResolvedValue(undefined);
 

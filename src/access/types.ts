@@ -33,6 +33,8 @@ export interface AccessPrincipal {
   createdBy: string;
   disabledAt?: string;
   disabledBy?: string;
+  lastSuccessFunctionName?: FunctionName;
+  lastSuccessAt?: string;
 }
 
 export interface AccessAuditEvent {
@@ -83,6 +85,14 @@ export interface DisablePrincipalInput {
   disabledBy: string;
 }
 
+export interface RecordPrincipalSuccessInput {
+  profileName: string;
+  type: "user" | "group";
+  principalId: string;
+  functionName: FunctionName;
+  occurredAt: string;
+}
+
 export interface AccessAuditInput {
   profileName: string;
   actorUserId: string;
@@ -126,9 +136,13 @@ export interface AccessStore {
     type: AccessPrincipalType,
     principalId: string
   ): Promise<boolean>;
-  listPrincipals(profileName: string): Promise<AccessPrincipal[]>;
+  listPrincipals(
+    profileName: string,
+    options?: { includeDisabled?: boolean }
+  ): Promise<AccessPrincipal[]>;
   addPrincipal(input: AddPrincipalInput): Promise<AccessPrincipal>;
   disablePrincipal(input: DisablePrincipalInput): Promise<boolean>;
+  recordPrincipalSuccess(input: RecordPrincipalSuccessInput): Promise<void>;
   recordAudit(input: AccessAuditInput): Promise<void>;
   listAuditEvents(profileName: string, limit: number): Promise<AccessAuditEvent[]>;
   listGroupFunctionGrants(profileName: string, groupId: string): Promise<FunctionName[]>;

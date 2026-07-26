@@ -26,6 +26,7 @@ import {
   groupEngagementIgnoredReason
 } from "../../engagement.js";
 import {
+  getFunctionDefinition,
   isFunctionGrantableForPrincipal,
   isGrantableFunctionName,
   userFacingFunctionNames
@@ -1125,23 +1126,47 @@ async function handleAdminAccessCommand(
 
   if (command === "access-list") {
     const filterType = parseAccessPrincipalType(args[0], ["user", "group", "admin"]);
-    const principals = (await accessStore.listPrincipals(profile.name)).filter(
-      (principal) => !filterType || principal.type === filterType
+    const principals = (
+      await accessStore.listPrincipals(profile.name, { includeDisabled: true })
+    ).filter(
+      (principal) =>
+        (!principal.disabledAt || principal.type === "group") &&
+        (!filterType || principal.type === filterType)
     );
     if (principals.length === 0) {
       return { ok: true, replyText: "Access list\n(none)" };
     }
+    const rows = await Promise.all(
+      principals.map(async (principal) => {
+        const base = `${principal.type}: ${principal.principalId}${
+          principal.displayName ? ` (${principal.displayName})` : ""
+        }`;
+        if (principal.type !== "group") {
+          return base;
+        }
+        const effectiveDisplayNames = await groupEffectiveFunctionDisplayNames(
+          profile,
+          accessStore,
+          principal.principalId
+        );
+        const lastSuccessDisplayName = principal.lastSuccessFunctionName
+          ? getFunctionDefinition(principal.lastSuccessFunctionName)?.displayName
+          : undefined;
+        return [
+          base,
+          `  state: ${principal.disabledAt ? "disabled" : "active"}`,
+          `  effective: ${effectiveDisplayNames.join(", ") || "(none)"}`,
+          `  last-success: ${
+            lastSuccessDisplayName && principal.lastSuccessAt
+              ? `${lastSuccessDisplayName} @ ${principal.lastSuccessAt}`
+              : "(none)"
+          }`
+        ].join("\n");
+      })
+    );
     return {
       ok: true,
-      replyText: [
-        "Access list",
-        ...principals.map(
-          (principal) =>
-            `${principal.type}: ${principal.principalId}${
-              principal.displayName ? ` (${principal.displayName})` : ""
-            }`
-        )
-      ].join("\n")
+      replyText: ["Access list", ...rows].join("\n")
     };
   }
 
@@ -1495,6 +1520,32 @@ function parseFunctionName(value: string | undefined): FunctionName | undefined 
 
 function formatFunctionNames(): string {
   return userFacingFunctionNames().join(", ");
+}
+
+async function groupEffectiveFunctionDisplayNames(
+  profile: BotProfileConfig,
+  accessStore: AccessStore,
+  groupId: string
+): Promise<string[]> {
+  const profileDefaults = profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
+  const grants = (await accessStore.listGroupFunctionGrants(profile.name, groupId)).filter((name) =>
+    isFunctionGrantableForPrincipal(name, "group")
+  );
+  const roleFunctions = (
+    await accessStore.listPrincipalCapabilities(profile.name, "group", groupId)
+  )
+    .map((capability) => capability.match(/^function:([^:]+):execute$/u)?.[1])
+    .filter((name): name is FunctionName =>
+      Boolean(
+        name &&
+        isFunctionName(name) &&
+        isGrantableFunctionName(name) &&
+        isFunctionGrantableForPrincipal(name, "group")
+      )
+    );
+  return mergeFunctionNames(mergeFunctionNames(profileDefaults, grants), roleFunctions).flatMap(
+    (name) => getFunctionDefinition(name)?.displayName ?? []
+  );
 }
 
 function mergeFunctionNames(
