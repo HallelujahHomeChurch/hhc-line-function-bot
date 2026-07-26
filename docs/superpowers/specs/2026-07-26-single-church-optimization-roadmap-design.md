@@ -4,6 +4,10 @@
 
 Approved direction on 2026-07-26.
 
+The approved delivery finish line is R5.0 Lean Release Assurance. After R5.0,
+the product enters stable maintenance; R5.1 and R5.2 are not required roadmap
+milestones.
+
 This design replaces the remaining R4 through R8 direction in
 `2026-07-19-controlled-retrieval-product-roadmap-design.md`. The completed R0,
 R1, R2, R3, R3.1, Controlled Retrieval Kernel v1, and R3.5 milestones remain
@@ -55,8 +59,7 @@ remaining roadmap:
   church helper.
 
 The correct next investment is therefore not tenant infrastructure. It is
-honest user guidance, release assurance, recoverability, bounded operational
-visibility, and evidence-based cost control.
+honest user guidance followed by lean, provider-free release assurance.
 
 ## Considered Approaches
 
@@ -66,14 +69,13 @@ Complete the original R4 user-facing work and leave production controls mostly
 manual.
 
 This is the shortest path, but it leaves known contradictions in attachment
-availability and leaves releases, dependency health, rollback, backup, and
-cost ownership incomplete. It is rejected.
+availability and leaves releases and rollback unverified. It is rejected.
 
 ### 2. Lean single-church optimization
 
 Correct current production contracts first, complete the internal product
-experience, add a small release transaction, establish essential operational
-safety, and optimize cost only after usage evidence exists.
+experience, add a small release transaction, and then enter stable
+maintenance.
 
 This is the selected approach. It resolves present risk without creating a
 platform.
@@ -168,11 +170,9 @@ Completed R0-R3
   -> Completed R3.1
   -> Completed Controlled Retrieval Kernel v1
   -> Completed R3.5
-  -> R4.0 Production Contract Correction
+  -> Completed R4.0 Production Contract Correction
   -> R4.1 Internal Product Experience
   -> R5.0 Lean Release Assurance
-  -> R5.1 Single-Church Operational Safety
-  -> R5.2 Cost And Maintenance Optimization
   -> Stable Maintenance
 ```
 
@@ -327,82 +327,6 @@ reports must not claim otherwise.
   deploy-time or periodic check.
 - Deploy-time checks consume zero DeepSeek and zero embedding requests.
 
-## R5.1 — Single-Church Operational Safety
-
-### Outcome
-
-A small church administrator can detect material failures, restore durable
-data, rotate access, and return to a known-good release without enterprise
-operations infrastructure.
-
-### Scope
-
-- Add a small set of actionable Azure Monitor or Log Analytics alerts:
-  valid-webhook 5xx, revision/readiness failure, repeated catalog-sync failure,
-  catalog freshness breach, ClamAV refresh/signature breach, queue backlog,
-  scan failure, provider unavailability, and monthly Azure budget threshold.
-- Change `/diag` so `configured` and bounded `reachable` are distinct. Include
-  DeepSeek, Azure embedding, Graph, Notion, SearXNG, queue, catalog job, scan
-  job, and ClamAV freshness without exposing secrets or source content.
-- Verify PostgreSQL point-in-time recovery and perform one real restore drill,
-  then repeat once or twice per year.
-- Verify OneDrive versioning and retention for published church resources.
-- Treat Redis as disposable short-lived workflow state. Do not turn it into a
-  second durable-data backup project.
-- Maintain a secret inventory with an owner and annual or incident-triggered
-  rotation.
-- Replace the five-year queue producer SAS with a shorter owned rotation or
-  managed identity when supported by the chosen queue adapter.
-- Pin third-party GitHub Actions to commit SHAs and add a lightweight SBOM and
-  dependency/image vulnerability gate.
-- Keep one-page incident, rollback, provider outage, attachment outage,
-  user/group offboarding, and source-owner handoff runbooks.
-- For content that policy forbids sending to a remote semantic provider,
-  reject or use a deterministic non-model path. Do not restore a local model
-  lane.
-
-### Exit Criteria
-
-- Every alert has one test-trigger record and one owner.
-- A PostgreSQL restore drill has current evidence.
-- The known-good release can be restored within four hours by following the
-  runbook.
-- No production secret is both long-lived and ownerless.
-- Routine monthly maintenance can be completed in approximately 30 minutes.
-
-## R5.2 — Cost And Maintenance Optimization
-
-### Outcome
-
-The internal helper has bounded, visible operating cost without weakening
-freshness, security, or the Kernel contract.
-
-### Scope
-
-- Record privacy-safe DeepSeek request and token buckets plus embedding batch
-  and item counts. Never record prompts, chunks, answers, filenames, URLs, or
-  user text.
-- Establish an Azure budget and a concise monthly service-cost summary with an
-  owner.
-- Observe at least one month of catalog change frequency before changing the
-  current 15-minute synchronization cadence to 30 or 60 minutes.
-- Observe SearXNG consent-fallback use before retaining always-on capacity,
-  moving it to scale-to-zero, or disabling the fallback. Preserve internal-only
-  ingress and never expand it to general web search.
-- Add ACR image retention and review PostgreSQL, Redis, Log Analytics, and ACA
-  resource sizing.
-- Keep attachment scanning event-driven with zero idle scan replicas.
-- Re-run Kernel, release assurance, and freshness checks after every
-  cost-driven topology or cadence change.
-
-### Exit Criteria
-
-- Every material Azure and model-provider cost has an owner and monthly limit.
-- No cadence or topology reduction is made without at least one month of usage
-  evidence.
-- Cost changes preserve the accepted Kernel, release, security, and freshness
-  boundaries.
-
 ## Work Explicitly Removed
 
 The following are no longer roadmap items:
@@ -415,7 +339,9 @@ The following are no longer roadmap items:
 - shared-cell routing, tenant quotas, and noisy-tenant isolation;
 - tenant export, suspension, deletion, and dedicated-cell automation;
 - a local semantic model or office-runtime fallback;
-- broad branch/campus identity propagation.
+- broad branch/campus identity propagation;
+- R5.1 enterprise-style operational-safety expansion;
+- R5.2 long-running cost and maintenance optimization program.
 
 ## Delivery Decomposition
 
@@ -424,14 +350,11 @@ implementation plan for each independently deployable milestone:
 
 1. R4.0 production contract correction;
 2. R4.1 internal product experience;
-3. R5.0 lean release assurance;
-4. R5.1 single-church operational safety;
-5. R5.2 cost and maintenance optimization.
+3. R5.0 lean release assurance.
 
 R4.0 must complete before R4.1 because it corrects a current attachment
-availability defect. R5.0 precedes R5.1 so operational probes and rollback
-evidence have a release boundary to attach to. R5.2 begins only after R5.1
-establishes trustworthy usage, health, and cost signals.
+availability defect. R5.0 is the final delivery milestone and establishes the
+release probes and rollback evidence required before stable maintenance.
 
 Each behavior or lifecycle change after R3 must update the versioned Kernel
 corpus and run the applicable deterministic, Redis/PostgreSQL integration, and
@@ -442,7 +365,5 @@ bounded; production deploy smoke remains provider-free.
 
 The roadmap is complete when church members can discover and use only their
 authorized functions, branch groups cannot consume one another's workflow
-state, formal church data remains current and intentionally shared, every
-release is verifiably recoverable, durable data has demonstrated restoration,
-material failures alert an owner, and operating cost is bounded without
-building a SaaS platform.
+state, formal church data remains current and intentionally shared, and every
+release is verifiably recoverable without building a SaaS platform.
