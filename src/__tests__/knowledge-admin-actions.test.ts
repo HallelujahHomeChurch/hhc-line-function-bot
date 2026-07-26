@@ -175,6 +175,100 @@ describe("knowledge source admin actions", () => {
     expect(result.replyText).not.toContain("Uunknown");
   });
 
+  it.each([
+    {
+      caseName: "matches the principal id",
+      principalId: "Uowner",
+      displayName: " Uowner "
+    },
+    {
+      caseName: "has the canonical LINE user id shape",
+      principalId: "creator-alias",
+      displayName: "U0123456789abcdef0123456789ABCDEF"
+    }
+  ])("rejects a knowledge owner label that $caseName", async ({ principalId, displayName }) => {
+    const store = new InMemoryKnowledgeStore();
+    await store.upsertSource({
+      profileName: "helper",
+      sourceKey: "retreat",
+      displayName: "2026 青年出隊",
+      adapterType: "notion",
+      externalRootId: "root",
+      rootUrl: "https://example.test/root",
+      enabled: true,
+      createdBy: principalId
+    });
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "owner-principal",
+          profileName: "helper",
+          type: "admin",
+          principalId,
+          displayName,
+          createdAt: "2026-07-01T00:00:00.000Z",
+          createdBy: "bootstrap"
+        }
+      ]
+    });
+    const registry = createAdminActionRegistry({
+      accessStore,
+      registrationInviteCodeStore: new InMemoryRegistrationInviteCodeStore(),
+      registrationInviteCodeTtlMinutes: 60,
+      knowledgeStore: store
+    });
+
+    const result = await registry.execute({
+      action: "knowledge_source_list",
+      profile,
+      event
+    });
+
+    expect(result.replyText).toContain("owner: 尚未指定");
+    expect(result.replyText).not.toContain(displayName.trim());
+  });
+
+  it("keeps a normal knowledge owner display name that starts with U", async () => {
+    const store = new InMemoryKnowledgeStore();
+    await store.upsertSource({
+      profileName: "helper",
+      sourceKey: "retreat",
+      displayName: "2026 青年出隊",
+      adapterType: "notion",
+      externalRootId: "root",
+      rootUrl: "https://example.test/root",
+      enabled: true,
+      createdBy: "Uowner"
+    });
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "owner-principal",
+          profileName: "helper",
+          type: "admin",
+          principalId: "Uowner",
+          displayName: " Uadmin ",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          createdBy: "bootstrap"
+        }
+      ]
+    });
+    const registry = createAdminActionRegistry({
+      accessStore,
+      registrationInviteCodeStore: new InMemoryRegistrationInviteCodeStore(),
+      registrationInviteCodeTtlMinutes: 60,
+      knowledgeStore: store
+    });
+
+    const result = await registry.execute({
+      action: "knowledge_source_list",
+      profile,
+      event
+    });
+
+    expect(result.replyText).toContain("owner: Uadmin");
+  });
+
   it("preserves the source key through destructive confirmation", async () => {
     const store = new InMemoryKnowledgeStore();
     await store.upsertSource({

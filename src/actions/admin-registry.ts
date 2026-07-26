@@ -57,6 +57,15 @@ export function createAdminActionRegistry(
   return new DefaultAdminActionRegistry(options);
 }
 
+function safeKnowledgeOwnerLabel(
+  principalId: string,
+  displayName: string | undefined
+): string | undefined {
+  const label = displayName?.trim();
+  if (!label || label === principalId || /^U[0-9a-f]{32}$/i.test(label)) return undefined;
+  return label;
+}
+
 class DefaultAdminActionRegistry implements AdminActionRegistry {
   private readonly confirmationStore: ConfirmationStore;
   private readonly confirmationTtlMinutes: number;
@@ -474,8 +483,8 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
     const ownerLabels = new Map(
       principals.flatMap((principal) => {
         if (principal.type === "group") return [];
-        const displayName = principal.displayName?.trim();
-        return displayName ? [[principal.principalId, displayName] as const] : [];
+        const label = safeKnowledgeOwnerLabel(principal.principalId, principal.displayName);
+        return label ? [[principal.principalId, label] as const] : [];
       })
     );
     return {
