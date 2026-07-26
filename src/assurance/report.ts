@@ -157,6 +157,7 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
   const failureCode = failureCodeValue(source.failureCode);
   const startedAt = isoTimestamp(source.startedAt);
   const completedAt = isoTimestamp(source.completedAt);
+  const reportChecks = checks(source.checks, kind);
   const report: AssuranceReport = {
     version: exactOne(source.version),
     kind,
@@ -168,11 +169,12 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
     failureCode,
     target: target(source.target),
     knownGood: knownGood(source.knownGood),
-    checks: checks(source.checks, kind),
+    checks: reportChecks,
     rollback: rollback(source.rollback),
     providerRequests: providerRequests(source.providerRequests)
   };
   if ((status === "passed") !== (failureCode === "none")) invalid();
+  if (status === "passed" && reportChecks.some((check) => check.status === "failed")) invalid();
   if (Date.parse(completedAt) < Date.parse(startedAt)) invalid();
   return report;
 }
@@ -276,10 +278,7 @@ function safeIdentifier(value: unknown): string {
 }
 
 function immutableImage(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    !/^[a-z0-9][a-z0-9./_-]{0,255}@sha256:[a-f0-9]{64}$/u.test(value)
-  ) {
+  if (typeof value !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(value)) {
     invalid();
   }
   return value;
