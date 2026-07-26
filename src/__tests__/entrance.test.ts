@@ -3341,6 +3341,24 @@ describe("LINE entrance", () => {
       functionName: "find_resource",
       createdBy: "Uroot"
     });
+    await accessStore.addUserFunctionGrant({
+      profileName: "helper",
+      userId: "Uroot",
+      functionName: "query_wikipedia",
+      createdBy: "Uroot"
+    });
+    const groupRole = await accessStore.upsertRole({
+      profileName: "helper",
+      roleKey: "music_reader",
+      displayName: "Music reader"
+    });
+    await accessStore.bindRoleCapability(groupRole.id, "function:find_sheet_music:execute");
+    await accessStore.bindRoleToPrincipal({
+      profileName: "helper",
+      principalType: "group",
+      principalId: "Cactive",
+      roleId: groupRole.id
+    });
     await accessStore.recordPrincipalSuccess({
       profileName: "helper",
       type: "group",
@@ -3383,7 +3401,8 @@ describe("LINE entrance", () => {
     const reply = String(replyText.mock.calls[0]?.[1]);
     expect(reply).toContain("group: Cactive (影音同工群)");
     expect(reply).toContain("state: active");
-    expect(reply).toContain("effective: 查投影片, 查服事表, 查教會資料");
+    expect(reply).toContain("effective: 查投影片, 查服事表, 查教會資料, 查歌譜");
+    expect(reply).not.toContain("查維基百科");
     expect(reply).toContain("last-success: 查投影片 @ 2026-07-26T10:00:00.000Z");
     expect(reply).toContain("group: Cdisabled (舊服事群)");
     expect(reply).toContain("state: disabled");

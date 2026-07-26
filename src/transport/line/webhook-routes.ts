@@ -556,6 +556,7 @@ async function handleWebhook(
           handleAdminCommand(
             event.message!.text!,
             effectiveProfile,
+            profile,
             event,
             config,
             adminHandlers,
@@ -928,6 +929,7 @@ async function shouldPromptManagedRegistration(
 async function handleAdminCommand(
   text: string,
   profile: BotProfileConfig,
+  configuredProfile: BotProfileConfig,
   event: LineEvent,
   config: AppConfig,
   adminHandlers: AdminHandlerRegistry,
@@ -1032,6 +1034,7 @@ async function handleAdminCommand(
     parsed.command,
     parsed.args,
     profile,
+    configuredProfile,
     event,
     accessStore,
     adminActionRegistry
@@ -1115,6 +1118,7 @@ async function handleAdminAccessCommand(
   command: string,
   args: string[],
   profile: BotProfileConfig,
+  configuredProfile: BotProfileConfig,
   event: LineEvent,
   accessStore: AccessStore,
   adminActionRegistry: AdminActionRegistry
@@ -1145,7 +1149,7 @@ async function handleAdminAccessCommand(
           return base;
         }
         const effectiveDisplayNames = await groupEffectiveFunctionDisplayNames(
-          profile,
+          configuredProfile,
           accessStore,
           principal.principalId
         );
