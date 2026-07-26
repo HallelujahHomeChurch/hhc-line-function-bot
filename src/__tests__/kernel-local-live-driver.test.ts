@@ -203,7 +203,7 @@ describe("Kernel local live journey outcome evaluation", () => {
       })
     ).toMatchObject({
       passed: false,
-      failureCode: "journey_assertion_failed"
+      failureCode: "write_turn_count_failed"
     });
     expect(
       evaluateKernelLocalLiveOutcome({
@@ -220,6 +220,49 @@ describe("Kernel local live journey outcome evaluation", () => {
       passed: false,
       failureCode: "journey_assertion_failed"
     });
+  });
+
+  it("reports the allowlisted write journey boundary that failed", () => {
+    const traces = Array.from({ length: 5 }, () =>
+      trace([{ phase: "text_handler", action: "save_resource", outcome: "handled" }])
+    );
+    const queue = {
+      caseId: "write-preview-confirm" as const,
+      kind: "queue",
+      ordinal: 1,
+      outcome: "queued"
+    } as const;
+    const scanWork = {
+      caseId: "write-preview-confirm" as const,
+      kind: "scan_work",
+      ordinal: 1,
+      outcome: "queued"
+    } as const;
+
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "write-preview-confirm",
+        traces,
+        observations: [queue, scanWork],
+        replyQuickReplyLabels: []
+      })
+    ).toMatchObject({ passed: false, failureCode: "write_reply_states_failed" });
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "write-preview-confirm",
+        traces,
+        observations: [scanWork],
+        replyQuickReplyLabels: writeReplyQuickReplyLabels()
+      })
+    ).toMatchObject({ passed: false, failureCode: "write_queue_evidence_failed" });
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "write-preview-confirm",
+        traces,
+        observations: [queue],
+        replyQuickReplyLabels: writeReplyQuickReplyLabels()
+      })
+    ).toMatchObject({ passed: false, failureCode: "write_scan_work_evidence_failed" });
   });
 
   it("rejects partial multi-turn evidence and a queue emitted before confirmation", () => {
@@ -258,7 +301,7 @@ describe("Kernel local live journey outcome evaluation", () => {
       })
     ).toMatchObject({
       passed: false,
-      failureCode: "journey_assertion_failed"
+      failureCode: "write_preconfirm_queue_failed"
     });
   });
 

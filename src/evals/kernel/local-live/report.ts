@@ -36,7 +36,13 @@ const CASE_STRING_VALUES = {
     "initial_result_unavailable",
     "initial_result_missing",
     "continuation_turn_failed",
-    "continuation_reason_failed"
+    "continuation_reason_failed",
+    "write_turn_count_failed",
+    "write_trace_missing",
+    "write_reply_states_failed",
+    "write_preconfirm_queue_failed",
+    "write_queue_evidence_failed",
+    "write_scan_work_evidence_failed"
   ]),
   disposition: new Set([
     "execute",

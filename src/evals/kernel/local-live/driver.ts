@@ -323,6 +323,29 @@ function outcomeFailureCode(
   caseId: KernelLocalLiveCaseId,
   evidence: Parameters<typeof outcomePassed>[1]
 ): string {
+  if (caseId === "write-preview-confirm") {
+    if (evidence.turns.length !== 5) return "write_turn_count_failed";
+    if (evidence.turns.some(({ steps }) => steps.length === 0)) return "write_trace_missing";
+    if (!matchesWriteReplyStates(evidence.replyQuickReplyLabels)) {
+      return "write_reply_states_failed";
+    }
+    if (evidence.preFinalQueueDetected) return "write_preconfirm_queue_failed";
+    if (
+      evidence.caseObservations.filter(
+        ({ kind, outcome }) => kind === "queue" && outcome === "queued"
+      ).length !== 1
+    ) {
+      return "write_queue_evidence_failed";
+    }
+    if (
+      evidence.caseObservations.filter(
+        ({ kind, outcome }) => kind === "scan_work" && outcome === "queued"
+      ).length !== 1
+    ) {
+      return "write_scan_work_evidence_failed";
+    }
+    return "journey_assertion_failed";
+  }
   if (caseId !== "schedule-refinement") return "journey_assertion_failed";
   const declaredCase = KERNEL_LOCAL_LIVE_CASES.find(({ id }) => id === caseId)!;
   if (

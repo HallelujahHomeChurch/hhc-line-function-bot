@@ -81,15 +81,22 @@ prior pending collection or active task to intercept a later case before the
 planner. Direct-chat cases now use distinct synthetic requesters while turns
 within each case retain the same requester.
 
-The final authorized full run against `0187430a` passed the first four cases and
+The last run under the original ceiling, against `0187430a`, passed the first four cases and
 both semantic turns of `knowledge-follow-up`, but the latter recorded only one
 of its two required embedding batches. It made 8 DeepSeek requests and 2
 embedding batches. Cumulative live-provider use is therefore 29 DeepSeek
-requests and 4 embedding batches; no further live run is authorized under the
-30-request DeepSeek ceiling. The cause was a harness-only embedding cache keyed
+requests and 4 embedding batches. The cause was a harness-only embedding cache keyed
 only by text, which reused the fixture/query vector across independently
 budgeted cases. The cache is now case-scoped, while exact reuse inside one case
 remains enabled.
+
+After the provider ceiling was raised, a full run against `32b967db` passed the
+first seven cases with the exact required 9 DeepSeek requests and 3 embedding
+batches. Only `write-preview-confirm` failed its aggregate assertion. Cumulative
+live-provider use is now 38 DeepSeek requests and 7 embedding batches. The write
+case uses no provider calls; allowlisted write boundary codes now distinguish
+turn/trace completeness, quick-reply state, pre-confirm queueing, queue evidence,
+and scan-work evidence for a zero-cost diagnostic rerun.
 
 All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
