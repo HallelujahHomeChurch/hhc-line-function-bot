@@ -185,8 +185,8 @@ export async function runAttachmentScanWorker(
         return failWork(options.workStore, work, "scan_unavailable", true);
       }
 
-      const publicationNow = options.now?.() ?? new Date();
       const publicationSignatureManifest = await options.readSignatureManifest();
+      const publicationNow = options.now?.() ?? new Date();
       const publicationSignatureAssessment = assessClamAvSignatureManifest(
         publicationSignatureManifest,
         publicationNow,

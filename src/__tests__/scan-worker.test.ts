@@ -309,6 +309,33 @@ describe("attachment scan worker", () => {
     expect(workerNow).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the clock after the publication manifest read when assessing signature health", async () => {
+    let currentNow = new Date("2026-07-24T03:59:59.999Z");
+    const workerNow = vi.fn(() => currentNow);
+    const { graph, work, workerOptions } = await setup({ now: workerNow });
+    workerOptions.readSignatureManifest = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValueOnce({
+        ...freshSignature,
+        lastSuccessfulAt: "2026-07-17T04:00:00.000Z"
+      })
+      .mockImplementationOnce(async () => {
+        currentNow = now;
+        return {
+          ...freshSignature,
+          lastSuccessfulAt: "2026-07-17T04:00:00.000Z"
+        };
+      });
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed",
+      signatureHealth: "warning"
+    });
+
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
+    expect(workerNow).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     [undefined, "missing"],
     [{ ...freshSignature, signatureVersion: "invalid value" }, "malformed"],
