@@ -547,8 +547,8 @@ Scanner results other than `clean`, or signatures without a valid immutable
 manifest, fail closed. A pure signature policy runs both pre-scan and
 pre-publication: missing, malformed, future-dated, or mid-scan-changed manifests
 block publication, while a valid last-known-good immutable set remains usable
-regardless of age. The policy reports a warning after 7 days but never creates an
-age-based publication block. A weekly `10 19 * * 0` UTC scheduled ACA Job stages
+regardless of age. Signature age is warning-only: it is never an age-based
+publication block after 7 days. A weekly `10 19 * * 0` UTC scheduled ACA Job stages
 and validates an immutable versioned database set, then atomically replaces the
 manifest that selects it. Scans retain their selected set and must observe the
 same manifest version immediately before publication. Deployment bootstraps and
