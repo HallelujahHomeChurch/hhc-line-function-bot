@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { InMemoryAgentJobStore } from "../agent/jobs.js";
+import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
+import { InMemoryScheduleStore } from "../schedules/store.js";
+import { InMemorySessionStore } from "../state/session-store.js";
 import { RECURRENCE_FAMILIES } from "../evals/kernel/contracts.js";
 import { KERNEL_ACCEPTANCE_CASES, validateKernelCorpus } from "../evals/kernel/corpus.js";
 import { PRODUCT_EXPERIENCE_KERNEL_CASES } from "../evals/kernel/cases/product-experience.js";
 import { REMOTE_RUNTIME_KERNEL_CASES } from "../evals/kernel/cases/remote-runtime.js";
 import { SCHEDULE_KERNEL_CASES } from "../evals/kernel/cases/schedule.js";
+import { messages } from "../messages.js";
 
 const R41_PRODUCT_EXPERIENCE_CASE_IDS = [
   "kernel-v1/product_experience/effective-discovery-direct@1",
@@ -17,6 +23,10 @@ const R41_PRODUCT_EXPERIENCE_CASE_IDS = [
 ] as const;
 
 describe("Kernel v1 versioned acceptance corpus", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("uses unique stable versioned case IDs", () => {
     const ids = KERNEL_ACCEPTANCE_CASES.map(({ id }) => id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -157,4 +167,154 @@ describe("Kernel v1 versioned acceptance corpus", () => {
       expect.objectContaining({ boundary: "active_task_lifecycle", securityViolations: [] })
     );
   });
+
+  it("classifies shared formal-data failure as completion failure without a scope leak", async () => {
+    vi.spyOn(InMemoryScheduleStore.prototype, "searchItems").mockResolvedValue([]);
+
+    const observation = await runProductCase("branch-group-isolation@1");
+
+    expect(observation).toEqual(
+      expect.objectContaining({
+        passed: false,
+        coreJourneySucceeded: false,
+        failureCode: "shared_formal_data_unavailable",
+        unavailableMisclassified: false,
+        securityViolations: []
+      })
+    );
+  });
+
+  it("classifies same-group different-requester generic-session leakage as a scope leak", async () => {
+    const original = InMemorySessionStore.prototype.findPendingFunction;
+    vi.spyOn(InMemorySessionStore.prototype, "findPendingFunction").mockImplementation(
+      function (lookup) {
+        return original.call(this, {
+          ...lookup,
+          requesterUserId: "U_BRANCH_SESSION",
+          source: { ...lookup.source, userId: "U_BRANCH_SESSION" }
+        });
+      }
+    );
+
+    await expectScopeLeak();
+  });
+
+  it("classifies same-group different-requester selection leakage as a scope leak", async () => {
+    const original = InMemorySessionStore.prototype.findSelection;
+    vi.spyOn(InMemorySessionStore.prototype, "findSelection").mockImplementation(function (lookup) {
+      return original.call(this, {
+        ...lookup,
+        requesterUserId: "U_BRANCH_MEMBER",
+        source: { ...lookup.source, userId: "U_BRANCH_MEMBER" }
+      });
+    });
+
+    await expectScopeLeak();
+  });
+
+  it("classifies same-group different-requester job leakage as a scope leak", async () => {
+    const original = InMemoryAgentJobStore.prototype.get;
+    vi.spyOn(InMemoryAgentJobStore.prototype, "get").mockImplementation(function (id, scope) {
+      return original.call(this, id, { ...scope, requesterUserId: "U_BRANCH_MEMBER" });
+    });
+
+    await expectScopeLeak();
+  });
+
+  it("classifies same-group different-requester attachment leakage as a scope leak", async () => {
+    const original = InMemorySessionStore.prototype.findPendingAttachment;
+    vi.spyOn(InMemorySessionStore.prototype, "findPendingAttachment").mockImplementation(
+      function (lookup) {
+        return original.call(this, {
+          ...lookup,
+          requesterUserId: "U_BRANCH_MEMBER",
+          source: { ...lookup.source, userId: "U_BRANCH_MEMBER" }
+        });
+      }
+    );
+
+    await expectScopeLeak();
+  });
+
+  it("classifies private-memory requester leakage as a scope leak while retaining group visibility", async () => {
+    const original = InMemoryAgentMemoryStore.prototype.searchTextMemories;
+    vi.spyOn(InMemoryAgentMemoryStore.prototype, "searchTextMemories").mockImplementation(
+      function (input) {
+        return original.call(this, {
+          ...input,
+          requesterUserId: "U_BRANCH_MEMBER",
+          source: { ...input.source, userId: "U_BRANCH_MEMBER" }
+        });
+      }
+    );
+
+    await expectScopeLeak();
+  });
+
+  it("classifies same-group different-requester task-frame leakage as a scope leak", async () => {
+    const original = InMemoryConversationWindowStore.prototype.activeTask;
+    vi.spyOn(InMemoryConversationWindowStore.prototype, "activeTask").mockImplementation(
+      function (scope) {
+        return original.call(this, { ...scope, requesterUserId: "U_BRANCH_MEMBER" });
+      }
+    );
+
+    await expectScopeLeak();
+  });
+
+  it("attributes only unavailable-copy failure to unavailable misclassification", async () => {
+    const mutableMessages = messages as { unavailableGuidance: string; notFoundGuidance: string };
+    const unavailable = mutableMessages.unavailableGuidance;
+    mutableMessages.unavailableGuidance = "synthetic broken unavailable copy";
+    const unavailableObservation = await runProductCase("result-guidance-classes@1");
+    mutableMessages.unavailableGuidance = unavailable;
+
+    expect(unavailableObservation).toEqual(
+      expect.objectContaining({
+        passed: false,
+        unavailableEligible: true,
+        unavailableMisclassified: true
+      })
+    );
+
+    const notFound = mutableMessages.notFoundGuidance;
+    mutableMessages.notFoundGuidance = "synthetic broken not-found copy";
+    const notFoundObservation = await runProductCase("result-guidance-classes@1");
+    mutableMessages.notFoundGuidance = notFound;
+
+    expect(notFoundObservation).toEqual(
+      expect.objectContaining({
+        passed: false,
+        unavailableEligible: true,
+        unavailableMisclassified: false
+      })
+    );
+  });
+
+  it("does not classify registration-first-read as a required-slot recurrence", () => {
+    const registration = PRODUCT_EXPERIENCE_KERNEL_CASES.find(({ id }) =>
+      id.endsWith("registration-first-read@1")
+    );
+
+    expect(registration?.recurrenceFamily).toBe("write_safety_bypass");
+  });
 });
+
+async function runProductCase(suffix: string) {
+  const entry = PRODUCT_EXPERIENCE_KERNEL_CASES.find(({ id }) => id.endsWith(suffix));
+  if (!entry) throw new Error(`missing_product_case:${suffix}`);
+  return entry.run({ now: () => new Date("2026-07-26T08:00:00.000Z") });
+}
+
+async function expectScopeLeak(): Promise<void> {
+  const observation = await runProductCase("branch-group-isolation@1");
+  expect(observation).toEqual(
+    expect.objectContaining({
+      passed: false,
+      coreJourneySucceeded: false,
+      failureCode: "scope_leak",
+      unavailableMisclassified: false,
+      securityViolations: ["scope_leak"]
+    })
+  );
+}
