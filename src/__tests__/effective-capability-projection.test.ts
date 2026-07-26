@@ -6,6 +6,7 @@ import {
   renderCapabilityHelp,
   renderRegistrationCompletion
 } from "../application/capabilities/capability-presenters.js";
+import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
 import { getFunctionDefinition, type FunctionDefinition } from "../functions/definitions.js";
 import { FUNCTION_NAMES, type BotProfileConfig, type FunctionName } from "../types.js";
 
@@ -177,21 +178,26 @@ describe("effective capability projection", () => {
     expect(action?.type === "message" ? action.text.length : 0).toBe(300);
   });
 
-  it("renders complete help and introduction without implementation details", () => {
+  it("renders complete ordinary capability copy without implementation details", () => {
     const projection = projectEffectiveCapabilities({
       context: context({ enabledFunctions: [...FUNCTION_NAMES] })
     });
     const help = renderCapabilityHelp(projection, "help");
     const introduction = renderCapabilityHelp(projection, "introduction");
+    const registration = renderRegistrationCompletion(projection);
 
     expect(help.replyText).toContain("- 查服事表：依日期、聚會或服事類型查詢目前可用的服事安排。");
     expect(help.replyText).toContain("- 記住資訊：保存使用者明確請我記住的文字資訊。");
     expect(help.replyText).toContain("- 查教會資料：搜尋目前可用的泛用教會資料。");
     expect(introduction.replyText).toMatch(/^我是小哈，家教會的小幫手。/u);
     expect(introduction.quickReplies).toEqual(help.quickReplies);
-    expect(`${help.replyText}\n${introduction.replyText}`).not.toMatch(
-      /OneDrive|Notion|Graph|DeepSeek|provider|storage|database|資料庫|資料來源|來源 ID|function name|功能名稱|user ID|使用者 ID|group ID|群組 ID/iu
-    );
+    expect(registration.replyText).toContain("小哈 下一場服事表");
+    expect(registration.replyText).toContain("小哈 查歌譜 Yesterday");
+    expect(registration.replyText).toContain("小哈 查投影片 奇異恩典");
+
+    expectOrdinaryCopyToExcludeInternalTerms(help);
+    expectOrdinaryCopyToExcludeInternalTerms(introduction);
+    expectOrdinaryCopyToExcludeInternalTerms(registration);
   });
 
   it("uses only onboarding items for registration completion without identifiers", () => {
@@ -206,3 +212,20 @@ describe("effective capability projection", () => {
     expect(registration.replyText).not.toMatch(/Uadmin|group ID|user ID/iu);
   });
 });
+
+const ordinaryCopyForbiddenTerms =
+  /OneDrive|Notion|Graph|DeepSeek|provider|storage|database|資料庫|儲存|儲存空間|雲端儲存|供應商|服務提供者|內部實作|資料來源|來源 ID|function name|功能名稱|user ID|使用者 ID|group ID|群組 ID/iu;
+
+function expectOrdinaryCopyToExcludeInternalTerms(result: FunctionExecutionResult): void {
+  const quickReplyCopy = (result.quickReplies ?? []).flatMap((quickReply) => [
+    quickReply.label,
+    quickReply.action.label,
+    ...(quickReply.action.type === "message"
+      ? [quickReply.action.text]
+      : quickReply.action.displayText
+        ? [quickReply.action.displayText]
+        : [])
+  ]);
+
+  expect([result.replyText, ...quickReplyCopy].join("\n")).not.toMatch(ordinaryCopyForbiddenTerms);
+}
