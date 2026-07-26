@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -19,6 +19,28 @@ afterEach(async () => {
 });
 
 describe("release assurance shell transaction", () => {
+  it.each(["missing_manifest", "known_good_capture_failure"])(
+    "writes an allowlisted report without rollback for deploy-time %s",
+    async (scenario) => {
+      const fixture = await createDeployFixture(scenario);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+
+      expect(result.status, diagnostic(result, calls)).not.toBe(0);
+      const reportText = await readFile(fixture.reportPath, "utf8").catch((error: unknown) => {
+        throw new Error(`${diagnostic(result, calls)}\n${String(error)}`);
+      });
+      const report = JSON.parse(reportText) as AssuranceReportInput;
+      expect(() => buildAssuranceReport(report)).not.toThrow();
+      expect(report.status).toBe("failed");
+      expect(report.failureCode).toBe("network_failed");
+      expect(report.knownGood.revision).toBe("unavailable");
+      expect(report.rollback).toEqual({ status: "not_required" });
+      expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
+      expect(calls.some((args) => args.includes("job") && args.includes("update"))).toBe(false);
+    }
+  );
+
   it("captures known-good state, runs live gates, and writes an allowlisted digest-only report", async () => {
     const fixture = await createFixture("success");
     const result = fixture.run();
@@ -282,6 +304,94 @@ describe("release assurance shell transaction", () => {
     await expect(readFile(fixture.reportPath, "utf8")).rejects.toThrow();
   });
 });
+
+async function createDeployFixture(scenario: string) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "deploy-release-assurance-"));
+  temporaryDirectories.push(directory);
+  const scriptsDirectory = path.join(directory, "scripts");
+  const binDirectory = path.join(directory, "bin");
+  const callLogPath = path.join(directory, "calls.jsonl");
+  const reportPath = path.join(directory, "report.json");
+  const driverPath = path.join(directory, "driver.sh");
+  await Promise.all([mkdir(scriptsDirectory), mkdir(binDirectory)]);
+  await Promise.all([
+    copyFile(
+      path.join(ROOT, "scripts/deploy-aca.sh"),
+      path.join(scriptsDirectory, "deploy-aca.sh")
+    ),
+    copyFile(
+      path.join(ROOT, "scripts/release-assurance.sh"),
+      path.join(scriptsDirectory, "release-assurance.sh")
+    )
+  ]);
+  if (scenario === "known_good_capture_failure") {
+    await mkdir(path.join(directory, "infra/searxng"), { recursive: true });
+    await Promise.all(
+      [
+        "aca.containerapp.yaml",
+        "aca.searxng.containerapp.yaml",
+        "aca.catalog-sync-job.yaml",
+        "aca.attachment-scan-job.yaml",
+        "aca.clamav-signature-refresh-job.yaml",
+        "aca.release-probe-job.yaml",
+        "aca.periodic-assurance-job.yaml"
+      ].map((name) => copyFile(path.join(ROOT, name), path.join(directory, name)))
+    );
+    await copyFile(
+      path.join(ROOT, "infra/searxng/settings.yml"),
+      path.join(directory, "infra/searxng/settings.yml")
+    );
+  }
+  await writeFile(
+    path.join(binDirectory, "az"),
+    `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${toBashPath(callLogPath)}"
+exit 61
+`,
+    { mode: 0o700 }
+  );
+
+  await writeFile(
+    driverPath,
+    `#!/usr/bin/env bash
+export PATH="${toBashPath(binDirectory)}:\${PATH}"
+export ACR_NAME="fixture-acr"
+export ACR_LOGIN_SERVER="fixture.invalid"
+export IMAGE_REPOSITORY="fixture/bot"
+export SCAN_IMAGE_REPOSITORY="fixture/scan"
+export IMAGE_TAG="fixture-tag"
+export RESOURCE_GROUP="fixture-resource-group"
+export CONTAINER_APP_NAME="fixture-bot"
+export CATALOG_SYNC_JOB_NAME="fixture-catalog"
+export ATTACHMENT_SCAN_JOB_NAME="fixture-scan"
+export CLAMAV_SIGNATURE_REFRESH_JOB_NAME="fixture-refresh"
+export RELEASE_PROBE_JOB_NAME="fixture-release-probe"
+export PERIODIC_ASSURANCE_JOB_NAME="fixture-periodic"
+export ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME="fixture-attachments"
+export ATTACHMENT_SCAN_QUEUE_NAME="fixture-queue"
+export CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME="fixture-clamav"
+export CLAMAV_SIGNATURE_FILE_SHARE_NAME="fixture-share"
+export RELEASE_REPORT_PATH="${toBashPath(reportPath)}"
+export RELEASE_ID="fixture-early-failure"
+export RELEASE_COMMIT_SHA="${"a".repeat(40)}"
+exec bash "${toBashPath(path.join(scriptsDirectory, "deploy-aca.sh"))}"
+`,
+    { mode: 0o700 }
+  );
+
+  return {
+    reportPath,
+    run: () => spawnSync("bash", [toBashPath(driverPath)], { cwd: ROOT, encoding: "utf8" }),
+    calls: async (): Promise<string[][]> => {
+      const text = await readFile(callLogPath, "utf8").catch(() => "");
+      return text
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split(" "));
+    }
+  };
+}
 
 async function createFixture(scenario: string) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "release-assurance-"));

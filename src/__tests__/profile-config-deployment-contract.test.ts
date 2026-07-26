@@ -681,8 +681,8 @@ describe("production profile configuration deployment contract", () => {
     ]) {
       expect(position).toBeGreaterThanOrEqual(0);
     }
-    expect(helperSource).toBeLessThan(snapshot);
-    expect(snapshot).toBeLessThan(exitTrap);
+    expect(helperSource).toBeLessThan(exitTrap);
+    expect(exitTrap).toBeLessThan(snapshot);
     expect(exitTrap).toBeLessThan(mutationMark);
     expect(mutationMark).toBeLessThan(botApply);
     expect(botApply).toBeLessThan(gate);

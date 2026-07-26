@@ -31,6 +31,7 @@ echo "Deploying ${image_ref} to ${CONTAINER_APP_NAME}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/release-assurance.sh"
+trap 'release_assurance_on_exit "$?"' EXIT
 bot_manifest_template="${script_dir}/../aca.containerapp.yaml"
 searxng_manifest_template="${script_dir}/../aca.searxng.containerapp.yaml"
 searxng_settings_template="${script_dir}/../infra/searxng/settings.yml"
@@ -69,7 +70,6 @@ if [[ ! -f "${bot_manifest_template}" \
 fi
 
 capture_known_good_state
-trap 'release_assurance_on_exit "$?"' EXIT
 
 managed_environment_id="$(az containerapp show \
   --resource-group "${RESOURCE_GROUP}" \

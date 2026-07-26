@@ -733,10 +733,10 @@ restore_changed_job_image() {
 
 write_release_report() {
   : "${RELEASE_REPORT_PATH:?RELEASE_REPORT_PATH is required}"
-  : "${RELEASE_KNOWN_GOOD_REVISION:?known-good revision is required}"
-  : "${RELEASE_KNOWN_GOOD_IMAGE:?known-good image is required}"
-  local target_revision="${RELEASE_TARGET_REVISION:-${RELEASE_KNOWN_GOOD_REVISION}}"
-  local target_image="${RELEASE_TARGET_IMAGE:-${RELEASE_KNOWN_GOOD_IMAGE}}"
+  local known_good_revision="${RELEASE_KNOWN_GOOD_REVISION:-unavailable}"
+  local known_good_image="${RELEASE_KNOWN_GOOD_IMAGE:-unavailable}"
+  local target_revision="${RELEASE_TARGET_REVISION:-${known_good_revision}}"
+  local target_image="${RELEASE_TARGET_IMAGE:-${known_good_image}}"
   local status=failed
   local target_status=failed
   if [[ "${RELEASE_FAILURE_REASON}" == "none" ]]; then
@@ -756,8 +756,8 @@ write_release_report() {
   RELEASE_ROLLBACK_STATUS="${RELEASE_ROLLBACK_STATUS}" \
   RELEASE_ROLLBACK_REVISION="${RELEASE_ROLLBACK_REVISION}" \
   RELEASE_ROLLBACK_IMAGE="${RELEASE_ROLLBACK_IMAGE}" \
-  RELEASE_KNOWN_GOOD_REVISION="${RELEASE_KNOWN_GOOD_REVISION}" \
-  RELEASE_KNOWN_GOOD_IMAGE="${RELEASE_KNOWN_GOOD_IMAGE}" \
+  RELEASE_KNOWN_GOOD_REVISION="${known_good_revision}" \
+  RELEASE_KNOWN_GOOD_IMAGE="${known_good_image}" \
   RELEASE_PROVIDER_CONTRACT_VERIFIED="${RELEASE_PROVIDER_CONTRACT_VERIFIED}" \
   python3 - <<'PY'
 from datetime import datetime, timezone
