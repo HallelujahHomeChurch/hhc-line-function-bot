@@ -206,7 +206,9 @@ The bot does not perform arbitrary web browsing or maintain an administrator web
 
 Sheet music has one controlled public-search fallback. If `SEARXNG_BASE_URL` points to an internal SearXNG service and local sheet music lookup finds nothing, the bot asks the requester whether to search public results. It calls SearXNG only after consent, uses only title/snippet/url fields, sends those fields to the `web_summarization` provider for summary/ranking, and does not fetch pages, download files, or save the results. Leave `SEARXNG_BASE_URL` unset to disable this fallback.
 
-Production deploys `hhc-searxng` with internal-only ingress, one replica, `0.25` CPU, and `0.5Gi` memory. The ClamAV signature refresh job runs every Monday at `10 19 * * 0` UTC, which is 03:10 Monday in Asia/Taipei. The deployment still starts and waits for one refresh execution before enabling the queue scanner, independently of the weekly schedule.
+Production deploys `hhc-searxng` with internal-only ingress, one replica, `0.25` CPU, and `0.5Gi` memory. The attachment scanner has no ingress, one replica per execution, and 2 CPU / 4 GiB. The ClamAV signature refresh job runs every Monday at `10 19 * * 0` UTC, which is 03:10 Monday in Asia/Taipei. The deployment still starts and waits for one refresh execution before enabling the queue scanner, independently of the weekly schedule.
+
+The refresh publishes only a complete, validated `main`/`daily`/`bytecode` immutable set by atomically replacing its sanitized manifest last. The worker verifies that manifest before scanning and again before publication. Missing, malformed, future-dated, or changed-during-scan manifests block publication, as does every scan result other than `clean`. Signature age is warning-only: a valid last-known-good immutable set remains usable indefinitely, with `signatureHealth: "warning"` after 7 days rather than an age-based hard stop. When health is `warning`, investigate the scheduled refresh job, Azure Files availability, and its most recent failure without disabling a valid scanner; repair or rerun refresh so the next validated immutable set can be promoted.
 
 ## Attachment Save Gate
 

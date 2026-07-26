@@ -342,6 +342,13 @@ either integration without capability-specific changes.
   performs the existing validation, antivirus scan, OneDrive publication, and
   catalog upsert through the sole binary-publisher path. It reports through
   requester-scoped long-running job retrieval/postback rather than LINE push.
+
+> **Superseded for ClamAV operations:** The following completed-roadmap text
+> records the earlier contract. The approved single-church R4.0 contract in
+> [2026-07-26-single-church-optimization-roadmap-design.md](2026-07-26-single-church-optimization-roadmap-design.md)
+> replaces its two-day refresh and 72-hour age-block assumptions with weekly
+> refresh and warning-only signature age.
+
 - Use an Azure Files share for ClamAV signature data. A scheduled ACA Job
   refreshes and validates signatures every two days; scan jobs mount the share
   read-only and fail closed when signatures are absent, older than 72 hours,

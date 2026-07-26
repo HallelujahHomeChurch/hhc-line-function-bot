@@ -14,13 +14,33 @@ describe("R3.5 modular monolith documentation", () => {
   });
 
   it("keeps the weekly ClamAV refresh ownership aligned across operator docs", async () => {
-    const [readme, agents] = await Promise.all([
+    const [readme, agents, architecture, operations] = await Promise.all([
       readFile("README.md", "utf8"),
-      readFile("AGENTS.md", "utf8")
+      readFile("AGENTS.md", "utf8"),
+      readFile("docs/architecture-context.md", "utf8"),
+      readFile("docs/runbooks/production-operations.md", "utf8")
     ]);
 
-    expect(readme).toContain("10 19 * * 0");
-    expect(agents).toContain("10 19 * * 0");
-    expect(agents).not.toContain("10 19 */2 * *");
+    for (const document of [readme, agents, architecture, operations]) {
+      expect(document).toContain("10 19 * * 0");
+      expect(document).toContain("7 days");
+      expect(document).not.toMatch(
+        /(?:at-most-)?72-hour|(?:more than |older than )?72 hours(?: old)?/i
+      );
+    }
+
+    for (const document of [readme, agents, architecture, operations]) {
+      expect(document).toContain("2 CPU / 4 GiB");
+      expect(document).not.toContain("1 vCPU/4 GiB");
+    }
+
+    expect(readme).toContain("signatureHealth");
+    expect(readme).toContain("warning-only");
+    expect(readme).toContain("manifest-driven");
+    expect(readme).toContain("scripts/deploy-aca.sh");
+    expect(architecture).toContain("pure signature policy");
+    expect(architecture).toContain("pre-scan");
+    expect(architecture).toContain("pre-publication");
+    expect(operations).toContain("warning");
   });
 });
