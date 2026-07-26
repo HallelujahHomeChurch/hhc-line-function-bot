@@ -633,14 +633,25 @@ describe("production profile configuration deployment contract", () => {
       "PERIODIC_REPORT_PATH: artifacts/release-assurance/periodic-report.json"
     );
     expect(workflow).toContain("uses: actions/upload-artifact@v4");
-    expect(workflow).toContain("if: always()");
     expect(workflow).toContain("path: artifacts/release-assurance/periodic-report.json");
     expect(workflow).not.toMatch(/containerapp (?:update|revision|ingress)/);
     expect(workflow).not.toMatch(/deepseek|embedding|eval:agent:live/iu);
+    const login = workflow.indexOf("uses: azure/login@v2");
+    const extension = workflow.indexOf("az extension add --name containerapp");
     const runner = workflow.indexOf("bash scripts/run-periodic-assurance.sh");
     const upload = workflow.indexOf("uses: actions/upload-artifact@v4");
+    const runnerStepStart = workflow.lastIndexOf("- name:", runner);
+    const uploadStepStart = workflow.lastIndexOf("- name:", upload);
+    const runnerStep = workflow.slice(runnerStepStart, uploadStepStart);
+    const uploadStep = workflow.slice(uploadStepStart);
+    expect(login).toBeGreaterThanOrEqual(0);
+    expect(extension).toBeGreaterThan(login);
+    expect(runner).toBeGreaterThan(extension);
     expect(runner).toBeGreaterThanOrEqual(0);
     expect(upload).toBeGreaterThan(runner);
+    expect(runnerStep).toContain("if: always()");
+    expect(uploadStep).toContain("if: always()");
+    expect(uploadStep).toContain("if-no-files-found: error");
   });
 
   it("wraps every bot and dependent-job mutation in the recoverable release transaction", () => {

@@ -38,6 +38,7 @@ jobs:
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --yes
       - name: Run weekly assurance
+        if: always()
         run: bash scripts/run-periodic-assurance.sh
       - name: Upload periodic assurance report
         if: always()
@@ -45,4 +46,4 @@ jobs:
         with:
           name: periodic-assurance-${{ github.run_id }}
           path: artifacts/release-assurance/periodic-report.json
-          if-no-files-found: warn
+          if-no-files-found: error

@@ -234,6 +234,8 @@ def validate_payload(value):
             raise ValueError("invalid periodic warning")
         if check_status == "passed" and code != "none":
             raise ValueError("invalid periodic passed result")
+        if check_status == "failed" and code == "none":
+            raise ValueError("invalid periodic failed result")
         names.add(name)
         checks.append({"name": name, "status": check_status, "code": code})
     if names != expected_checks:
@@ -282,6 +284,11 @@ if payload is not None:
         runner_failure = "malformed_json"
 elif os.environ["PERIODIC_EXECUTION_STATUS"] in {"Succeeded", "Failed", "Stopped"}:
     runner_failure = "malformed_json"
+workload_failure_code = (
+    next(check["code"] for check in checks if check["status"] == "failed")
+    if payload_status == "failed"
+    else None
+)
 
 try:
     scan_failed = recent_scan_failed(os.environ["PERIODIC_SCAN_EXECUTION"])
@@ -304,8 +311,8 @@ if (
 ):
     runner_failure = "http_mismatch"
 
-if runner_failure == "none" and payload_status == "failed":
-    failure_code = next(check["code"] for check in checks if check["status"] == "failed")
+if payload_status == "failed":
+    failure_code = workload_failure_code
 elif runner_failure != "none":
     failure_code = runner_failure
 else:

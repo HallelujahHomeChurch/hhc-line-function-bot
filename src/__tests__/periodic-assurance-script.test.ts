@@ -81,6 +81,65 @@ describe("periodic assurance shell runner", () => {
     expectForbiddenCallsAbsent(calls);
   });
 
+  it.each([
+    {
+      scenario: "clamav_failure_and_scan_failure",
+      check: "clamav_eicar",
+      code: "clamav_eicar_failed"
+    },
+    {
+      scenario: "diagnostic_failure_and_malformed_scan",
+      check: "diagnostic_write_delete",
+      code: "diagnostic_delete_failed"
+    }
+  ])(
+    "preserves late workload failure $code over later control-plane failures",
+    async ({ scenario, check, code }) => {
+      const fixture = await createFixture(scenario);
+
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      expect(result.status, diagnostic(result, calls)).toBe(1);
+      const reportText = await readFile(fixture.reportPath, "utf8");
+      const report = JSON.parse(reportText) as AssuranceReportInput;
+
+      expect(() => buildAssuranceReport(report), reportText).not.toThrow();
+      expect(report.failureCode).toBe(code);
+      expect(report.checks).toContainEqual(
+        expect.objectContaining({ name: check, status: "failed", code })
+      );
+      expect(reportText).not.toContain("fake-private-error");
+      expectJobLifecycle(calls, { polls: 1, logs: 1 });
+      expectRecentScanObservation(calls);
+      expectForbiddenCallsAbsent(calls);
+    }
+  );
+
+  it.each([
+    ["failed_check_with_none", "failed", "none"],
+    ["passed_check_with_failure_code", "passed", "graph_metadata_failed"],
+    ["warning_check_with_none", "warning", "none"]
+  ])(
+    "fails closed and writes a failed report for malformed %s invariant (%s/%s)",
+    async (scenario) => {
+      const fixture = await createFixture(scenario);
+
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      expect(result.status, diagnostic(result, calls)).toBe(1);
+      const reportText = await readFile(fixture.reportPath, "utf8");
+      const report = JSON.parse(reportText) as AssuranceReportInput;
+
+      expect(() => buildAssuranceReport(report), reportText).not.toThrow();
+      expect(report.status).toBe("failed");
+      expect(report.failureCode).toBe("malformed_json");
+      expect(report.checks).toEqual([]);
+      expect(reportText).not.toContain("fake-private-error");
+      expectJobLifecycle(calls, { polls: 1, logs: 1 });
+      expectForbiddenCallsAbsent(calls);
+    }
+  );
+
   it("bounds execution polling and never starts a replacement execution", async () => {
     const fixture = await createFixture("timeout");
 
@@ -96,6 +155,25 @@ describe("periodic assurance shell runner", () => {
     expect(report.providerRequests).toEqual({ deepseek: 0, embedding: 0 });
     expectJobLifecycle(calls, { polls: 3, logs: 0 });
     expect(calls.filter((args) => args[0] === "sleep")).toHaveLength(2);
+    expectRecentScanObservation(calls);
+    expectForbiddenCallsAbsent(calls);
+  });
+
+  it("writes a network-failed artifact when Azure authentication is unavailable", async () => {
+    const fixture = await createFixture("azure_unavailable");
+
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    expect(result.status, diagnostic(result, calls)).toBe(1);
+    const reportText = await readFile(fixture.reportPath, "utf8");
+    const report = JSON.parse(reportText) as AssuranceReportInput;
+
+    expect(() => buildAssuranceReport(report), reportText).not.toThrow();
+    expect(report.status).toBe("failed");
+    expect(report.failureCode).toBe("network_failed");
+    expect(report.checks).toEqual([]);
+    expect(reportText).not.toContain("fake-private-auth-error");
+    expect(calls.some((args) => command(args, "containerapp", "job", "start"))).toBe(false);
     expectRecentScanObservation(calls);
     expectForbiddenCallsAbsent(calls);
   });
@@ -270,6 +348,10 @@ def value(flag):
     except (ValueError, IndexError):
         return None
 
+if scenario == "azure_unavailable":
+    print("fake-private-auth-error", file=sys.stderr)
+    sys.exit(17)
+
 if command("containerapp", "job", "show"):
     print("private-registry.example/fixture/scan@${PERIODIC_IMAGE_DIGEST}")
 elif command("containerapp", "job", "start"):
@@ -280,23 +362,32 @@ elif command("containerapp", "job", "execution", "show"):
     count_path.write_text(str(count))
     if scenario == "timeout":
         print("Running")
-    elif scenario == "periodic_and_scan_failure":
+    elif scenario in {
+        "periodic_and_scan_failure",
+        "clamav_failure_and_scan_failure",
+        "diagnostic_failure_and_malformed_scan",
+        "failed_check_with_none",
+        "passed_check_with_failure_code",
+        "warning_check_with_none",
+    }:
         print("Failed")
     else:
         print("Running" if count == 1 else "Succeeded")
 elif command("containerapp", "job", "execution", "list"):
+    if scenario == "diagnostic_failure_and_malformed_scan":
+        print("{malformed-scan-observation")
+        sys.exit(0)
     started = (
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=5)
     ).isoformat().replace("+00:00", "Z")
     print(json.dumps({
         "name":"scan-exec-3",
-        "status":"Failed" if scenario in {"periodic_and_scan_failure", "recent_scan_failure"} else "Succeeded",
+        "status":"Failed" if scenario in {"periodic_and_scan_failure", "clamav_failure_and_scan_failure", "recent_scan_failure"} else "Succeeded",
         "startTime":started,
     }))
 elif command("containerapp", "job", "logs", "show"):
-    failed = scenario == "periodic_and_scan_failure"
     checks = [
-        {"name":"graph_metadata","status":"failed" if failed else "passed","code":"graph_metadata_failed" if failed else "none"},
+        {"name":"graph_metadata","status":"passed","code":"none"},
         {"name":"notion_query","status":"passed","code":"none"},
         {"name":"attachment_queue","status":"passed","code":"none"},
         {"name":"clamav_signature","status":"passed","code":"none"},
@@ -304,6 +395,22 @@ elif command("containerapp", "job", "logs", "show"):
         {"name":"clamav_eicar","status":"passed","code":"none"},
         {"name":"diagnostic_write_delete","status":"passed","code":"none"},
     ]
+    failures = {
+        "periodic_and_scan_failure": ("graph_metadata", "graph_metadata_failed"),
+        "clamav_failure_and_scan_failure": ("clamav_eicar", "clamav_eicar_failed"),
+        "diagnostic_failure_and_malformed_scan": ("diagnostic_write_delete", "diagnostic_delete_failed"),
+    }
+    if scenario in failures:
+        failed_name, failed_code = failures[scenario]
+        row = next(item for item in checks if item["name"] == failed_name)
+        row.update({"status":"failed","code":failed_code})
+    elif scenario == "failed_check_with_none":
+        checks[0].update({"status":"failed","code":"none"})
+    elif scenario == "passed_check_with_failure_code":
+        checks[0].update({"status":"passed","code":"graph_metadata_failed"})
+    elif scenario == "warning_check_with_none":
+        checks[3].update({"status":"warning","code":"none"})
+    failed = any(item["status"] == "failed" for item in checks)
     payload = {
         "status":"failed" if failed else "passed",
         "checks":checks,
