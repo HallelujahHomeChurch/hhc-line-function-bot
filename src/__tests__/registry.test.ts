@@ -64,7 +64,9 @@ const weeklyAudioSource: CatalogSourceInput = {
   rootLocation: { driveId: "drive-id", folderItemId: "weekly-folder" },
   enabled: false,
   syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-  capabilities: { read: ["helper"], write: [] }
+  capabilities: { read: ["helper"], write: [] },
+  ownerLabel: "週報同工",
+  freshnessResponsibility: "每週一前確認音檔"
 };
 
 describe("function registry", () => {
@@ -207,6 +209,9 @@ describe("function registry", () => {
     expect(listBefore.replyText).toContain("Catalog sources");
     expect(listBefore.replyText).toContain("weekly_report_audio");
     expect(listBefore.replyText).toContain("enabled=false");
+    expect(listBefore.replyText).toContain("owner: 週報同工");
+    expect(listBefore.replyText).toContain("freshness: 每週一前確認音檔");
+    expect(listBefore.replyText).not.toContain("weekly-folder");
     expect(enable.replyText).toContain("enabled weekly_report_audio");
     expect(status.replyText).toContain("enabled=true");
     expect(sync.replyText).toContain("synced: 1");

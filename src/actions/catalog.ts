@@ -167,7 +167,7 @@ const adminActions: ActionDefinition<AdminActionName>[] = [
     sourcePolicy: "direct",
     sideEffect: "read_only",
     naturalLanguage: true,
-    description: "List knowledge sources for this profile.",
+    description: "List knowledge sources and their responsibility metadata for this profile.",
     naturalLanguageHints: ["知識來源列表", "列出知識來源", "有哪些知識來源"]
   },
   {

@@ -14,6 +14,7 @@ import {
 } from "../evals/kernel/integration/environment.js";
 import { runPostgresIntegrationMatrix } from "../evals/kernel/integration/postgres-matrix.js";
 import { runKnowledgeMigrations } from "../knowledge/migrations.js";
+import { PostgresKnowledgeStore } from "../knowledge/postgres-store.js";
 import { runScheduleMigrations } from "../schedules/migrations.js";
 import { PostgresScheduleStore } from "../schedules/postgres-store.js";
 
@@ -156,8 +157,9 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
     expect(schedule).toHaveLength(1);
     expect(schedule[0]?.externalKey).toBe("legacy-event");
 
+    const catalogStore = new PostgresCatalogStore(pool);
     const migratedSource = (
-      await new PostgresCatalogStore(pool).listSources({
+      await catalogStore.listSources({
         profileName: "helper",
         sourceKeys: ["legacy-catalog"]
       })
@@ -167,12 +169,72 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
       healthStatus: "ready",
       publishedItemCount: 1
     });
+    await catalogStore.upsertSource({
+      profileName: "helper",
+      sourceKey: "legacy-catalog",
+      adapterType: "manual",
+      domain: "general",
+      defaultItemKind: "document",
+      rootLocation: {},
+      enabled: true,
+      syncPolicy: { mode: "manual" },
+      capabilities: { read: [], write: [] },
+      ownerLabel: "資料管理員",
+      freshnessResponsibility: "每月確認"
+    });
+    await catalogStore.upsertSource({
+      profileName: "helper",
+      sourceKey: "legacy-catalog",
+      adapterType: "manual",
+      domain: "general",
+      defaultItemKind: "document",
+      rootLocation: {},
+      enabled: true,
+      syncPolicy: { mode: "manual" },
+      capabilities: { read: [], write: [] }
+    });
+    await expect(
+      catalogStore.listSources({
+        profileName: "helper",
+        sourceKeys: ["legacy-catalog"]
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        ownerLabel: "資料管理員",
+        freshnessResponsibility: "每月確認"
+      })
+    ]);
     expect(
-      await new PostgresCatalogStore(pool).searchItems({
+      await catalogStore.searchItems({
         profileName: "helper",
         query: "Legacy resource"
       })
     ).toHaveLength(1);
+
+    const knowledgeStore = new PostgresKnowledgeStore(pool);
+    await knowledgeStore.upsertSource({
+      profileName: "helper",
+      sourceKey: "responsibility",
+      displayName: "責任測試",
+      adapterType: "notion",
+      externalRootId: "root",
+      rootUrl: "https://example.invalid/root",
+      enabled: true,
+      createdBy: "Ucreator"
+    });
+    await knowledgeStore.upsertSource({
+      profileName: "helper",
+      sourceKey: "responsibility",
+      displayName: "責任測試更新",
+      adapterType: "notion",
+      externalRootId: "root",
+      rootUrl: "https://example.invalid/root",
+      enabled: true,
+      createdBy: "Uother"
+    });
+    await expect(
+      knowledgeStore.listSources({ profileName: "helper", includeDisabled: true })
+    ).resolves.toEqual([expect.objectContaining({ createdBy: "Ucreator" })]);
 
     const memoryStore = new PostgresAgentMemoryStore(pool);
     expect(

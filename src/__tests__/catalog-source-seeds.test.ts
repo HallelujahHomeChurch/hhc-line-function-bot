@@ -33,7 +33,9 @@ describe("catalog source seeds", () => {
     });
     expect(seeds.find((source) => source.sourceKey === "pop_sheet_music")).toMatchObject({
       rootLocation: { driveId: "pop-drive", folderItemId: "pop-root" },
-      syncPolicy: { allowedExtensions: [".pdf", ".jpg", ".jpeg", ".png"] }
+      syncPolicy: { allowedExtensions: [".pdf", ".jpg", ".jpeg", ".png"] },
+      ownerLabel: "敬拜團隊",
+      freshnessResponsibility: "歌譜異動後由敬拜團隊確認"
     });
     expect(seeds.find((source) => source.sourceKey === "xiaoha_database")?.rootLocation).toEqual({
       driveId: "drive-1",
@@ -54,7 +56,9 @@ describe("catalog source seeds", () => {
       rootLocation: { driveId: "drive-1", folderItemId: "admin-changed-root" },
       enabled: false,
       syncPolicy: { mode: "manual" },
-      capabilities: { read: ["custom-read"], write: [] }
+      capabilities: { read: ["custom-read"], write: [] },
+      ownerLabel: "資料庫管理員",
+      freshnessResponsibility: "每月第一個工作日確認"
     });
 
     const result = await seedCatalogSources({
@@ -69,7 +73,9 @@ describe("catalog source seeds", () => {
           rootLocation: { driveId: "drive-1", folderItemId: "seed-root" },
           enabled: true,
           syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-          capabilities: { read: ["helper"], write: ["helper:ppt_slide:write"] }
+          capabilities: { read: ["helper"], write: ["helper:ppt_slide:write"] },
+          ownerLabel: "種子預設負責人",
+          freshnessResponsibility: "種子預設更新責任"
         }
       ]
     });
@@ -81,7 +87,9 @@ describe("catalog source seeds", () => {
         enabled: false,
         rootLocation: { driveId: "drive-1", folderItemId: "admin-changed-root" },
         syncPolicy: { mode: "manual" },
-        capabilities: { read: ["custom-read"], write: [] }
+        capabilities: { read: ["custom-read"], write: [] },
+        ownerLabel: "資料庫管理員",
+        freshnessResponsibility: "每月第一個工作日確認"
       }
     ]);
   });

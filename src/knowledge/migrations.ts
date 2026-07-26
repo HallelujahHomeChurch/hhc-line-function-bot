@@ -14,6 +14,7 @@ const migrations = [
     adapter_type text not null,
     external_root_id text not null,
     root_url text not null,
+    created_by text,
     staged_display_name text not null,
     staged_adapter_type text not null,
     staged_external_root_id text not null,
@@ -41,6 +42,7 @@ const migrations = [
     unique (profile_name, source_key)
   )
   `,
+  `alter table knowledge_sources add column if not exists created_by text`,
   `alter table knowledge_sources add column if not exists aliases text[] not null default '{}'`,
   `alter table knowledge_sources add column if not exists topics text[] not null default '{}'`,
   `alter table knowledge_sources add column if not exists sample_queries text[] not null default '{}'`,

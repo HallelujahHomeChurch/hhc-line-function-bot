@@ -410,6 +410,7 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
         externalRootId,
         rootUrl: url,
         enabled: true,
+        createdBy: input.event.source.userId,
         expiresAt: expiresAt ? new Date(expiresAt).toISOString() : undefined,
         aliases: readStringArrayArg(input.arguments, ["aliases", "alias"]),
         topics: readStringArrayArg(input.arguments, ["topics", "topic"]),
@@ -467,14 +468,27 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
       profileName: input.profile.name,
       includeDisabled: true
     });
+    const principals = await this.options.accessStore.listPrincipals(input.profile.name, {
+      includeDisabled: true
+    });
+    const ownerLabels = new Map(
+      principals.flatMap((principal) => {
+        if (principal.type === "group") return [];
+        const displayName = principal.displayName?.trim();
+        return displayName ? [[principal.principalId, displayName] as const] : [];
+      })
+    );
     return {
       ok: true,
       replyText: sources.length
         ? [
             "知識來源：",
-            ...sources.map(
-              (source) =>
-                `- ${source.sourceKey}｜${source.displayName}｜${source.enabled ? "啟用" : "停用"}｜${source.syncStatus ?? "pending"}${source.expiresAt ? `｜到期 ${source.expiresAt.slice(0, 10)}` : "｜永久"}｜別名 ${source.adminAliases.length}｜主題 ${source.adminTopics.length}｜範例問題 ${source.adminSampleQueries.length}`
+            ...sources.map((source) =>
+              [
+                `- ${source.sourceKey}｜${source.displayName}｜${source.enabled ? "啟用" : "停用"}｜${source.syncStatus ?? "pending"}${source.expiresAt ? `｜到期 ${source.expiresAt.slice(0, 10)}` : "｜永久"}｜別名 ${source.adminAliases.length}｜主題 ${source.adminTopics.length}｜範例問題 ${source.adminSampleQueries.length}`,
+                `  owner: ${(source.createdBy && ownerLabels.get(source.createdBy)) ?? "尚未指定"}`,
+                "  freshness: 尚未指定"
+              ].join("\n")
             )
           ].join("\n")
         : "目前沒有知識來源。"

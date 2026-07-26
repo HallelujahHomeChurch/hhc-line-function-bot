@@ -3,6 +3,22 @@ import { describe, expect, it, vi } from "vitest";
 import { runCatalogMigrations } from "../catalog/migrations.js";
 
 describe("catalog migrations", () => {
+  it("adds nullable source responsibility columns to the existing source table", async () => {
+    const queries: string[] = [];
+    await runCatalogMigrations({
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+      })
+    });
+
+    const responsibilityColumns = queries.find((sql) =>
+      sql.includes("add column if not exists owner_label text")
+    );
+    expect(responsibilityColumns).toContain(
+      "add column if not exists freshness_responsibility text"
+    );
+  });
+
   it("adds publication lifecycle columns before backfilling existing sources", async () => {
     const queries: string[] = [];
     await runCatalogMigrations({

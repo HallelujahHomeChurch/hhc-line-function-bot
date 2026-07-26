@@ -126,7 +126,8 @@ describe("query_knowledge", () => {
       adapterType: "notion",
       externalRootId: "root",
       rootUrl: "https://www.notion.so/root",
-      enabled: true
+      enabled: true,
+      createdBy: "Uowner"
     });
     const document = await store.replaceDocument({
       sourceId: source.id,
@@ -205,7 +206,7 @@ describe("query_knowledge", () => {
       supportedOperations: ["continue", "refine", "select"]
     });
     expect(JSON.stringify(result.agentResult)).not.toMatch(
-      /https?:|日月潭|notion|八月出遊|第一天|trip/iu
+      /https?:|日月潭|notion|八月出遊|第一天|trip|Uowner/iu
     );
   });
 

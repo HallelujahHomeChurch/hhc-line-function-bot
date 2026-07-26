@@ -1031,6 +1031,8 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/registry");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("owner:");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("freshness:");
     expect(replyText).toHaveBeenCalledWith(
       "reply-token",
       expect.any(String),
@@ -2299,7 +2301,12 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const catalogSources = vi.fn().mockResolvedValue({
       ok: true,
-      replyText: "Catalog sources"
+      replyText: [
+        "Catalog sources",
+        "- weekly_report_audio",
+        "  owner: 週報同工",
+        "  freshness: 每週一前確認音檔"
+      ].join("\n")
     });
     const app = createTestApp(testConfig(), {
       router: { route },
@@ -2349,9 +2356,12 @@ describe("LINE entrance", () => {
     });
 
     expect(catalogSources).toHaveBeenCalledTimes(1);
-    expect(replyText.mock.calls[0]?.[1]).not.toBe("Catalog sources");
-    expect(replyText.mock.calls[1]?.[1]).not.toBe("Catalog sources");
-    expect(replyText.mock.calls[2]?.[1]).toBe("Catalog sources");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("owner:");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("freshness:");
+    expect(String(replyText.mock.calls[1]?.[1])).not.toContain("owner:");
+    expect(String(replyText.mock.calls[1]?.[1])).not.toContain("freshness:");
+    expect(String(replyText.mock.calls[2]?.[1])).toContain("owner: 週報同工");
+    expect(String(replyText.mock.calls[2]?.[1])).toContain("freshness: 每週一前確認音檔");
   });
 
   it("reports profile diagnostics through slash admin profile", async () => {

@@ -85,7 +85,9 @@ describe("find_resource", () => {
       rootLocation: { driveId: "drive-1", folderItemId: "folder-1" },
       enabled: true,
       syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-      capabilities: { read: ["helper"], write: [] }
+      capabilities: { read: ["helper"], write: [] },
+      ownerLabel: "週報同工",
+      freshnessResponsibility: "每週一前確認音檔"
     });
     await catalog.upsertItem({
       sourceId: source.id,
@@ -128,6 +130,8 @@ describe("find_resource", () => {
       supportedOperations: ["continue", "refine", "view_full"]
     });
     expect(JSON.stringify(result.agentResult)).not.toMatch(/週報音檔|download\.invalid/iu);
+    expect(JSON.stringify(result)).not.toContain("週報同工");
+    expect(JSON.stringify(result)).not.toContain("每週一前確認音檔");
     expect(graph.createSharingLink).toHaveBeenCalledWith(
       "drive-1",
       "audio-1",

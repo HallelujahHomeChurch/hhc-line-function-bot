@@ -32,6 +32,8 @@ describe("knowledge migrations", () => {
     expect(sql).toContain("staged_enabled boolean");
     expect(sql).toContain("staged_expires_at timestamptz");
     expect(sql).toContain("staging_revision uuid");
+    expect(sql).toContain("created_by text");
+    expect(sql).toMatch(/alter table knowledge_sources add column if not exists created_by text/iu);
     expect(sql).toContain("section_key text");
     expect(sql).toMatch(/alter table knowledge_sources add column if not exists aliases/iu);
     expect(sql).toMatch(

@@ -45,6 +45,39 @@ function audioItem(sourceId: string, title: string): CatalogItemInput {
 }
 
 describe("catalog store", () => {
+  it("round-trips source responsibility and preserves it when an upsert omits the fields", async () => {
+    const store = new InMemoryCatalogStore();
+    await store.upsertSource({
+      ...helperSource,
+      ownerLabel: "週報同工",
+      freshnessResponsibility: "每週一前確認音檔"
+    });
+
+    await store.upsertSource({ ...helperSource, enabled: false });
+
+    await expect(store.listSources({ profileName: "helper" })).resolves.toMatchObject([
+      {
+        sourceKey: "weekly_report_audio",
+        enabled: false,
+        ownerLabel: "週報同工",
+        freshnessResponsibility: "每週一前確認音檔"
+      }
+    ]);
+
+    await store.upsertSource({
+      ...helperSource,
+      ownerLabel: "影音同工",
+      freshnessResponsibility: "每週二前確認音檔"
+    });
+
+    await expect(store.listSources({ profileName: "helper" })).resolves.toMatchObject([
+      {
+        ownerLabel: "影音同工",
+        freshnessResponsibility: "每週二前確認音檔"
+      }
+    ]);
+  });
+
   it("indexes future item kinds such as weekly report audio without schema changes", async () => {
     const store = new InMemoryCatalogStore();
     const source = await store.upsertSource(helperSource);

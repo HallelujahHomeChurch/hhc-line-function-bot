@@ -15,6 +15,8 @@ const migrations = [
     enabled boolean not null default true,
     sync_policy jsonb not null default '{}'::jsonb,
     capabilities jsonb not null default '{"read":[],"write":[]}'::jsonb,
+    owner_label text,
+    freshness_responsibility text,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     unique (profile_name, source_key)
@@ -46,6 +48,11 @@ const migrations = [
   `
   alter table catalog_sources
   add column if not exists sync_cursor text
+  `,
+  `
+  alter table catalog_sources
+    add column if not exists owner_label text,
+    add column if not exists freshness_responsibility text
   `,
   `
   alter table catalog_sources
