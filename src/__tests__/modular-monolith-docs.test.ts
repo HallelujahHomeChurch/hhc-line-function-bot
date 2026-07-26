@@ -80,6 +80,10 @@ describe("R3.5 modular monolith documentation", () => {
       "Historical baseline approved on 2026-07-19; remaining direction superseded on 2026-07-26."
     );
     expect(currentRoadmap).toContain("This design replaces the remaining R4 through R8 direction");
+    expect(currentRoadmap).toContain(
+      "-> R4.1 Local Acceptance Complete (Production Verification Pending)"
+    );
+    expect(currentRoadmap).not.toContain("-> Completed R4.1 Internal Product Experience");
 
     expect(implementationPlan).not.toContain("// prettier-ignore");
     expect(implementationPlan).toContain(`const expectedEnvironment = {

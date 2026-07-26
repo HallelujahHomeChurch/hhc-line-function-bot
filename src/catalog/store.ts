@@ -6,7 +6,12 @@ export type CatalogAdapterType = "onedrive" | "notion" | "manual";
 export type CatalogDomain = "presentation" | "sheet_music" | "schedule" | "audio" | "general";
 export type CatalogSyncMode = "scheduled" | "manual";
 
-export interface CatalogSourceInput {
+export interface SourceResponsibility {
+  ownerLabel?: string;
+  freshnessResponsibility?: string;
+}
+
+export interface CatalogSourceInput extends SourceResponsibility {
   profileName: string;
   sourceKey: string;
   adapterType: CatalogAdapterType;
@@ -134,6 +139,8 @@ export class InMemoryCatalogStore implements CatalogStore {
     );
     const record: CatalogSourceRecord = {
       ...input,
+      ownerLabel: input.ownerLabel ?? existing?.ownerLabel,
+      freshnessResponsibility: input.freshnessResponsibility ?? existing?.freshnessResponsibility,
       id: existing?.id ?? randomUUID(),
       syncCursor: existing?.syncCursor,
       revision: existing?.revision ?? "0",

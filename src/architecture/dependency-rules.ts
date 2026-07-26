@@ -49,10 +49,42 @@ export function checkDependencyBoundaries(files: SourceFile[]): BoundaryViolatio
     }
 
     for (const { specifier, typeOnly } of importSpecifiers(file.source)) {
+      if (effectiveCapabilityProjectionPackageImportIsForbidden(importer, specifier)) {
+        violations.push({
+          importer,
+          imported: specifier,
+          rule: "effective_capability_projection_must_not_import_runtime_adapters"
+        });
+        continue;
+      }
+      if (effectiveAccessPackageImportIsForbidden(importer, specifier)) {
+        violations.push({
+          importer,
+          imported: specifier,
+          rule: "effective_access_must_not_import_runtime_adapters"
+        });
+        continue;
+      }
       if (!specifier.startsWith(".")) {
         continue;
       }
       const imported = resolveSourceImport(importer, specifier);
+      if (effectiveCapabilityProjectionImportIsForbidden(importer, imported)) {
+        violations.push({
+          importer,
+          imported,
+          rule: "effective_capability_projection_must_not_import_runtime_adapters"
+        });
+        continue;
+      }
+      if (effectiveAccessImportIsForbidden(importer, imported)) {
+        violations.push({
+          importer,
+          imported,
+          rule: "effective_access_must_not_import_runtime_adapters"
+        });
+        continue;
+      }
       const importedLayer = layerFor(imported);
       if (typeOnly && importedLayer === "infrastructure") {
         continue;
@@ -72,6 +104,44 @@ export function checkDependencyBoundaries(files: SourceFile[]): BoundaryViolatio
     [left.importer, left.imported, left.rule]
       .join("\0")
       .localeCompare([right.importer, right.imported, right.rule].join("\0"))
+  );
+}
+
+function effectiveCapabilityProjectionImportIsForbidden(
+  importer: string,
+  imported: string
+): boolean {
+  return Boolean(
+    /^src\/application\/capabilities\//u.test(importer) &&
+    (/^src\/transport\//u.test(imported) ||
+      /^src\/(?:__tests__|testing)\//u.test(imported) ||
+      /^src\/(?:access\/postgres-access-store|db\/postgres|redis|clients\/line)/u.test(imported))
+  );
+}
+
+function effectiveCapabilityProjectionPackageImportIsForbidden(
+  importer: string,
+  specifier: string
+): boolean {
+  return Boolean(
+    /^src\/application\/capabilities\//u.test(importer) &&
+    ["@line/bot-sdk", "pg", "redis"].includes(specifier)
+  );
+}
+
+function effectiveAccessImportIsForbidden(importer: string, imported: string): boolean {
+  return Boolean(
+    /^src\/application\/access\//u.test(importer) &&
+    (/^src\/transport\//u.test(imported) ||
+      /^src\/(?:__tests__|testing)\//u.test(imported) ||
+      /^src\/(?:access\/postgres-access-store|db\/postgres|redis|clients\/line)/u.test(imported))
+  );
+}
+
+function effectiveAccessPackageImportIsForbidden(importer: string, specifier: string): boolean {
+  return Boolean(
+    /^src\/application\/access\//u.test(importer) &&
+    ["@line/bot-sdk", "pg", "redis"].includes(specifier)
   );
 }
 

@@ -14,8 +14,15 @@ const migrations = [
     created_by text not null,
     disabled_at timestamptz,
     disabled_by text,
+    last_success_function_name text,
+    last_success_at timestamptz,
     unique (profile_name, principal_type, principal_id)
   )
+  `,
+  `
+  alter table access_principals
+    add column if not exists last_success_function_name text,
+    add column if not exists last_success_at timestamptz
   `,
   `
   create table if not exists access_audit_events (

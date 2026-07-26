@@ -8,12 +8,17 @@ import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
+import { createControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createStaticAppDiagnostics } from "../diagnostics/dependencies.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import { InMemoryWebhookEventStore } from "../idempotency/webhook-event-store.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
 import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
+import {
+  InMemoryFirstSuccessStore,
+  type FirstSuccessStore
+} from "../observability/first-success-store.js";
 import { InMemoryRateLimiter } from "../rate-limit.js";
 import {
   createApp as createTransportApp,
@@ -28,6 +33,7 @@ export type TestAppDependencies = Partial<AppDependencies> & {
   adminActionRouter?: AdminActionRouterPort;
   functionRegistry?: FunctionRegistry;
   inFlightStore?: InFlightStore;
+  firstSuccessStore?: FirstSuccessStore;
 };
 
 export function createTestApp(config: AppConfig, overrides: TestAppDependencies = {}) {
@@ -48,6 +54,15 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     (overrides.router ? adaptLegacyRouter(overrides.router) : undefined);
   const functionRegistry = overrides.functionRegistry ?? {};
   const textMessageHandlers = overrides.textMessageHandlers ?? {};
+  const firstSuccessStore = overrides.firstSuccessStore ?? new InMemoryFirstSuccessStore();
+  const completionObserver =
+    overrides.completionObserver ??
+    createControlledCompletionObserver({
+      accessStore,
+      routeObserver: overrides.routeObserver,
+      firstSuccessStore,
+      observabilityHmacKey: config.observability?.hmacKey
+    });
   const adminActionRegistry =
     overrides.adminActionRegistry ??
     createAdminActionRegistry({
@@ -77,6 +92,8 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
       conversationWindowStore,
       controlledAgentRouter,
       observabilityHmacKey: config.observability?.hmacKey,
+      firstSuccessStore,
+      completionObserver,
       timeZone: config.timeZone
     });
 
@@ -109,7 +126,8 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     agentJobStore: overrides.agentJobStore ?? new InMemoryAgentJobStore(),
     conversationWindowStore,
     textFallbackGenerator: overrides.textFallbackGenerator,
-    controlledAgentRouter
+    controlledAgentRouter,
+    completionObserver
   });
 }
 

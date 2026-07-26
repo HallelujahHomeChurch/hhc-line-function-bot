@@ -7,6 +7,7 @@ import { runAttachmentScanWorker } from "../../../attachments/scan-worker.js";
 import { InMemoryCatalogStore } from "../../../catalog/store.js";
 import { isSupportedAttachment } from "../../../functions/pending-attachment.js";
 import { createResourceBinaryPublisher } from "../../../functions/resource-binary-publisher.js";
+import { messages } from "../../../messages.js";
 import { InMemorySessionStore } from "../../../state/session-store.js";
 import type {
   BotProfileConfig,
@@ -146,7 +147,11 @@ async function unauthorizedWriteDenied(now: Date): Promise<boolean> {
       requestId: "unauthorized-save"
     }
   ]);
-  return executions === 0 && result?.replyText !== "unsafe";
+  return (
+    executions === 0 &&
+    result?.replyText === messages.unsupported &&
+    result.quickReplyLabels.length === 0
+  );
 }
 
 async function missingWriteEvidenceDenied(now: Date): Promise<boolean> {

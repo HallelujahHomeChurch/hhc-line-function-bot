@@ -173,6 +173,56 @@ describe("find_sheet_music", () => {
     );
   });
 
+  it("carries the actual data time for a stale catalog sheet-music success", async () => {
+    const catalog = new InMemoryCatalogStore();
+    const source = await catalog.upsertSource({
+      profileName: "main",
+      sourceKey: "pop_sheet_music",
+      adapterType: "onedrive",
+      domain: "sheet_music",
+      defaultItemKind: "pop_sheet",
+      rootLocation: { driveId: "drive-id", folderItemId: "sheet-folder-id" },
+      enabled: true,
+      syncPolicy: { mode: "scheduled", intervalMinutes: 10 },
+      capabilities: { read: ["main"], write: [] }
+    });
+    await catalog.publishSourceSnapshot({
+      sourceId: source.id,
+      expectedRevision: "0",
+      publishedAt: "2026-07-04T09:00:00.000Z",
+      items: [
+        {
+          sourceId: source.id,
+          itemKind: "pop_sheet",
+          domain: "sheet_music",
+          title: "A TIME FOR US.pdf",
+          storageRef: { provider: "graph", driveId: "catalog-drive", itemId: "stale-sheet" }
+        }
+      ]
+    });
+    const handler = createFindPopSheetMusicHandler({
+      graph: {
+        listFolderChildren: vi.fn(),
+        getItemById: vi.fn(currentItemById),
+        createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/stale-sheet")
+      },
+      catalog,
+      driveId: "drive-id",
+      folderItemId: "sheet-folder-id",
+      allowedExtensions: [".pdf"],
+      now: () => new Date("2026-07-04T09:30:00.000Z")
+    });
+
+    const result = await handler({ query: "A TIME FOR US" }, handlerContext());
+
+    expect(result.diagnostics).toMatchObject({
+      executionMode: "catalog_snapshot_read",
+      freshnessStatus: "stale_allowed",
+      sourceRevision: "present",
+      dataAsOf: "2026-07-04T09:00:00.000Z"
+    });
+  });
+
   it("falls back to a fresh provider query when the catalog has never published", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),

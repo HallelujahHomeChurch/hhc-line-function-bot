@@ -4,6 +4,7 @@ import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
+import type { ControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
@@ -114,6 +115,27 @@ function defaultAccessStore(): InMemoryAccessStore {
       }
     ]
   });
+}
+
+class PostCommitProjectionFailureAccessStore extends InMemoryAccessStore {
+  private committed = false;
+
+  override async addPrincipal(
+    input: Parameters<InMemoryAccessStore["addPrincipal"]>[0]
+  ): ReturnType<InMemoryAccessStore["addPrincipal"]> {
+    const principal = await super.addPrincipal(input);
+    this.committed = true;
+    return principal;
+  }
+
+  override async hasActivePrincipal(
+    ...args: Parameters<InMemoryAccessStore["hasActivePrincipal"]>
+  ): ReturnType<InMemoryAccessStore["hasActivePrincipal"]> {
+    if (this.committed) {
+      throw new Error("post_commit_projection_failed");
+    }
+    return super.hasActivePrincipal(...args);
+  }
 }
 
 function createTestApp(
@@ -634,6 +656,162 @@ describe("LINE entrance", () => {
     );
   });
 
+  it("records only successful controlled group function metadata", async () => {
+    const route = vi
+      .fn<FunctionRouterPort["route"]>()
+      .mockResolvedValueOnce({
+        type: "execute",
+        action: "find_ppt_slides",
+        arguments: { query: "private-query" },
+        provider: "deepseek"
+      })
+      .mockResolvedValueOnce({
+        type: "execute",
+        action: "query_schedule",
+        arguments: { query: "服事表" },
+        provider: "deepseek"
+      })
+      .mockResolvedValueOnce({
+        type: "execute",
+        action: "query_schedule",
+        arguments: { query: "服事表" },
+        provider: "deepseek"
+      });
+    const accessStore = defaultAccessStore();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      accessStore,
+      functionRegistry: {
+        find_ppt_slides: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "private-result",
+          agentResult: {
+            status: "success",
+            replyText: "private-result",
+            supportedOperations: []
+          }
+        }),
+        query_schedule: vi
+          .fn()
+          .mockResolvedValueOnce({
+            ok: true,
+            replyText: "找不到",
+            agentResult: { status: "not_found", replyText: "找不到" }
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            replyText: "direct success",
+            agentResult: {
+              status: "success",
+              replyText: "direct success",
+              supportedOperations: []
+            }
+          })
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const send = async (
+      replyToken: string,
+      source: { type: "group"; groupId: string; userId: string } | { type: "user"; userId: string },
+      text: string
+    ) => {
+      const body = lineBody({
+        type: "message",
+        replyToken,
+        source,
+        message: { type: "text", text }
+      });
+      return app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+    };
+
+    expect(
+      (
+        await send(
+          "reply-success",
+          { type: "group", groupId: "Cmain", userId: "Uprivate" },
+          "小哈 查投影片 private-query"
+        )
+      ).statusCode
+    ).toBe(200);
+    expect(
+      (
+        await send(
+          "reply-not-found",
+          { type: "group", groupId: "Cmain", userId: "Uprivate" },
+          "小哈 查不存在的服事表"
+        )
+      ).statusCode
+    ).toBe(200);
+    expect(
+      (await send("reply-direct", { type: "user", userId: "Uallowed" }, "小哈 查服事表")).statusCode
+    ).toBe(200);
+
+    const principals = await accessStore.listPrincipals("main");
+    expect(principals.find((principal) => principal.principalId === "Cmain")).toMatchObject({
+      lastSuccessFunctionName: "find_ppt_slides",
+      lastSuccessAt: expect.any(String)
+    });
+    expect(principals.find((principal) => principal.principalId === "Uallowed")).not.toHaveProperty(
+      "lastSuccessFunctionName"
+    );
+    expect(JSON.stringify(principals)).not.toContain("Uprivate");
+    expect(JSON.stringify(principals)).not.toContain("private-query");
+    expect(JSON.stringify(principals)).not.toContain("private-result");
+  });
+
+  it("keeps a successful group reply when success-summary persistence fails", async () => {
+    const accessStore = defaultAccessStore();
+    vi.spyOn(accessStore, "recordPrincipalSuccess").mockRejectedValue(
+      new Error("summary unavailable")
+    );
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: {
+        route: vi.fn().mockResolvedValue({
+          type: "execute",
+          action: "find_ppt_slides",
+          arguments: { query: "奇異恩典" },
+          provider: "deepseek"
+        })
+      },
+      accessStore,
+      functionRegistry: {
+        find_ppt_slides: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "已找到投影片",
+          agentResult: {
+            status: "success",
+            replyText: "已找到投影片",
+            supportedOperations: []
+          }
+        })
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "小哈 查投影片 奇異恩典" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(replyText.mock.calls[0]?.[1]).toBe("已找到投影片");
+  });
+
   it("ignores a group message without wake word before calling the router", async () => {
     const router: FunctionRouterPort = { route: vi.fn() };
     const app = createTestApp(testConfig(), { router });
@@ -833,7 +1011,7 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("functions: find_ppt_slides, query_schedule");
   });
 
-  it("lists public commands and effective functions through help", async () => {
+  it("lists the exact effective functions through help", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
@@ -856,13 +1034,147 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText.mock.calls[0]?.[1]).toContain("我可以協助");
+    expect(replyText.mock.calls[0]?.[1]).toContain("可以查詢");
+    expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
+    expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
     expect(replyText.mock.calls[0]?.[1]).toContain("/registry <code>");
     expect(replyText.mock.calls[0]?.[1]).toContain("/whoami");
-    expect(replyText.mock.calls[0]?.[1]).toContain("/help admin");
-    expect(replyText.mock.calls[0]?.[1]).not.toContain("查投影片");
-    expect(replyText.mock.calls[0]?.[1]).not.toContain("查服事表");
-    expect(replyText).toHaveBeenCalledWith("reply-token", expect.any(String), undefined);
+    expect(replyText.mock.calls[0]?.[1]).toContain("/memories");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/forget-memory <id>");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("owner:");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("freshness:");
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.any(String),
+      expect.objectContaining({
+        quickReplies: expect.arrayContaining([
+          expect.objectContaining({ label: "查服事表" }),
+          expect.objectContaining({ label: "查投影片" })
+        ])
+      })
+    );
+  });
+
+  it("returns registration guidance without capabilities for unregistered help", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(accessConfig(), {
+      router: { route },
+      accessStore: new InMemoryAccessStore(),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Unew" },
+      message: { type: "text", text: "/help" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "你尚未開通小哈，請先找管理員協助註冊。",
+      undefined
+    );
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("可以查詢");
+  });
+
+  it("projects direct, group, granted-user, and admin help from exact effective access", async () => {
+    const config = testConfig();
+    config.profiles[0].enabledFunctions = ["query_schedule", "save_schedule"];
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "principal-direct",
+          profileName: "main",
+          type: "user",
+          principalId: "Udirect",
+          createdAt: "2026-07-06T00:00:00.000Z",
+          createdBy: "test"
+        },
+        {
+          id: "principal-granted",
+          profileName: "main",
+          type: "user",
+          principalId: "Ugranted",
+          createdAt: "2026-07-06T00:00:00.000Z",
+          createdBy: "test"
+        },
+        {
+          id: "principal-help-group",
+          profileName: "main",
+          type: "group",
+          principalId: "Chelp",
+          createdAt: "2026-07-06T00:00:00.000Z",
+          createdBy: "test"
+        }
+      ]
+    });
+    await accessStore.addGroupFunctionGrant({
+      profileName: "main",
+      groupId: "Chelp",
+      functionName: "find_ppt_slides",
+      createdBy: "Uadmin"
+    });
+    await accessStore.addUserFunctionGrant({
+      profileName: "main",
+      userId: "Ugranted",
+      functionName: "save_schedule",
+      createdBy: "Uadmin"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      router: { route: vi.fn() },
+      accessStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const sources = [
+      { type: "user" as const, userId: "Udirect" },
+      { type: "group" as const, groupId: "Chelp", userId: "Ugroup" },
+      { type: "user" as const, userId: "Ugranted" },
+      { type: "user" as const, userId: "Uadmin" }
+    ];
+
+    for (const [index, source] of sources.entries()) {
+      const body = lineBody({
+        type: "message",
+        replyToken: `reply-token-${index}`,
+        source,
+        message: { type: "text", text: "/help" }
+      });
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+    }
+
+    const directHelp = String(replyText.mock.calls[0]?.[1]);
+    const groupHelp = String(replyText.mock.calls[1]?.[1]);
+    const grantedHelp = String(replyText.mock.calls[2]?.[1]);
+    const adminHelp = String(replyText.mock.calls[3]?.[1]);
+    expect(directHelp).toContain("- 查服事表：");
+    expect(directHelp).not.toContain("查投影片");
+    expect(directHelp).not.toContain("記服事表");
+    expect(groupHelp).toContain("- 查服事表：");
+    expect(groupHelp).toContain("- 查投影片：");
+    expect(groupHelp).not.toContain("記服事表");
+    expect(grantedHelp).toContain("- 查服事表：");
+    expect(grantedHelp).toContain("- 記服事表：");
+    expect(grantedHelp).not.toContain("查投影片");
+    expect(adminHelp).toContain("- 查服事表：");
+    expect(adminHelp).toContain("- 記服事表：");
+    expect(adminHelp).not.toContain("查投影片");
+    expect(adminHelp).not.toContain("Admin commands");
   });
 
   it("lists common grouped admin commands through help admin", async () => {
@@ -1684,8 +1996,10 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText.mock.calls[0]?.[1]).toContain("我可以幫你查資料");
-    expect(replyText.mock.calls[0]?.[1]).not.toContain("我是小哈");
+    expect(replyText.mock.calls[0]?.[1]).toContain("我目前可以協助：");
+    expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
+    expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
   });
 
   it("uses controlled LLM small talk for direct greetings when enabled by profile", async () => {
@@ -1784,7 +2098,7 @@ describe("LINE entrance", () => {
     expect(replyText).toHaveBeenCalledWith("reply-token", "你好，我在。", undefined);
   });
 
-  it("answers capabilities questions without repeating the identity sentence", async () => {
+  it("answers capabilities questions from the effective capability projection", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
@@ -1807,9 +2121,10 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText.mock.calls[0]?.[1]).toContain("我可以幫你查資料");
-    expect(replyText.mock.calls[0]?.[1]).not.toContain("我是小哈");
-    expect(replyText.mock.calls[0]?.[1]).toContain("你可以試試：");
+    expect(replyText.mock.calls[0]?.[1]).toContain("我目前可以協助：");
+    expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
+    expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
   });
 
   it("does not disclose profile write functions in a regular user's capability reply", async () => {
@@ -1836,9 +2151,59 @@ describe("LINE entrance", () => {
     });
 
     const reply = String(replyText.mock.calls[0]?.[1]);
-    expect(reply).toContain("我可以幫你查資料");
+    expect(reply).toContain("- 查服事表：");
     expect(reply).not.toContain("記服事表");
     expect(reply).not.toContain("保存連結資源");
+  });
+
+  it("uses the same effective capability projection for help and natural-language introduction", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = JSON.stringify({
+      destination: "bot",
+      events: [
+        {
+          type: "message",
+          replyToken: "help-reply",
+          source: { type: "user", userId: "Uallowed" },
+          message: { type: "text", text: "/help" }
+        },
+        {
+          type: "message",
+          replyToken: "intro-reply",
+          source: { type: "user", userId: "Uallowed" },
+          message: { type: "text", text: "小哈你能做什麼" }
+        }
+      ]
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    const helpText = String(replyText.mock.calls[0]?.[1]);
+    const introText = String(replyText.mock.calls[1]?.[1]);
+    expect(helpText).toContain("- 查投影片：");
+    expect(helpText).toContain("- 查服事表：");
+    expect(introText).toContain("- 查投影片：");
+    expect(introText).toContain("- 查服事表：");
+    for (const command of ["/registry", "/whoami", "/memories", "/forget-memory"]) {
+      expect(helpText).toContain(command);
+      expect(introText).not.toContain(command);
+    }
+    expect(replyText.mock.calls[1]?.[2]?.quickReplies).toEqual(
+      replyText.mock.calls[0]?.[2]?.quickReplies
+    );
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
   });
 
   it("introduces sheet music lookup without exposing storage details", async () => {
@@ -1938,7 +2303,12 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const catalogSources = vi.fn().mockResolvedValue({
       ok: true,
-      replyText: "Catalog sources"
+      replyText: [
+        "Catalog sources",
+        "- weekly_report_audio",
+        "  owner: 週報同工",
+        "  freshness: 每週一前確認音檔"
+      ].join("\n")
     });
     const app = createTestApp(testConfig(), {
       router: { route },
@@ -1988,9 +2358,12 @@ describe("LINE entrance", () => {
     });
 
     expect(catalogSources).toHaveBeenCalledTimes(1);
-    expect(replyText.mock.calls[0]?.[1]).not.toBe("Catalog sources");
-    expect(replyText.mock.calls[1]?.[1]).not.toBe("Catalog sources");
-    expect(replyText.mock.calls[2]?.[1]).toBe("Catalog sources");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("owner:");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("freshness:");
+    expect(String(replyText.mock.calls[1]?.[1])).not.toContain("owner:");
+    expect(String(replyText.mock.calls[1]?.[1])).not.toContain("freshness:");
+    expect(String(replyText.mock.calls[2]?.[1])).toContain("owner: 週報同工");
+    expect(String(replyText.mock.calls[2]?.[1])).toContain("freshness: 每週一前確認音檔");
   });
 
   it("reports profile diagnostics through slash admin profile", async () => {
@@ -2425,6 +2798,18 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
     expect(identityClient.getUserDisplayName).toHaveBeenCalledWith("Unew");
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.stringContaining("已開通，你現在可以使用小哈。"),
+      expect.objectContaining({
+        quickReplies: [
+          expect.objectContaining({ label: "查服事表" }),
+          expect.objectContaining({ label: "查投影片" })
+        ]
+      })
+    );
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("Unew");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("目前還沒有開放");
     await expect(accessStore.hasActivePrincipal("helper", "user", "Unew")).resolves.toBe(true);
     await expect(accessStore.listPrincipals("helper")).resolves.toMatchObject([
       {
@@ -2478,6 +2863,19 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
     expect(identityClient.getGroupDisplayName).toHaveBeenCalledWith("Cnew");
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.stringContaining("已開通，你現在可以使用小哈。"),
+      expect.objectContaining({
+        quickReplies: [
+          expect.objectContaining({ label: "查服事表" }),
+          expect.objectContaining({ label: "查投影片" })
+        ]
+      })
+    );
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("Cnew");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("LINE 影音同工群");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("目前還沒有開放");
     await expect(accessStore.hasActivePrincipal("helper", "group", "Cnew")).resolves.toBe(true);
     await expect(accessStore.listPrincipals("helper")).resolves.toMatchObject([
       {
@@ -2489,6 +2887,96 @@ describe("LINE entrance", () => {
     expect(accessStore.audit).toMatchObject([
       { action: "access.group.registry", targetType: "group", targetId: "Cnew" }
     ]);
+  });
+
+  it("returns a truthful direct-registration success when post-commit capability projection fails", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const accessStore = new PostCommitProjectionFailureAccessStore();
+    const registrationInviteCodeStore = new InMemoryRegistrationInviteCodeStore({
+      codeFactory: () => "HHCDIRECT",
+      now: () => new Date("2026-07-07T00:30:00.000Z")
+    });
+    await registrationInviteCodeStore.create({
+      profileName: "helper",
+      createdBy: "Uroot",
+      ttlMinutes: 60,
+      now: new Date("2026-07-07T00:00:00.000Z")
+    });
+    const app = createApp(accessConfig(), {
+      accessStore,
+      registrationInviteCodeStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Unew" },
+      message: { type: "text", text: "/registry HHCDIRECT" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "已開通，你現在可以使用小哈。",
+      undefined
+    );
+    await expect(accessStore.listPrincipals("helper")).resolves.toMatchObject([
+      { type: "user", principalId: "Unew" }
+    ]);
+    await expect(registrationInviteCodeStore.consume("helper", "HHCDIRECT")).resolves.toBe(false);
+  });
+
+  it("returns a truthful group-registration success when post-commit capability projection fails", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const accessStore = new PostCommitProjectionFailureAccessStore();
+    const registrationInviteCodeStore = new InMemoryRegistrationInviteCodeStore({
+      codeFactory: () => "HHCGROUPFAIL",
+      now: () => new Date("2026-07-07T00:30:00.000Z")
+    });
+    await registrationInviteCodeStore.create({
+      profileName: "helper",
+      createdBy: "Uroot",
+      ttlMinutes: 60,
+      now: new Date("2026-07-07T00:00:00.000Z")
+    });
+    const app = createApp(accessConfig(), {
+      accessStore,
+      registrationInviteCodeStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cnew", userId: "Unew" },
+      message: { type: "text", text: "/registry HHCGROUPFAIL" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "已開通，你現在可以使用小哈。",
+      undefined
+    );
+    await expect(accessStore.listPrincipals("helper")).resolves.toMatchObject([
+      { type: "group", principalId: "Cnew" }
+    ]);
+    await expect(registrationInviteCodeStore.consume("helper", "HHCGROUPFAIL")).resolves.toBe(
+      false
+    );
   });
 
   it("does not let admins register the current group without an invite code", async () => {
@@ -2922,6 +3410,120 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(replyText.mock.calls[0]?.[1]).toContain("group: Callowed");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("user: Uallowed");
+  });
+
+  it("summarizes active and disabled groups with effective display names and last success", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const accessStore = new InMemoryAccessStore();
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cactive",
+      displayName: "影音同工群",
+      createdBy: "Uroot"
+    });
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cdisabled",
+      displayName: "舊服事群",
+      createdBy: "Uroot"
+    });
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "user",
+      principalId: "Udisabled",
+      displayName: "舊使用者",
+      createdBy: "Uroot"
+    });
+    await accessStore.addGroupFunctionGrant({
+      profileName: "helper",
+      groupId: "Cactive",
+      functionName: "find_resource",
+      createdBy: "Uroot"
+    });
+    await accessStore.addGroupFunctionGrant({
+      profileName: "helper",
+      groupId: "Cdisabled",
+      functionName: "find_resource",
+      createdBy: "Uroot"
+    });
+    await accessStore.addUserFunctionGrant({
+      profileName: "helper",
+      userId: "Uroot",
+      functionName: "query_wikipedia",
+      createdBy: "Uroot"
+    });
+    const groupRole = await accessStore.upsertRole({
+      profileName: "helper",
+      roleKey: "music_reader",
+      displayName: "Music reader"
+    });
+    await accessStore.bindRoleCapability(groupRole.id, "function:find_sheet_music:execute");
+    await accessStore.bindRoleToPrincipal({
+      profileName: "helper",
+      principalType: "group",
+      principalId: "Cactive",
+      roleId: groupRole.id
+    });
+    await accessStore.bindRoleToPrincipal({
+      profileName: "helper",
+      principalType: "group",
+      principalId: "Cdisabled",
+      roleId: groupRole.id
+    });
+    await accessStore.recordPrincipalSuccess({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cactive",
+      functionName: "find_ppt_slides",
+      occurredAt: "2026-07-26T10:00:00.000Z"
+    });
+    await accessStore.disablePrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cdisabled",
+      disabledBy: "Uroot"
+    });
+    await accessStore.disablePrincipal({
+      profileName: "helper",
+      type: "user",
+      principalId: "Udisabled",
+      disabledBy: "Uroot"
+    });
+    const app = createApp(accessConfig(), {
+      router: { route },
+      accessStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "/access-list" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    const reply = String(replyText.mock.calls[0]?.[1]);
+    expect(reply).toContain("group: Cactive (影音同工群)");
+    expect(reply).toContain("state: active");
+    expect(reply).toContain("effective: 查投影片, 查服事表, 查教會資料, 查歌譜");
+    expect(reply).not.toContain("查維基百科");
+    expect(reply).toContain("last-success: 查投影片 @ 2026-07-26T10:00:00.000Z");
+    expect(reply).toContain("group: Cdisabled (舊服事群)");
+    expect(reply).toContain("state: disabled");
+    expect(reply).toMatch(
+      /group: Cdisabled \(舊服事群\)\n {2}state: disabled\n {2}effective: \(none\)/u
+    );
+    expect(reply).not.toContain("user: Udisabled");
   });
 
   it("lists recent access audit events with a capped limit", async () => {
@@ -3452,6 +4054,51 @@ describe("LINE entrance", () => {
     expect(replyText).toHaveBeenCalledWith("reply-token", "已選擇第 1 個投影片", undefined);
   });
 
+  it("invokes the shared completion boundary exactly once for an executed postback", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const complete = vi.fn<ControlledCompletionObserver["complete"]>(async ({ result }) => ({
+      ...result,
+      replyText: "沒有找到符合條件的結果。請換一個關鍵字再試。"
+    }));
+    const app = createTestApp(testConfig(), {
+      router: { route: vi.fn() },
+      completionObserver: { complete },
+      postbackHandlers: {
+        select_schedule: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "原始未找到",
+          executedAction: "query_schedule",
+          agentResult: { status: "not_found", replyText: "原始未找到" }
+        })
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "postback",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      postback: { data: "action=select_schedule&requestId=req-1&index=0" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "query_schedule", durationMs: expect.any(Number) })
+    );
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "沒有找到符合條件的結果。請換一個關鍵字再試。",
+      undefined
+    );
+  });
+
   it("keeps selection-session reads out of requester-scoped active tasks", async () => {
     const config = testConfig();
     config.profiles[0] = {
@@ -3552,7 +4199,7 @@ describe("LINE entrance", () => {
     expect(recordActiveTask).not.toHaveBeenCalled();
   });
 
-  it("stores slow agent turns and lets the same requester retrieve the result by postback", async () => {
+  it("retrieves an already-observed slow agent result without observing it again", async () => {
     const config = testConfig();
     config.profiles[0] = {
       ...config.profiles[0],
@@ -3560,6 +4207,9 @@ describe("LINE entrance", () => {
     };
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const deferred = createDeferred<FunctionExecutionResult | undefined>();
+    const completionObserver: ControlledCompletionObserver = {
+      complete: vi.fn(async ({ result }) => result)
+    };
     const agentTurnRuntime = {
       handleTextTurn: vi.fn().mockReturnValue(deferred.promise)
     };
@@ -3567,6 +4217,7 @@ describe("LINE entrance", () => {
       router: { route: vi.fn() },
       agentTurnRuntime,
       agentJobStore: new InMemoryAgentJobStore(),
+      completionObserver,
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -3590,7 +4241,25 @@ describe("LINE entrance", () => {
     const data =
       quickReplies[0]?.action.type === "postback" ? quickReplies[0].action.data : undefined;
 
-    deferred.resolve({ ok: true, replyText: "finished result" });
+    const finishedResult = {
+      ok: true,
+      replyText: "finished result",
+      executedAction: "query_schedule" as const
+    };
+    await completionObserver.complete({
+      context: {
+        profile: config.profiles[0]!,
+        event: {
+          type: "message",
+          source: { type: "user", userId: "Uallowed" },
+          message: { type: "text", text: "lookup" }
+        },
+        requestId: "slow-runtime"
+      },
+      action: "query_schedule",
+      result: finishedResult
+    });
+    deferred.resolve(finishedResult);
     await deferred.promise;
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -3609,6 +4278,7 @@ describe("LINE entrance", () => {
 
     expect(postbackRes.statusCode).toBe(200);
     expect(replyText).toHaveBeenLastCalledWith("reply-token-2", "finished result", undefined);
+    expect(completionObserver.complete).toHaveBeenCalledTimes(1);
   });
 
   it("keeps group follow-up routing scoped to the same requester conversation window", async () => {

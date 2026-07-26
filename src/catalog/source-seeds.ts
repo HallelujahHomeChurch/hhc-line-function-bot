@@ -37,7 +37,9 @@ export function buildCatalogSourceSeeds(
     driveId,
     folderItemId: env.GRAPH_PPT_FOLDER_ITEM_ID,
     enabled: true,
-    capabilities: { read: ["helper"], write: ["helper:ppt_slide:write"] }
+    capabilities: { read: ["helper"], write: ["helper:ppt_slide:write"] },
+    ownerLabel: "媒體團隊",
+    freshnessResponsibility: "投影片異動後由媒體團隊確認"
   });
   addOneDriveSource(sources, {
     profileName: "helper",
@@ -48,7 +50,9 @@ export function buildCatalogSourceSeeds(
     folderItemId: env.GRAPH_POP_SHEET_FOLDER_ITEM_ID,
     enabled: true,
     allowedExtensions: sheetMusicExtensions,
-    capabilities: { read: ["helper"], write: ["helper:pop_sheet:write"] }
+    capabilities: { read: ["helper"], write: ["helper:pop_sheet:write"] },
+    ownerLabel: "敬拜團隊",
+    freshnessResponsibility: "歌譜異動後由敬拜團隊確認"
   });
   addOneDriveSource(sources, {
     profileName: "helper",
@@ -59,7 +63,9 @@ export function buildCatalogSourceSeeds(
     folderItemId: env.GRAPH_HYMN_SHEET_FOLDER_ITEM_ID,
     enabled: true,
     allowedExtensions: sheetMusicExtensions,
-    capabilities: { read: ["helper"], write: ["helper:hymn_sheet:write"] }
+    capabilities: { read: ["helper"], write: ["helper:hymn_sheet:write"] },
+    ownerLabel: "敬拜團隊",
+    freshnessResponsibility: "歌譜異動後由敬拜團隊確認"
   });
   const databaseId = env.NOTION_SERVICE_DATABASE_ID?.trim();
   if (databaseId) {
@@ -72,7 +78,9 @@ export function buildCatalogSourceSeeds(
       rootLocation: { databaseId },
       enabled: true,
       syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-      capabilities: { read: ["query_schedule"], write: [] }
+      capabilities: { read: ["query_schedule"], write: [] },
+      ownerLabel: "媒體團隊",
+      freshnessResponsibility: "服事表異動後由媒體團隊確認"
     });
   }
 
@@ -85,7 +93,9 @@ export function buildCatalogSourceSeeds(
     driveId,
     folderItemId: env.GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID,
     enabled: false,
-    capabilities: { read: ["helper"], write: [] }
+    capabilities: { read: ["helper"], write: [] },
+    ownerLabel: "週報團隊",
+    freshnessResponsibility: "每週聚會後由週報團隊確認"
   });
 
   return sources;
@@ -126,6 +136,8 @@ function addOneDriveSource(
     enabled: boolean;
     allowedExtensions?: string[];
     capabilities: CatalogSourceInput["capabilities"];
+    ownerLabel: string;
+    freshnessResponsibility: string;
   }
 ): void {
   const folderItemId = input.folderItemId?.trim();
@@ -145,7 +157,9 @@ function addOneDriveSource(
       intervalMinutes: 15,
       ...(input.allowedExtensions ? { allowedExtensions: input.allowedExtensions } : {})
     },
-    capabilities: input.capabilities
+    capabilities: input.capabilities,
+    ownerLabel: input.ownerLabel,
+    freshnessResponsibility: input.freshnessResponsibility
   });
 }
 
@@ -181,6 +195,8 @@ function addXiaohaDatabaseSource(
     rootLocation: { driveId, documentFolderItemId, imageFolderItemId, otherFolderItemId },
     enabled: true,
     syncPolicy: { mode: "manual" },
-    capabilities: { read: ["helper"], write: ["helper:church_database:write"] }
+    capabilities: { read: ["helper"], write: ["helper:church_database:write"] },
+    ownerLabel: "小哈管理員",
+    freshnessResponsibility: "資料異動後由小哈管理員確認"
   });
 }

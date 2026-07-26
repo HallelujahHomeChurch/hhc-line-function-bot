@@ -1,5 +1,6 @@
 import type { AccessStore } from "../../access/types.js";
 import type { AdminActionRegistry } from "../../actions/admin-registry.js";
+import { projectEffectiveCapabilities } from "../capabilities/effective-capability-projection.js";
 import {
   enabledNaturalLanguageAdminActionNames,
   matchesGroupScopedNaturalLanguageAdminActionHint,
@@ -20,6 +21,7 @@ import { createIntroReply } from "../../intro.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
 import { stateAgeBucket } from "../../observability/retrieval-diagnostics.js";
 import { emitProductEvent } from "../../observability/product-events.js";
+import type { FirstSuccessStore } from "../../observability/first-success-store.js";
 import type { LastErrorStore } from "../../observability/last-error-store.js";
 import type { LastRouteRecord, LastRouteStore } from "../../observability/last-route-store.js";
 import { normalizeFunctionArguments } from "../../functions/argument-normalization.js";
@@ -74,6 +76,11 @@ import {
 import { matchTextContinuation } from "./stages/text-continuation-stage.js";
 import { runTurnStages } from "./coordinator.js";
 import type { TurnStage, TurnStageName } from "./contracts.js";
+import { applyResultGuidance, controlledResultStateForValidatorDeny } from "./result-guidance.js";
+import {
+  createControlledCompletionObserver,
+  type ControlledCompletionObserver
+} from "./completion-observer.js";
 
 export interface AgentTurnRuntimeOptions {
   functionRegistry: FunctionRegistry;
@@ -95,6 +102,8 @@ export interface AgentTurnRuntimeOptions {
   timeZone?: string;
   now?: () => Date;
   observabilityHmacKey?: string;
+  firstSuccessStore?: FirstSuccessStore;
+  completionObserver?: ControlledCompletionObserver;
 }
 
 export interface AgentTextTurnInput {
@@ -113,6 +122,15 @@ export interface AgentTurnRuntime {
 
 export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentTurnRuntime {
   const now = options.now ?? (() => new Date());
+  const completionObserver =
+    options.completionObserver ??
+    createControlledCompletionObserver({
+      accessStore: options.accessStore,
+      routeObserver: options.routeObserver,
+      firstSuccessStore: options.firstSuccessStore,
+      observabilityHmacKey: options.observabilityHmacKey,
+      now
+    });
 
   async function recordTrace(
     input: AgentTextTurnInput,
@@ -191,11 +209,12 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               requesterIsAdmin: input.requesterIsAdmin
             }
           );
+          const durationMs = elapsedMs(startedAt);
           steps.push({
             phase: "text_handler",
             outcome: textMessageHandler.name,
             ok: result?.ok,
-            durationMs: elapsedMs(startedAt)
+            durationMs
           });
           await emitRouteEvent(options.routeObserver, {
             kind: "text_handler",
@@ -204,8 +223,9 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             requestId: input.requestId,
             handler: textMessageHandler.name,
             ok: result?.ok,
-            durationMs: elapsedMs(startedAt)
+            durationMs
           });
+          let transitionFunctionName: FunctionName | undefined;
           if (result) {
             if (result.executedAction) {
               await recordFunctionWriteAudit(
@@ -220,7 +240,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               result.agentResource?.resourceType,
               context.profile.enabledFunctions
             );
-            const transitionFunctionName = result.executedAction ?? textHandlerFunctionName;
+            transitionFunctionName = result.executedAction ?? textHandlerFunctionName;
             if (transitionFunctionName) {
               const previousTask = await readActiveTask(options, input, true);
               if (options.traceStore) {
@@ -258,7 +278,17 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               });
             }
           }
-          return finish(input, steps, result);
+          const completedResult =
+            result && transitionFunctionName
+              ? await completionObserver.complete({
+                  context,
+                  action: transitionFunctionName,
+                  result,
+                  durationMs,
+                  clarificationCount: 0
+                })
+              : result;
+          return finish(input, steps, completedResult);
         }
 
         if (input.allowRouting === false) {
@@ -355,7 +385,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               action: plan.capability,
               clarificationCount: 1
             });
-            return finish(input, steps, slotCollection);
+            return finish(
+              input,
+              steps,
+              applyResultGuidance({
+                state: "missing_input",
+                result: slotCollection,
+                definition: getFunctionDefinition(plan.capability)
+              })
+            );
           }
           return finish(
             input,
@@ -434,10 +472,26 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               });
               return finish(input, steps, result);
             }
-            const intro = createIntroReply(input.profile, text, {
-              force: true,
-              variant: introVariantRouteArgument(route.arguments)
-            });
+            const intro = createIntroReply(
+              projectEffectiveCapabilities({
+                context: {
+                  profile: input.profile,
+                  authorized: true,
+                  requesterIsAdmin: Boolean(input.requesterIsAdmin),
+                  sourceType:
+                    input.event.source.type === "user"
+                      ? "user"
+                      : input.event.source.type === "group"
+                        ? "group"
+                        : "room"
+                }
+              }),
+              text,
+              {
+                force: true,
+                variant: introVariantRouteArgument(route.arguments)
+              }
+            );
             return finish(
               input,
               steps,
@@ -467,7 +521,14 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         }
 
         if (route.type === "deny") {
-          return finish(input, steps, { ok: true, replyText: messages.unsupported });
+          return finish(
+            input,
+            steps,
+            applyResultGuidance({
+              state: controlledResultStateForValidatorDeny(route.reason),
+              result: { ok: true, replyText: "" }
+            })
+          );
         }
         return continueStage;
       });
@@ -488,7 +549,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         });
         const handler = options.functionRegistry[route.action];
         if (!handler) {
-          return finish(input, steps, { ok: true, replyText: messages.functionNotConfigured });
+          return finish(
+            input,
+            steps,
+            applyResultGuidance({
+              state: "unavailable",
+              result: { ok: true, replyText: messages.functionNotConfigured },
+              definition: getFunctionDefinition(route.action)
+            })
+          );
         }
 
         const slotClarification = await createSlotClarificationResult({
@@ -515,7 +584,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             action: route.action,
             clarificationCount: 1
           });
-          return finish(input, steps, slotClarification);
+          return finish(
+            input,
+            steps,
+            applyResultGuidance({
+              state: "missing_input",
+              result: slotClarification,
+              definition: getFunctionDefinition(route.action)
+            })
+          );
         }
 
         const inFlight = buildInFlightKey(
@@ -575,7 +652,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             ...context,
             activeTask: controlledContinuationAuthorized ? activeTaskView(activeTask) : undefined
           });
-          const result = projectAgentReply({
+          const controlledResult = projectAgentReply({
             capability: route.action,
             text: routingText,
             result: rawResult
@@ -586,12 +663,12 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               scope: activeTaskScope(options.conversationWindowStore, input),
               capability: route.action,
               enabledFunctions: input.profile.enabledFunctions,
-              result,
+              result: controlledResult,
               now: now(),
               ttlMs: activeTaskTtlMs(input.profile),
               previousTask: activeTask
             });
-            steps.push(resultEnvelopeTraceStep(result));
+            steps.push(resultEnvelopeTraceStep(controlledResult));
             steps.push({
               phase: "active_task",
               outcome: "transition",
@@ -604,15 +681,22 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             context,
             route.action,
             normalizedArguments,
-            result
+            controlledResult
           );
           await options.agentRuntime?.afterFunctionResult({
             context,
             action: route.action,
             arguments: normalizedArguments,
-            result
+            result: controlledResult
           });
           const durationMs = elapsedMs(functionStartedAt);
+          const result = await completionObserver.complete({
+            context,
+            action: route.action,
+            result: controlledResult,
+            durationMs,
+            clarificationCount: 0
+          });
           steps.push({
             phase: "function",
             outcome: "executed",
@@ -634,29 +718,6 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             durationMs,
             ...result.diagnostics
           });
-          await emitProductEvent(options.routeObserver, {
-            eventName: "function_completed",
-            requestId: input.requestId,
-            profileName: input.profile.name,
-            source: input.event.source,
-            hmacKey: options.observabilityHmacKey,
-            action: route.action,
-            resultClass: productResultClass(result),
-            durationMs,
-            clarificationCount: 0
-          });
-          if (result.writePhase) {
-            await emitProductEvent(options.routeObserver, {
-              eventName: result.writePhase === "commit" ? "write_committed" : "write_previewed",
-              requestId: input.requestId,
-              profileName: input.profile.name,
-              source: input.event.source,
-              hmacKey: options.observabilityHmacKey,
-              action: route.action,
-              resultClass: productResultClass(result),
-              durationMs
-            });
-          }
           await options.lastRouteStore.record({
             requestId: input.requestId,
             occurredAt: now().toISOString(),
@@ -706,10 +767,18 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             errorName: error instanceof Error ? error.name : typeof error,
             durationMs
           });
-          return finish(input, steps, {
-            ok: false,
-            replyText: requestFailedMessage(input.requestId)
-          });
+          return finish(
+            input,
+            steps,
+            applyResultGuidance({
+              state: "error",
+              result: {
+                ok: false,
+                replyText: requestFailedMessage(input.requestId)
+              },
+              definition: getFunctionDefinition(route.action)
+            })
+          );
         } finally {
           if (inFlight) {
             await releaseInFlight(options.inFlightStore, inFlight.key);
@@ -730,13 +799,6 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
       return outcome.kind === "handled" ? outcome.result : undefined;
     }
   };
-}
-
-function productResultClass(
-  result: FunctionExecutionResult
-): "success" | "not_found" | "ambiguous" | "unavailable" | "error" {
-  if (!result.ok) return "error";
-  return result.agentResult?.status ?? "success";
 }
 
 async function recordFunctionWriteAudit(
@@ -976,23 +1038,33 @@ function controlledClarificationResult(
   context: FunctionHandlerContext
 ): FunctionExecutionResult {
   if (plan.reasonCode === "retrieval_unavailable") {
-    return {
-      ok: true,
-      replyText: withRequesterDisplayName(context, "資料來源暫時無法查詢，請稍後再試。")
-    };
+    return applyResultGuidance({
+      state: "unavailable",
+      result: {
+        ok: true,
+        replyText: withRequesterDisplayName(context, "暫時無法查詢，請稍後再試。")
+      }
+    });
   }
   const definition = plan.capability ? getFunctionDefinition(plan.capability) : undefined;
   const slot = definition?.requiredSlots[0];
   const replyText =
     definition?.clarificationPrompt ?? "請再告訴我想查哪個功能，以及要找的名稱、日期或主題。";
-  return {
+  const result = {
     ok: true,
     replyText: withRequesterDisplayName(context, replyText),
     quickReplies: slot?.quickReplies?.map((item) => ({
       label: item.label,
-      action: { type: "message", label: item.label, text: item.text }
+      action: { type: "message" as const, label: item.label, text: item.text }
     }))
   };
+  return plan.reasonCode === "missing_required_slot"
+    ? applyResultGuidance({
+        state: "missing_input",
+        result,
+        definition
+      })
+    : result;
 }
 
 async function readActiveTask(

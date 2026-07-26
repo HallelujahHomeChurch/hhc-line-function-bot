@@ -472,7 +472,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
   {
     name: "find_resource",
     displayName: "查教會資料",
-    shortDescription: "搜尋已同步的小哈資料庫或其他泛用教會資料。",
+    shortDescription: "搜尋目前可用的泛用教會資料。",
     examples: ["小哈 查教會資料 週報音檔", "小哈 找 2026-07 週報音檔"],
     requires: ["graph"],
     scope: "group_capable",
@@ -536,7 +536,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       label: "查教會資料",
       command: "小哈 查教會資料"
     },
-    helpText: "查詢小哈資料庫或其他已授權的泛用教會資料。"
+    helpText: "查詢目前可用的泛用教會資料。"
   },
   {
     name: "query_wikipedia",
@@ -657,12 +657,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
   },
   {
     name: "save_resource",
-    displayName: "保存連結資源",
-    shortDescription: "保存同工明確交代的投影片或歌譜 HTTPS 連結。",
-    examples: [
-      "小哈幫我保存這份投影片 https://example.org/slides 名稱是青年聚會投影片",
-      "小哈保存歌譜 https://example.org/score 名稱是恩典之路歌譜"
-    ],
+    displayName: "保存檔案",
+    shortDescription: "上傳圖片或檔案，選擇用途與名稱，預覽確認後經驗證掃毒再保存發布。",
+    examples: ["小哈我要上傳檔案", "小哈幫我存檔案"],
     requires: ["memory", "session"],
     scope: "group_capable",
     sideEffectLevel: "write",
@@ -672,7 +669,19 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         name: "url",
         argument: "url",
         missingWhen: "blank",
-        prompt: "請提供要保存的 HTTPS 連結。"
+        genericRequest: {
+          phrases: ["小哈我要上傳檔案", "小哈要上傳檔案", "小哈幫我存檔案"],
+          clearArguments: [
+            "url",
+            "resourceType",
+            "title",
+            "description",
+            "visibility",
+            "confirm",
+            "cancel"
+          ]
+        },
+        prompt: "請直接上傳一個圖片或檔案。"
       },
       {
         name: "resource_type",
@@ -695,9 +704,10 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     },
     memoryPolicy: { kind: "explicit_text" },
     agentCapability: {
-      intents: ["保存連結", "保存檔案", "上傳檔案", "幫我保存"],
+      intents: ["保存檔案", "上傳檔案", "幫我存檔案", "保存連結", "幫我保存"],
       candidateHints: ["保存", "上傳", "檔案", "連結"],
-      semanticDescription: "經確認後保存投影片、歌譜或泛用教會資源。",
+      semanticDescription:
+        "啟動受控附件流程，上傳圖片或檔案後選擇用途、輸入名稱、預覽確認，通過驗證與掃毒後發布；也保留明確外部連結匯入。",
       arguments: {
         mode: {
           type: "string",
@@ -749,15 +759,15 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       ],
       ambiguity: "clarify"
     },
-    clarificationPrompt: "請提供要保存的連結、類型與名稱。",
+    clarificationPrompt: "請先上傳圖片或檔案；之後我會依序詢問用途與名稱，再讓你預覽確認。",
     description:
-      '- save_resource: save an explicit HTTPS link as a private resource by default. Arguments: {"url":"https URL", "resourceType":"ppt_slide|sheet_music", "title":"user-provided title", "description":"optional", "visibility":"private|group optional", "confirm":boolean optional}. Always preview before persisting. Use visibility group only when the requester explicitly asks to share with the group.',
+      '- save_resource: start the controlled attachment intake for an explicit upload activation. The attachment workflow owns purpose, title, preview, confirmation, validation, malware scanning, and publication. An explicit HTTPS URL import remains supported through {"url":"https URL", "resourceType":"ppt_slide|sheet_music", "title":"user-provided title"}. Never bypass preview or confirmation.',
     argumentSchema: saveResourceArgumentsSchema,
     quickReply: {
-      label: "保存連結",
-      command: "小哈幫我保存投影片連結："
+      label: "保存檔案",
+      command: "小哈我要上傳檔案"
     },
-    helpText: "保存明確提供的投影片或歌譜 HTTPS 連結；預設私人，需確認後才寫入。"
+    helpText: "上傳圖片或檔案，選擇用途與名稱，預覽確認後經驗證掃毒再保存發布。"
   },
   {
     name: "retrieve_memory",

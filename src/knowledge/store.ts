@@ -13,6 +13,7 @@ export interface KnowledgeSourceInput {
   externalRootId: string;
   rootUrl: string;
   enabled: boolean;
+  createdBy?: string;
   expiresAt?: string;
   aliases?: string[];
   topics?: string[];
@@ -246,6 +247,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
         sampleQueries: [],
         syncStatus: "pending" as const
       }),
+      createdBy: existing?.createdBy ?? input.createdBy,
       stagedDisplayName: staged.displayName,
       stagedAdapterType: input.adapterType,
       stagedExternalRootId: input.externalRootId,

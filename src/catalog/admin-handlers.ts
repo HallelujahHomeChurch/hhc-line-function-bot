@@ -151,22 +151,30 @@ function formatCatalogSources(title: string, sources: CatalogSourceRecord[]): st
     title,
     ...sources.map((source) =>
       [
-        `- ${source.sourceKey}`,
-        `enabled=${source.enabled}`,
-        `adapter=${source.adapterType}`,
-        `domain=${source.domain}`,
-        `itemKind=${source.defaultItemKind}`,
-        `health=${source.healthStatus}`,
-        `revision=${source.revision}`,
-        `items=${source.publishedItemCount}`,
-        `lastSuccess=${source.lastSuccessAt ?? "(never)"}`,
-        `lastFailure=${source.lastFailureAt ?? "(none)"}`,
-        `mode=${source.syncPolicy.mode}`,
-        `read=${source.capabilities.read.join(",") || "(none)"}`,
-        `write=${source.capabilities.write.join(",") || "(none)"}`
-      ].join(" ")
+        [
+          `- ${source.sourceKey}`,
+          `enabled=${source.enabled}`,
+          `adapter=${source.adapterType}`,
+          `domain=${source.domain}`,
+          `itemKind=${source.defaultItemKind}`,
+          `health=${source.healthStatus}`,
+          `revision=${source.revision}`,
+          `items=${source.publishedItemCount}`,
+          `lastSuccess=${source.lastSuccessAt ?? "(never)"}`,
+          `lastFailure=${source.lastFailureAt ?? "(none)"}`,
+          `mode=${source.syncPolicy.mode}`,
+          `read=${source.capabilities.read.join(",") || "(none)"}`,
+          `write=${source.capabilities.write.join(",") || "(none)"}`
+        ].join(" "),
+        `  owner: ${responsibilityLabel(source.ownerLabel)}`,
+        `  freshness: ${responsibilityLabel(source.freshnessResponsibility)}`
+      ].join("\n")
     )
   ].join("\n");
+}
+
+function responsibilityLabel(value: string | undefined): string {
+  return value?.trim() || "尚未指定";
 }
 
 function summarizeSyncResult(result: SyncCatalogSourcesResult): Record<string, unknown> {

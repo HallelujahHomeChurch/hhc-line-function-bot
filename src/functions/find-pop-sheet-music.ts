@@ -17,6 +17,7 @@ import {
   type FindPopSheetMusicArguments
 } from "../function-arguments.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
+import type { RetrievalDiagnostics } from "../observability/retrieval-diagnostics.js";
 import { withRequesterDisplayName } from "../requester-personalization.js";
 import { canCreateRequesterScopedSession } from "../state/session-safety.js";
 import {
@@ -162,7 +163,11 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
       ).slice(0, MAX_CANDIDATES);
 
       if (candidates.length === 1) {
-        return createSheetMusicCandidateReply(options.graph, candidates[0], now());
+        const result = await createSheetMusicCandidateReply(options.graph, candidates[0], now());
+        return {
+          ...result,
+          diagnostics: catalogSheetMusicDiagnostics(catalogResult)
+        };
       }
 
       if (!canCreateRequesterScopedSession(context.event.source)) {
@@ -574,6 +579,7 @@ async function findCatalogSheetMusic(
 ): Promise<{
   status: "fresh" | "stale_allowed" | "unavailable" | "not_found";
   revision: string;
+  dataAsOf?: string;
   items: CatalogItemRecord[];
 }> {
   if (!catalog) {
@@ -595,6 +601,24 @@ async function findCatalogSheetMusic(
       .filter((item) => catalogSourceAllowsRead(item.source, [profileName, "find_sheet_music"]))
       .filter((item) => item.storageRef.provider === "graph")
       .filter((item) => extensions.some((extension) => catalogItemExtension(item) === extension))
+  };
+}
+
+function catalogSheetMusicDiagnostics(result: {
+  status: "fresh" | "stale_allowed" | "unavailable" | "not_found";
+  revision: string;
+  dataAsOf?: string;
+}): RetrievalDiagnostics {
+  return {
+    executionMode: "catalog_snapshot_read",
+    freshnessStatus:
+      result.status === "fresh"
+        ? "fresh"
+        : result.status === "stale_allowed"
+          ? "stale_allowed"
+          : "stale_rejected",
+    sourceRevision: result.revision ? "present" : "missing",
+    dataAsOf: result.dataAsOf
   };
 }
 

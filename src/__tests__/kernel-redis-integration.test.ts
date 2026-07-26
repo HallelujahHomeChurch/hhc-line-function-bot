@@ -6,6 +6,7 @@ import {
   type KernelRedisEnvironment
 } from "../evals/kernel/integration/environment.js";
 import { runRedisIntegrationMatrix } from "../evals/kernel/integration/redis-matrix.js";
+import { RedisFirstSuccessStore } from "../observability/first-success-store.js";
 import { RedisSessionStore } from "../state/redis-session-store.js";
 
 describe("kernel Redis integration environment", () => {
@@ -64,6 +65,32 @@ describe("kernel Redis integration environment", () => {
         passed: true
       }))
     );
+  });
+
+  it("atomically marks first success across two real Redis clients", async () => {
+    environment ??= await createKernelRedisEnvironment();
+    const stores = environment.clients.map(
+      (client) => new RedisFirstSuccessStore({ client, keyPrefix: environment!.keyPrefix })
+    );
+    const scope = {
+      profileName: "helper-private",
+      sourceType: "group" as const,
+      sourceId: "C-private",
+      requesterUserId: "U-private"
+    };
+    const ttlMs = 31_536_000_000;
+
+    const results = await Promise.all(stores.map((store) => store.tryMark(scope, ttlMs)));
+
+    expect(results.filter((result) => result === "first")).toHaveLength(1);
+    expect(results.filter((result) => result === "existing")).toHaveLength(1);
+    const keys = await environment.clients[0].keys(`${environment.keyPrefix}:first-success:v1:*`);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toMatch(/:first-success:v1:[a-f0-9]{64}$/u);
+    expect(keys[0]).not.toMatch(/helper-private|C-private|U-private/u);
+    const remainingTtlMs = await environment.clients[0].pTTL(keys[0]!);
+    expect(remainingTtlMs).toBeGreaterThan(ttlMs - 5_000);
+    expect(remainingTtlMs).toBeLessThanOrEqual(ttlMs);
   });
 
   it("clears the interactive index when handlers delete or take by id", async () => {

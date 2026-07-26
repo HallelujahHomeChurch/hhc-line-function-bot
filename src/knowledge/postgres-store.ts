@@ -41,11 +41,12 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     const result = await this.db.query(
       `insert into knowledge_sources
        (id, profile_name, source_key, display_name, adapter_type, external_root_id, root_url,
-        enabled, expires_at, staged_display_name, staged_adapter_type, staged_external_root_id,
+        created_by, enabled, expires_at, staged_display_name, staged_adapter_type, staged_external_root_id,
         staged_root_url, staged_enabled, staged_expires_at, staging_revision,
         admin_aliases, admin_topics, admin_sample_queries)
-       values ($1,$2,$3,$4,$5,$6,$7,false,null,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,false,null,$4,$5,$6,$7,$9,$10,$11,$12,$13,$14)
        on conflict (profile_name, source_key) do update set
+         created_by=coalesce(knowledge_sources.created_by,excluded.created_by),
          staged_display_name=excluded.staged_display_name,
          staged_adapter_type=excluded.staged_adapter_type,
          staged_external_root_id=excluded.staged_external_root_id,
@@ -65,6 +66,7 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
         input.adapterType,
         input.externalRootId,
         input.rootUrl,
+        input.createdBy ?? null,
         input.enabled,
         input.expiresAt ?? null,
         randomUUID(),
@@ -690,6 +692,7 @@ function mapSource(row: Record<string, unknown>): KnowledgeSourceRecord {
     externalRootId: requiredString(row.external_root_id),
     rootUrl: requiredString(row.root_url),
     enabled: Boolean(row.enabled),
+    createdBy: optionalString(row.created_by),
     expiresAt: iso(row.expires_at),
     disabledAt: iso(row.disabled_at),
     purgeAfter: iso(row.purge_after),

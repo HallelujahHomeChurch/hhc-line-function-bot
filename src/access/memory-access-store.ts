@@ -17,7 +17,8 @@ import type {
   AccessRole,
   BindRoleInput,
   UpsertRoleInput,
-  RolePrincipalType
+  RolePrincipalType,
+  RecordPrincipalSuccessInput
 } from "./types.js";
 
 export interface InMemoryAccessStoreOptions {
@@ -61,9 +62,16 @@ export class InMemoryAccessStore implements AccessStore {
     );
   }
 
-  async listPrincipals(profileName: string): Promise<AccessPrincipal[]> {
+  async listPrincipals(
+    profileName: string,
+    options: { includeDisabled?: boolean } = {}
+  ): Promise<AccessPrincipal[]> {
     return Array.from(this.principals.values())
-      .filter((principal) => principal.profileName === profileName && !principal.disabledAt)
+      .filter(
+        (principal) =>
+          principal.profileName === profileName &&
+          (options.includeDisabled || !principal.disabledAt)
+      )
       .sort((a, b) => a.type.localeCompare(b.type) || a.principalId.localeCompare(b.principalId))
       .map((principal) => ({ ...principal }));
   }
@@ -116,6 +124,28 @@ export class InMemoryAccessStore implements AccessStore {
       disabledBy: input.disabledBy
     });
     return true;
+  }
+
+  async recordPrincipalSuccess(input: RecordPrincipalSuccessInput): Promise<void> {
+    const existing = Array.from(this.principals.values()).find(
+      (principal) =>
+        principal.profileName === input.profileName &&
+        principal.type === input.type &&
+        principal.principalId === input.principalId &&
+        !principal.disabledAt
+    );
+    if (
+      !existing ||
+      (existing.lastSuccessAt &&
+        new Date(existing.lastSuccessAt).getTime() > new Date(input.occurredAt).getTime())
+    ) {
+      return;
+    }
+    this.principals.set(existing.id, {
+      ...existing,
+      lastSuccessFunctionName: input.functionName,
+      lastSuccessAt: input.occurredAt
+    });
   }
 
   async recordAudit(input: AccessAuditInput): Promise<void> {

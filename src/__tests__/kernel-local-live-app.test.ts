@@ -395,9 +395,13 @@ describe("Kernel local live application composition", () => {
     expect(replies).toEqual([
       expect.objectContaining({
         token: "reply-token-1",
-        text: expect.stringContaining("/help admin")
+        text: expect.stringContaining("我目前可以協助：")
       })
     ]);
+    expect(replies[0]?.text).toContain("- 查服事表：");
+    expect(replies[0]?.text).toContain("- 查已加入知識：");
+    expect(replies[0]?.text).toContain("- 保存檔案：");
+    expect(replies[0]?.text).not.toContain("/help admin");
     await app.close();
   });
 });

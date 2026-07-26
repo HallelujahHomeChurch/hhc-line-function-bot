@@ -16,6 +16,12 @@ import {
 import { formatAgentTurnTraces, type AgentTraceStore } from "../../agent/trace-store.js";
 import type { AccessPrincipalType, AccessStore } from "../../access/types.js";
 import {
+  isDefaultUserFunctionAvailable,
+  resolveEffectiveAccessContext
+} from "../../application/access/effective-access.js";
+import type { ControlledCompletionObserver } from "../../application/turn/completion-observer.js";
+import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
+import {
   classifyGroupEngagement,
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
@@ -70,7 +76,7 @@ import {
   parsePostbackData,
   sourceKey
 } from "./postbacks.js";
-import { handlePublicAccessCommand } from "./public-access-commands.js";
+import { handlePublicAccessCommand, registrationPrompt } from "./public-access-commands.js";
 
 export interface AppDependencies {
   adminActionRegistry: AdminActionRegistry;
@@ -98,6 +104,7 @@ export interface AppDependencies {
   conversationWindowStore: ConversationWindowStore;
   textFallbackGenerator?: TextGenerationProvider;
   controlledAgentRouter?: ControlledAgentRouter;
+  completionObserver: ControlledCompletionObserver;
 }
 
 interface AllowResult {
@@ -250,7 +257,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         agentJobStore,
         conversationWindowStore,
         webhookEventStore,
-        deps.sessionStore
+        deps.sessionStore,
+        deps.completionObserver
       );
     });
   }
@@ -286,7 +294,8 @@ async function handleWebhook(
   agentJobStore: AgentJobStore,
   conversationWindowStore: ConversationWindowStore,
   webhookEventStore: WebhookEventStore,
-  sessionStore: SessionStore | undefined
+  sessionStore: SessionStore | undefined,
+  completionObserver: ControlledCompletionObserver
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -349,12 +358,14 @@ async function handleWebhook(
     }
     const requestId = requestIdFactory();
     const requesterIsAdmin = await isAdminUser(profile, event.source.userId, accessStore);
-    const effectiveProfile = await resolveEffectiveProfile(
+    const effectiveAccess = await resolveEffectiveAccessContext({
       profile,
       event,
       accessStore,
       requesterIsAdmin
-    );
+    });
+    const effectiveProfile = effectiveAccess.profile;
+    const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
     const requesterDisplayName = await resolveRequesterDisplayName(lineIdentity, event);
 
     if (event.type === "postback") {
@@ -362,7 +373,7 @@ async function handleWebhook(
         continue;
       }
       const startedAt = Date.now();
-      const result = await handlePostbackEvent(
+      const { result, completionEligible } = await handlePostbackEvent(
         event,
         effectiveProfile,
         postbackHandlers,
@@ -370,12 +381,13 @@ async function handleWebhook(
         requesterDisplayName,
         agentJobStore
       );
-      const postbackFunctionName =
-        result.executedAction ??
-        functionNameForAgentResource(
-          result.agentResource?.resourceType,
-          effectiveProfile.enabledFunctions
-        );
+      const postbackFunctionName = completionEligible
+        ? (result.executedAction ??
+          functionNameForAgentResource(
+            result.agentResource?.resourceType,
+            effectiveProfile.enabledFunctions
+          ))
+        : undefined;
       if (postbackFunctionName) {
         await applyActiveTaskTransition({
           store: conversationWindowStore,
@@ -395,19 +407,35 @@ async function handleWebhook(
           result
         });
       }
+      const durationMs = elapsedMs(startedAt);
+      const completedResult = postbackFunctionName
+        ? await completionObserver.complete({
+            context: {
+              profile: effectiveProfile,
+              event,
+              requestId,
+              requesterDisplayName,
+              requesterIsAdmin
+            },
+            action: postbackFunctionName,
+            result,
+            durationMs,
+            clarificationCount: 0
+          })
+        : result;
       await emitRouteEvent(routeObserver, {
         kind: "postback",
         profileName: profile.name,
         sourceType: event.source.type,
         requestId,
         action: parsePostbackData(event.postback?.data ?? "")?.action,
-        ok: result.ok,
-        durationMs: elapsedMs(startedAt)
+        ok: completedResult.ok,
+        durationMs
       });
       await line.replyText(
         event.replyToken,
-        result.replyText,
-        result.quickReplies ? { quickReplies: result.quickReplies } : undefined
+        completedResult.replyText,
+        completedResult.quickReplies ? { quickReplies: completedResult.quickReplies } : undefined
       );
       continue;
     }
@@ -518,7 +546,14 @@ async function handleWebhook(
           isAdminUser,
           isDirectUserAllowed,
           isGroupAllowed
-        }
+        },
+        resolveCurrentAccess: () =>
+          resolveEffectiveAccessContext({
+            profile,
+            event,
+            accessStore,
+            requesterIsAdmin
+          })
       });
       if (accessCommandResult) {
         await line.replyText(
@@ -542,6 +577,7 @@ async function handleWebhook(
           handleAdminCommand(
             event.message!.text!,
             effectiveProfile,
+            profile,
             event,
             config,
             adminHandlers,
@@ -579,7 +615,7 @@ async function handleWebhook(
       Boolean(conversationScope) &&
       (await conversationWindowStore.isActive(conversationScope as ConversationWindowScope));
     if (groupEngagement?.kind === "intro") {
-      const intro = createIntroReply(effectiveProfile, event.message.text, { force: true });
+      const intro = createIntroReply(capabilityProjection, event.message.text, { force: true });
       await emitRouteEvent(routeObserver, {
         kind: "route",
         profileName: profile.name,
@@ -622,7 +658,7 @@ async function handleWebhook(
       continue;
     }
 
-    const intro = createIntroReply(effectiveProfile, event.message.text);
+    const intro = createIntroReply(capabilityProjection, event.message.text);
     if (intro) {
       await line.replyText(
         event.replyToken,
@@ -667,85 +703,6 @@ async function handleWebhook(
     allowedEvents: allowedEvents.length,
     ignored: ignoredCounts.size > 0 ? formatIgnoredSummary(ignoredCounts) : undefined
   });
-}
-
-async function resolveEffectiveProfile(
-  profile: BotProfileConfig,
-  event: LineEvent,
-  accessStore: AccessStore,
-  requesterIsAdmin?: boolean
-): Promise<BotProfileConfig> {
-  const enabledFunctions = await resolveEffectiveFunctions(
-    profile,
-    event,
-    accessStore,
-    requesterIsAdmin
-  );
-  if (enabledFunctions.length === profile.enabledFunctions.length) {
-    const unchanged = enabledFunctions.every(
-      (name, index) => name === profile.enabledFunctions[index]
-    );
-    if (unchanged) {
-      return profile;
-    }
-  }
-  return { ...profile, enabledFunctions };
-}
-
-async function resolveEffectiveFunctions(
-  profile: BotProfileConfig,
-  event: LineEvent,
-  accessStore: AccessStore,
-  requesterIsAdmin?: boolean
-): Promise<FunctionName[]> {
-  const isAdmin =
-    requesterIsAdmin ?? (await isAdminUser(profile, event.source.userId, accessStore));
-  const profileFunctions = isAdmin
-    ? profile.enabledFunctions
-    : profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
-  const userGrants = event.source.userId
-    ? (await accessStore.listUserFunctionGrants(profile.name, event.source.userId)).filter((name) =>
-        isFunctionGrantableForPrincipal(name, "user")
-      )
-    : [];
-  const userRoleFunctions = event.source.userId
-    ? capabilitiesToFunctionNames(
-        await accessStore.listPrincipalCapabilities(profile.name, "user", event.source.userId),
-        "user"
-      )
-    : [];
-  if (event.source.type !== "group" || !event.source.groupId) {
-    return mergeFunctionNames(mergeFunctionNames(profileFunctions, userGrants), userRoleFunctions);
-  }
-  const groupGrants = (
-    await accessStore.listGroupFunctionGrants(profile.name, event.source.groupId)
-  ).filter((name) => isFunctionGrantableForPrincipal(name, "group"));
-  const groupRoleFunctions = capabilitiesToFunctionNames(
-    await accessStore.listPrincipalCapabilities(profile.name, "group", event.source.groupId),
-    "group"
-  );
-  return mergeFunctionNames(
-    mergeFunctionNames(mergeFunctionNames(profileFunctions, groupGrants), groupRoleFunctions),
-    mergeFunctionNames(userGrants, userRoleFunctions)
-  );
-}
-
-function capabilitiesToFunctionNames(
-  capabilities: string[],
-  principal: "user" | "group"
-): FunctionName[] {
-  return capabilities
-    .map((capability) => capability.match(/^function:([^:]+):execute$/u)?.[1])
-    .filter(
-      (name): name is FunctionName =>
-        typeof name === "string" &&
-        isGrantableFunctionName(name as FunctionName) &&
-        isFunctionGrantableForPrincipal(name as FunctionName, principal)
-    );
-}
-
-function isDefaultUserFunctionAvailable(functionName: FunctionName): boolean {
-  return getFunctionDefinition(functionName)?.sideEffectLevel === "read";
 }
 
 function activeTaskScopeForEvent(
@@ -863,7 +820,7 @@ async function allowEvent(
       if (
         await matchingTextMessageHandler(
           event,
-          await resolveEffectiveProfile(profile, event, accessStore),
+          (await resolveEffectiveAccessContext({ profile, event, accessStore })).profile,
           textMessageHandlers
         )
       ) {
@@ -968,16 +925,6 @@ function conversationWindowTtlMs(profile: BotProfileConfig): number {
   return Math.max(1, profile.generalAgent.conversationWindowSeconds) * 1000;
 }
 
-function registrationPrompt(profile: BotProfileConfig, event: LineEvent): string {
-  if (profile.registration?.enabled) {
-    if (event.source.type === "group") {
-      return "這個群組還沒有開通小哈，請先找管理員協助註冊。";
-    }
-    return "你尚未開通小哈，請先找管理員協助註冊。";
-  }
-  return "你尚未開通小哈，請聯絡管理同工協助。";
-}
-
 async function shouldPromptManagedRegistration(
   profile: BotProfileConfig,
   event: LineEvent,
@@ -1003,6 +950,7 @@ async function shouldPromptManagedRegistration(
 async function handleAdminCommand(
   text: string,
   profile: BotProfileConfig,
+  configuredProfile: BotProfileConfig,
   event: LineEvent,
   config: AppConfig,
   adminHandlers: AdminHandlerRegistry,
@@ -1107,6 +1055,7 @@ async function handleAdminCommand(
     parsed.command,
     parsed.args,
     profile,
+    configuredProfile,
     event,
     accessStore,
     adminActionRegistry
@@ -1190,6 +1139,7 @@ async function handleAdminAccessCommand(
   command: string,
   args: string[],
   profile: BotProfileConfig,
+  configuredProfile: BotProfileConfig,
   event: LineEvent,
   accessStore: AccessStore,
   adminActionRegistry: AdminActionRegistry
@@ -1201,23 +1151,47 @@ async function handleAdminAccessCommand(
 
   if (command === "access-list") {
     const filterType = parseAccessPrincipalType(args[0], ["user", "group", "admin"]);
-    const principals = (await accessStore.listPrincipals(profile.name)).filter(
-      (principal) => !filterType || principal.type === filterType
+    const principals = (
+      await accessStore.listPrincipals(profile.name, { includeDisabled: true })
+    ).filter(
+      (principal) =>
+        (!principal.disabledAt || principal.type === "group") &&
+        (!filterType || principal.type === filterType)
     );
     if (principals.length === 0) {
       return { ok: true, replyText: "Access list\n(none)" };
     }
+    const rows = await Promise.all(
+      principals.map(async (principal) => {
+        const base = `${principal.type}: ${principal.principalId}${
+          principal.displayName ? ` (${principal.displayName})` : ""
+        }`;
+        if (principal.type !== "group") {
+          return base;
+        }
+        const effectiveDisplayNames = await groupEffectiveFunctionDisplayNames(
+          configuredProfile,
+          accessStore,
+          principal.principalId
+        );
+        const lastSuccessDisplayName = principal.lastSuccessFunctionName
+          ? getFunctionDefinition(principal.lastSuccessFunctionName)?.displayName
+          : undefined;
+        return [
+          base,
+          `  state: ${principal.disabledAt ? "disabled" : "active"}`,
+          `  effective: ${effectiveDisplayNames.join(", ") || "(none)"}`,
+          `  last-success: ${
+            lastSuccessDisplayName && principal.lastSuccessAt
+              ? `${lastSuccessDisplayName} @ ${principal.lastSuccessAt}`
+              : "(none)"
+          }`
+        ].join("\n");
+      })
+    );
     return {
       ok: true,
-      replyText: [
-        "Access list",
-        ...principals.map(
-          (principal) =>
-            `${principal.type}: ${principal.principalId}${
-              principal.displayName ? ` (${principal.displayName})` : ""
-            }`
-        )
-      ].join("\n")
+      replyText: ["Access list", ...rows].join("\n")
     };
   }
 
@@ -1571,6 +1545,22 @@ function parseFunctionName(value: string | undefined): FunctionName | undefined 
 
 function formatFunctionNames(): string {
   return userFacingFunctionNames().join(", ");
+}
+
+async function groupEffectiveFunctionDisplayNames(
+  profile: BotProfileConfig,
+  accessStore: AccessStore,
+  groupId: string
+): Promise<string[]> {
+  const context = await resolveEffectiveAccessContext({
+    profile,
+    event: { type: "access-summary", source: { type: "group", groupId } },
+    accessStore,
+    requesterIsAdmin: false
+  });
+  return context.profile.enabledFunctions.flatMap(
+    (name) => getFunctionDefinition(name)?.displayName ?? []
+  );
 }
 
 function mergeFunctionNames(

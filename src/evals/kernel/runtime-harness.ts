@@ -15,6 +15,7 @@ import type {
   BotProfileConfig,
   FunctionRegistry,
   LineEvent,
+  LineSource,
   TextMessageHandlerRegistry
 } from "../../types.js";
 
@@ -22,6 +23,7 @@ export interface KernelTurnInput {
   text: string;
   requesterUserId: string;
   requestId: string;
+  source?: LineSource;
 }
 
 export interface KernelTurnResult {
@@ -78,7 +80,7 @@ export function createKernelRuntimeHarness(
         const startedAt = performance.now();
         const result = await runtime.handleTextTurn({
           profile: options.profile,
-          event: groupTextEvent(turn.text, turn.requesterUserId),
+          event: textEvent(turn),
           requestId: turn.requestId
         });
         const measuredElapsedMs = Math.max(0, performance.now() - startedAt);
@@ -95,11 +97,18 @@ export function createKernelRuntimeHarness(
   };
 }
 
-function groupTextEvent(text: string, userId: string): LineEvent {
+function textEvent(turn: KernelTurnInput): LineEvent {
   return {
     type: "message",
     replyToken: "synthetic-reply-token",
-    source: { type: "group", groupId: "G_SYNTHETIC", userId },
-    message: { type: "text", text }
+    source: sourceForTurn(turn),
+    message: { type: "text", text: turn.text }
   };
+}
+
+function sourceForTurn(turn: KernelTurnInput): LineSource {
+  if (!turn.source) {
+    return { type: "group", groupId: "G_SYNTHETIC", userId: turn.requesterUserId };
+  }
+  return { ...turn.source, userId: turn.requesterUserId };
 }

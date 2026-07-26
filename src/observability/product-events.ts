@@ -8,7 +8,8 @@ export const PRODUCT_EVENT_NAMES = [
   "function_completed",
   "write_previewed",
   "write_committed",
-  "retry_observed"
+  "retry_observed",
+  "first_success"
 ] as const;
 
 export type ProductEventName = (typeof PRODUCT_EVENT_NAMES)[number];

@@ -60,7 +60,9 @@ import { createKnowledgeRetrievalEvidenceProvider } from "../knowledge/retrieval
 import { createProfileAwareProvider } from "../llm/provider-runtime.js";
 import { createLastErrorStore } from "../observability/create-last-error-store.js";
 import { createLastRouteStore } from "../observability/create-last-route-store.js";
+import { createFirstSuccessStore } from "../observability/first-success-store.js";
 import { createConsoleRouteObserver } from "../observability/route-observer.js";
+import { createControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { createRateLimiter } from "../rate-limit.js";
 import { createRedisRuntime } from "../redis.js";
 import { createScheduleStore } from "../schedules/create-schedule-store.js";
@@ -271,6 +273,14 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     redis,
     maxEntries: config.lastErrors?.maxEntries ?? 20
   });
+  const firstSuccessStore = createFirstSuccessStore(redis);
+  const routeObserver = createConsoleRouteObserver();
+  const completionObserver = createControlledCompletionObserver({
+    accessStore,
+    routeObserver,
+    firstSuccessStore,
+    observabilityHmacKey: config.observability?.hmacKey
+  });
   const rateLimiter = createRateLimiter({
     redis,
     config: config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
@@ -329,7 +339,9 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     traceStore: agentTraceStore,
     lastErrorStore,
     lastRouteStore,
-    routeObserver: createConsoleRouteObserver(),
+    firstSuccessStore,
+    routeObserver,
+    completionObserver,
     textGenerator: smartTalkPrimary,
     conversationWindowStore,
     controlledAgentRouter,
@@ -364,7 +376,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       postgres: postgres?.pool,
       redis: redis?.client
     }),
-    routeObserver: createConsoleRouteObserver()
+    routeObserver,
+    completionObserver
   });
 
   return {

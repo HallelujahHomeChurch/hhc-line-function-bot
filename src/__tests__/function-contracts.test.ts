@@ -2,7 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import { FUNCTION_DEFINITIONS } from "../functions/definitions.js";
 
-const internalTerms = ["OneDrive", "Notion", "Graph", "Redis", "database", "Postgres"];
+const internalTerms = [
+  "OneDrive",
+  "Notion",
+  "Graph",
+  "Redis",
+  "database",
+  "Postgres",
+  "資料庫",
+  "儲存",
+  "儲存空間",
+  "雲端儲存",
+  "供應商",
+  "服務提供者",
+  "內部實作"
+];
 
 describe("function capability contracts", () => {
   it("defines user-facing metadata for every function", () => {
@@ -30,6 +44,7 @@ describe("function capability contracts", () => {
         definition.displayName,
         definition.shortDescription,
         definition.clarificationPrompt,
+        definition.helpText,
         ...definition.examples
       ].join("\n");
 

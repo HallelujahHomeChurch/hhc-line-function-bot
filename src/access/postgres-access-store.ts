@@ -17,7 +17,8 @@ import type {
   AccessRole,
   BindRoleInput,
   UpsertRoleInput,
-  RolePrincipalType
+  RolePrincipalType,
+  RecordPrincipalSuccessInput
 } from "./types.js";
 import type { FunctionName } from "../types.js";
 
@@ -51,13 +52,16 @@ export class PostgresAccessStore implements AccessStore {
     return result.rows.length > 0;
   }
 
-  async listPrincipals(profileName: string): Promise<AccessPrincipal[]> {
+  async listPrincipals(
+    profileName: string,
+    options: { includeDisabled?: boolean } = {}
+  ): Promise<AccessPrincipal[]> {
     const result = await this.db.query(
       `
       select *
       from access_principals
       where profile_name = $1
-        and disabled_at is null
+        ${options.includeDisabled ? "" : "and disabled_at is null"}
       order by principal_type, principal_id
       `,
       [profileName]
@@ -105,6 +109,21 @@ export class PostgresAccessStore implements AccessStore {
       [input.profileName, input.type, input.principalId, input.disabledBy]
     );
     return result.rows.length > 0;
+  }
+
+  async recordPrincipalSuccess(input: RecordPrincipalSuccessInput): Promise<void> {
+    await this.db.query(
+      `
+      update access_principals
+      set last_success_function_name = $4, last_success_at = $5
+      where profile_name = $1
+        and principal_type = $2
+        and principal_id = $3
+        and disabled_at is null
+        and (last_success_at is null or last_success_at <= $5)
+      `,
+      [input.profileName, input.type, input.principalId, input.functionName, input.occurredAt]
+    );
   }
 
   async recordAudit(input: AccessAuditInput): Promise<void> {
@@ -345,7 +364,10 @@ function mapPrincipal(row: Record<string, unknown>): AccessPrincipal {
     createdAt: toIso(row.created_at),
     createdBy: String(row.created_by),
     disabledAt: optionalIso(row.disabled_at),
-    disabledBy: optionalString(row.disabled_by)
+    disabledBy: optionalString(row.disabled_by),
+    lastSuccessFunctionName: optionalString(row.last_success_function_name) as
+      FunctionName | undefined,
+    lastSuccessAt: optionalIso(row.last_success_at)
   };
 }
 

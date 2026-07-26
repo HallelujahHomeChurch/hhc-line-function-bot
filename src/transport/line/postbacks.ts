@@ -10,6 +10,11 @@ import type {
   PostbackRequest
 } from "../../types.js";
 
+export interface HandledPostbackEvent {
+  result: FunctionExecutionResult;
+  completionEligible: boolean;
+}
+
 export async function handlePostbackEvent(
   event: LineEvent,
   profile: BotProfileConfig,
@@ -17,19 +22,31 @@ export async function handlePostbackEvent(
   requestId: string,
   requesterDisplayName: string | undefined,
   agentJobStore: AgentJobStore
-) {
+): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
-    return { ok: true, replyText: messages.postbackUnsupported };
+    return {
+      result: { ok: true, replyText: messages.postbackUnsupported },
+      completionEligible: false
+    };
   }
   if (request.action === "agent_job_result") {
-    return handleAgentJobResultPostback(request, profile, event, agentJobStore);
+    return {
+      result: await handleAgentJobResultPostback(request, profile, event, agentJobStore),
+      completionEligible: false
+    };
   }
   const handler = postbackHandlers[request.action];
   if (!handler) {
-    return { ok: true, replyText: messages.postbackUnsupported };
+    return {
+      result: { ok: true, replyText: messages.postbackUnsupported },
+      completionEligible: false
+    };
   }
-  return handler(request, { profile, event, requestId, requesterDisplayName });
+  return {
+    result: await handler(request, { profile, event, requestId, requesterDisplayName }),
+    completionEligible: true
+  };
 }
 
 export async function handleAgentTextTurnWithLongJob(input: {

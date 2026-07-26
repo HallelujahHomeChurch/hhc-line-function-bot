@@ -230,7 +230,18 @@ describe("clarification flow", () => {
         "下載連結（1 天內有效）：",
         "https://download.invalid/amazing-grace"
       ].join("\n"),
-      undefined
+      {
+        quickReplies: [
+          {
+            label: "查看完整結果",
+            action: {
+              type: "message",
+              label: "查看完整結果",
+              text: "查看完整結果"
+            }
+          }
+        ]
+      }
     );
   });
 

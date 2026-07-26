@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
+import { PostgresAccessStore } from "../access/postgres-access-store.js";
 
 describe("access store", () => {
   it("tracks profile-scoped active principals", async () => {
@@ -15,6 +16,108 @@ describe("access store", () => {
 
     await expect(store.hasActivePrincipal("helper", "user", "U1")).resolves.toBe(true);
     await expect(store.hasActivePrincipal("main", "user", "U1")).resolves.toBe(false);
+  });
+
+  it("lists disabled principals only when requested and keeps the newest success", async () => {
+    const store = new InMemoryAccessStore();
+    await store.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "C1",
+      displayName: "影音同工群",
+      createdBy: "Uadmin"
+    });
+
+    await store.recordPrincipalSuccess({
+      profileName: "helper",
+      type: "group",
+      principalId: "C1",
+      functionName: "find_ppt_slides",
+      occurredAt: "2026-07-26T10:00:00.000Z"
+    });
+    await store.recordPrincipalSuccess({
+      profileName: "helper",
+      type: "group",
+      principalId: "C1",
+      functionName: "query_schedule",
+      occurredAt: "2026-07-26T09:00:00.000Z"
+    });
+    await store.disablePrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "C1",
+      disabledBy: "Uadmin"
+    });
+    await store.recordPrincipalSuccess({
+      profileName: "helper",
+      type: "group",
+      principalId: "C1",
+      functionName: "query_schedule",
+      occurredAt: "2026-07-26T11:00:00.000Z"
+    });
+
+    await expect(store.listPrincipals("helper")).resolves.toEqual([]);
+    await expect(store.listPrincipals("helper", { includeDisabled: true })).resolves.toMatchObject([
+      {
+        type: "group",
+        principalId: "C1",
+        disabledAt: expect.any(String),
+        lastSuccessFunctionName: "find_ppt_slides",
+        lastSuccessAt: "2026-07-26T10:00:00.000Z"
+      }
+    ]);
+  });
+
+  it("maps PostgreSQL success metadata and emits a monotonic active-principal update", async () => {
+    const queries: Array<{ sql: string; values?: unknown[] }> = [];
+    const store = new PostgresAccessStore({
+      async query(sql, values) {
+        queries.push({ sql, values });
+        if (/select \*/u.test(sql)) {
+          return {
+            rows: [
+              {
+                id: "principal-1",
+                profile_name: "helper",
+                principal_type: "group",
+                principal_id: "C1",
+                display_name: "影音同工群",
+                created_at: new Date("2026-07-01T00:00:00.000Z"),
+                created_by: "Uadmin",
+                disabled_at: new Date("2026-07-25T00:00:00.000Z"),
+                disabled_by: "Uadmin",
+                last_success_function_name: "find_ppt_slides",
+                last_success_at: new Date("2026-07-26T10:00:00.000Z")
+              }
+            ]
+          };
+        }
+        return { rows: [] };
+      }
+    });
+
+    await expect(store.listPrincipals("helper", { includeDisabled: true })).resolves.toMatchObject([
+      {
+        principalId: "C1",
+        disabledAt: "2026-07-25T00:00:00.000Z",
+        lastSuccessFunctionName: "find_ppt_slides",
+        lastSuccessAt: "2026-07-26T10:00:00.000Z"
+      }
+    ]);
+    await store.recordPrincipalSuccess({
+      profileName: "helper",
+      type: "group",
+      principalId: "C1",
+      functionName: "query_schedule",
+      occurredAt: "2026-07-26T11:00:00.000Z"
+    });
+
+    expect(queries[0]?.sql).not.toContain("disabled_at is null");
+    expect(queries[1]).toMatchObject({
+      values: ["helper", "group", "C1", "query_schedule", "2026-07-26T11:00:00.000Z"]
+    });
+    expect(queries[1]?.sql).toContain("disabled_at is null");
+    expect(queries[1]?.sql).toContain("last_success_at <= $5");
   });
 
   it("tracks profile-scoped group function grants", async () => {

@@ -67,4 +67,29 @@ describe("function definitions", () => {
     }
     expect(isFunctionGrantableForPrincipal("find_ppt_slides", "group")).toBe(true);
   });
+
+  it("describes save_resource through the attachment intake users actually perform", () => {
+    const definition = getFunctionDefinition("save_resource");
+    const activationSlot = definition?.requiredSlots.find((slot) => slot.argument === "url");
+
+    expect(definition).toMatchObject({
+      displayName: "保存檔案",
+      quickReply: {
+        label: "保存檔案",
+        command: "小哈我要上傳檔案"
+      }
+    });
+    expect(definition?.examples).toEqual(
+      expect.arrayContaining(["小哈我要上傳檔案", "小哈幫我存檔案"])
+    );
+    expect(definition?.shortDescription).toMatch(/上傳.*用途.*名稱.*確認.*掃毒.*發布/u);
+    expect(definition?.helpText).toMatch(/上傳.*用途.*名稱.*預覽.*確認.*掃毒.*發布/u);
+    expect(definition?.helpText).not.toMatch(/HTTPS|OneDrive/u);
+    expect(activationSlot?.genericRequest).toMatchObject({
+      phrases: expect.arrayContaining(["小哈我要上傳檔案", "小哈幫我存檔案"]),
+      clearArguments: expect.arrayContaining(["url", "resourceType", "title"])
+    });
+    expect(activationSlot?.prompt).toContain("上傳");
+    expect(definition?.clarificationPrompt).toMatch(/上傳/u);
+  });
 });

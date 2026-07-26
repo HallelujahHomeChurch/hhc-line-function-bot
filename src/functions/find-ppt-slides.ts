@@ -321,7 +321,12 @@ function retrievalDiagnostics(
 function catalogDiagnostics(
   options: FindPptSlidesOptions,
   query: string,
-  result: { status: CatalogRetrievalStatus; revision: string; items: CatalogItemRecord[] }
+  result: {
+    status: CatalogRetrievalStatus;
+    revision: string;
+    items: CatalogItemRecord[];
+    dataAsOf?: string;
+  }
 ): RetrievalDiagnostics {
   return {
     ...retrievalDiagnostics(options, "catalog_snapshot_read", query, result.items[0]?.id),
@@ -331,7 +336,8 @@ function catalogDiagnostics(
         : result.status === "stale_allowed"
           ? "stale_allowed"
           : "stale_rejected",
-    sourceRevision: result.revision ? "present" : "missing"
+    sourceRevision: result.revision ? "present" : "missing",
+    dataAsOf: result.dataAsOf
   };
 }
 
@@ -575,7 +581,12 @@ async function findCatalogPptSlides(
   profileName: string,
   query: string,
   extensions: string[]
-): Promise<{ status: CatalogRetrievalStatus; revision: string; items: CatalogItemRecord[] }> {
+): Promise<{
+  status: CatalogRetrievalStatus;
+  revision: string;
+  items: CatalogItemRecord[];
+  dataAsOf?: string;
+}> {
   if (!catalog) {
     return { status: "unavailable", revision: "", items: [] };
   }

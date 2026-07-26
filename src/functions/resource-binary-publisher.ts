@@ -137,7 +137,7 @@ export function createResourceBinaryPublisher(
       if (!driveId || !folderItemId || !options.graph.uploadFile) {
         return {
           status: "failed",
-          result: { ok: true, replyText: "目前沒有可用的 OneDrive 上傳服務。" }
+          result: { ok: true, replyText: "目前沒有可用的檔案發布服務。" }
         };
       }
 

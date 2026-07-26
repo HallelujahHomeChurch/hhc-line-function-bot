@@ -31,6 +31,8 @@ type CatalogSourceRow = {
   enabled: boolean;
   sync_policy: CatalogSourceRecord["syncPolicy"];
   capabilities: CatalogSourceRecord["capabilities"];
+  owner_label: string | null;
+  freshness_responsibility: string | null;
   sync_cursor: string | null;
   revision: string;
   health_status: CatalogSourceRecord["healthStatus"];
@@ -67,6 +69,8 @@ type CatalogItemRow = {
   enabled: boolean;
   sync_policy: CatalogSourceRecord["syncPolicy"];
   capabilities: CatalogSourceRecord["capabilities"];
+  owner_label: string | null;
+  freshness_responsibility: string | null;
   sync_cursor: string | null;
   revision: string;
   health_status: CatalogSourceRecord["healthStatus"];
@@ -85,8 +89,9 @@ export class PostgresCatalogStore implements CatalogStore {
       `
       insert into catalog_sources
         (id, profile_name, source_key, adapter_type, domain, default_item_kind,
-         root_location, enabled, sync_policy, capabilities, updated_at)
-      values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb, now())
+         root_location, enabled, sync_policy, capabilities, owner_label,
+         freshness_responsibility, updated_at)
+      values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb, $11, $12, now())
       on conflict (profile_name, source_key) do update
       set adapter_type = excluded.adapter_type,
           domain = excluded.domain,
@@ -95,6 +100,11 @@ export class PostgresCatalogStore implements CatalogStore {
           enabled = excluded.enabled,
           sync_policy = excluded.sync_policy,
           capabilities = excluded.capabilities,
+          owner_label = coalesce(excluded.owner_label, catalog_sources.owner_label),
+          freshness_responsibility = coalesce(
+            excluded.freshness_responsibility,
+            catalog_sources.freshness_responsibility
+          ),
           updated_at = now()
       returning *
       `,
@@ -108,7 +118,9 @@ export class PostgresCatalogStore implements CatalogStore {
         JSON.stringify(input.rootLocation),
         input.enabled,
         JSON.stringify(input.syncPolicy),
-        JSON.stringify(input.capabilities)
+        JSON.stringify(input.capabilities),
+        input.ownerLabel ?? null,
+        input.freshnessResponsibility ?? null
       ]
     );
     return mapSource(result.rows[0]);
@@ -122,8 +134,9 @@ export class PostgresCatalogStore implements CatalogStore {
       `
       insert into catalog_sources
         (id, profile_name, source_key, adapter_type, domain, default_item_kind,
-         root_location, enabled, sync_policy, capabilities, updated_at)
-      values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb, now())
+         root_location, enabled, sync_policy, capabilities, owner_label,
+         freshness_responsibility, updated_at)
+      values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb, $11, $12, now())
       on conflict (profile_name, source_key) do nothing
       returning *
       `,
@@ -137,7 +150,9 @@ export class PostgresCatalogStore implements CatalogStore {
         JSON.stringify(input.rootLocation),
         input.enabled,
         JSON.stringify(input.syncPolicy),
-        JSON.stringify(input.capabilities)
+        JSON.stringify(input.capabilities),
+        input.ownerLabel ?? null,
+        input.freshnessResponsibility ?? null
       ]
     );
     if (result.rows[0]) {
@@ -542,6 +557,8 @@ export class PostgresCatalogStore implements CatalogStore {
         catalog_sources.enabled,
         catalog_sources.sync_policy,
         catalog_sources.capabilities,
+        catalog_sources.owner_label,
+        catalog_sources.freshness_responsibility,
         catalog_sources.sync_cursor,
         catalog_sources.revision,
         catalog_sources.health_status,
@@ -575,6 +592,8 @@ export class PostgresCatalogStore implements CatalogStore {
         catalog_sources.enabled,
         catalog_sources.sync_policy,
         catalog_sources.capabilities,
+        catalog_sources.owner_label,
+        catalog_sources.freshness_responsibility,
         catalog_sources.sync_cursor,
         catalog_sources.revision,
         catalog_sources.health_status,
@@ -608,6 +627,8 @@ function mapSource(row: CatalogSourceRow): CatalogSourceRecord {
     enabled: row.enabled,
     syncPolicy: row.sync_policy,
     capabilities: row.capabilities,
+    ownerLabel: row.owner_label ?? undefined,
+    freshnessResponsibility: row.freshness_responsibility ?? undefined,
     syncCursor: row.sync_cursor ?? undefined,
     revision: row.revision,
     healthStatus: row.health_status,
@@ -649,6 +670,8 @@ function mapItem(row: CatalogItemRow): CatalogItemRecord {
       enabled: row.enabled,
       syncPolicy: row.sync_policy,
       capabilities: row.capabilities,
+      ownerLabel: row.owner_label ?? undefined,
+      freshnessResponsibility: row.freshness_responsibility ?? undefined,
       syncCursor: row.sync_cursor ?? undefined,
       revision: row.revision,
       healthStatus: row.health_status,
