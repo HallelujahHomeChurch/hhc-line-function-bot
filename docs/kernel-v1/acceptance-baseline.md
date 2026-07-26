@@ -109,6 +109,10 @@ turn intentionally returns attachment quick replies without entering the
 controlled-agent trace. The write contract now permits an empty file-turn trace
 while requiring traces for text turns 2 through 5.
 
+A subsequent zero-provider `write-preview-confirm` run passed all five webhook
+turns, quick-reply states, pre-confirm queue exclusion, the single queue and
+scan-work evidence, namespace cleanup, Compose cleanup, and secret cleanup.
+
 All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
 label after successful cleanup before propagating driver exit code `1`; this
