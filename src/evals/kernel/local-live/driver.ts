@@ -155,7 +155,15 @@ export async function runKernelLocalLiveDriver(
         const captured = await channel.readReply(request.replyToken);
         if (!captured) throw new Error("kernel_local_live_reply_missing");
         replyQuickReplyLabels.push(captured.quickReplyLabels);
-        traces.push(...(await traceStore.list(1)));
+        const [turnTrace] = await traceStore.list(1);
+        traces.push(
+          turnTrace ?? {
+            occurredAt: new Date().toISOString(),
+            profileName: "acceptance",
+            sourceType: turn.source.type,
+            steps: []
+          }
+        );
         const currentObservations = await channel.readObservations();
         if (
           journey.caseId === "write-preview-confirm" &&
@@ -325,7 +333,8 @@ function outcomeFailureCode(
 ): string {
   if (caseId === "write-preview-confirm") {
     if (evidence.turns.length !== 5) return "write_turn_count_failed";
-    if (evidence.turns.some(({ steps }) => steps.length === 0)) return "write_trace_missing";
+    const missingTraceIndex = evidence.turns.findIndex(({ steps }) => steps.length === 0);
+    if (missingTraceIndex >= 0) return `write_trace_missing_turn_${missingTraceIndex + 1}`;
     if (!matchesWriteReplyStates(evidence.replyQuickReplyLabels)) {
       return "write_reply_states_failed";
     }

@@ -98,6 +98,12 @@ case uses no provider calls; allowlisted write boundary codes now distinguish
 turn/trace completeness, quick-reply state, pre-confirm queueing, queue evidence,
 and scan-work evidence for a zero-cost diagnostic rerun.
 
+A zero-provider write-only run then reported an incomplete turn count. The
+driver had omitted turn positions when a transport/text-handler turn produced
+no agent trace, which could shift later evidence onto the wrong ordinal. It now
+retains one safe trace slot per webhook and reports the exact missing turn
+without storing message content.
+
 All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
 label after successful cleanup before propagating driver exit code `1`; this
