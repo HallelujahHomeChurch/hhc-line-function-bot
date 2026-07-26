@@ -47,9 +47,9 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain("SEARXNG_CONTAINER_APP_NAME:=hhc-searxng");
     expect(deployment).toContain("properties.configuration.ingress.fqdn");
     expect(deployment).toContain('searxng_base_url="https://${searxng_fqdn}"');
-    expect(deployment).toContain('"SEARXNG_BASE_URL=${searxng_base_url}"');
+    expect(deployment).toContain('SEARXNG_BASE_URL="${searxng_base_url}"');
     expect(deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"')).toBeLessThan(
-      deployment.indexOf('az containerapp update "${update_args[@]}"')
+      deployment.indexOf('--yaml "${bot_manifest}"')
     );
     const searxngUpdateStart = deployment.indexOf(
       'az containerapp update --yaml "${searxng_manifest}"'
@@ -61,6 +61,122 @@ describe("production profile configuration deployment contract", () => {
     expect(searxngUpdate).toContain('--resource-group "${RESOURCE_GROUP}"');
     expect(searxngUpdate).toContain('--name "${SEARXNG_CONTAINER_APP_NAME}"');
     expect(projectFileExists("infra/searxng/settings.yml")).toBe(true);
+  });
+
+  it("deploys the bot from a secret-value-free rendered manifest before dependent jobs", () => {
+    const manifest = readProjectFile("aca.containerapp.yaml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const secretRefs = [
+      ["ATTACHMENT_SCAN_QUEUE_URL", "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_URL_SECRET_REF"],
+      ["LINE_HELPER_CHANNEL_SECRET", "PLACEHOLDER_LINE_HELPER_CHANNEL_SECRET_REF"],
+      [
+        "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
+        "PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF"
+      ],
+      ["LINE_HELPER_ADMIN_USER_ID", "PLACEHOLDER_LINE_HELPER_ADMIN_USER_ID_SECRET_REF"],
+      ["AZURE_OPENAI_EMBEDDING_API_KEY", "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF"],
+      ["DEEPSEEK_API_KEY", "PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF"],
+      ["OBSERVABILITY_HMAC_KEY", "PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF"],
+      ["DATABASE_URL", "PLACEHOLDER_DATABASE_URL_SECRET_REF"],
+      ["REDIS_URL", "PLACEHOLDER_REDIS_URL_SECRET_REF"],
+      ["GRAPH_CLIENT_SECRET", "PLACEHOLDER_GRAPH_CLIENT_SECRET_REF"],
+      ["NOTION_TOKEN", "PLACEHOLDER_NOTION_TOKEN_SECRET_REF"]
+    ] as const;
+
+    expect(manifest).toContain("dapr:\n      enabled: true");
+    expect(manifest).toContain("appId: hhc-line-function-bot");
+    expect(manifest).toContain("appPort: 3000");
+    expect(manifest).toContain("appProtocol: http");
+    expect(manifest).toContain("ingress:\n      external: false");
+    expect(manifest).toContain("type: Liveness");
+    expect(manifest).toContain("path: /healthz");
+    expect(manifest).toContain("type: Readiness");
+    expect(manifest).toContain("path: /readyz");
+    expect(manifest).toContain("scale:");
+    expect(manifest).toContain("minReplicas:");
+    expect(manifest).toContain("maxReplicas:");
+    expect(manifest).toContain("resources:");
+    expect(manifest).toContain("cpu:");
+    expect(manifest).toContain("memory:");
+
+    for (const [envName, placeholder] of secretRefs) {
+      expect(manifest).toContain(`- name: ${envName}\n            secretRef: ${placeholder}`);
+      expect(manifest.match(new RegExp(placeholder, "g"))).toHaveLength(1);
+    }
+    expect(manifest.match(/secretRef:/g)).toHaveLength(secretRefs.length);
+    expect(manifest).not.toMatch(/\n    secrets:/);
+    expect(manifest).not.toContain("PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS");
+    expect(manifest).not.toContain("attachment-scan-queue-connection-string");
+    expect(manifest).not.toContain("clamav-signature-storage-key");
+
+    expect(deployment).toContain('bot_manifest_template="${script_dir}/../aca.containerapp.yaml"');
+    expect(deployment).toContain('bot_manifest="$(mktemp)"');
+    expect(deployment).toContain('"${bot_manifest}"');
+    expect(deployment).toContain('! -f "${bot_manifest_template}"');
+    expect(deployment).toContain('if "PLACEHOLDER_" in text:');
+    expect(deployment).toContain('raise SystemExit("A bot manifest placeholder was not resolved")');
+    expect(deployment).toContain('Path(os.environ["BOT_MANIFEST"]).write_text(text)');
+
+    const searxngDeploy = deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"');
+    const botRendererStart = deployment.indexOf('BOT_MANIFEST_TEMPLATE="${bot_manifest_template}"');
+    const botApplyStart = deployment.indexOf(
+      'az containerapp update \\\n  --resource-group "${RESOURCE_GROUP}"',
+      botRendererStart
+    );
+    const botRenderer = deployment.slice(botRendererStart, botApplyStart);
+    const botDeploy = deployment.indexOf('--yaml "${bot_manifest}"', botApplyStart);
+    const healthVerification = deployment.indexOf('echo "Waiting for revision ${target_revision}');
+    const daprVerification = deployment.indexOf("Bot Dapr configuration changed unexpectedly");
+    const refreshedSecretSnapshot = deployment.indexOf(
+      'bot_secrets_json="$(az containerapp secret list',
+      botDeploy
+    );
+    const refreshedEnvSnapshot = deployment.indexOf(
+      'bot_env_json="$(az containerapp show',
+      botDeploy
+    );
+    const renderJobs = deployment.indexOf('render_job_manifest \\\n  "${clamav_refresh');
+    const refreshDeploy = deployment.indexOf('deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"');
+    const refreshBootstrap = deployment.indexOf(
+      'start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"'
+    );
+    const scanDeploy = deployment.indexOf('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
+    const catalogDeploy = deployment.indexOf('deploy_job "${CATALOG_SYNC_JOB_NAME}"');
+
+    for (const position of [
+      searxngDeploy,
+      botRendererStart,
+      botApplyStart,
+      botDeploy,
+      healthVerification,
+      daprVerification,
+      refreshedSecretSnapshot,
+      refreshedEnvSnapshot,
+      renderJobs,
+      refreshDeploy,
+      refreshBootstrap,
+      scanDeploy,
+      catalogDeploy
+    ]) {
+      expect(position).toBeGreaterThanOrEqual(0);
+    }
+    expect(searxngDeploy).toBeLessThan(botDeploy);
+    expect(botDeploy).toBeLessThan(healthVerification);
+    expect(healthVerification).toBeLessThan(daprVerification);
+    expect(daprVerification).toBeLessThan(refreshedSecretSnapshot);
+    expect(daprVerification).toBeLessThan(refreshedEnvSnapshot);
+    expect(refreshedSecretSnapshot).toBeLessThan(renderJobs);
+    expect(refreshedEnvSnapshot).toBeLessThan(renderJobs);
+    expect(renderJobs).toBeLessThan(refreshDeploy);
+    expect(refreshDeploy).toBeLessThan(refreshBootstrap);
+    expect(refreshBootstrap).toBeLessThan(scanDeploy);
+    expect(scanDeploy).toBeLessThan(catalogDeploy);
+
+    expect(botRenderer).not.toContain("BOT_SECRETS_JSON");
+    expect(botRenderer).not.toContain("--show-values");
+    expect(deployment).not.toContain("update_args=(");
+    expect(deployment).not.toContain('az containerapp update "${update_args[@]}"');
+    expect(deployment).not.toContain("az containerapp dapr enable");
   });
 
   it("ships file-backed profiles and does not deploy an ACA profile secret", () => {
@@ -104,9 +220,8 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).not.toContain("name: SHEET_MUSIC_DEFAULT_RECURSIVE");
     expect(manifest).toContain("name: SEARXNG_BASE_URL");
     expect(manifest).toContain("name: MAX_ATTACHMENT_BYTES");
-    expect(manifest).toContain("name: observability-hmac-key");
     expect(manifest).toContain("name: OBSERVABILITY_HMAC_KEY");
-    expect(manifest).toContain("secretRef: observability-hmac-key");
+    expect(manifest).toContain("secretRef: PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF");
     expect(manifest).toContain('value: "26214400"');
     expect(manifest).toContain("name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS");
     expect(manifest).toContain('value: "30000"');
@@ -116,38 +231,23 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).not.toContain("bot-profiles-base64-json");
     expect(releaseWorkflow).toContain("- config/**");
     expect(ciWorkflow).toContain("pnpm config:validate");
-    expect(deployment).toContain("PROFILE_CONFIG_PATH=/app/config/profiles.json");
-    expect(deployment).toContain("OBSERVABILITY_HMAC_KEY=secretref:observability-hmac-key");
-    expect(deployment).toContain("--remove-env-vars");
-    expect(deployment).toContain("az containerapp dapr enable");
-    expect(deployment).toContain('--dapr-app-id "hhc-line-function-bot"');
-    expect(deployment).toContain("--dapr-app-port 3000");
+    expect(deployment).toContain('"PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF"');
+    expect(deployment).toContain('"observability-hmac-key"');
+    expect(deployment).not.toContain("--remove-env-vars");
+    expect(deployment).not.toContain("az containerapp dapr enable");
     expect(deployment).not.toContain("az containerapp dapr disable");
-    expect(deployment).toContain('"SEARXNG_BASE_URL=${searxng_base_url}"');
-    expect(deployment).toContain("MAX_ATTACHMENT_BYTES=26214400");
-    expect(deployment).toContain("LINE_CONTENT_DOWNLOAD_TIMEOUT_MS=30000");
-    expect(deployment).toContain("EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS=15000");
-    expect(deployment).toContain("EXTERNAL_RESOURCE_MAX_REDIRECTS=3");
+    expect(deployment).toContain('SEARXNG_BASE_URL="${searxng_base_url}"');
     expect(deployment).toContain(
       "AZURE_OPENAI_EMBEDDING_RESOURCE_NAME:=bible-text-embedding-resource"
     );
     expect(deployment).toContain("az cognitiveservices account deployment list");
     expect(deployment).toContain("az cognitiveservices account keys list");
     expect(deployment).toContain('"azure-openai-embedding-key=${azure_openai_embedding_key}"');
+    expect(deployment).toContain('"PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF"');
     expect(deployment).toContain(
-      '"AZURE_OPENAI_EMBEDDING_API_KEY=secretref:azure-openai-embedding-key"'
+      'AZURE_OPENAI_EMBEDDING_ENDPOINT="${azure_openai_embedding_endpoint}"'
     );
-    expect(deployment).toContain("EMBEDDING_PROVIDER=azure_openai");
-    expect(deployment).toContain(
-      "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}"
-    );
-    expect(deployment).toContain(
-      "AZURE_OPENAI_EMBEDDING_API_VERSION=${AZURE_OPENAI_EMBEDDING_API_VERSION}"
-    );
-    expect(deployment).toContain("EMBEDDING_MODEL=text-embedding-3-small");
     expect(deployment).not.toContain("https://api.openai.com");
-    expect(deployment).toContain("EMBEDDING_BATCH_SIZE=16");
-    expect(deployment).toContain("EMBEDDING_TIMEOUT_MS=30000");
     expect(deployment).not.toContain("EMBEDDING_KEEP_ALIVE=");
     expect(helper?.enabledFunctions).toEqual(
       expect.arrayContaining(["find_resource", "save_resource", "save_memory", "retrieve_memory"])
@@ -330,7 +430,7 @@ describe("production profile configuration deployment contract", () => {
     );
 
     expect(bot).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
-    expect(bot).toContain("secretRef: attachment-scan-queue-url");
+    expect(bot).toContain("secretRef: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_URL_SECRET_REF");
     expect(bot).not.toContain("name: CLAMAV_DATABASE_DIRECTORY");
     expect(catalogJob).not.toContain("name: CLAMAV_DATABASE_DIRECTORY");
     expect(catalogJob).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
@@ -377,24 +477,29 @@ describe("production profile configuration deployment contract", () => {
       expect(jobManifest).toContain("identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
     }
 
-    const retiredEnvBlock = deployment.slice(
-      deployment.indexOf("retired_exact = {"),
-      deployment.indexOf("retired_prefixes =")
-    );
     for (const name of [
+      "BOT_PROFILES_BASE64_JSON",
+      "BOT_PROFILES_JSON",
+      "PROFILE_CONFIG_VERSION",
+      "PPT_ALLOWED_EXTENSIONS",
+      "PPT_DEFAULT_INCLUDE_PDF",
+      "GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID",
+      "GRAPH_SHEET_MUSIC_FOLDER_PATH",
+      "SHEET_MUSIC_DEFAULT_RECURSIVE",
       "LLM_PROVIDER",
       "LLM_FALLBACK_PROVIDER",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "OPENAI_EMBEDDING_MODEL",
       "EMBEDDING_KEEP_ALIVE",
       "CLAMAV_TIMEOUT_MS"
     ]) {
-      expect(retiredEnvBlock).toContain(`"${name}"`);
+      expect(bot).not.toContain(`name: ${name}`);
     }
-    expect(deployment).toContain('retired_provider_token = "".join(("OLLA", "MA"))');
-    expect(deployment).toContain('or f"_{retired_provider_token}_" in name');
 
     const queueSecretDeploy = deployment.indexOf("az containerapp secret set");
     const searxngDeploy = deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"');
-    const botDeploy = deployment.indexOf('az containerapp update "${update_args[@]}"');
+    const botDeploy = deployment.indexOf('--yaml "${bot_manifest}"');
     const refreshedSecretSnapshot = deployment.indexOf(
       'bot_secrets_json="$(az containerapp secret list',
       botDeploy

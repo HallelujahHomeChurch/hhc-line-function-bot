@@ -27,18 +27,21 @@ scan_image_ref="${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 echo "Deploying ${image_ref} to ${CONTAINER_APP_NAME}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bot_manifest_template="${script_dir}/../aca.containerapp.yaml"
 searxng_manifest_template="${script_dir}/../aca.searxng.containerapp.yaml"
 searxng_settings_template="${script_dir}/../infra/searxng/settings.yml"
 catalog_job_manifest_template="${script_dir}/../aca.catalog-sync-job.yaml"
 attachment_scan_job_manifest_template="${script_dir}/../aca.attachment-scan-job.yaml"
 clamav_refresh_job_manifest_template="${script_dir}/../aca.clamav-signature-refresh-job.yaml"
+bot_manifest="$(mktemp)"
 searxng_manifest="$(mktemp)"
 catalog_job_manifest="$(mktemp)"
 attachment_scan_job_manifest="$(mktemp)"
 clamav_refresh_job_manifest="$(mktemp)"
-trap 'rm -f "${searxng_manifest}" "${catalog_job_manifest}" "${attachment_scan_job_manifest}" "${clamav_refresh_job_manifest}"' EXIT
+trap 'rm -f "${bot_manifest}" "${searxng_manifest}" "${catalog_job_manifest}" "${attachment_scan_job_manifest}" "${clamav_refresh_job_manifest}"' EXIT
 
-if [[ ! -f "${searxng_manifest_template}" \
+if [[ ! -f "${bot_manifest_template}" \
+  || ! -f "${searxng_manifest_template}" \
   || ! -f "${searxng_settings_template}" \
   || ! -f "${catalog_job_manifest_template}" \
   || ! -f "${attachment_scan_job_manifest_template}" \
@@ -302,109 +305,87 @@ if [[ -z "${searxng_fqdn}" ]]; then
 fi
 searxng_base_url="https://${searxng_fqdn}"
 
-mapfile -t retired_profile_envs < <(BOT_ENV_JSON="${bot_env_json}" python3 - <<'PY'
+BOT_MANIFEST_TEMPLATE="${bot_manifest_template}" \
+BOT_MANIFEST="${bot_manifest}" \
+MANAGED_ENVIRONMENT_ID="${managed_environment_id}" \
+CONTAINER_APP_LOCATION="${container_app_location}" \
+BOT_IMAGE="${image_ref}" \
+SEARXNG_BASE_URL="${searxng_base_url}" \
+AZURE_OPENAI_EMBEDDING_ENDPOINT="${azure_openai_embedding_endpoint}" \
+BOT_ENV_JSON="${bot_env_json}" \
+python3 - <<'PY'
+from pathlib import Path
 import json
 import os
 
-retired_exact = {
-    "BOT_PROFILES_BASE64_JSON",
-    "BOT_PROFILES_JSON",
-    "PROFILE_CONFIG_VERSION",
-    "PPT_ALLOWED_EXTENSIONS",
-    "PPT_DEFAULT_INCLUDE_PDF",
-    "GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID",
-    "GRAPH_SHEET_MUSIC_FOLDER_PATH",
-    "SHEET_MUSIC_DEFAULT_RECURSIVE",
-    "LLM_PROVIDER",
-    "LLM_FALLBACK_PROVIDER",
-    "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
-    "OPENAI_EMBEDDING_MODEL",
-    "EMBEDDING_KEEP_ALIVE",
-    "CLAMAV_TIMEOUT_MS",
-    "".join(("CLAM", "AV_HOST")),
-    "".join(("CLAM", "AV_PORT")),
+env_values = {
+    item["name"]: item.get("value")
+    for item in json.loads(os.environ["BOT_ENV_JSON"])
+    if item.get("name")
 }
-retired_prefixes = (
-    "".join(("OLLA", "MA_")),
-    "".join(("VIRUS_", "SCAN_")),
+source_env_names = [
+    "GRAPH_TENANT_ID",
+    "GRAPH_CLIENT_ID",
+    "GRAPH_DRIVE_ID",
+    "GRAPH_PPT_FOLDER_ITEM_ID",
+    "GRAPH_POP_SHEET_FOLDER_ITEM_ID",
+    "GRAPH_POP_SHEET_DRIVE_ID",
+    "GRAPH_HYMN_SHEET_FOLDER_ITEM_ID",
+    "GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID",
+    "GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID",
+    "GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID",
+    "NOTION_SERVICE_DATABASE_ID",
+    "NOTION_DATE_PROPERTY",
+    "NOTION_MEETING_PROPERTY",
+    "NOTION_ROLE_PROPERTY",
+    "NOTION_PERSON_PROPERTY",
+]
+for name in source_env_names:
+    if env_values.get(name) is None:
+        raise SystemExit(f"Required ACA environment reference is unavailable: {name}")
+
+substitutions = {
+    "PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID": os.environ["MANAGED_ENVIRONMENT_ID"],
+    "PLACEHOLDER_AZURE_REGION": os.environ["CONTAINER_APP_LOCATION"],
+    "PLACEHOLDER_BOT_IMAGE": os.environ["BOT_IMAGE"],
+    "PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"],
+    "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_ENDPOINT": os.environ[
+        "AZURE_OPENAI_EMBEDDING_ENDPOINT"
+    ],
+    "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_URL_SECRET_REF": "attachment-scan-queue-url",
+    "PLACEHOLDER_LINE_HELPER_CHANNEL_SECRET_REF": "line-helper-channel-secret",
+    "PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF": (
+        "line-helper-channel-access-token"
+    ),
+    "PLACEHOLDER_LINE_HELPER_ADMIN_USER_ID_SECRET_REF": "line-helper-admin-user-id",
+    "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF": (
+        "azure-openai-embedding-key"
+    ),
+    "PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF": "deepseek-api-key",
+    "PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF": "observability-hmac-key",
+    "PLACEHOLDER_DATABASE_URL_SECRET_REF": "database-url",
+    "PLACEHOLDER_REDIS_URL_SECRET_REF": "redis-url",
+    "PLACEHOLDER_GRAPH_CLIENT_SECRET_REF": "graph-client-secret",
+    "PLACEHOLDER_NOTION_TOKEN_SECRET_REF": "notion-token",
+}
+substitutions.update(
+    {f"PLACEHOLDER_{name}": env_values[name] for name in source_env_names}
 )
-retired_provider_token = "".join(("OLLA", "MA"))
-retired_office_address = ".".join(["172", "16", "65", "5"])
-for item in json.loads(os.environ["BOT_ENV_JSON"]):
-    name = item.get("name", "")
-    value = str(item.get("value") or "")
-    if (
-        name in retired_exact
-        or name.startswith(retired_prefixes)
-        or f"_{retired_provider_token}_" in name
-        or retired_office_address in value
-    ):
-        print(name)
+
+text = Path(os.environ["BOT_MANIFEST_TEMPLATE"]).read_text()
+for placeholder, value in substitutions.items():
+    if text.count(placeholder) != 1:
+        raise SystemExit(f"Expected one bot manifest placeholder: {placeholder}")
+    text = text.replace(placeholder, json.dumps(value, ensure_ascii=False))
+if "PLACEHOLDER_" in text:
+    raise SystemExit("A bot manifest placeholder was not resolved")
+Path(os.environ["BOT_MANIFEST"]).write_text(text)
 PY
-)
 
-update_args=(
-  --resource-group "${RESOURCE_GROUP}"
-  --name "${CONTAINER_APP_NAME}"
-  --image "${image_ref}"
-  --set-env-vars
-  "PROFILE_CONFIG_PATH=/app/config/profiles.json"
-  "READY_PATH=/readyz"
-  "LLM_CONTEXT_WINDOW_TOKENS=272000"
-  "LLM_RUNTIME_CONTEXT_BUDGET_TOKENS=2000"
-  "LLM_CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.75"
-  "LLM_GENERAL_MAX_OUTPUT_TOKENS=160"
-  "LLM_ROUTE_MAX_OUTPUT_TOKENS=256"
-  "CONFIRMATION_TTL_MINUTES=5"
-  "RATE_LIMIT_ENABLED=true"
-  "RATE_LIMIT_WINDOW_MS=60000"
-  "RATE_LIMIT_MAX_REQUESTS=20"
-  "LAST_ERRORS_MAX_ENTRIES=20"
-  "MAX_ATTACHMENT_BYTES=26214400"
-  "LINE_CONTENT_DOWNLOAD_TIMEOUT_MS=30000"
-  "ATTACHMENT_SCAN_QUEUE_URL=secretref:attachment-scan-queue-url"
-  "EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS=15000"
-  "EXTERNAL_RESOURCE_MAX_REDIRECTS=3"
-  "SHEET_MUSIC_ALLOWED_EXTENSIONS=pdf,jpg,jpeg,png"
-  "SEARXNG_BASE_URL=${searxng_base_url}"
-  "SEARXNG_TIMEOUT_MS=8000"
-  "EMBEDDING_PROVIDER=azure_openai"
-  "AZURE_OPENAI_EMBEDDING_API_KEY=secretref:azure-openai-embedding-key"
-  "AZURE_OPENAI_EMBEDDING_ENDPOINT=${azure_openai_embedding_endpoint}"
-  "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}"
-  "AZURE_OPENAI_EMBEDDING_API_VERSION=${AZURE_OPENAI_EMBEDDING_API_VERSION}"
-  "EMBEDDING_MODEL=text-embedding-3-small"
-  "EMBEDDING_BATCH_SIZE=16"
-  "EMBEDDING_TIMEOUT_MS=30000"
-  "OBSERVABILITY_HMAC_KEY=secretref:observability-hmac-key"
-)
-if [[ ${#retired_profile_envs[@]} -gt 0 ]]; then
-  update_args+=(--remove-env-vars "${retired_profile_envs[@]}")
-fi
-
-az containerapp update "${update_args[@]}" \
-  --only-show-errors \
-  --output none
-
-bot_secrets_json="$(az containerapp secret list \
+az containerapp update \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
-  --show-values \
-  --output json)"
-bot_env_json="$(az containerapp show \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${CONTAINER_APP_NAME}" \
-  --query "properties.template.containers[0].env" \
-  --output json)"
-
-az containerapp dapr enable \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${CONTAINER_APP_NAME}" \
-  --dapr-app-id "hhc-line-function-bot" \
-  --dapr-app-port 3000 \
-  --dapr-app-protocol http \
-  --dapr-log-level warn \
+  --yaml "${bot_manifest}" \
   --only-show-errors \
   --output none
 
@@ -454,6 +435,40 @@ if [[ "${revision_ready}" != "true" ]]; then
   echo "Revision ${target_revision} did not become ready in time"
   exit 1
 fi
+
+bot_dapr_json="$(az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CONTAINER_APP_NAME}" \
+  --query "properties.configuration.dapr" \
+  --output json)"
+if ! BOT_DAPR_JSON="${bot_dapr_json}" python3 - <<'PY'
+import json
+import os
+
+dapr = json.loads(os.environ["BOT_DAPR_JSON"] or "null") or {}
+if (
+    dapr.get("enabled") is not True
+    or dapr.get("appId") != "hhc-line-function-bot"
+    or dapr.get("appPort") != 3000
+    or dapr.get("appProtocol") != "http"
+):
+    raise SystemExit(1)
+PY
+then
+  echo "Bot Dapr configuration changed unexpectedly" >&2
+  exit 1
+fi
+
+bot_secrets_json="$(az containerapp secret list \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CONTAINER_APP_NAME}" \
+  --show-values \
+  --output json)"
+bot_env_json="$(az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CONTAINER_APP_NAME}" \
+  --query "properties.template.containers[0].env" \
+  --output json)"
 
 legacy_profile_secret="$(az containerapp secret list \
   --resource-group "${RESOURCE_GROUP}" \
