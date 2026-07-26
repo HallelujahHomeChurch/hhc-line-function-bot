@@ -261,20 +261,26 @@ function normalizeServiceScheduleArguments(
   const groundedModelQuery =
     query && input.text.normalize("NFKC").includes(query.normalize("NFKC")) ? query : undefined;
   const groundedRole = normalizeGroundedScheduleRole(stringArg(args, "role"), role);
-  return {
+  const normalized: JsonRecord = {
     ...structured,
     ...args,
-    ...(groundedRole ? { role: groundedRole } : {}),
     query:
       groundedModelQuery ??
       (currentQuery === "主日" ? "主日服事" : refinement.residualQuery || currentQuery)
   };
+  if (groundedRole) {
+    normalized.role = groundedRole;
+  } else {
+    delete normalized.role;
+  }
+  return normalized;
 }
 
 function normalizeGroundedScheduleRole(
   modelRole: string | undefined,
   deterministicRole: string | undefined
 ): string | undefined {
+  if (isGenericScheduleRole(modelRole)) return deterministicRole;
   if (!deterministicRole) return modelRole;
   if (!modelRole) return deterministicRole;
   const normalizedModelRole = modelRole.normalize("NFKC").replace(/\s+/gu, "");
@@ -285,6 +291,23 @@ function normalizeGroundedScheduleRole(
     )
     ? deterministicRole
     : modelRole;
+}
+
+function isGenericScheduleRole(role: string | undefined): boolean {
+  if (!role) return false;
+  const normalized = role.normalize("NFKC").replace(/[\s、，,。]+/gu, "");
+  return new Set([
+    "人員",
+    "安排",
+    "服事",
+    "服事表",
+    "服事人員",
+    "服事安排",
+    "聚會服事",
+    "聚會服事表",
+    "聚會服事人員",
+    "聚會服事安排"
+  ]).has(normalized);
 }
 
 function relativeScheduleDateIntent(

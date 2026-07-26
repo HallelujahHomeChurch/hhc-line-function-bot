@@ -56,6 +56,14 @@ A diagnostic single-case run against commit
 DeepSeek requests and 0 embedding batches. The three runs have therefore
 consumed 6 DeepSeek requests and 0 embedding batches in total.
 
+After the diagnostic boundary was narrowed, a single-case run against
+`735b9a1e` passed both refinement turns with 2 DeepSeek requests. A following
+full run passed `schedule-explicit` but again found no rows in the initial
+refinement turn and stopped after 3 DeepSeek requests. The live runs have
+therefore consumed 11 DeepSeek requests and 0 embedding batches in total. The
+shared normalizer now drops model-inferred generic schedule nouns such as
+`服事` from the role filter while preserving explicit known roles.
+
 All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
 label after successful cleanup before propagating driver exit code `1`; this

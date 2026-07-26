@@ -231,6 +231,26 @@ describe("function argument normalization", () => {
     });
   });
 
+  it("does not treat a generic schedule noun as a role filter", () => {
+    const normalized = normalizeFunctionArguments(
+      "query_schedule",
+      {
+        query: "synthetic service",
+        dateIntent: "specific_date",
+        specificDate: "2026-07-27",
+        role: "服事"
+      },
+      {
+        text: "查 synthetic service 2026-07-27 服事",
+        inferStructuredEvidence: true,
+        now: new Date("2026-07-26T00:00:00.000Z"),
+        timeZone: "Asia/Taipei"
+      }
+    );
+
+    expect(normalized).not.toHaveProperty("role");
+  });
+
   it("clears model-inferred content when the user only asks to remember a schedule", () => {
     expect(
       normalizeFunctionArguments(
