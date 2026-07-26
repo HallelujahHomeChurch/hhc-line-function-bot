@@ -17,6 +17,7 @@ RELEASE_ROLLBACK_IMAGE="${RELEASE_ROLLBACK_IMAGE:-}"
 RELEASE_CATALOG_JOB_MUTATED="${RELEASE_CATALOG_JOB_MUTATED:-false}"
 RELEASE_SCAN_JOB_MUTATED="${RELEASE_SCAN_JOB_MUTATED:-false}"
 RELEASE_REFRESH_JOB_MUTATED="${RELEASE_REFRESH_JOB_MUTATED:-false}"
+RELEASE_PROVIDER_CONTRACT_VERIFIED="${RELEASE_PROVIDER_CONTRACT_VERIFIED:-false}"
 RELEASE_CLEANUP_FILES=()
 
 set_release_failure() {
@@ -76,8 +77,11 @@ capture_known_good_state() {
   fi
 
   if ! RELEASE_KNOWN_GOOD_CATALOG_IMAGE="$(release_job_image "${CATALOG_SYNC_JOB_NAME}")" \
+    || [[ -z "${RELEASE_KNOWN_GOOD_CATALOG_IMAGE}" ]] \
     || ! RELEASE_KNOWN_GOOD_SCAN_IMAGE="$(release_job_image "${ATTACHMENT_SCAN_JOB_NAME}")" \
-    || ! RELEASE_KNOWN_GOOD_REFRESH_IMAGE="$(release_job_image "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}")"; then
+    || [[ -z "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" ]] \
+    || ! RELEASE_KNOWN_GOOD_REFRESH_IMAGE="$(release_job_image "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}")" \
+    || [[ -z "${RELEASE_KNOWN_GOOD_REFRESH_IMAGE}" ]]; then
     set_release_failure known_good_snapshot_failed
     return 1
   fi
@@ -131,6 +135,7 @@ run_release_gates() {
   : "${RELEASE_TARGET_REVISION:?RELEASE_TARGET_REVISION is required}"
   : "${RELEASE_TARGET_IMAGE:?RELEASE_TARGET_IMAGE is required}"
   : "${RELEASE_TARGET_SCAN_IMAGE:?RELEASE_TARGET_SCAN_IMAGE is required}"
+  : "${RELEASE_EXPECTED_SEARXNG_IMAGE:?RELEASE_EXPECTED_SEARXNG_IMAGE is required}"
   : "${RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME:?RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME is required}"
 
   release_wait_for_target || return
@@ -138,23 +143,24 @@ run_release_gates() {
   release_check_job_definition \
     "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" Schedule 900 1 schedule \
     "${RELEASE_TARGET_SCAN_IMAGE}" clamav_refresh_job refresh_definition_mismatch false || return
-  release_wait_for_job_execution \
-    "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
-    "${RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME}" \
-    clamav_refresh_job clamav_bootstrap_failed clamav_manifest_invalid || return
   release_check_job_definition \
     "${ATTACHMENT_SCAN_JOB_NAME}" Event 900 1 event \
     "${RELEASE_TARGET_SCAN_IMAGE}" attachment_scan_job scan_definition_mismatch || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
     "${RELEASE_TARGET_IMAGE}" catalog_job catalog_definition_mismatch false || return
-  release_check_recent_catalog_success || return
   release_check_job_definition \
     "${RELEASE_PROBE_JOB_NAME}" Manual 300 0 manual \
     "${RELEASE_TARGET_IMAGE}" release_probe release_probe_definition_mismatch false || return
   release_check_job_definition \
     "${PERIODIC_ASSURANCE_JOB_NAME}" Manual 600 0 manual \
     "${RELEASE_TARGET_SCAN_IMAGE}" periodic_assurance_job periodic_definition_mismatch || return
+  RELEASE_PROVIDER_CONTRACT_VERIFIED=true
+  release_wait_for_job_execution \
+    "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
+    "${RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME}" \
+    clamav_refresh_job clamav_bootstrap_failed clamav_manifest_invalid || return
+  release_check_recent_catalog_success || return
   release_run_probe || return
 }
 
@@ -168,7 +174,7 @@ release_wait_for_target() {
       az containerapp show \
         --resource-group "${RESOURCE_GROUP}" \
         --name "${CONTAINER_APP_NAME}" \
-        --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,dapr:properties.configuration.dapr}" \
+        --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,dapr:properties.configuration.dapr}" \
         --output json \
         --only-show-errors
     )"; then
@@ -219,7 +225,11 @@ else:
     dapr = state.get("dapr") or {}
     if not traffic_ok:
         print("target_traffic_mismatch")
-    elif state.get("external") is not False or state.get("targetPort") != 3000:
+    elif (
+        state.get("external") is not False
+        or state.get("targetPort") != 3000
+        or state.get("transport") != "auto"
+    ):
         print("bot_ingress_mismatch")
     elif (
         dapr.get("enabled") is not True
@@ -280,26 +290,41 @@ release_check_searxng() {
     az containerapp show \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${SEARXNG_CONTAINER_APP_NAME}" \
-      --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,minReplicas:properties.template.scale.minReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,image:properties.template.containers[0].image}" \
+      --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,image:properties.template.containers[0].image}" \
       --output json \
       --only-show-errors
-  )" || ! RELEASE_SEARXNG_STATE="${state_json}" python3 - <<'PY'
+  )" || ! RELEASE_SEARXNG_STATE="${state_json}" \
+    RELEASE_EXPECTED_SEARXNG_IMAGE="${RELEASE_EXPECTED_SEARXNG_IMAGE}" \
+    python3 - <<'PY'
 import json
 import os
 
 state = json.loads(os.environ["RELEASE_SEARXNG_STATE"])
 image = state.get("image")
+revision = state.get("latestRevision")
+traffic = state.get("traffic")
+traffic_ok = (
+    isinstance(traffic, list)
+    and len(traffic) == 1
+    and traffic[0].get("weight") == 100
+    and (
+        traffic[0].get("revisionName") == revision
+        or traffic[0].get("latestRevision") is True
+    )
+)
 valid = (
-    state.get("latestRevision")
-    and state.get("latestRevision") == state.get("latestReadyRevision")
+    revision
+    and revision == state.get("latestReadyRevision")
     and state.get("runningStatus") == "Running"
+    and traffic_ok
     and state.get("external") is False
     and state.get("targetPort") == 8080
+    and state.get("transport") == "http"
     and state.get("minReplicas") == 1
+    and state.get("maxReplicas") == 1
     and state.get("cpu") == 0.25
     and state.get("memory") == "0.5Gi"
-    and isinstance(image, str)
-    and "searxng/searxng@sha256:" in image
+    and image == os.environ["RELEASE_EXPECTED_SEARXNG_IMAGE"]
 )
 raise SystemExit(0 if valid else 1)
 PY
@@ -326,7 +351,7 @@ release_check_job_definition() {
     az containerapp job show \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${job_name}" \
-      --query "{triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,schedule:properties.configuration.scheduleTriggerConfig,event:properties.configuration.eventTriggerConfig,manual:properties.configuration.manualTriggerConfig,image:properties.template.containers[0].image}" \
+      --query "{triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,schedule:properties.configuration.scheduleTriggerConfig,event:properties.configuration.eventTriggerConfig,manual:properties.configuration.manualTriggerConfig,image:properties.template.containers[0].image,args:properties.template.containers[0].args,env:properties.template.containers[0].env,resources:properties.template.containers[0].resources,volumeMounts:properties.template.containers[0].volumeMounts,volumes:properties.template.volumes}" \
       --output json \
       --only-show-errors
   )" || ! RELEASE_JOB_DEFINITION="${definition_json}" \
@@ -335,13 +360,14 @@ release_check_job_definition() {
     RELEASE_EXPECTED_RETRY="${retry_limit}" \
     RELEASE_EXPECTED_TRIGGER_KEY="${trigger_key}" \
     RELEASE_EXPECTED_JOB_IMAGE="${expected_image}" \
+    RELEASE_JOB_CHECK_NAME="${check_name}" \
     python3 - <<'PY'
 import json
 import os
 
 definition = json.loads(os.environ["RELEASE_JOB_DEFINITION"])
 trigger = definition.get(os.environ["RELEASE_EXPECTED_TRIGGER_KEY"]) or {}
-valid = (
+common_valid = (
     definition.get("triggerType") == os.environ["RELEASE_EXPECTED_TRIGGER"]
     and definition.get("replicaTimeout") == int(os.environ["RELEASE_EXPECTED_TIMEOUT"])
     and definition.get("replicaRetryLimit") == int(os.environ["RELEASE_EXPECTED_RETRY"])
@@ -349,6 +375,144 @@ valid = (
     and trigger.get("replicaCompletionCount") == 1
     and definition.get("image") == os.environ["RELEASE_EXPECTED_JOB_IMAGE"]
 )
+check_name = os.environ["RELEASE_JOB_CHECK_NAME"]
+args = definition.get("args")
+env = definition.get("env")
+resources = definition.get("resources")
+mounts = definition.get("volumeMounts")
+volumes = definition.get("volumes")
+
+expected_mounts = [
+    {"volumeName": "clamav-signatures", "mountPath": "/var/lib/clamav"}
+]
+readonly_volumes = [
+    {
+        "name": "clamav-signatures",
+        "storageType": "AzureFile",
+        "storageName": "clamav-signatures-readonly",
+    }
+]
+readwrite_volumes = [
+    {
+        "name": "clamav-signatures",
+        "storageType": "AzureFile",
+        "storageName": "clamav-signatures-readwrite",
+    }
+]
+
+def env_contract(entries, expected):
+    if not isinstance(entries, list) or len(entries) != len(expected):
+        return False
+    by_name = {
+        entry.get("name"): entry
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+    }
+    if set(by_name) != set(expected):
+        return False
+    if any(
+        marker in name.upper()
+        for name in by_name
+        for marker in ("DEEPSEEK", "EMBEDDING", "OPENAI")
+    ):
+        return False
+    return all(
+        all(
+            (
+                isinstance(by_name[name].get(key), str)
+                and bool(by_name[name].get(key))
+                if value is None
+                else by_name[name].get(key) == value
+            )
+            for key, value in contract.items()
+        )
+        and set(by_name[name]) == {"name", *contract.keys()}
+        for name, contract in expected.items()
+    )
+
+valid = common_valid
+if check_name == "catalog_job":
+    valid = valid and trigger.get("cronExpression") == "*/15 * * * *"
+elif check_name == "clamav_refresh_job":
+    valid = (
+        valid
+        and trigger.get("cronExpression") == "10 19 * * 0"
+        and mounts == expected_mounts
+        and volumes == readwrite_volumes
+    )
+elif check_name == "attachment_scan_job":
+    scale = trigger.get("scale") or {}
+    rules = scale.get("rules")
+    rule = rules[0] if isinstance(rules, list) and len(rules) == 1 else {}
+    valid = (
+        valid
+        and scale.get("minExecutions") == 0
+        and scale.get("maxExecutions") == 1
+        and rule.get("type") == "azure-queue"
+        and rule.get("metadata", {}).get("queueLength") == "1"
+        and rule.get("auth")
+        == [
+            {
+                "triggerParameter": "connection",
+                "secretRef": "attachment-scan-queue-connection-string",
+            }
+        ]
+        and resources == {"cpu": 2, "memory": "4Gi"}
+        and mounts == expected_mounts
+        and volumes == readonly_volumes
+    )
+elif check_name == "release_probe":
+    valid = (
+        valid
+        and args == ["dist/tools/run-release-probe.js"]
+        and env_contract(
+            env,
+            {
+                "BOT_BASE_URL": {"value": None},
+                "SEARXNG_BASE_URL": {"value": None},
+                "GATEWAY_WEBHOOK_URL": {"value": None},
+                "LINE_HELPER_CHANNEL_SECRET": {
+                    "secretRef": "line-helper-channel-secret"
+                },
+                "CLAMAV_SIGNATURE_MANIFEST_PATH": {
+                    "value": "/var/lib/clamav/current/manifest.json"
+                },
+            },
+        )
+        and resources == {"cpu": 0.25, "memory": "0.5Gi"}
+        and mounts == expected_mounts
+        and volumes == readonly_volumes
+    )
+elif check_name == "periodic_assurance_job":
+    valid = (
+        valid
+        and args == ["dist/tools/run-periodic-assurance.js"]
+        and env_contract(
+            env,
+            {
+                "GRAPH_TENANT_ID": {"value": None},
+                "GRAPH_CLIENT_ID": {"value": None},
+                "GRAPH_DRIVE_ID": {"value": None},
+                "GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID": {"value": None},
+                "NOTION_SERVICE_DATABASE_ID": {"value": None},
+                "ATTACHMENT_SCAN_QUEUE_NAME": {"value": None},
+                "GRAPH_CLIENT_SECRET": {"secretRef": "graph-client-secret"},
+                "NOTION_TOKEN": {"secretRef": "notion-token"},
+                "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": {
+                    "secretRef": "attachment-scan-queue-connection-string"
+                },
+                "CLAMAV_SIGNATURE_MANIFEST_PATH": {
+                    "value": "/var/lib/clamav/current/manifest.json"
+                },
+                "CLAMAV_SCAN_TIMEOUT_MS": {"value": "15000"},
+            },
+        )
+        and resources == {"cpu": 0.25, "memory": "0.5Gi"}
+        and mounts == expected_mounts
+        and volumes == readonly_volumes
+    )
+else:
+    valid = False
 raise SystemExit(0 if valid else 1)
 PY
   then
@@ -455,6 +619,7 @@ release_run_probe() {
 restore_known_good_revision() {
   local rollback_revision
   local rollback_ok=true
+  local rollback_verified=false
   local attempt
   local state_json
   local image
@@ -475,7 +640,7 @@ restore_known_good_revision() {
         az containerapp show \
           --resource-group "${RESOURCE_GROUP}" \
           --name "${CONTAINER_APP_NAME}" \
-          --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,dapr:properties.configuration.dapr}" \
+          --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,dapr:properties.configuration.dapr}" \
           --output json \
           --only-show-errors
       )" && image="$(
@@ -486,7 +651,10 @@ restore_known_good_revision() {
           --query "properties.template.containers[0].image" \
           --output tsv \
           --only-show-errors
-      )" && RELEASE_ROLLBACK_STATE="${state_json}" \
+      )" \
+        && RELEASE_ROLLBACK_REVISION="${rollback_revision}" \
+        && RELEASE_ROLLBACK_IMAGE="${image}" \
+        && RELEASE_ROLLBACK_STATE="${state_json}" \
         RELEASE_ROLLBACK_REVISION_CANDIDATE="${rollback_revision}" \
         RELEASE_ROLLBACK_IMAGE_CANDIDATE="${image}" \
         RELEASE_EXPECTED_ROLLBACK_IMAGE="${RELEASE_KNOWN_GOOD_IMAGE}" \
@@ -508,16 +676,15 @@ PY
       then
         RELEASE_ROLLBACK_REVISION="${rollback_revision}"
         RELEASE_ROLLBACK_IMAGE="${image}"
+        rollback_verified=true
         break
       fi
       if ((attempt < RELEASE_POLL_ATTEMPTS)); then
         sleep "${RELEASE_POLL_INTERVAL_SECONDS}"
       fi
     done
-    if [[ -z "${RELEASE_ROLLBACK_REVISION}" ]]; then
+    if [[ "${rollback_verified}" != "true" ]]; then
       rollback_ok=false
-      RELEASE_ROLLBACK_REVISION="${rollback_revision}"
-      RELEASE_ROLLBACK_IMAGE="${RELEASE_KNOWN_GOOD_IMAGE}"
     fi
   fi
 
@@ -539,8 +706,6 @@ PY
     return 0
   fi
   RELEASE_ROLLBACK_STATUS=failed
-  [[ -n "${RELEASE_ROLLBACK_REVISION}" ]] || RELEASE_ROLLBACK_REVISION="${RELEASE_KNOWN_GOOD_REVISION}"
-  [[ -n "${RELEASE_ROLLBACK_IMAGE}" ]] || RELEASE_ROLLBACK_IMAGE="${RELEASE_KNOWN_GOOD_IMAGE}"
   return 1
 }
 
@@ -578,7 +743,7 @@ write_release_report() {
     target_status=ready
   fi
 
-  RELEASE_REPORT_STATUS="${status}" \
+  if RELEASE_REPORT_STATUS="${status}" \
   RELEASE_REPORT_TARGET_STATUS="${target_status}" \
   RELEASE_REPORT_TARGET_REVISION="${target_revision}" \
   RELEASE_REPORT_TARGET_IMAGE="${target_image}" \
@@ -592,6 +757,7 @@ write_release_report() {
   RELEASE_ROLLBACK_IMAGE="${RELEASE_ROLLBACK_IMAGE}" \
   RELEASE_KNOWN_GOOD_REVISION="${RELEASE_KNOWN_GOOD_REVISION}" \
   RELEASE_KNOWN_GOOD_IMAGE="${RELEASE_KNOWN_GOOD_IMAGE}" \
+  RELEASE_PROVIDER_CONTRACT_VERIFIED="${RELEASE_PROVIDER_CONTRACT_VERIFIED}" \
   python3 - <<'PY'
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -624,6 +790,9 @@ failure_map = {
     "release_probe_failed": "http_mismatch",
     "release_probe_failed_timeout": "timeout",
     "report_write_failed": "network_failed",
+    "transaction_incomplete": "network_failed",
+    "unclassified_release_failure": "network_failed",
+    "unexpected_release_job": "http_mismatch",
 }
 check_names = {
     "target_revision",
@@ -669,14 +838,22 @@ for row in os.environ.get("RELEASE_CHECK_RECORDS", "").splitlines():
     )
 
 reason = os.environ["RELEASE_FAILURE_REASON"]
-failure_code = failure_map.get(reason, "network_failed")
+if reason not in failure_map:
+    raise SystemExit("unknown release failure reason")
+failure_code = failure_map[reason]
 rollback_status = os.environ["RELEASE_ROLLBACK_STATUS"]
 rollback = {"status": rollback_status}
-if rollback_status != "not_required":
+rollback_revision = os.environ["RELEASE_ROLLBACK_REVISION"]
+rollback_image = os.environ["RELEASE_ROLLBACK_IMAGE"]
+if bool(rollback_revision) != bool(rollback_image):
+    raise SystemExit("incomplete rollback observation")
+if rollback_status == "restored" and not rollback_revision:
+    raise SystemExit("restored rollback observation missing")
+if rollback_revision:
     rollback.update(
         {
-            "revision": os.environ["RELEASE_ROLLBACK_REVISION"],
-            "image": image_identity(os.environ["RELEASE_ROLLBACK_IMAGE"]),
+            "revision": rollback_revision,
+            "image": image_identity(rollback_image),
         }
     )
 report = {
@@ -702,8 +879,11 @@ report = {
     },
     "checks": checks,
     "rollback": rollback,
-    "providerRequests": {"deepseek": 0, "embedding": 0},
 }
+if os.environ["RELEASE_PROVIDER_CONTRACT_VERIFIED"] == "true":
+    report["providerRequests"] = {"deepseek": 0, "embedding": 0}
+elif report["status"] == "passed":
+    raise SystemExit("passed release lacks provider contract verification")
 
 path = Path(os.environ["RELEASE_REPORT_PATH"])
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -724,7 +904,12 @@ finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
 PY
-  RELEASE_REPORT_WRITTEN=true
+  then
+    RELEASE_REPORT_WRITTEN=true
+    return 0
+  fi
+  RELEASE_REPORT_WRITTEN=false
+  return 1
 }
 
 release_assurance_on_exit() {

@@ -296,6 +296,14 @@ if "PLACEHOLDER_SEARXNG_SETTINGS" in manifest:
 Path(os.environ["SEARXNG_MANIFEST"]).write_text(manifest)
 PY
 unset searxng_secret_key
+RELEASE_EXPECTED_SEARXNG_IMAGE="$(
+  awk '$1 == "image:" {print $2; exit}' "${searxng_manifest}"
+)"
+if [[ -z "${RELEASE_EXPECTED_SEARXNG_IMAGE}" ]]; then
+  set_release_failure preflight_failed
+  echo "Could not resolve the expected SearXNG image from its rendered manifest" >&2
+  exit 1
+fi
 
 if az containerapp show \
   --resource-group "${RESOURCE_GROUP}" \

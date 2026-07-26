@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildAssuranceReport } from "../assurance/report.js";
+import { buildAssuranceReport, type AssuranceReportInput } from "../assurance/report.js";
 
 const timestamp = "2026-07-27T00:00:00.000Z";
 
@@ -208,6 +208,68 @@ describe("buildAssuranceReport", () => {
     ).toThrow("assurance_report_invalid");
   });
 
+  it("accepts an early failed release without an unverified provider-request attestation", () => {
+    const report = validReleaseReport();
+    report.status = "failed";
+    report.failureCode = "network_failed";
+    report.target.status = "failed";
+    delete report.providerRequests;
+
+    expect(buildAssuranceReport(report)).not.toHaveProperty("providerRequests");
+  });
+
+  it.each([
+    ["passed release", {}],
+    [
+      "periodic report",
+      {
+        kind: "periodic" as const,
+        checks: [
+          {
+            name: "attachment_queue" as const,
+            status: "passed" as const,
+            observedAt: timestamp,
+            code: "none" as const
+          }
+        ]
+      }
+    ]
+  ])("rejects a %s without a provider-request attestation", (_label, override) => {
+    const report = { ...validReleaseReport(), ...override };
+    delete report.providerRequests;
+
+    expect(() => buildAssuranceReport(report as AssuranceReportInput)).toThrow(
+      "assurance_report_invalid"
+    );
+  });
+
+  it("allows a failed rollback to omit unavailable observed state", () => {
+    const report = validReleaseReport();
+    report.status = "failed";
+    report.failureCode = "http_mismatch";
+    report.target.status = "failed";
+    report.rollback = { status: "failed" };
+
+    expect(buildAssuranceReport(report).rollback).toEqual({ status: "failed" });
+  });
+
+  it.each([
+    { status: "failed" as const, revision: "bot--rollback" },
+    {
+      status: "failed" as const,
+      image: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    { status: "restored" as const }
+  ])("rejects incomplete rollback evidence: $status", (rollback) => {
+    const report = validReleaseReport();
+    report.status = "failed";
+    report.failureCode = "http_mismatch";
+    report.target.status = "failed";
+    report.rollback = rollback;
+
+    expect(() => buildAssuranceReport(report)).toThrow("assurance_report_invalid");
+  });
+
   it.each([
     ["unknown version", { version: 2 }],
     ["unknown kind", { kind: "unexpected" }],
@@ -249,3 +311,29 @@ describe("buildAssuranceReport", () => {
     expect(() => buildAssuranceReport(input)).toThrow("assurance_report_invalid");
   });
 });
+
+function validReleaseReport(): AssuranceReportInput {
+  return {
+    version: 1,
+    kind: "release",
+    releaseId: "release-20260727",
+    commitSha: "0123456789abcdef0123456789abcdef01234567",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    status: "passed",
+    failureCode: "none",
+    target: {
+      resource: "bot",
+      revision: "bot--r5",
+      image: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      status: "ready"
+    },
+    knownGood: {
+      revision: "bot--r4",
+      image: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    checks: [{ name: "release_probe", status: "passed", observedAt: timestamp, code: "none" }],
+    rollback: { status: "not_required" },
+    providerRequests: { deepseek: 0, embedding: 0 }
+  };
+}

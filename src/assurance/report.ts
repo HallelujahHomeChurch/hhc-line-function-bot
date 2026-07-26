@@ -88,7 +88,7 @@ export interface AssuranceReportInput {
   knownGood: AssuranceKnownGood;
   checks: AssuranceCheck[];
   rollback: { status: AssuranceRollbackStatus; revision?: string; image?: string };
-  providerRequests: { deepseek: 0; embedding: 0 };
+  providerRequests?: { deepseek: 0; embedding: 0 };
 }
 
 export type AssuranceReport = AssuranceReportInput;
@@ -152,21 +152,38 @@ const periodicChecks = new Set<PeriodicCheckName>([
 
 export function buildAssuranceReport(input: AssuranceReportInput): AssuranceReport {
   const value = input as unknown;
-  assertObject(value, [
-    "version",
-    "kind",
-    "releaseId",
-    "commitSha",
-    "startedAt",
-    "completedAt",
-    "status",
-    "failureCode",
-    "target",
-    "knownGood",
-    "checks",
-    "rollback",
-    "providerRequests"
-  ]);
+  assertObject(
+    value,
+    [
+      "version",
+      "kind",
+      "releaseId",
+      "commitSha",
+      "startedAt",
+      "completedAt",
+      "status",
+      "failureCode",
+      "target",
+      "knownGood",
+      "checks",
+      "rollback",
+      "providerRequests"
+    ],
+    [
+      "version",
+      "kind",
+      "releaseId",
+      "commitSha",
+      "startedAt",
+      "completedAt",
+      "status",
+      "failureCode",
+      "target",
+      "knownGood",
+      "checks",
+      "rollback"
+    ]
+  );
   const source = value as Record<string, unknown>;
   const kind = enumValue(source.kind, ["release", "periodic"] as const);
   const status = enumValue(source.status, ["passed", "failed"] as const);
@@ -174,6 +191,8 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
   const startedAt = isoTimestamp(source.startedAt);
   const completedAt = isoTimestamp(source.completedAt);
   const reportChecks = checks(source.checks, kind);
+  const providerRequestReport =
+    source.providerRequests === undefined ? undefined : providerRequests(source.providerRequests);
   const report: AssuranceReport = {
     version: exactOne(source.version),
     kind,
@@ -187,8 +206,10 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
     knownGood: knownGood(source.knownGood),
     checks: reportChecks,
     rollback: rollback(source.rollback),
-    providerRequests: providerRequests(source.providerRequests)
+    ...(providerRequestReport === undefined ? {} : { providerRequests: providerRequestReport })
   };
+  if ((kind === "periodic" || status === "passed") && providerRequestReport === undefined)
+    invalid();
   if ((status === "passed") !== (failureCode === "none")) invalid();
   if (status === "passed" && reportChecks.some((check) => check.status === "failed")) invalid();
   if (Date.parse(completedAt) < Date.parse(startedAt)) invalid();
@@ -234,7 +255,7 @@ function rollback(value: unknown): AssuranceReport["rollback"] {
   const image = source.image === undefined ? undefined : immutableImage(source.image);
   if ((revision === undefined) !== (image === undefined)) invalid();
   if (status === "not_required" && revision !== undefined) invalid();
-  if (status !== "not_required" && revision === undefined) invalid();
+  if (status === "restored" && revision === undefined) invalid();
   return {
     status,
     ...(revision === undefined ? {} : { revision }),

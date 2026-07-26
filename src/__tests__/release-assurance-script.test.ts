@@ -85,18 +85,58 @@ describe("release assurance shell transaction", () => {
     expect(calls.some((args) => args.includes("job") && args.includes("update"))).toBe(false);
   });
 
+  it.each(["empty_catalog_snapshot", "empty_scan_snapshot", "empty_refresh_snapshot"])(
+    "fails an incomplete %s before any mutation",
+    async (scenario) => {
+      const fixture = await createFixture(scenario);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+      expect(result.status, diagnostic(result, calls)).not.toBe(0);
+      expect(report.status).toBe("failed");
+      expect(report.rollback).toEqual({ status: "not_required" });
+      expect(report).not.toHaveProperty("providerRequests");
+      expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
+      expect(calls.some((args) => args.includes("job") && args.includes("update"))).toBe(false);
+      expect(calls.some((args) => args.includes("job") && args.includes("start"))).toBe(false);
+    }
+  );
+
   it.each([
     "target_revision_mismatch",
     "target_image_mismatch",
     "target_traffic_mismatch",
     "bot_ingress_mismatch",
+    "bot_ingress_transport_mismatch",
     "bot_dapr_mismatch",
     "release_probe_failure",
     "searxng_definition_failure",
+    "searxng_traffic_mismatch",
+    "searxng_transport_mismatch",
+    "searxng_scale_mismatch",
+    "searxng_image_mismatch",
     "catalog_definition_failure",
+    "catalog_cron_mismatch",
+    "catalog_image_mismatch",
     "catalog_no_recent_success",
     "refresh_definition_failure",
-    "scan_definition_failure"
+    "refresh_cron_mismatch",
+    "refresh_mount_mismatch",
+    "scan_definition_failure",
+    "scan_scaler_mismatch",
+    "scan_resources_mismatch",
+    "scan_mount_mismatch",
+    "release_probe_args_mismatch",
+    "release_probe_env_mismatch",
+    "release_probe_resources_mismatch",
+    "release_probe_mount_mismatch",
+    "release_probe_provider_env",
+    "periodic_args_mismatch",
+    "periodic_env_mismatch",
+    "periodic_resources_mismatch",
+    "periodic_mount_mismatch",
+    "periodic_provider_env"
   ])("fails the %s gate and performs a verified rollback", async (scenario) => {
     const fixture = await createFixture(scenario);
     const result = fixture.run();
@@ -107,6 +147,22 @@ describe("release assurance shell transaction", () => {
 
     expect(report.status).toBe("failed");
     expect(report.failureCode).not.toBe("none");
+    if (
+      scenario.startsWith("target_") ||
+      scenario.startsWith("bot_") ||
+      scenario.startsWith("searxng_") ||
+      scenario.includes("definition") ||
+      scenario.includes("_cron_") ||
+      scenario.includes("_image_") ||
+      scenario.includes("_scaler_") ||
+      scenario.includes("_resources_") ||
+      scenario.includes("_mount_") ||
+      scenario.includes("_args_") ||
+      scenario.includes("_env_") ||
+      scenario.includes("_provider_")
+    ) {
+      expect(report).not.toHaveProperty("providerRequests");
+    }
     if (scenario === "bot_ingress_mismatch") {
       expect(report.failureCode).toBe("http_mismatch");
     }
@@ -160,10 +216,54 @@ describe("release assurance shell transaction", () => {
 
       expect(report.status).toBe("failed");
       expect(report.failureCode).toBe("http_mismatch");
-      expect(report.rollback.status).toBe("failed");
+      expect(report.rollback).toEqual(
+        scenario === "rollback_copy_failure"
+          ? { status: "failed" }
+          : {
+              status: "failed",
+              revision: "bot--rollback",
+              image: `sha256:${"6".repeat(64)}`
+            }
+      );
       expectForbiddenCallsAbsent(calls);
     }
   );
+
+  it.each(["write", "fsync", "replace"])(
+    "does not mark a report durable when its %s step fails",
+    async (failureMode) => {
+      const fixture = await createFixture(`report_${failureMode}_failure`);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      const reportFlag = await readFile(fixture.reportFlagPath, "utf8");
+
+      expect(result.status, diagnostic(result, calls)).toBe(31);
+      expect(reportFlag).toBe("false");
+      await expect(readFile(fixture.reportPath, "utf8")).rejects.toThrow();
+      expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(true);
+    }
+  );
+
+  it.each([
+    ["transaction_incomplete", 1, "network_failed"],
+    ["unclassified_release_failure", 27, "network_failed"],
+    ["unexpected_release_job", 28, "http_mismatch"]
+  ])("maps the emitted %s reason explicitly", async (scenario, expectedExit, expectedCode) => {
+    const fixture = await createFixture(scenario);
+    const result = fixture.run();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status).toBe(expectedExit);
+    expect(report.failureCode).toBe(expectedCode);
+  });
+
+  it("fails closed instead of silently mapping an unknown reason", async () => {
+    const fixture = await createFixture("unknown_failure_reason");
+    const result = fixture.run();
+
+    expect(result.status).toBe(29);
+    await expect(readFile(fixture.reportPath, "utf8")).rejects.toThrow();
+  });
 });
 
 async function createFixture(scenario: string) {
@@ -173,8 +273,29 @@ async function createFixture(scenario: string) {
   const stateDirectory = path.join(directory, "state");
   const callLogPath = path.join(directory, "calls.jsonl");
   const reportPath = path.join(directory, "report.json");
+  const reportFlagPath = path.join(stateDirectory, "report-flag");
   const driverPath = path.join(directory, "driver.sh");
   await Promise.all([mkdir(binDirectory), mkdir(stateDirectory)]);
+  await writeFile(
+    path.join(directory, "sitecustomize.py"),
+    `import json
+import os
+
+mode = os.environ.get("FAKE_REPORT_IO_FAILURE")
+if mode == "write":
+    def fail_dump(*_args, **_kwargs):
+        raise OSError("injected report write failure")
+    json.dump = fail_dump
+elif mode == "fsync":
+    def fail_fsync(*_args, **_kwargs):
+        raise OSError("injected report fsync failure")
+    os.fsync = fail_fsync
+elif mode == "replace":
+    def fail_replace(*_args, **_kwargs):
+        raise OSError("injected report replace failure")
+    os.replace = fail_replace
+`
+  );
   await writeFile(path.join(binDirectory, "az"), FAKE_AZ, { mode: 0o700 });
   await writeFile(
     path.join(binDirectory, "node"),
@@ -209,9 +330,11 @@ exec /mnt/c/nvm4w/nodejs/node.exe "\${script_path}" \
 set -Eeuo pipefail
 export FAKE_SYSTEM_NODE="$(command -v node || true)"
 export PATH="${toBashPath(binDirectory)}:\${PATH}"
+export PYTHONPATH="${toBashPath(directory)}"
 export FAKE_AZ_LOG="${toBashPath(callLogPath)}"
 export FAKE_AZ_STATE="${toBashPath(stateDirectory)}"
 export FAKE_SCENARIO="${scenario}"
+export FAKE_REPORT_IO_FAILURE="${scenario.startsWith("report_") ? scenario.slice(7, -8) : ""}"
 export RESOURCE_GROUP="fixture-resource-group"
 export CONTAINER_APP_NAME="fixture-bot"
 export SEARXNG_CONTAINER_APP_NAME="fixture-searxng"
@@ -225,9 +348,36 @@ export RELEASE_ID="fixture-release-17"
 export RELEASE_COMMIT_SHA="${"a".repeat(40)}"
 export RELEASE_POLL_ATTEMPTS="3"
 export RELEASE_POLL_INTERVAL_SECONDS="1"
+export RELEASE_EXPECTED_SEARXNG_IMAGE="docker.io/searxng/searxng@sha256:${"5".repeat(64)}"
 source "${toBashPath(path.join(ROOT, "scripts/release-assurance.sh"))}"
 trap 'release_assurance_on_exit "$?"' EXIT
 capture_known_good_state
+if [[ "\${FAKE_SCENARIO}" == report_*_failure ]]; then
+  mark_release_mutated
+  set_release_failure "preflight_failed"
+  if write_release_report; then
+    printf '%s' "\${RELEASE_REPORT_WRITTEN}" > "${toBashPath(reportFlagPath)}"
+    exit 88
+  fi
+  printf '%s' "\${RELEASE_REPORT_WRITTEN}" > "${toBashPath(reportFlagPath)}"
+  exit 31
+fi
+if [[ "\${FAKE_SCENARIO}" == "transaction_incomplete" ]]; then
+  exit 0
+fi
+if [[ "\${FAKE_SCENARIO}" == "unclassified_release_failure" ]]; then
+  exit 27
+fi
+if [[ "\${FAKE_SCENARIO}" == "unexpected_release_job" ]]; then
+  if ! mark_release_job_mutated "unexpected-job"; then
+    exit 28
+  fi
+  exit 89
+fi
+if [[ "\${FAKE_SCENARIO}" == "unknown_failure_reason" ]]; then
+  set_release_failure "unknown_fixture_reason"
+  exit 29
+fi
 if [[ "\${FAKE_SCENARIO}" == "pre_mutation_failure" ]]; then
   set_release_failure "preflight_failed"
   exit 23
@@ -251,6 +401,7 @@ complete_release_transaction
 
   return {
     reportPath,
+    reportFlagPath,
     run: () => spawnSync("bash", [toBashPath(driverPath)], { cwd: ROOT, encoding: "utf8" }),
     calls: async (): Promise<string[][]> => {
       const text = await readFile(callLogPath, "utf8").catch(() => "");
@@ -327,7 +478,7 @@ const targetImages = {
 
 if (command("containerapp", "show") && name === "fixture-bot") {
   if (query === "properties.latestReadyRevisionName") output("bot--known-good");
-  else if (query === "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,dapr:properties.configuration.dapr}") {
+  else if (query === "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,dapr:properties.configuration.dapr}") {
     const rolledBack = existsSync(path.join(state, "rollback"));
     output({
       latestRevision: rolledBack ? "bot--rollback" : "bot--target",
@@ -345,6 +496,7 @@ if (command("containerapp", "show") && name === "fixture-bot") {
           : [{ revisionName: rolledBack ? "bot--rollback" : "bot--target", weight: 100 }],
       external: false,
       targetPort: scenario === "bot_ingress_mismatch" ? 3001 : 3000,
+      transport: scenario === "bot_ingress_transport_mismatch" ? "tcp" : "auto",
       dapr:
         scenario === "bot_dapr_mismatch"
           ? { enabled: false, appId: "wrong", appPort: 1, appProtocol: "tcp" }
@@ -381,17 +533,26 @@ if (command("containerapp", "revision", "show")) {
 }
 
 if (command("containerapp", "show") && name === "fixture-searxng") {
-  if (query !== "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,minReplicas:properties.template.scale.minReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,image:properties.template.containers[0].image}") process.exit(94);
+  if (query !== "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,image:properties.template.containers[0].image}") process.exit(94);
   output({
     latestRevision: "searx--ready",
     latestReadyRevision: "searx--ready",
     runningStatus: "Running",
+    traffic:
+      scenario === "searxng_traffic_mismatch"
+        ? [{ revisionName: "searx--old", weight: 100 }]
+        : [{ revisionName: "searx--ready", weight: 100 }],
     external: false,
     targetPort: 8080,
-    minReplicas: 1,
+    transport: scenario === "searxng_transport_mismatch" ? "auto" : "http",
+    minReplicas: scenario === "searxng_scale_mismatch" ? 0 : 1,
+    maxReplicas: 1,
     cpu: scenario === "searxng_definition_failure" ? 1 : 0.25,
     memory: "0.5Gi",
-    image: "docker.io/searxng/searxng@sha256:${"5".repeat(64)}"
+    image:
+      scenario === "searxng_image_mismatch"
+        ? "docker.io/searxng/searxng@sha256:${"6".repeat(64)}"
+        : "docker.io/searxng/searxng@sha256:${"5".repeat(64)}"
   });
   process.exit(0);
 }
@@ -402,49 +563,176 @@ if (command("containerapp", "job", "show")) {
     const restored = existsSync(path.join(state, "restored-" + name));
     if (!existsSync(snapshot)) {
       writeFileSync(snapshot, "1");
-      output(oldImages[name]);
+      const emptySnapshot =
+        (scenario === "empty_catalog_snapshot" && name === "hhc-line-bot-catalog-sync") ||
+        (scenario === "empty_scan_snapshot" && name === "hhc-line-bot-attachment-scan") ||
+        (scenario === "empty_refresh_snapshot" && name === "hhc-line-bot-clamav-refresh");
+      output(emptySnapshot ? "" : oldImages[name]);
     } else {
       output(restored ? oldImages[name] : targetImages[name]);
     }
     process.exit(0);
   }
-  if (query !== "{triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,schedule:properties.configuration.scheduleTriggerConfig,event:properties.configuration.eventTriggerConfig,manual:properties.configuration.manualTriggerConfig,image:properties.template.containers[0].image}") process.exit(95);
+  if (query !== "{triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,schedule:properties.configuration.scheduleTriggerConfig,event:properties.configuration.eventTriggerConfig,manual:properties.configuration.manualTriggerConfig,image:properties.template.containers[0].image,args:properties.template.containers[0].args,env:properties.template.containers[0].env,resources:properties.template.containers[0].resources,volumeMounts:properties.template.containers[0].volumeMounts,volumes:properties.template.volumes}") process.exit(95);
   const definitions = {
     "hhc-line-bot-catalog-sync": {
       triggerType: "Schedule",
       replicaTimeout: 600,
       replicaRetryLimit: 1,
-      schedule: { parallelism: 1, replicaCompletionCount: 1 }
+      schedule: {
+        cronExpression: "*/15 * * * *",
+        parallelism: 1,
+        replicaCompletionCount: 1
+      },
+      args: ["dist/tools/sync-catalog.js"],
+      env: [],
+      resources: {},
+      volumeMounts: [],
+      volumes: []
     },
     "hhc-line-bot-attachment-scan": {
       triggerType: "Event",
       replicaTimeout: 900,
       replicaRetryLimit: 1,
-      event: { parallelism: 1, replicaCompletionCount: 1 }
+      event: {
+        parallelism: 1,
+        replicaCompletionCount: 1,
+        scale: {
+          minExecutions: 0,
+          maxExecutions: 1,
+          rules: [
+            {
+              type: "azure-queue",
+              metadata: { queueLength: "1" },
+              auth: [
+                {
+                  triggerParameter: "connection",
+                  secretRef: "attachment-scan-queue-connection-string"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      args: ["dist/tools/run-attachment-scan-job.js"],
+      env: [],
+      resources: { cpu: 2, memory: "4Gi" },
+      volumeMounts: [{ volumeName: "clamav-signatures", mountPath: "/var/lib/clamav" }],
+      volumes: [
+        {
+          name: "clamav-signatures",
+          storageType: "AzureFile",
+          storageName: "clamav-signatures-readonly"
+        }
+      ]
     },
     "hhc-line-bot-clamav-refresh": {
       triggerType: "Schedule",
       replicaTimeout: 900,
       replicaRetryLimit: 1,
-      schedule: { parallelism: 1, replicaCompletionCount: 1 }
+      schedule: {
+        cronExpression: "10 19 * * 0",
+        parallelism: 1,
+        replicaCompletionCount: 1
+      },
+      args: ["dist/tools/refresh-clamav-signatures.js"],
+      env: [],
+      resources: { cpu: 0.5, memory: "1Gi" },
+      volumeMounts: [{ volumeName: "clamav-signatures", mountPath: "/var/lib/clamav" }],
+      volumes: [
+        {
+          name: "clamav-signatures",
+          storageType: "AzureFile",
+          storageName: "clamav-signatures-readwrite"
+        }
+      ]
     },
     "hhc-line-bot-release-probe": {
       triggerType: "Manual",
       replicaTimeout: 300,
       replicaRetryLimit: 0,
-      manual: { parallelism: 1, replicaCompletionCount: 1 }
+      manual: { parallelism: 1, replicaCompletionCount: 1 },
+      args: ["dist/tools/run-release-probe.js"],
+      env: [
+        { name: "BOT_BASE_URL", value: "https://bot.internal.example" },
+        { name: "SEARXNG_BASE_URL", value: "https://searx.internal.example" },
+        {
+          name: "GATEWAY_WEBHOOK_URL",
+          value: "https://gateway.example/api/line/webhook/helper"
+        },
+        { name: "LINE_HELPER_CHANNEL_SECRET", secretRef: "line-helper-channel-secret" },
+        {
+          name: "CLAMAV_SIGNATURE_MANIFEST_PATH",
+          value: "/var/lib/clamav/current/manifest.json"
+        }
+      ],
+      resources: { cpu: 0.25, memory: "0.5Gi" },
+      volumeMounts: [{ volumeName: "clamav-signatures", mountPath: "/var/lib/clamav" }],
+      volumes: [
+        {
+          name: "clamav-signatures",
+          storageType: "AzureFile",
+          storageName: "clamav-signatures-readonly"
+        }
+      ]
     },
     "hhc-line-bot-periodic-assurance": {
       triggerType: "Manual",
       replicaTimeout: 600,
       replicaRetryLimit: 0,
-      manual: { parallelism: 1, replicaCompletionCount: 1 }
+      manual: { parallelism: 1, replicaCompletionCount: 1 },
+      args: ["dist/tools/run-periodic-assurance.js"],
+      env: [
+        { name: "GRAPH_TENANT_ID", value: "tenant-fixture" },
+        { name: "GRAPH_CLIENT_ID", value: "client-fixture" },
+        { name: "GRAPH_CLIENT_SECRET", secretRef: "graph-client-secret" },
+        { name: "GRAPH_DRIVE_ID", value: "drive-fixture" },
+        { name: "GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID", value: "folder-fixture" },
+        { name: "NOTION_TOKEN", secretRef: "notion-token" },
+        { name: "NOTION_SERVICE_DATABASE_ID", value: "notion-fixture" },
+        {
+          name: "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING",
+          secretRef: "attachment-scan-queue-connection-string"
+        },
+        { name: "ATTACHMENT_SCAN_QUEUE_NAME", value: "queue-fixture" },
+        {
+          name: "CLAMAV_SIGNATURE_MANIFEST_PATH",
+          value: "/var/lib/clamav/current/manifest.json"
+        },
+        { name: "CLAMAV_SCAN_TIMEOUT_MS", value: "15000" }
+      ],
+      resources: { cpu: 0.25, memory: "0.5Gi" },
+      volumeMounts: [{ volumeName: "clamav-signatures", mountPath: "/var/lib/clamav" }],
+      volumes: [
+        {
+          name: "clamav-signatures",
+          storageType: "AzureFile",
+          storageName: "clamav-signatures-readonly"
+        }
+      ]
     }
   };
   const definition = { ...definitions[name], image: targetImages[name] };
   if (scenario === "catalog_definition_failure" && name === "hhc-line-bot-catalog-sync") definition.replicaTimeout = 1;
+  if (scenario === "catalog_cron_mismatch" && name === "hhc-line-bot-catalog-sync") definition.schedule.cronExpression = "0 * * * *";
+  if (scenario === "catalog_image_mismatch" && name === "hhc-line-bot-catalog-sync") definition.image = "registry.example/fixture-secret/bot@sha256:${"7".repeat(64)}";
   if (scenario === "refresh_definition_failure" && name === "hhc-line-bot-clamav-refresh") definition.replicaTimeout = 1;
+  if (scenario === "refresh_cron_mismatch" && name === "hhc-line-bot-clamav-refresh") definition.schedule.cronExpression = "0 0 * * *";
+  if (scenario === "refresh_mount_mismatch" && name === "hhc-line-bot-clamav-refresh") definition.volumes[0].storageName = "clamav-signatures-readonly";
   if (scenario === "scan_definition_failure" && name === "hhc-line-bot-attachment-scan") definition.replicaTimeout = 1;
+  if (scenario === "scan_scaler_mismatch" && name === "hhc-line-bot-attachment-scan") definition.event.scale.minExecutions = 1;
+  if (scenario === "scan_resources_mismatch" && name === "hhc-line-bot-attachment-scan") definition.resources.memory = "2Gi";
+  if (scenario === "scan_mount_mismatch" && name === "hhc-line-bot-attachment-scan") definition.volumes[0].storageName = "clamav-signatures-readwrite";
+  if (scenario === "release_probe_args_mismatch" && name === "hhc-line-bot-release-probe") definition.args = ["dist/tools/wrong.js"];
+  if (scenario === "release_probe_env_mismatch" && name === "hhc-line-bot-release-probe") definition.env = definition.env.filter((entry) => entry.name !== "BOT_BASE_URL");
+  if (scenario === "release_probe_resources_mismatch" && name === "hhc-line-bot-release-probe") definition.resources.cpu = 1;
+  if (scenario === "release_probe_mount_mismatch" && name === "hhc-line-bot-release-probe") definition.volumes[0].storageName = "clamav-signatures-readwrite";
+  if (scenario === "release_probe_provider_env" && name === "hhc-line-bot-release-probe") definition.env.push({ name: "DEEPSEEK_API_KEY", secretRef: "forbidden" });
+  if (scenario === "periodic_args_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.args = ["dist/tools/wrong.js"];
+  if (scenario === "periodic_env_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.env = definition.env.filter((entry) => entry.name !== "GRAPH_DRIVE_ID");
+  if (scenario === "periodic_resources_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.resources.memory = "1Gi";
+  if (scenario === "periodic_mount_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.volumes[0].storageName = "clamav-signatures-readwrite";
+  if (scenario === "periodic_provider_env" && name === "hhc-line-bot-periodic-assurance") definition.env.push({ name: "AZURE_OPENAI_EMBEDDING_API_KEY", secretRef: "forbidden" });
   output(definition);
   process.exit(0);
 }
