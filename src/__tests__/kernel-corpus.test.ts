@@ -71,7 +71,7 @@ describe("Kernel v1 versioned acceptance corpus", () => {
         "kernel-v1/resource/deepseek-unavailable-explicit@1",
         "kernel-v1/resource/deepseek-unavailable-ambiguous@1",
         "kernel-v1/write/signature-missing-no-publish@1",
-        "kernel-v1/write/signature-stale-no-publish@1",
+        "kernel-v1/write/signature-aged-publishes@1",
         "kernel-v1/write/infected-no-publish@1",
         "kernel-v1/state/clean-job-requester-scope@1"
       ])
