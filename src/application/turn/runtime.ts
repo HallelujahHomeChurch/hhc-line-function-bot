@@ -75,6 +75,7 @@ import {
 import { matchTextContinuation } from "./stages/text-continuation-stage.js";
 import { runTurnStages } from "./coordinator.js";
 import type { TurnStage, TurnStageName } from "./contracts.js";
+import { applyResultGuidance, type ControlledResultState } from "./result-guidance.js";
 
 export interface AgentTurnRuntimeOptions {
   functionRegistry: FunctionRegistry;
@@ -259,7 +260,20 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               });
             }
           }
-          return finish(input, steps, result);
+          return finish(
+            input,
+            steps,
+            result
+              ? guideControlledResult(
+                  result,
+                  result.executedAction ??
+                    functionNameForAgentResource(
+                      result.agentResource?.resourceType,
+                      context.profile.enabledFunctions
+                    )
+                )
+              : result
+          );
         }
 
         if (input.allowRouting === false) {
@@ -356,7 +370,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               action: plan.capability,
               clarificationCount: 1
             });
-            return finish(input, steps, slotCollection);
+            return finish(
+              input,
+              steps,
+              applyResultGuidance({
+                state: "missing_input",
+                result: slotCollection,
+                definition: getFunctionDefinition(plan.capability)
+              })
+            );
           }
           return finish(
             input,
@@ -484,7 +506,14 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         }
 
         if (route.type === "deny") {
-          return finish(input, steps, { ok: true, replyText: messages.unsupported });
+          return finish(
+            input,
+            steps,
+            applyResultGuidance({
+              state: "permission_denied",
+              result: { ok: true, replyText: messages.unsupported }
+            })
+          );
         }
         return continueStage;
       });
@@ -505,7 +534,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         });
         const handler = options.functionRegistry[route.action];
         if (!handler) {
-          return finish(input, steps, { ok: true, replyText: messages.functionNotConfigured });
+          return finish(
+            input,
+            steps,
+            applyResultGuidance({
+              state: "unavailable",
+              result: { ok: true, replyText: messages.functionNotConfigured },
+              definition: getFunctionDefinition(route.action)
+            })
+          );
         }
 
         const slotClarification = await createSlotClarificationResult({
@@ -532,7 +569,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             action: route.action,
             clarificationCount: 1
           });
-          return finish(input, steps, slotClarification);
+          return finish(
+            input,
+            steps,
+            applyResultGuidance({
+              state: "missing_input",
+              result: slotClarification,
+              definition: getFunctionDefinition(route.action)
+            })
+          );
         }
 
         const inFlight = buildInFlightKey(
@@ -592,7 +637,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             ...context,
             activeTask: controlledContinuationAuthorized ? activeTaskView(activeTask) : undefined
           });
-          const result = projectAgentReply({
+          const controlledResult = projectAgentReply({
             capability: route.action,
             text: routingText,
             result: rawResult
@@ -603,12 +648,12 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               scope: activeTaskScope(options.conversationWindowStore, input),
               capability: route.action,
               enabledFunctions: input.profile.enabledFunctions,
-              result,
+              result: controlledResult,
               now: now(),
               ttlMs: activeTaskTtlMs(input.profile),
               previousTask: activeTask
             });
-            steps.push(resultEnvelopeTraceStep(result));
+            steps.push(resultEnvelopeTraceStep(controlledResult));
             steps.push({
               phase: "active_task",
               outcome: "transition",
@@ -621,14 +666,15 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             context,
             route.action,
             normalizedArguments,
-            result
+            controlledResult
           );
           await options.agentRuntime?.afterFunctionResult({
             context,
             action: route.action,
             arguments: normalizedArguments,
-            result
+            result: controlledResult
           });
+          const result = guideControlledResult(controlledResult, route.action);
           const durationMs = elapsedMs(functionStartedAt);
           steps.push({
             phase: "function",
@@ -723,10 +769,18 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             errorName: error instanceof Error ? error.name : typeof error,
             durationMs
           });
-          return finish(input, steps, {
-            ok: false,
-            replyText: requestFailedMessage(input.requestId)
-          });
+          return finish(
+            input,
+            steps,
+            applyResultGuidance({
+              state: "error",
+              result: {
+                ok: false,
+                replyText: requestFailedMessage(input.requestId)
+              },
+              definition: getFunctionDefinition(route.action)
+            })
+          );
         } finally {
           if (inFlight) {
             await releaseInFlight(options.inFlightStore, inFlight.key);
@@ -993,23 +1047,54 @@ function controlledClarificationResult(
   context: FunctionHandlerContext
 ): FunctionExecutionResult {
   if (plan.reasonCode === "retrieval_unavailable") {
-    return {
-      ok: true,
-      replyText: withRequesterDisplayName(context, "資料來源暫時無法查詢，請稍後再試。")
-    };
+    return applyResultGuidance({
+      state: "unavailable",
+      result: {
+        ok: true,
+        replyText: withRequesterDisplayName(context, "暫時無法查詢，請稍後再試。")
+      }
+    });
   }
   const definition = plan.capability ? getFunctionDefinition(plan.capability) : undefined;
   const slot = definition?.requiredSlots[0];
   const replyText =
     definition?.clarificationPrompt ?? "請再告訴我想查哪個功能，以及要找的名稱、日期或主題。";
-  return {
+  const result = {
     ok: true,
     replyText: withRequesterDisplayName(context, replyText),
     quickReplies: slot?.quickReplies?.map((item) => ({
       label: item.label,
-      action: { type: "message", label: item.label, text: item.text }
+      action: { type: "message" as const, label: item.label, text: item.text }
     }))
   };
+  return plan.reasonCode === "missing_required_slot"
+    ? applyResultGuidance({
+        state: "missing_input",
+        result,
+        definition
+      })
+    : result;
+}
+
+function guideControlledResult(
+  result: FunctionExecutionResult,
+  action?: FunctionName
+): FunctionExecutionResult {
+  const definition = action ? getFunctionDefinition(action) : undefined;
+  return applyResultGuidance({
+    state: controlledResultState(result),
+    result,
+    definition,
+    supportsViewFull:
+      result.agentResult?.status === "success" &&
+      definition?.agentCapability?.operations.includes("view_full")
+  });
+}
+
+function controlledResultState(result: FunctionExecutionResult): ControlledResultState {
+  if (!result.ok) return "error";
+  if (result.diagnostics?.freshnessStatus === "stale_allowed") return "stale_allowed";
+  return result.agentResult?.status ?? "success";
 }
 
 async function readActiveTask(

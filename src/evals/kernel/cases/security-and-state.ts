@@ -146,7 +146,11 @@ async function unauthorizedWriteDenied(now: Date): Promise<boolean> {
       requestId: "unauthorized-save"
     }
   ]);
-  return executions === 0 && result?.replyText !== "unsafe";
+  return (
+    executions === 0 &&
+    result?.replyText?.includes("/help") === true &&
+    result.quickReplyLabels.join(",") === "查看可用功能"
+  );
 }
 
 async function missingWriteEvidenceDenied(now: Date): Promise<boolean> {

@@ -251,7 +251,8 @@ describe("AgentTurnRuntime controlled path", () => {
       requestId: "u2"
     });
 
-    expect(result?.replyText).toBe("目前不支援這個請求。");
+    expect(result?.replyText).toContain("權限");
+    expect(result?.replyText).toContain("/help");
   });
 
   it("fails closed with a clarification when the controlled planner is unavailable", async () => {
@@ -296,7 +297,166 @@ describe("AgentTurnRuntime controlled path", () => {
       requestId: "retrieval-down"
     });
 
-    expect(result?.replyText).toBe("資料來源暫時無法查詢，請稍後再試。");
+    expect(result?.replyText).toBe("這項功能目前暫時無法使用，請稍後再試。");
+  });
+
+  it("guides a controlled deny to help after the authority decision", async () => {
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "deny",
+          reasonCode: "source_not_allowed"
+        })
+      },
+      now
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(),
+      event: event("下一場服事"),
+      requestId: "permission-denied"
+    });
+
+    expect(result?.replyText).toContain("權限");
+    expect(result?.replyText).toContain("/help");
+    expect(result?.quickReplies).toEqual([
+      {
+        label: "查看可用功能",
+        action: {
+          type: "message",
+          label: "查看可用功能",
+          text: "/help"
+        }
+      }
+    ]);
+  });
+
+  it("keeps the definition-owned missing-slot prompt with one bounded next action", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "collect",
+          capability: "query_schedule",
+          arguments: {},
+          reasonCode: "missing_required_slot"
+        })
+      },
+      now
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(),
+      event: event("查服事表"),
+      requestId: "missing-input"
+    });
+
+    expect(result?.replyText).toContain("要查哪一天、哪一場聚會，或哪一類服事？");
+    expect(result?.replyText).toContain("請");
+    expect(result?.quickReplies?.map(({ label }) => label)).toEqual(["下一場"]);
+  });
+
+  it.each([
+    ["not_found", "換一個關鍵字"],
+    ["unavailable", "稍後再試"],
+    ["stale_allowed", "資料時間"]
+  ] as const)(
+    "maps the controlled %s result without changing its envelope",
+    async (state, phrase) => {
+      const agentResult = {
+        status: state === "stale_allowed" ? ("success" as const) : state,
+        replyText: "受控結果",
+        anchors: { scheduleId: "opaque-schedule" },
+        supportedOperations: ["continue"]
+      };
+      const responseData = {
+        kind: "schedule",
+        fields: { role: "音控", people: "小明" }
+      };
+      const handler = vi.fn<FunctionHandler>().mockResolvedValue({
+        ok: true,
+        replyText: "聚焦結果",
+        agentResult,
+        responseData,
+        ...(state === "stale_allowed"
+          ? {
+              diagnostics: {
+                executionMode: "catalog_snapshot_read" as const,
+                freshnessStatus: "stale_allowed" as const
+              }
+            }
+          : {})
+      });
+      const runtime = createAgentTurnRuntime({
+        functionRegistry: { query_schedule: handler },
+        textMessageHandlers: {},
+        inFlightStore: new MemoryInFlightStore(),
+        lastErrorStore: new InMemoryLastErrorStore(10),
+        lastRouteStore: new InMemoryLastRouteStore(10),
+        controlledAgentRouter: {
+          resolve: vi.fn().mockResolvedValue({
+            disposition: "execute",
+            capability: "query_schedule",
+            arguments: { query: "下一場服事" },
+            reasonCode: "explicit_intent"
+          })
+        },
+        now
+      });
+
+      const result = await runtime.handleTextTurn({
+        profile: profile(),
+        event: event("下一場服事"),
+        requestId: `result-${state}`
+      });
+
+      expect(result?.replyText).toContain(phrase);
+      expect(result?.agentResult).toBe(agentResult);
+      expect(result?.responseData).toBe(responseData);
+      expect(result?.quickReplies).toBeUndefined();
+    }
+  );
+
+  it("keeps safe execution-error copy without suggesting a retry action", async () => {
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {
+        query_schedule: vi.fn<FunctionHandler>().mockRejectedValue(new Error("private details"))
+      },
+      textMessageHandlers: {},
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "execute",
+          capability: "query_schedule",
+          arguments: { query: "下一場服事" },
+          reasonCode: "explicit_intent"
+        })
+      },
+      now
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(),
+      event: event("下一場服事"),
+      requestId: "execution-error"
+    });
+
+    expect(result?.replyText).toContain("支援碼");
+    expect(result?.replyText).not.toContain("private details");
+    expect(result?.quickReplies).toBeUndefined();
   });
 
   it("collects missing write content and uses the next requester reply", async () => {

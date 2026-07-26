@@ -269,7 +269,22 @@ describe("LINE entrance", () => {
       enabledFunctions: ["find_ppt_slides"],
       text: "小哈 不支援的要求"
     });
-    expect(replyText).toHaveBeenCalledWith("reply-token", "目前不支援這個請求。", undefined);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "目前這個對話或你的權限不能使用這項功能。輸入 /help 可查看目前可用功能。",
+      {
+        quickReplies: [
+          {
+            label: "查看可用功能",
+            action: {
+              type: "message",
+              label: "查看可用功能",
+              text: "/help"
+            }
+          }
+        ]
+      }
+    );
   });
 
   it("emits route and function observer events without raw message text", async () => {
@@ -1410,7 +1425,22 @@ describe("LINE entrance", () => {
       expect.any(Function)
     );
     expect(legacyRoute).not.toHaveBeenCalled();
-    expect(replyText).toHaveBeenCalledWith("reply-token", "目前不支援這個請求。", undefined);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "目前這個對話或你的權限不能使用這項功能。輸入 /help 可查看目前可用功能。",
+      {
+        quickReplies: [
+          {
+            label: "查看可用功能",
+            action: {
+              type: "message",
+              label: "查看可用功能",
+              text: "/help"
+            }
+          }
+        ]
+      }
+    );
   });
 
   it("does not apply group function grants to direct users", async () => {
