@@ -471,6 +471,151 @@ describe("production profile configuration deployment contract", () => {
     expect(readme).toContain("node dist/tools/sync-catalog.js");
   });
 
+  it("defines a finite provider-free release probe job", () => {
+    expect(projectFileExists("aca.release-probe-job.yaml")).toBe(true);
+    const job = readProjectFile("aca.release-probe-job.yaml");
+
+    expect(job).toMatch(/^name: hhc-line-bot-release-probe$/m);
+    expect(job).toContain("type: Microsoft.App/jobs");
+    expect(job).toContain("triggerType: Manual");
+    expect(job).toContain("replicaTimeout: 300");
+    expect(job).toContain("replicaRetryLimit: 0");
+    expect(job).toContain("parallelism: 1");
+    expect(job).toContain("replicaCompletionCount: 1");
+    expect(job).toContain("type: UserAssigned");
+    expect(job).toContain("PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}");
+    expect(job).toContain("server: alive.azurecr.io");
+    expect(job).toContain("identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
+    expect(job).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot:latest");
+    expect(job).toContain("args:\n          - dist/tools/run-release-probe.js");
+    expect(job).not.toContain("command:");
+    expect(job).toContain("cpu: 0.25");
+    expect(job).toContain("memory: 0.5Gi");
+    expect(job).toContain("name: LINE_HELPER_CHANNEL_SECRET");
+    expect(job).toContain("secretRef: line-helper-channel-secret");
+    expect(job.match(/secretRef:/g)).toHaveLength(1);
+    expect(job).toContain("name: BOT_BASE_URL");
+    expect(job).toContain("value: PLACEHOLDER_BOT_BASE_URL");
+    expect(job).toContain("name: SEARXNG_BASE_URL");
+    expect(job).toContain("value: PLACEHOLDER_SEARXNG_BASE_URL");
+    expect(job).toContain("name: GATEWAY_WEBHOOK_URL");
+    expect(job).toContain("value: PLACEHOLDER_GATEWAY_WEBHOOK_URL");
+    expect(job).toContain("name: CLAMAV_SIGNATURE_MANIFEST_PATH");
+    expect(job).toContain("value: /var/lib/clamav/current/manifest.json");
+    expect(job).toContain("mountPath: /var/lib/clamav");
+    expect(job).toContain("storageName: clamav-signatures-readonly");
+    expect(job).not.toContain("scheduleTriggerConfig:");
+    expect(job).not.toContain("cronExpression:");
+    expect(job).not.toContain("ingress:");
+    expect(job).not.toContain("name: DEEPSEEK_API_KEY");
+    expect(job).not.toMatch(/name: (?:AZURE_OPENAI_)?EMBEDDING_/);
+  });
+
+  it("defines a finite provider-free periodic assurance job", () => {
+    expect(projectFileExists("aca.periodic-assurance-job.yaml")).toBe(true);
+    const job = readProjectFile("aca.periodic-assurance-job.yaml");
+
+    expect(job).toMatch(/^name: hhc-line-bot-periodic-assurance$/m);
+    expect(job).toContain("type: Microsoft.App/jobs");
+    expect(job).toContain("triggerType: Manual");
+    expect(job).toContain("replicaTimeout: 600");
+    expect(job).toContain("replicaRetryLimit: 0");
+    expect(job).toContain("parallelism: 1");
+    expect(job).toContain("replicaCompletionCount: 1");
+    expect(job).toContain("type: UserAssigned");
+    expect(job).toContain("PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}");
+    expect(job).toContain("server: alive.azurecr.io");
+    expect(job).toContain("identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
+    expect(job).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
+    expect(job).toContain("args:\n          - dist/tools/run-periodic-assurance.js");
+    expect(job).not.toContain("command:");
+    expect(job).toContain("cpu: 0.25");
+    expect(job).toContain("memory: 0.5Gi");
+    expect(job).toContain("name: GRAPH_CLIENT_SECRET");
+    expect(job).toContain("secretRef: graph-client-secret");
+    expect(job).toContain("name: NOTION_TOKEN");
+    expect(job).toContain("secretRef: notion-token");
+    expect(job).toContain("name: ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING");
+    expect(job).toContain("secretRef: attachment-scan-queue-connection-string");
+    expect(job.match(/secretRef:/g)).toHaveLength(3);
+    expect(job).toContain("name: GRAPH_TENANT_ID");
+    expect(job).toContain("name: GRAPH_CLIENT_ID");
+    expect(job).toContain("name: GRAPH_DRIVE_ID");
+    expect(job).toContain("name: GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID");
+    expect(job).toContain("name: NOTION_SERVICE_DATABASE_ID");
+    expect(job).toContain("name: ATTACHMENT_SCAN_QUEUE_NAME");
+    expect(job).toContain("name: CLAMAV_SCAN_TIMEOUT_MS");
+    expect(job).toContain('value: "15000"');
+    expect(job).toContain("name: CLAMAV_SIGNATURE_MANIFEST_PATH");
+    expect(job).toContain("value: /var/lib/clamav/current/manifest.json");
+    expect(job).toContain("mountPath: /var/lib/clamav");
+    expect(job).toContain("storageName: clamav-signatures-readonly");
+    expect(job).not.toContain("scheduleTriggerConfig:");
+    expect(job).not.toContain("cronExpression:");
+    expect(job).not.toContain("ingress:");
+    expect(job).not.toContain("name: DEEPSEEK_API_KEY");
+    expect(job).not.toMatch(/name: (?:AZURE_OPENAI_)?EMBEDDING_/);
+  });
+
+  it("renders and deploys immutable assurance jobs before uploading the release report", () => {
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
+
+    expect(deployment).toContain(
+      ': "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"'
+    );
+    expect(deployment).toContain(
+      ': "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"'
+    );
+    expect(deployment).toContain("API_GATEWAY_CONTAINER_APP_NAME:=api-gateway");
+    expect(deployment).toContain('bot_base_url="https://${bot_fqdn}"');
+    expect(deployment).toContain(
+      'gateway_webhook_url="https://${api_gateway_fqdn}/api/line/webhook/helper"'
+    );
+    expect(deployment).toContain('BOT_BASE_URL="${bot_base_url}"');
+    expect(deployment).toContain('SEARXNG_BASE_URL="${searxng_base_url}"');
+    expect(deployment).toContain('GATEWAY_WEBHOOK_URL="${gateway_webhook_url}"');
+    expect(deployment).toContain('"PLACEHOLDER_BOT_BASE_URL": os.environ["BOT_BASE_URL"]');
+    expect(deployment).toContain('"PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"]');
+    expect(deployment).toContain(
+      '"PLACEHOLDER_GATEWAY_WEBHOOK_URL": os.environ["GATEWAY_WEBHOOK_URL"]'
+    );
+    expect(deployment).toContain("if text.count(placeholder) != 1:");
+    expect(deployment).toContain(
+      'render_job_manifest \\\n  "${release_probe_job_manifest_template}"'
+    );
+    expect(deployment).toContain(
+      'render_job_manifest \\\n  "${periodic_assurance_job_manifest_template}"'
+    );
+    expect(deployment).toContain('"${RELEASE_PROBE_JOB_NAME}" \\\n  "${image_ref}"');
+    expect(deployment).toContain('"${PERIODIC_ASSURANCE_JOB_NAME}" \\\n  "${scan_image_ref}"');
+    expect(deployment).toContain(
+      'deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"'
+    );
+    expect(deployment).toContain(
+      'deploy_job "${PERIODIC_ASSURANCE_JOB_NAME}" "${periodic_assurance_job_manifest}"'
+    );
+    expect(deployment).not.toMatch(/cat "\$\{(?:release_probe|periodic_assurance)_job_manifest\}"/);
+
+    expect(releaseWorkflow).toContain("- aca.release-probe-job.yaml");
+    expect(releaseWorkflow).toContain("- aca.periodic-assurance-job.yaml");
+    expect(releaseWorkflow).toContain("RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe");
+    expect(releaseWorkflow).toContain(
+      "PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance"
+    );
+    expect(releaseWorkflow).toContain(
+      "RELEASE_REPORT_PATH: artifacts/release-assurance/report.json"
+    );
+    expect(releaseWorkflow).toContain("uses: actions/upload-artifact@v4");
+    expect(releaseWorkflow).toContain("if: always()");
+    expect(releaseWorkflow).toContain("path: artifacts/release-assurance/**");
+    expect(releaseWorkflow).not.toContain("pnpm ");
+    const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
+    const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v4");
+    expect(deploy).toBeGreaterThanOrEqual(0);
+    expect(upload).toBeGreaterThan(deploy);
+  });
+
   it("provisions finite queue scans and atomic scheduled ClamAV signature refreshes", () => {
     const scanJob = readProjectFile("aca.attachment-scan-job.yaml");
     const refreshJob = readProjectFile("aca.clamav-signature-refresh-job.yaml");

@@ -12,11 +12,14 @@ set -euo pipefail
 : "${CATALOG_SYNC_JOB_NAME:?CATALOG_SYNC_JOB_NAME is required}"
 : "${ATTACHMENT_SCAN_JOB_NAME:?ATTACHMENT_SCAN_JOB_NAME is required}"
 : "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME:?CLAMAV_SIGNATURE_REFRESH_JOB_NAME is required}"
+: "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"
+: "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"
 : "${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME:?ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME is required}"
 : "${ATTACHMENT_SCAN_QUEUE_NAME:?ATTACHMENT_SCAN_QUEUE_NAME is required}"
 : "${CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME:?CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME is required}"
 : "${CLAMAV_SIGNATURE_FILE_SHARE_NAME:?CLAMAV_SIGNATURE_FILE_SHARE_NAME is required}"
 : "${SEARXNG_CONTAINER_APP_NAME:=hhc-searxng}"
+: "${API_GATEWAY_CONTAINER_APP_NAME:=api-gateway}"
 : "${CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs}"
 : "${AZURE_OPENAI_EMBEDDING_RESOURCE_NAME:=bible-text-embedding-resource}"
 : "${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:=text-embedding-3-small}"
@@ -33,19 +36,25 @@ searxng_settings_template="${script_dir}/../infra/searxng/settings.yml"
 catalog_job_manifest_template="${script_dir}/../aca.catalog-sync-job.yaml"
 attachment_scan_job_manifest_template="${script_dir}/../aca.attachment-scan-job.yaml"
 clamav_refresh_job_manifest_template="${script_dir}/../aca.clamav-signature-refresh-job.yaml"
+release_probe_job_manifest_template="${script_dir}/../aca.release-probe-job.yaml"
+periodic_assurance_job_manifest_template="${script_dir}/../aca.periodic-assurance-job.yaml"
 bot_manifest="$(mktemp)"
 searxng_manifest="$(mktemp)"
 catalog_job_manifest="$(mktemp)"
 attachment_scan_job_manifest="$(mktemp)"
 clamav_refresh_job_manifest="$(mktemp)"
-trap 'rm -f "${bot_manifest}" "${searxng_manifest}" "${catalog_job_manifest}" "${attachment_scan_job_manifest}" "${clamav_refresh_job_manifest}"' EXIT
+release_probe_job_manifest="$(mktemp)"
+periodic_assurance_job_manifest="$(mktemp)"
+trap 'rm -f "${bot_manifest}" "${searxng_manifest}" "${catalog_job_manifest}" "${attachment_scan_job_manifest}" "${clamav_refresh_job_manifest}" "${release_probe_job_manifest}" "${periodic_assurance_job_manifest}"' EXIT
 
 if [[ ! -f "${bot_manifest_template}" \
   || ! -f "${searxng_manifest_template}" \
   || ! -f "${searxng_settings_template}" \
   || ! -f "${catalog_job_manifest_template}" \
   || ! -f "${attachment_scan_job_manifest_template}" \
-  || ! -f "${clamav_refresh_job_manifest_template}" ]]; then
+  || ! -f "${clamav_refresh_job_manifest_template}" \
+  || ! -f "${release_probe_job_manifest_template}" \
+  || ! -f "${periodic_assurance_job_manifest_template}" ]]; then
   echo "Missing deployment configuration"
   exit 1
 fi
@@ -469,6 +478,25 @@ then
   exit 1
 fi
 
+bot_fqdn="$(az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CONTAINER_APP_NAME}" \
+  --query "properties.configuration.ingress.fqdn" \
+  --output tsv \
+  --only-show-errors)"
+api_gateway_fqdn="$(az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${API_GATEWAY_CONTAINER_APP_NAME}" \
+  --query "properties.configuration.ingress.fqdn" \
+  --output tsv \
+  --only-show-errors)"
+if [[ -z "${bot_fqdn}" || -z "${api_gateway_fqdn}" ]]; then
+  echo "Could not resolve the release assurance endpoint contract" >&2
+  exit 1
+fi
+bot_base_url="https://${bot_fqdn}"
+gateway_webhook_url="https://${api_gateway_fqdn}/api/line/webhook/helper"
+
 retired_bot_secrets=(
   bot-profiles-base64-json
   attachment-scan-queue-connection-string
@@ -520,6 +548,9 @@ render_job_manifest() {
   BOT_SECRETS_JSON="${bot_secrets_json}" \
   BOT_ENV_JSON="${bot_env_json}" \
   ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING="${attachment_scan_queue_connection_string}" \
+  BOT_BASE_URL="${bot_base_url}" \
+  SEARXNG_BASE_URL="${searxng_base_url}" \
+  GATEWAY_WEBHOOK_URL="${gateway_webhook_url}" \
   python3 - <<'PY'
 from pathlib import Path
 import json
@@ -559,7 +590,7 @@ for line in lines:
     rendered.append(line)
 
 text = "\n".join(rendered) + "\n"
-for placeholder, value in {
+substitutions = {
     "PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID": os.environ["MANAGED_ENVIRONMENT_ID"],
     "PLACEHOLDER_AZURE_REGION": os.environ["CONTAINER_APP_LOCATION"],
     "PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID": os.environ[
@@ -572,7 +603,19 @@ for placeholder, value in {
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": os.environ[
         "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING"
     ],
-}.items():
+    "PLACEHOLDER_BOT_BASE_URL": os.environ["BOT_BASE_URL"],
+    "PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"],
+    "PLACEHOLDER_GATEWAY_WEBHOOK_URL": os.environ["GATEWAY_WEBHOOK_URL"],
+}
+strict_assurance_placeholders = {
+    "PLACEHOLDER_BOT_BASE_URL",
+    "PLACEHOLDER_SEARXNG_BASE_URL",
+    "PLACEHOLDER_GATEWAY_WEBHOOK_URL",
+}
+for placeholder, value in substitutions.items():
+    if placeholder in strict_assurance_placeholders and placeholder in text:
+        if text.count(placeholder) != 1:
+            raise SystemExit(f"Expected one assurance job placeholder: {placeholder}")
     text = text.replace(placeholder, value)
 if "PLACEHOLDER_" in text:
     raise SystemExit("A job manifest placeholder was not resolved")
@@ -663,10 +706,22 @@ render_job_manifest \
   "${catalog_job_manifest}" \
   "${CATALOG_SYNC_JOB_NAME}" \
   "${image_ref}"
+render_job_manifest \
+  "${release_probe_job_manifest_template}" \
+  "${release_probe_job_manifest}" \
+  "${RELEASE_PROBE_JOB_NAME}" \
+  "${image_ref}"
+render_job_manifest \
+  "${periodic_assurance_job_manifest_template}" \
+  "${periodic_assurance_job_manifest}" \
+  "${PERIODIC_ASSURANCE_JOB_NAME}" \
+  "${scan_image_ref}"
 
 deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" "${clamav_refresh_job_manifest}"
 start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"
 deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
+deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"
+deploy_job "${PERIODIC_ASSURANCE_JOB_NAME}" "${periodic_assurance_job_manifest}"
 
 echo "Deployed ${image_ref} to revision ${target_revision}"
