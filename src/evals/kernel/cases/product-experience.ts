@@ -479,19 +479,21 @@ function branchGroupIsolationCase(): KernelAcceptanceCase {
       const now = context.now();
       const fixture = await createBranchFixture(now);
       const shared = await sharedFormalDataVisible(fixture, context.now);
-      const isolated = await scopedInteractionDataIsolated(fixture, now);
-      const passed = shared && isolated;
+      const scopedState = await observeScopedInteractionState(fixture, now);
+      const passed = shared && scopedState.ownerAvailable && !scopedState.forbiddenExposure;
       return observation({
         id,
         boundary: "active_task_lifecycle",
         recurrenceFamily: "group_requester_scope_leak",
         passed,
-        failureCode: !isolated
+        failureCode: scopedState.forbiddenExposure
           ? "scope_leak"
           : !shared
             ? "shared_formal_data_unavailable"
-            : undefined,
-        securityViolations: !isolated ? ["scope_leak"] : []
+            : !scopedState.ownerAvailable
+              ? "scoped_state_unavailable"
+              : undefined,
+        securityViolations: scopedState.forbiddenExposure ? ["scope_leak"] : []
       });
     }
   );
@@ -695,7 +697,15 @@ async function sharedFormalDataVisible(fixture: BranchFixture, now: () => Date):
   return true;
 }
 
-async function scopedInteractionDataIsolated(fixture: BranchFixture, now: Date): Promise<boolean> {
+interface ScopedInteractionFacts {
+  ownerAvailable: boolean;
+  forbiddenExposure: boolean;
+}
+
+async function observeScopedInteractionState(
+  fixture: BranchFixture,
+  now: Date
+): Promise<ScopedInteractionFacts> {
   const expiresAt = new Date(now.getTime() + 60_000).toISOString();
   const alphaSessionSource = { ...fixture.alpha, userId: SESSION_REQUESTER };
   const betaSessionSource = { ...fixture.beta, userId: SESSION_REQUESTER };
@@ -731,7 +741,8 @@ async function scopedInteractionDataIsolated(fixture: BranchFixture, now: Date):
       action: "save_memory"
     })
   ]);
-  const pendingIsolated = Boolean(alphaPending) && !betaPending && !alphaOtherPending;
+  const pendingOwnerAvailable = Boolean(alphaPending);
+  const pendingForbiddenExposure = Boolean(betaPending || alphaOtherPending);
 
   await fixture.sessions.set({
     id: "alpha-selection",
@@ -763,7 +774,8 @@ async function scopedInteractionDataIsolated(fixture: BranchFixture, now: Date):
       action: "find_resource"
     })
   ]);
-  const selectionIsolated = Boolean(alphaSelection) && !betaSelection && !alphaOtherSelection;
+  const selectionOwnerAvailable = Boolean(alphaSelection);
+  const selectionForbiddenExposure = Boolean(betaSelection || alphaOtherSelection);
 
   await fixture.sessions.set({
     id: "alpha-attachment",
@@ -793,7 +805,8 @@ async function scopedInteractionDataIsolated(fixture: BranchFixture, now: Date):
       requesterUserId: OTHER_REQUESTER
     })
   ]);
-  const attachmentIsolated = Boolean(alphaAttachment) && !betaAttachment && !alphaOtherAttachment;
+  const attachmentOwnerAvailable = Boolean(alphaAttachment);
+  const attachmentForbiddenExposure = Boolean(betaAttachment || alphaOtherAttachment);
 
   const alphaJobScope = {
     profileName: PROFILE_NAME,
@@ -910,28 +923,32 @@ async function scopedInteractionDataIsolated(fixture: BranchFixture, now: Date):
     })
   ]);
 
-  const checks = {
-    pending: pendingIsolated,
-    selection: selectionIsolated,
-    attachment: attachmentIsolated,
-    job: Boolean(alphaJob) && !betaJob && !alphaOtherJob,
+  const ownerChecks = {
+    pending: pendingOwnerAvailable,
+    selection: selectionOwnerAvailable,
+    attachment: attachmentOwnerAvailable,
+    job: Boolean(alphaJob),
     memory:
       alphaOwnerSharedMemory.length === 1 &&
       alphaOwnerPrivateMemory.length === 1 &&
-      alphaOtherSharedMemory.length === 1 &&
-      alphaOtherPrivateMemory.length === 0 &&
-      betaSharedMemory.length === 0 &&
-      betaPrivateMemory.length === 0,
-    task: Boolean(alphaTask) && !betaTask && !alphaOtherTask
+      alphaOtherSharedMemory.length === 1,
+    task: Boolean(alphaTask)
   };
-  return (
-    checks.pending &&
-    checks.selection &&
-    checks.attachment &&
-    checks.job &&
-    checks.memory &&
-    checks.task
-  );
+  const exposureChecks = {
+    pending: pendingForbiddenExposure,
+    selection: selectionForbiddenExposure,
+    attachment: attachmentForbiddenExposure,
+    job: Boolean(betaJob || alphaOtherJob),
+    memory:
+      alphaOtherPrivateMemory.length > 0 ||
+      betaSharedMemory.length > 0 ||
+      betaPrivateMemory.length > 0,
+    task: Boolean(betaTask || alphaOtherTask)
+  };
+  return {
+    ownerAvailable: Object.values(ownerChecks).every(Boolean),
+    forbiddenExposure: Object.values(exposureChecks).some(Boolean)
+  };
 }
 
 function acceptanceCase(

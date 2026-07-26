@@ -184,6 +184,65 @@ describe("Kernel v1 versioned acceptance corpus", () => {
     );
   });
 
+  it("classifies a missing owner generic session as scoped-state unavailability, not a leak", async () => {
+    const original = InMemorySessionStore.prototype.findPendingFunction;
+    vi.spyOn(InMemorySessionStore.prototype, "findPendingFunction").mockImplementation(
+      function (lookup) {
+        if (
+          lookup.source.type === "group" &&
+          lookup.source.groupId === "G_BRANCH_ALPHA" &&
+          lookup.requesterUserId === "U_BRANCH_SESSION"
+        ) {
+          return Promise.resolve(undefined);
+        }
+        return original.call(this, lookup);
+      }
+    );
+
+    await expectScopedStateUnavailable();
+  });
+
+  it("classifies a missing owner job as scoped-state unavailability, not a leak", async () => {
+    const original = InMemoryAgentJobStore.prototype.get;
+    vi.spyOn(InMemoryAgentJobStore.prototype, "get").mockImplementation(function (id, scope) {
+      if (
+        scope.sourceKey === "group:G_BRANCH_ALPHA" &&
+        scope.requesterUserId === "U_BRANCH_MEMBER"
+      ) {
+        return Promise.resolve(undefined);
+      }
+      return original.call(this, id, scope);
+    });
+
+    await expectScopedStateUnavailable();
+  });
+
+  it("prioritizes an observed exposure when owner state is also unavailable", async () => {
+    const originalPending = InMemorySessionStore.prototype.findPendingFunction;
+    vi.spyOn(InMemorySessionStore.prototype, "findPendingFunction").mockImplementation(
+      function (lookup) {
+        if (
+          lookup.source.type === "group" &&
+          lookup.source.groupId === "G_BRANCH_ALPHA" &&
+          lookup.requesterUserId === "U_BRANCH_SESSION"
+        ) {
+          return Promise.resolve(undefined);
+        }
+        return originalPending.call(this, lookup);
+      }
+    );
+    const originalSelection = InMemorySessionStore.prototype.findSelection;
+    vi.spyOn(InMemorySessionStore.prototype, "findSelection").mockImplementation(function (lookup) {
+      return originalSelection.call(this, {
+        ...lookup,
+        requesterUserId: "U_BRANCH_MEMBER",
+        source: { ...lookup.source, userId: "U_BRANCH_MEMBER" }
+      });
+    });
+
+    await expectScopeLeak();
+  });
+
   it("classifies same-group different-requester generic-session leakage as a scope leak", async () => {
     const original = InMemorySessionStore.prototype.findPendingFunction;
     vi.spyOn(InMemorySessionStore.prototype, "findPendingFunction").mockImplementation(
@@ -315,6 +374,19 @@ async function expectScopeLeak(): Promise<void> {
       failureCode: "scope_leak",
       unavailableMisclassified: false,
       securityViolations: ["scope_leak"]
+    })
+  );
+}
+
+async function expectScopedStateUnavailable(): Promise<void> {
+  const observation = await runProductCase("branch-group-isolation@1");
+  expect(observation).toEqual(
+    expect.objectContaining({
+      passed: false,
+      coreJourneySucceeded: false,
+      failureCode: "scoped_state_unavailable",
+      unavailableMisclassified: false,
+      securityViolations: []
     })
   );
 }
