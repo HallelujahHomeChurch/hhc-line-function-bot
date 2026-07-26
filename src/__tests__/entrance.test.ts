@@ -235,6 +235,35 @@ function accessConfig(): AppConfig {
 }
 
 describe("LINE entrance", () => {
+  it("acknowledges a signed empty event batch without creating a reply client or entering turn execution", async () => {
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const completeText = vi.fn<TextGenerationProvider["completeText"]>();
+    const executeFunction = vi.fn();
+    const replyText = vi.fn<LineReplyClient["replyText"]>();
+    const createLineReplyClient = vi.fn(() => ({ replyText }));
+    const app = createTestApp(testConfig(), {
+      router: { route },
+      textGenerator: { completeText },
+      functionRegistry: { find_ppt_slides: executeFunction },
+      createLineReplyClient
+    });
+    const body = '{"events":[]}';
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, ignored: true });
+    expect(createLineReplyClient).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(completeText).not.toHaveBeenCalled();
+    expect(executeFunction).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid LINE signature for the selected profile", async () => {
     const router: FunctionRouterPort = { route: vi.fn() };
     const app = createTestApp(testConfig(), { router });
