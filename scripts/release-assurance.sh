@@ -142,7 +142,7 @@ resolve_release_image() {
   local repository
   if [[ "${image}" =~ ^([^@]+)@sha256:([a-f0-9]{64})$ ]]; then
     printf '%s\n' "${image}"
-    return
+    return 0
   fi
   if [[ "${image}" != "${ACR_LOGIN_SERVER}/"* ]]; then
     return 1
@@ -1131,8 +1131,10 @@ restore_known_good_searxng() {
       --yes \
       --only-show-errors \
       --output none || return
-    [[ "$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")" == "false" ]]
-    return
+    if [[ "$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")" != "false" ]]; then
+      return 1
+    fi
+    return 0
   fi
   if ! rollback_revision="$(
     az containerapp revision copy \
@@ -1214,8 +1216,10 @@ restore_changed_job() {
       --yes \
       --only-show-errors \
       --output none || return
-    [[ "$(release_job_exists "${job_name}")" == "false" ]]
-    return
+    if [[ "$(release_job_exists "${job_name}")" != "false" ]]; then
+      return 1
+    fi
+    return 0
   fi
   az containerapp job update \
     --resource-group "${RESOURCE_GROUP}" \
