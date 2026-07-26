@@ -196,6 +196,8 @@ export async function runAttachmentScanWorker(
         publicationSignatureAssessment.status !== "usable" ||
         publicationSignatureAssessment.manifest.signatureVersion !==
           validatedSignatureManifest.signatureVersion ||
+        publicationSignatureAssessment.manifest.lastSuccessfulAt !==
+          validatedSignatureManifest.lastSuccessfulAt ||
         publicationSignatureAssessment.manifest.databaseDirectory !==
           validatedSignatureManifest.databaseDirectory
       ) {

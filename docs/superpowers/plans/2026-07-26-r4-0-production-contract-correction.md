@@ -218,11 +218,10 @@ git commit -m "feat: enforce warning-only ClamAV age policy"
 Extend `src/__tests__/attachment-scan-job.test.ts` to require:
 
 ```ts
-// prettier-ignore
 const expectedEnvironment = {
   signaturePolicy: {
-    warningAgeMs: 168 * 60 * 60 * 1000,
-  },
+    warningAgeMs: 168 * 60 * 60 * 1000
+  }
 };
 ```
 
@@ -673,4 +672,4 @@ Do not trigger an attachment upload, DeepSeek call, or Azure embedding call for 
 
 Report the PR number, squash commit, `PR CI` run, Production Release run, healthy bot revision, successful refresh execution, scan/refresh Job contract values, and that no live AI-provider requests were consumed.
 
-Only mark R4.0 complete after all of those items are verified. The next roadmap milestone is R5.1 operational hardening, not additional R4.0 scope.
+Only mark R4.0 complete after all of those items are verified. The next roadmap milestone is R4.1 Internal Product Experience.

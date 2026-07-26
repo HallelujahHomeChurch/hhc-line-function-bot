@@ -307,11 +307,14 @@ searxng_base_url="https://${searxng_fqdn}"
 
 BOT_MANIFEST_TEMPLATE="${bot_manifest_template}" \
 BOT_MANIFEST="${bot_manifest}" \
+CONTAINER_APP_NAME="${CONTAINER_APP_NAME}" \
 MANAGED_ENVIRONMENT_ID="${managed_environment_id}" \
 CONTAINER_APP_LOCATION="${container_app_location}" \
 BOT_IMAGE="${image_ref}" \
 SEARXNG_BASE_URL="${searxng_base_url}" \
 AZURE_OPENAI_EMBEDDING_ENDPOINT="${azure_openai_embedding_endpoint}" \
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}" \
+AZURE_OPENAI_EMBEDDING_API_VERSION="${AZURE_OPENAI_EMBEDDING_API_VERSION}" \
 BOT_ENV_JSON="${bot_env_json}" \
 python3 - <<'PY'
 from pathlib import Path
@@ -345,12 +348,19 @@ for name in source_env_names:
         raise SystemExit(f"Required ACA environment reference is unavailable: {name}")
 
 substitutions = {
+    "PLACEHOLDER_CONTAINER_APP_NAME": os.environ["CONTAINER_APP_NAME"],
     "PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID": os.environ["MANAGED_ENVIRONMENT_ID"],
     "PLACEHOLDER_AZURE_REGION": os.environ["CONTAINER_APP_LOCATION"],
     "PLACEHOLDER_BOT_IMAGE": os.environ["BOT_IMAGE"],
     "PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"],
     "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_ENDPOINT": os.environ[
         "AZURE_OPENAI_EMBEDDING_ENDPOINT"
+    ],
+    "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_DEPLOYMENT": os.environ[
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT"
+    ],
+    "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_VERSION": os.environ[
+        "AZURE_OPENAI_EMBEDDING_API_VERSION"
     ],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_URL_SECRET_REF": "attachment-scan-queue-url",
     "PLACEHOLDER_LINE_HELPER_CHANNEL_SECRET_REF": "line-helper-channel-secret",

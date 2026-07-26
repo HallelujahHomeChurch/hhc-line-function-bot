@@ -83,6 +83,7 @@ describe("production profile configuration deployment contract", () => {
       ["NOTION_TOKEN", "PLACEHOLDER_NOTION_TOKEN_SECRET_REF"]
     ] as const;
 
+    expect(manifest).toMatch(/^name: PLACEHOLDER_CONTAINER_APP_NAME$/m);
     expect(manifest).toContain("dapr:\n      enabled: true");
     expect(manifest).toContain("appId: hhc-line-function-bot");
     expect(manifest).toContain("appPort: 3000");
@@ -116,6 +117,10 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain('if "PLACEHOLDER_" in text:');
     expect(deployment).toContain('raise SystemExit("A bot manifest placeholder was not resolved")');
     expect(deployment).toContain('Path(os.environ["BOT_MANIFEST"]).write_text(text)');
+    expect(deployment).toContain('CONTAINER_APP_NAME="${CONTAINER_APP_NAME}"');
+    expect(deployment).toContain(
+      '"PLACEHOLDER_CONTAINER_APP_NAME": os.environ["CONTAINER_APP_NAME"]'
+    );
 
     const searxngDeploy = deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"');
     const botRendererStart = deployment.indexOf('BOT_MANIFEST_TEMPLATE="${bot_manifest_template}"');
@@ -321,6 +326,14 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain(
       'AZURE_OPENAI_EMBEDDING_ENDPOINT="${azure_openai_embedding_endpoint}"'
     );
+    expect(deployment).toContain(
+      'AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}"'
+    );
+    expect(deployment).toContain(
+      'AZURE_OPENAI_EMBEDDING_API_VERSION="${AZURE_OPENAI_EMBEDDING_API_VERSION}"'
+    );
+    expect(deployment).toContain('"PLACEHOLDER_AZURE_OPENAI_EMBEDDING_DEPLOYMENT": os.environ[');
+    expect(deployment).toContain('"PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_VERSION": os.environ[');
     expect(deployment).not.toContain("https://api.openai.com");
     expect(deployment).not.toContain("EMBEDDING_KEEP_ALIVE=");
     expect(helper?.enabledFunctions).toEqual(
@@ -438,6 +451,16 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: AZURE_OPENAI_EMBEDDING_ENDPOINT");
     expect(job).toContain("name: AZURE_OPENAI_EMBEDDING_DEPLOYMENT");
     expect(job).toContain("name: AZURE_OPENAI_EMBEDDING_API_VERSION");
+    for (const name of [
+      "AZURE_OPENAI_EMBEDDING_ENDPOINT",
+      "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+      "AZURE_OPENAI_EMBEDDING_API_VERSION"
+    ]) {
+      expect(job).toContain(`- name: ${name}\n            value: PLACEHOLDER_COPY_FROM_BOT_ENV`);
+    }
+    expect(job).not.toContain(
+      "value: https://bible-text-embedding-resource.cognitiveservices.azure.com/"
+    );
     expect(job).toContain("name: EMBEDDING_MODEL");
     expect(job).toContain("value: text-embedding-3-small");
     expect(job).toContain("name: EMBEDDING_BATCH_SIZE");

@@ -382,6 +382,26 @@ describe("attachment scan worker", () => {
     }
   );
 
+  it("does not publish when only the signature manifest timestamp changes during scanning", async () => {
+    const { graph, scanner, work, workerOptions } = await setup();
+    workerOptions.readSignatureManifest = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValueOnce(freshSignature)
+      .mockResolvedValueOnce({
+        ...freshSignature,
+        lastSuccessfulAt: "2026-07-24T03:30:00.000Z"
+      });
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "failed",
+      failureCode: "signature_stale",
+      infrastructureFailure: true
+    });
+
+    expect(scanner.scan).toHaveBeenCalledTimes(1);
+    expect(graph.uploadFile).not.toHaveBeenCalled();
+  });
+
   it("checks the atomic publication fence immediately before calling the publisher", async () => {
     const { agentJobStore, scope, job, graph, workStore, work, workerOptions } = await setup();
     const publicationDeadline = new Date("2026-07-24T04:10:00.000Z");

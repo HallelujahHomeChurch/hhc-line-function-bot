@@ -133,6 +133,42 @@ describe("ClamAV signature refresh", () => {
     });
   });
 
+  it.each(["not-a-timestamp", "2026-07-24T04:00:00Z"])(
+    "rejects invalid or noncanonical manifest timestamp %s",
+    (lastSuccessfulAt) => {
+      expect(
+        assessClamAvSignatureManifest(
+          {
+            ...validManifest(fixedNow),
+            lastSuccessfulAt
+          },
+          fixedNow
+        )
+      ).toEqual({ status: "invalid" });
+    }
+  );
+
+  it.each(["", "daily 20260724", "daily/20260724"])(
+    "rejects invalid signature version syntax %s",
+    (signatureVersion) => {
+      expect(
+        assessClamAvSignatureManifest(
+          {
+            ...validManifest(fixedNow),
+            signatureVersion
+          },
+          fixedNow
+        )
+      ).toEqual({ status: "invalid" });
+    }
+  );
+
+  it.each([0, -1])("rejects a non-positive warning age policy of %s", (warningAgeMs) => {
+    expect(
+      assessClamAvSignatureManifest(validManifest(fixedNow), fixedNow, { warningAgeMs })
+    ).toEqual({ status: "invalid" });
+  });
+
   it("downloads and validates a complete staged set before atomically promoting its manifest", async () => {
     const root = await createSignatureRoot();
     const execFile = successfulExec();

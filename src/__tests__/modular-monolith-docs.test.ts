@@ -56,4 +56,45 @@ describe("R3.5 modular monolith documentation", () => {
     expect(architecture).toContain("pre-publication");
     expect(operations).toContain("warning");
   });
+
+  it("marks the old roadmap as historical and keeps final R4.0 guidance current", async () => {
+    const [legacyRoadmap, currentRoadmap, implementationPlan, readme] = await Promise.all([
+      readFile(
+        "docs/superpowers/specs/2026-07-19-controlled-retrieval-product-roadmap-design.md",
+        "utf8"
+      ),
+      readFile(
+        "docs/superpowers/specs/2026-07-26-single-church-optimization-roadmap-design.md",
+        "utf8"
+      ),
+      readFile("docs/superpowers/plans/2026-07-26-r4-0-production-contract-correction.md", "utf8"),
+      readFile("README.md", "utf8")
+    ]);
+    const legacyBanner = legacyRoadmap.slice(0, legacyRoadmap.indexOf("## Status"));
+
+    expect(legacyBanner).toContain("Superseded");
+    expect(legacyBanner).toContain("all remaining R4-R8 direction");
+    expect(legacyBanner).toContain("completed milestones remain historical");
+    expect(legacyBanner).toContain("2026-07-26-single-church-optimization-roadmap-design.md");
+    expect(legacyRoadmap).toContain(
+      "Historical baseline approved on 2026-07-19; remaining direction superseded on 2026-07-26."
+    );
+    expect(currentRoadmap).toContain("This design replaces the remaining R4 through R8 direction");
+
+    expect(implementationPlan).not.toContain("// prettier-ignore");
+    expect(implementationPlan).toContain(`const expectedEnvironment = {
+  signaturePolicy: {
+    warningAgeMs: 168 * 60 * 60 * 1000
+  }
+};`);
+    expect(implementationPlan).toContain(
+      "The next roadmap milestone is R4.1 Internal Product Experience."
+    );
+    expect(implementationPlan).not.toContain(
+      "The next roadmap milestone is R5.1 operational hardening"
+    );
+
+    expect(readme).toContain("owns environment-specific values");
+    expect(readme).toContain("applies and verifies Dapr configuration");
+  });
 });
