@@ -439,6 +439,8 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: LINE_HELPER_ADMIN_USER_ID");
     expect(job).toContain("name: GRAPH_CLIENT_SECRET");
     expect(job).toContain("name: NOTION_TOKEN");
+    expect(job).toContain("name: OBSERVABILITY_HMAC_KEY");
+    expect(job).toContain("secretRef: observability-hmac-key");
     expect(job).toContain("name: NOTION_SERVICE_DATABASE_ID");
     expect(job).toContain("name: AZURE_OPENAI_EMBEDDING_API_KEY");
     expect(job).toContain("secretRef: azure-openai-embedding-key");
