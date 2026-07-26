@@ -37,13 +37,14 @@ export class InMemoryFirstSuccessStore implements FirstSuccessStore {
   }
 
   async tryMark(scope: FirstSuccessScope, ttlMs: number): Promise<"first" | "existing"> {
+    const normalizedTtlMs = normalizeTtlMs(ttlMs);
     const key = scopeHash(scope);
     const current = this.now().getTime();
     const expiresAt = this.markers.get(key);
     if (expiresAt !== undefined && expiresAt > current) {
       return "existing";
     }
-    this.markers.set(key, current + normalizedTtlMs(ttlMs));
+    this.markers.set(key, current + normalizedTtlMs);
     this.sweep(current);
     return "first";
   }
@@ -67,9 +68,10 @@ export class RedisFirstSuccessStore implements FirstSuccessStore {
   }
 
   async tryMark(scope: FirstSuccessScope, ttlMs: number): Promise<"first" | "existing"> {
+    const normalizedTtlMs = normalizeTtlMs(ttlMs);
     const result = await this.client.set(this.key(scope), "1", {
       NX: true,
-      PX: normalizedTtlMs(ttlMs)
+      PX: normalizedTtlMs
     });
     return result ? "first" : "existing";
   }
@@ -88,6 +90,17 @@ function scopeHash(scope: FirstSuccessScope): string {
     .digest("hex");
 }
 
-function normalizedTtlMs(ttlMs: number): number {
-  return Math.max(1, Math.trunc(ttlMs));
+function normalizeTtlMs(ttlMs: number): number {
+  const normalized = Math.trunc(ttlMs);
+  if (
+    !Number.isFinite(ttlMs) ||
+    ttlMs <= 0 ||
+    !Number.isSafeInteger(normalized) ||
+    normalized <= 0
+  ) {
+    throw new RangeError(
+      "First-success TTL must be finite and normalize to a positive safe integer"
+    );
+  }
+  return normalized;
 }

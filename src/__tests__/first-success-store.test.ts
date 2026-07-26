@@ -29,6 +29,20 @@ class AtomicRedisClient {
   }
 }
 
+function createStoreAdapter(kind: "memory" | "redis", now: () => Date = () => new Date(0)) {
+  if (kind === "memory") {
+    return {
+      store: new InMemoryFirstSuccessStore({ now }),
+      client: undefined
+    };
+  }
+  const client = new AtomicRedisClient();
+  return {
+    store: new RedisFirstSuccessStore({ client, keyPrefix: "test" }),
+    client
+  };
+}
+
 describe("first success stores", () => {
   it("atomically marks a scope only once in memory", async () => {
     const store = new InMemoryFirstSuccessStore();
@@ -87,5 +101,61 @@ describe("first success stores", () => {
     ]);
     expect(client.calls[0]?.key).toBe(client.calls[1]?.key);
     expect(JSON.stringify(client.calls)).not.toMatch(/helper|C-private|U-private/u);
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY],
+    ["zero", 0],
+    ["a negative value", -1],
+    ["a positive fraction below one millisecond", 0.9],
+    ["an unsafe normalized integer", Number.MAX_SAFE_INTEGER + 1]
+  ])("rejects %s before mutating either adapter", async (_label, ttlMs) => {
+    for (const kind of ["memory", "redis"] as const) {
+      const { store, client } = createStoreAdapter(kind);
+
+      await expect(store.tryMark(scope, ttlMs)).rejects.toThrow(
+        new RangeError("First-success TTL must be finite and normalize to a positive safe integer")
+      );
+      expect(client?.calls ?? []).toHaveLength(0);
+      await expect(store.tryMark(scope, 1)).resolves.toBe("first");
+    }
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["zero", 0],
+    ["a negative value", -1],
+    ["an unsafe normalized integer", Number.MAX_SAFE_INTEGER + 1]
+  ])("validates %s before reading or changing an existing marker", async (_label, ttlMs) => {
+    for (const kind of ["memory", "redis"] as const) {
+      const { store, client } = createStoreAdapter(kind);
+      await expect(store.tryMark(scope, 10)).resolves.toBe("first");
+
+      await expect(store.tryMark(scope, ttlMs)).rejects.toBeInstanceOf(RangeError);
+      expect(client?.calls ?? []).toHaveLength(kind === "redis" ? 1 : 0);
+      await expect(store.tryMark(scope, 10)).resolves.toBe("existing");
+    }
+  });
+
+  it.each([
+    ["minimum", 1, 1],
+    ["fractional", 1.9, 1],
+    ["maximum", Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]
+  ])("accepts the %s TTL boundary consistently", async (_label, ttlMs, normalizedTtlMs) => {
+    for (const kind of ["memory", "redis"] as const) {
+      const { store, client } = createStoreAdapter(kind);
+
+      await expect(store.tryMark(scope, ttlMs)).resolves.toBe("first");
+      await expect(store.tryMark(scope, ttlMs)).resolves.toBe("existing");
+      if (client) {
+        expect(client.calls.map(({ options }) => options.PX)).toEqual([
+          normalizedTtlMs,
+          normalizedTtlMs
+        ]);
+      }
+    }
   });
 });
