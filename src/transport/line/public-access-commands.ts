@@ -1,5 +1,11 @@
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
 import type { AccessStore } from "../../access/types.js";
+import type { EffectiveAccessContext } from "../../application/access/effective-access.js";
+import {
+  renderCapabilityHelp,
+  renderRegistrationCompletion
+} from "../../application/capabilities/capability-presenters.js";
+import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import { messages } from "../../messages.js";
 import { emitProductEvent } from "../../observability/product-events.js";
 import type {
@@ -61,6 +67,7 @@ export async function handlePublicAccessCommand(input: {
   adminHandlers: AdminHandlerRegistry;
   productContext: ProductEventContext;
   policies: PublicAccessCommandPolicies;
+  resolveCurrentAccess(): Promise<EffectiveAccessContext>;
 }): Promise<FunctionExecutionResult | undefined> {
   const parsed = input.policies.parseCommand(input.text);
   if (!parsed) {
@@ -78,7 +85,10 @@ export async function handlePublicAccessCommand(input: {
         replyText: input.policies.formatAdminHelp(input.adminHandlers, parsed.args[1] === "all")
       };
     }
-    return formatPublicHelp();
+    const context = await input.resolveCurrentAccess();
+    return context.authorized
+      ? renderCapabilityHelp(projectEffectiveCapabilities({ context }), "help")
+      : { ok: true, replyText: registrationPrompt(input.profile, input.event) };
   }
   if (parsed.command === "whoami") {
     return handleWhoamiCommand(input);
@@ -87,24 +97,6 @@ export async function handlePublicAccessCommand(input: {
     return undefined;
   }
   return handleRegistryCommand(parsed.args, input);
-}
-
-function formatPublicHelp(): FunctionExecutionResult {
-  return {
-    ok: true,
-    replyText: [
-      "我可以協助你用自然語言查資料，也能依權限記住或更新教會資訊。",
-      "直接告訴我名稱、日期、主題或要處理的內容就好。",
-      "",
-      "可用指令：",
-      "/help - 查看我可以協助什麼",
-      "/registry <code> - 使用邀請碼開通",
-      "/whoami - 查看目前 LINE user/group 資訊",
-      "/memories - 列出目前記住的資訊",
-      "/forget-memory <id> - 移除一段記憶",
-      "/help admin - 管理員指令說明"
-    ].join("\n")
-  };
 }
 
 async function handleWhoamiCommand(
@@ -188,7 +180,8 @@ async function handleRegistryCommand(
     hmacKey: input.productContext.hmacKey,
     resultClass: "success"
   });
-  return { ok: true, replyText: "已開通小哈。" };
+  const current = await input.resolveCurrentAccess();
+  return renderRegistrationCompletion(projectEffectiveCapabilities({ context: current }));
 }
 
 async function handleGroupRegistryCommand(
@@ -229,10 +222,18 @@ async function handleGroupRegistryCommand(
     hmacKey: input.productContext.hmacKey,
     resultClass: "success"
   });
-  return {
-    ok: true,
-    replyText: `已開通此群組 ${groupId}${displayName ? ` (${displayName})` : ""}`
-  };
+  const current = await input.resolveCurrentAccess();
+  return renderRegistrationCompletion(projectEffectiveCapabilities({ context: current }));
+}
+
+export function registrationPrompt(profile: BotProfileConfig, event: LineEvent): string {
+  if (profile.registration?.enabled) {
+    if (event.source.type === "group") {
+      return "這個群組還沒有開通小哈，請先找管理員協助註冊。";
+    }
+    return "你尚未開通小哈，請先找管理員協助註冊。";
+  }
+  return "你尚未開通小哈，請聯絡管理同工協助。";
 }
 
 async function resolveUserRegistrationDisplayName(

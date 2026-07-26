@@ -19,6 +19,7 @@ import {
   isDefaultUserFunctionAvailable,
   resolveEffectiveAccessContext
 } from "../../application/access/effective-access.js";
+import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import {
   classifyGroupEngagement,
   groupEngagementAllowsReply,
@@ -73,7 +74,7 @@ import {
   parsePostbackData,
   sourceKey
 } from "./postbacks.js";
-import { handlePublicAccessCommand } from "./public-access-commands.js";
+import { handlePublicAccessCommand, registrationPrompt } from "./public-access-commands.js";
 
 export interface AppDependencies {
   adminActionRegistry: AdminActionRegistry;
@@ -352,14 +353,14 @@ async function handleWebhook(
     }
     const requestId = requestIdFactory();
     const requesterIsAdmin = await isAdminUser(profile, event.source.userId, accessStore);
-    const effectiveProfile = (
-      await resolveEffectiveAccessContext({
-        profile,
-        event,
-        accessStore,
-        requesterIsAdmin
-      })
-    ).profile;
+    const effectiveAccess = await resolveEffectiveAccessContext({
+      profile,
+      event,
+      accessStore,
+      requesterIsAdmin
+    });
+    const effectiveProfile = effectiveAccess.profile;
+    const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
     const requesterDisplayName = await resolveRequesterDisplayName(lineIdentity, event);
 
     if (event.type === "postback") {
@@ -523,7 +524,14 @@ async function handleWebhook(
           isAdminUser,
           isDirectUserAllowed,
           isGroupAllowed
-        }
+        },
+        resolveCurrentAccess: () =>
+          resolveEffectiveAccessContext({
+            profile,
+            event,
+            accessStore,
+            requesterIsAdmin
+          })
       });
       if (accessCommandResult) {
         await line.replyText(
@@ -584,7 +592,7 @@ async function handleWebhook(
       Boolean(conversationScope) &&
       (await conversationWindowStore.isActive(conversationScope as ConversationWindowScope));
     if (groupEngagement?.kind === "intro") {
-      const intro = createIntroReply(effectiveProfile, event.message.text, { force: true });
+      const intro = createIntroReply(capabilityProjection, event.message.text, { force: true });
       await emitRouteEvent(routeObserver, {
         kind: "route",
         profileName: profile.name,
@@ -627,7 +635,7 @@ async function handleWebhook(
       continue;
     }
 
-    const intro = createIntroReply(effectiveProfile, event.message.text);
+    const intro = createIntroReply(capabilityProjection, event.message.text);
     if (intro) {
       await line.replyText(
         event.replyToken,
@@ -892,16 +900,6 @@ function conversationWindowTtlMs(profile: BotProfileConfig): number {
     return 0;
   }
   return Math.max(1, profile.generalAgent.conversationWindowSeconds) * 1000;
-}
-
-function registrationPrompt(profile: BotProfileConfig, event: LineEvent): string {
-  if (profile.registration?.enabled) {
-    if (event.source.type === "group") {
-      return "這個群組還沒有開通小哈，請先找管理員協助註冊。";
-    }
-    return "你尚未開通小哈，請先找管理員協助註冊。";
-  }
-  return "你尚未開通小哈，請聯絡管理同工協助。";
 }
 
 async function shouldPromptManagedRegistration(

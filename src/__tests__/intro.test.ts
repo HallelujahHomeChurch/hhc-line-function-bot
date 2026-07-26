@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { projectEffectiveCapabilities } from "../application/capabilities/effective-capability-projection.js";
 import { createIntroReply } from "../intro.js";
 import type { BotProfileConfig } from "../types.js";
 
@@ -22,54 +23,68 @@ function profile(enabledFunctions: BotProfileConfig["enabledFunctions"]): BotPro
   };
 }
 
+function projection(enabledFunctions: BotProfileConfig["enabledFunctions"]) {
+  return projectEffectiveCapabilities({
+    context: {
+      profile: profile(enabledFunctions),
+      authorized: true,
+      requesterIsAdmin: false,
+      sourceType: "user"
+    }
+  });
+}
+
 describe("intro replies", () => {
-  it("introduces Xiaoha without exposing the internal function catalog", () => {
-    const result = createIntroReply(
-      profile(["find_ppt_slides", "query_schedule", "find_sheet_music"]),
-      "小哈"
-    );
+  it("keeps the identity-only introduction exact", () => {
+    const result = createIntroReply(projection([]), "小哈");
 
     expect(result?.replyText).toBe("我是小哈，家教會的小幫手。");
-    expect(result?.replyText).not.toContain("查投影片、查服事表");
     expect(result?.quickReplies).toBeUndefined();
   });
 
-  it("answers capabilities questions without repeating the identity sentence", () => {
+  it("renders every projected capability and preferred Quick Replies", () => {
     const result = createIntroReply(
-      profile(["find_ppt_slides", "query_schedule"]),
+      projection(["find_ppt_slides", "query_schedule", "save_schedule"]),
       "小哈你能做什麼"
     );
 
-    expect(result?.replyText).toContain("我可以幫你查資料，也能依權限記住或更新教會資訊。");
-    expect(result?.replyText).not.toContain("我是小哈");
-    expect(result?.replyText).toContain("你可以試試：");
+    expect(result?.replyText).toContain("可以查詢\n- 查投影片：");
+    expect(result?.replyText).toContain("- 查服事表：");
+    expect(result?.replyText).toContain("可以保存或更新\n- 記服事表：");
+    expect(result?.quickReplies?.map(({ label }) => label)).toEqual(["查服事表", "查投影片"]);
   });
 
   it("understands capabilities questions with address punctuation", () => {
-    const result = createIntroReply(profile(["query_schedule"]), "小哈，你能做什麼？");
+    const result = createIntroReply(projection(["query_schedule"]), "小哈，你能做什麼？");
 
-    expect(result?.replyText).toContain("我可以幫你查資料");
-    expect(result?.replyText).not.toContain("我是小哈");
+    expect(result?.replyText).toContain("我目前可以協助：");
+    expect(result?.replyText).toContain("- 查服事表：");
   });
 
   it("can render the capabilities variant from router metadata", () => {
-    const result = createIntroReply(profile(["query_schedule"]), "你好", {
+    const result = createIntroReply(projection(["query_schedule"]), "你好", {
       force: true,
       variant: "capabilities"
     });
 
-    expect(result?.replyText).toContain("我可以幫你查資料");
-    expect(result?.replyText).not.toContain("我是小哈");
+    expect(result?.replyText).toContain("我目前可以協助：");
+    expect(result?.replyText).toContain("- 查服事表：");
   });
 
-  it("keeps examples deterministic for available functions", () => {
-    const result = createIntroReply(
-      profile(["find_ppt_slides", "query_schedule", "find_sheet_music"]),
-      "小哈你能做什麼"
-    );
+  it("keeps capability presentation deterministic without a random source", () => {
+    const effectiveProjection = projection([
+      "find_ppt_slides",
+      "query_schedule",
+      "find_sheet_music"
+    ]);
+    const first = createIntroReply(effectiveProjection, "小哈你能做什麼");
+    const second = createIntroReply(effectiveProjection, "小哈你能做什麼");
 
-    expect(result?.replyText).toContain("小哈 查投影片 奇異恩典");
-    expect(result?.replyText).toContain("小哈 下一場服事表");
-    expect(result?.replyText).toContain("小哈 查歌譜 Yesterday");
+    expect(second).toEqual(first);
+    expect(first?.quickReplies?.map(({ label }) => label)).toEqual([
+      "查服事表",
+      "查歌譜",
+      "查投影片"
+    ]);
   });
 });

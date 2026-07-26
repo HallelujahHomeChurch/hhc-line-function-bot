@@ -1,5 +1,6 @@
 import type { AccessStore } from "../../access/types.js";
 import type { AdminActionRegistry } from "../../actions/admin-registry.js";
+import { projectEffectiveCapabilities } from "../capabilities/effective-capability-projection.js";
 import {
   enabledNaturalLanguageAdminActionNames,
   matchesGroupScopedNaturalLanguageAdminActionHint,
@@ -434,10 +435,26 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               });
               return finish(input, steps, result);
             }
-            const intro = createIntroReply(input.profile, text, {
-              force: true,
-              variant: introVariantRouteArgument(route.arguments)
-            });
+            const intro = createIntroReply(
+              projectEffectiveCapabilities({
+                context: {
+                  profile: input.profile,
+                  authorized: true,
+                  requesterIsAdmin: Boolean(input.requesterIsAdmin),
+                  sourceType:
+                    input.event.source.type === "user"
+                      ? "user"
+                      : input.event.source.type === "group"
+                        ? "group"
+                        : "room"
+                }
+              }),
+              text,
+              {
+                force: true,
+                variant: introVariantRouteArgument(route.arguments)
+              }
+            );
             return finish(
               input,
               steps,

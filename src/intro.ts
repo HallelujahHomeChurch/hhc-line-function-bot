@@ -1,12 +1,12 @@
-import { getFunctionDefinitions } from "./functions/definitions.js";
-import type { BotProfileConfig, FunctionExecutionResult } from "./types.js";
+import { renderCapabilityHelp } from "./application/capabilities/capability-presenters.js";
+import type { EffectiveCapabilityProjection } from "./application/capabilities/effective-capability-projection.js";
+import type { FunctionExecutionResult } from "./types.js";
 
 type IntroVariant = "identity" | "capabilities";
 
 interface IntroReplyOptions {
   force?: boolean;
   variant?: IntroVariant;
-  random?: () => number;
 }
 
 const identityTriggers = ["小哈", "小哈?", "小哈？", "小哈是誰", "小哈你是誰"];
@@ -27,7 +27,7 @@ const capabilitiesTriggers = [
 ];
 
 export function createIntroReply(
-  profile: BotProfileConfig,
+  projection: EffectiveCapabilityProjection,
   rawText: string,
   options: IntroReplyOptions = {}
 ): FunctionExecutionResult | undefined {
@@ -38,28 +38,11 @@ export function createIntroReply(
     return undefined;
   }
 
-  const definitions = getFunctionDefinitions(profile.enabledFunctions);
   const selectedVariant = variant ?? "identity";
   if (selectedVariant === "identity") {
     return { ok: true, replyText: "我是小哈，家教會的小幫手。" };
   }
-  if (definitions.length === 0) {
-    return {
-      ok: true,
-      replyText: "目前還沒有開放可查詢的項目。"
-    };
-  }
-
-  const lines = ["我可以幫你查資料，也能依權限記住或更新教會資訊。"];
-  const examples = selectExamples(definitions, options.random ?? Math.random);
-
-  return {
-    ok: true,
-    replyText: [...lines, "", "你可以試試：", ...examples.map((example) => `- ${example}`)]
-      .filter((line) => line !== undefined)
-      .join("\n"),
-    quickReplies: undefined
-  };
+  return renderCapabilityHelp(projection, "introduction");
 }
 
 function introVariantFor(normalized: string): IntroVariant | undefined {
@@ -70,24 +53,6 @@ function introVariantFor(normalized: string): IntroVariant | undefined {
     return "capabilities";
   }
   return undefined;
-}
-
-function selectExamples(
-  definitions: ReturnType<typeof getFunctionDefinitions>,
-  random: () => number
-): string[] {
-  const selected = definitions.length <= 3 ? definitions : sample(definitions, 3, random);
-  return selected.map((definition) => definition.examples[0] ?? definition.quickReply.command);
-}
-
-function sample<T>(values: T[], count: number, random: () => number): T[] {
-  const remaining = [...values];
-  const selected: T[] = [];
-  while (selected.length < count && remaining.length > 0) {
-    const index = Math.min(Math.floor(random() * remaining.length), remaining.length - 1);
-    selected.push(remaining.splice(index, 1)[0]);
-  }
-  return selected;
 }
 
 function normalizeIntroText(value: string): string {
