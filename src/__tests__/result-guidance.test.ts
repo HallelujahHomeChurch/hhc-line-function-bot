@@ -79,6 +79,16 @@ describe("controlled result guidance", () => {
     expect(guided.quickReplies).toEqual([existingChoice]);
   });
 
+  it("gives not-found exactly one bounded textual next action", () => {
+    const guided = applyResultGuidance({
+      state: "not_found",
+      result: baseResult("not_found")
+    });
+
+    expect(guided.replyText).toBe("沒有找到符合條件的結果。請換一個關鍵字再試。");
+    expect(guided.quickReplies).toBeUndefined();
+  });
+
   it("preserves grounded ambiguity choices and controlled metadata", () => {
     const result = baseResult("ambiguous");
     const guided = applyResultGuidance({ state: "ambiguous", result });
