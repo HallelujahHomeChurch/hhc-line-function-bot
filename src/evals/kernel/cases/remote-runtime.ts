@@ -29,7 +29,7 @@ export const REMOTE_RUNTIME_KERNEL_CASES: KernelAcceptanceCase[] = [
     true
   ),
   attachmentCase("kernel-v1/write/signature-missing-no-publish@1", missingSignatureDoesNotPublish),
-  attachmentCase("kernel-v1/write/signature-stale-no-publish@1", staleSignatureDoesNotPublish),
+  attachmentCase("kernel-v1/write/signature-aged-publishes@1", agedSignaturePublishes),
   attachmentCase("kernel-v1/write/infected-no-publish@1", infectedAttachmentDoesNotPublish),
   attachmentCase(
     "kernel-v1/write/reclaimed-claim-publication-fenced@1",
@@ -160,20 +160,18 @@ async function missingSignatureDoesNotPublish(now: Date): Promise<boolean> {
   );
 }
 
-async function staleSignatureDoesNotPublish(now: Date): Promise<boolean> {
+async function agedSignaturePublishes(now: Date): Promise<boolean> {
   const fixture = await createScanFixture(
     now,
     {
       ...freshSignature(now),
-      lastSuccessfulAt: new Date(now.getTime() - 72 * 60 * 60 * 1000 - 1).toISOString()
+      lastSuccessfulAt: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
     },
     "clean"
   );
   const result = await runAttachmentScanWorker(fixture.workId, fixture.workerOptions);
   return (
-    result.status === "failed" &&
-    result.failureCode === "signature_stale" &&
-    fixture.uploads() === 0
+    result.status === "completed" && result.signatureHealth === "warning" && fixture.uploads() === 1
   );
 }
 

@@ -75,6 +75,8 @@ properties:
             value: /var/lib/clamav/current/manifest.json
           - name: CLAMAV_SCAN_TIMEOUT_MS
             value: "30000"
+          - name: CLAMAV_SIGNATURE_WARNING_AGE_HOURS
+            value: "168"
           - name: MAX_ATTACHMENT_BYTES
             value: "26214400"
           - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS

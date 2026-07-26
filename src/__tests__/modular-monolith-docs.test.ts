@@ -14,13 +14,87 @@ describe("R3.5 modular monolith documentation", () => {
   });
 
   it("keeps the weekly ClamAV refresh ownership aligned across operator docs", async () => {
-    const [readme, agents] = await Promise.all([
+    const [readme, agents, architecture, operations] = await Promise.all([
       readFile("README.md", "utf8"),
-      readFile("AGENTS.md", "utf8")
+      readFile("AGENTS.md", "utf8"),
+      readFile("docs/architecture-context.md", "utf8"),
+      readFile("docs/runbooks/production-operations.md", "utf8")
     ]);
 
-    expect(readme).toContain("10 19 * * 0");
-    expect(agents).toContain("10 19 * * 0");
-    expect(agents).not.toContain("10 19 */2 * *");
+    const activeDocuments = [
+      { name: "AGENTS.md", content: agents },
+      { name: "README.md", content: readme },
+      { name: "docs/architecture-context.md", content: architecture },
+      { name: "docs/runbooks/production-operations.md", content: operations }
+    ];
+
+    for (const { name, content } of activeDocuments) {
+      expect(content, name).toContain("10 19 * * 0");
+      expect(content, name).toContain("7 days");
+      expect(content, name).toContain("Signature age is warning-only");
+      expect(content, name).toMatch(/never an age-based\s+publication block/i);
+      expect(content, name).not.toMatch(
+        /(?:at-most-)?72-hour|(?:more than |older than )?72 hours(?: old)?/i
+      );
+      expect(content, name).not.toMatch(
+        /signature age is (?:an? )?(?:age-based )?(?:hard stop|(?:publication )?block)\b/i
+      );
+      expect(content, name).not.toMatch(
+        /\bsignature age\b.{0,80}\b(?:hard stop|reject(?:ion)?|fail closed)\b/i
+      );
+      expect(content, name).not.toMatch(/(?<!never an )\bage-based\s+publication block\b/i);
+      expect(content, name).toContain("2 CPU / 4 GiB");
+      expect(content, name).not.toMatch(/\b1\s*(?:v\s*)?cpu\s*\/\s*4\s*gi\s*b\b/i);
+    }
+
+    expect(readme).toContain("signatureHealth");
+    expect(readme).toContain("warning-only");
+    expect(readme).toContain("manifest-driven");
+    expect(readme).toContain("scripts/deploy-aca.sh");
+    expect(architecture).toContain("pure signature policy");
+    expect(architecture).toContain("pre-scan");
+    expect(architecture).toContain("pre-publication");
+    expect(operations).toContain("warning");
+  });
+
+  it("marks the old roadmap as historical and keeps final R4.0 guidance current", async () => {
+    const [legacyRoadmap, currentRoadmap, implementationPlan, readme] = await Promise.all([
+      readFile(
+        "docs/superpowers/specs/2026-07-19-controlled-retrieval-product-roadmap-design.md",
+        "utf8"
+      ),
+      readFile(
+        "docs/superpowers/specs/2026-07-26-single-church-optimization-roadmap-design.md",
+        "utf8"
+      ),
+      readFile("docs/superpowers/plans/2026-07-26-r4-0-production-contract-correction.md", "utf8"),
+      readFile("README.md", "utf8")
+    ]);
+    const legacyBanner = legacyRoadmap.slice(0, legacyRoadmap.indexOf("## Status"));
+
+    expect(legacyBanner).toContain("Superseded");
+    expect(legacyBanner).toContain("all remaining R4-R8 direction");
+    expect(legacyBanner).toContain("completed milestones remain historical");
+    expect(legacyBanner).toContain("2026-07-26-single-church-optimization-roadmap-design.md");
+    expect(legacyRoadmap).toContain(
+      "Historical baseline approved on 2026-07-19; remaining direction superseded on 2026-07-26."
+    );
+    expect(currentRoadmap).toContain("This design replaces the remaining R4 through R8 direction");
+
+    expect(implementationPlan).not.toContain("// prettier-ignore");
+    expect(implementationPlan).toContain(`const expectedEnvironment = {
+  signaturePolicy: {
+    warningAgeMs: 168 * 60 * 60 * 1000
+  }
+};`);
+    expect(implementationPlan).toContain(
+      "The next roadmap milestone is R4.1 Internal Product Experience."
+    );
+    expect(implementationPlan).not.toContain(
+      "The next roadmap milestone is R5.1 operational hardening"
+    );
+
+    expect(readme).toContain("owns environment-specific values");
+    expect(readme).toContain("applies and verifies Dapr configuration");
   });
 });

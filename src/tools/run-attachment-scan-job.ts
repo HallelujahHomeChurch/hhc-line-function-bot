@@ -6,6 +6,7 @@ import { QueueServiceClient } from "@azure/storage-queue";
 
 import { RedisAgentJobStore } from "../agent/jobs.js";
 import { scanWithClamAvCli } from "../attachments/clamav-cli.js";
+import type { ClamAvSignaturePolicy } from "../attachments/clamav-signature-policy.js";
 import { runAttachmentScanWorker } from "../attachments/scan-worker.js";
 import type { AttachmentScanWorkerResult } from "../attachments/scan-worker.js";
 import { loadAttachmentScanWorkerConfigFromEnv } from "../attachments/scan-worker-config.js";
@@ -21,6 +22,8 @@ import { createRedisRuntime } from "../redis.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const ATTACHMENT_SCAN_REPLICA_TIMEOUT_MS = 900_000;
+const DEFAULT_SIGNATURE_WARNING_AGE_HOURS = 168;
+const HOUR_MS = 60 * 60 * 1000;
 
 export interface AttachmentScanJobEnvironment {
   workId?: string;
@@ -29,6 +32,7 @@ export interface AttachmentScanJobEnvironment {
   databaseDirectory: string;
   signatureManifestPath: string;
   scanTimeoutMs: number;
+  signaturePolicy: ClamAvSignaturePolicy;
 }
 
 export function readAttachmentScanJobEnvironment(
@@ -59,11 +63,17 @@ export function readAttachmentScanJobEnvironment(
     throw new Error("CLAMAV_SIGNATURE_MANIFEST_PATH must be an absolute path");
   }
   const scanTimeoutMs = readPositiveInt(env.CLAMAV_SCAN_TIMEOUT_MS, 15_000);
+  const signatureWarningAgeHours = readPositiveInt(
+    env.CLAMAV_SIGNATURE_WARNING_AGE_HOURS,
+    DEFAULT_SIGNATURE_WARNING_AGE_HOURS,
+    "CLAMAV_SIGNATURE_WARNING_AGE_HOURS"
+  );
   return {
     ...(workId ? { workId } : { queueConnectionString, queueName }),
     databaseDirectory,
     signatureManifestPath,
-    scanTimeoutMs
+    scanTimeoutMs,
+    signaturePolicy: { warningAgeMs: signatureWarningAgeHours * HOUR_MS }
   };
 }
 
@@ -179,12 +189,13 @@ export async function runAttachmentScanJob(
       externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
       externalMaxRedirects: config.externalResources.maxRedirects,
       scanTimeoutMs: jobEnvironment.scanTimeoutMs,
+      signaturePolicy: jobEnvironment.signaturePolicy,
       publicationDeadline: attachmentScanPublicationDeadline(startedAt)
     });
 
     if (result.status === "completed") {
       await queueLease?.complete();
-      return { exitCode: 0, status: { status: "completed" } };
+      return { exitCode: 0, status: formatAttachmentScanJobStatus(result) };
     }
     if (result.status === "ignored") {
       const acknowledge = shouldAcknowledgeAttachmentScanResult(result);
@@ -193,7 +204,7 @@ export async function runAttachmentScanJob(
       }
       return {
         exitCode: acknowledge ? 0 : 1,
-        status: { status: "ignored", reason: result.reason }
+        status: formatAttachmentScanJobStatus(result)
       };
     }
     if (!result.infrastructureFailure) {
@@ -201,7 +212,7 @@ export async function runAttachmentScanJob(
     }
     return {
       exitCode: result.infrastructureFailure ? 1 : 0,
-      status: { status: "failed", failureCode: result.failureCode }
+      status: formatAttachmentScanJobStatus(result)
     };
   } catch {
     return {
@@ -225,6 +236,18 @@ export function shouldAcknowledgeAttachmentScanResult(result: AttachmentScanWork
   );
 }
 
+export function formatAttachmentScanJobStatus(
+  result: AttachmentScanWorkerResult
+): Record<string, string> {
+  if (result.status === "completed") {
+    return { status: "completed", signatureHealth: result.signatureHealth };
+  }
+  if (result.status === "ignored") {
+    return { status: "ignored", reason: result.reason };
+  }
+  return { status: "failed", failureCode: result.failureCode };
+}
+
 function isValidQueueName(value: string): boolean {
   return /^[a-z0-9](?:[a-z0-9]|-(?!-)){1,61}[a-z0-9]$/u.test(value) && !value.includes("--");
 }
@@ -237,11 +260,15 @@ async function readSignatureManifest(path: string): Promise<unknown> {
   }
 }
 
-function readPositiveInt(value: string | undefined, fallback: number): number {
+function readPositiveInt(
+  value: string | undefined,
+  fallback: number,
+  field = "CLAMAV_SCAN_TIMEOUT_MS"
+): number {
   if (value === undefined || value.trim() === "") return fallback;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error("CLAMAV_SCAN_TIMEOUT_MS must be a positive integer");
+    throw new Error(`${field} must be a positive integer`);
   }
   return parsed;
 }

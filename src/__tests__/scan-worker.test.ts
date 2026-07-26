@@ -38,8 +38,9 @@ const freshSignature: ClamAvSignatureManifest = {
 async function setup(
   options: {
     scanStatus?: "clean" | "infected" | "unavailable";
-    signatureManifest?: ClamAvSignatureManifest;
+    signatureManifest?: unknown;
     externalUrl?: string;
+    now?: () => Date;
   } = {}
 ) {
   const agentJobStore = new InMemoryAgentJobStore({ now: () => now });
@@ -131,13 +132,17 @@ async function setup(
       profiles: [profile],
       publisher: createResourceBinaryPublisher({ catalog, graph }),
       scanner,
-      readSignatureManifest: vi.fn().mockResolvedValue(options.signatureManifest ?? freshSignature),
+      readSignatureManifest: vi
+        .fn()
+        .mockResolvedValue(
+          Object.hasOwn(options, "signatureManifest") ? options.signatureManifest : freshSignature
+        ),
       databaseDirectory: "/var/lib/clamav/current",
       maxBytes: 25 * 1024 * 1024,
       lineDownloadTimeoutMs: 30_000,
       externalDownloadTimeoutMs: 15_000,
       externalMaxRedirects: 3,
-      now: () => now
+      now: options.now ?? (() => now)
     }
   };
 }
@@ -155,7 +160,7 @@ describe("attachment scan worker", () => {
 
     const result = await runAttachmentScanWorker(work.id, workerOptions);
 
-    expect(result).toEqual({ status: "completed" });
+    expect(result).toEqual({ status: "completed", signatureHealth: "current" });
     expect(lineContent.getMessageContent).toHaveBeenCalledTimes(1);
     expect(scanner.scan).toHaveBeenCalledWith({
       filePath: expect.any(String),
@@ -194,7 +199,8 @@ describe("attachment scan worker", () => {
     });
 
     await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
-      status: "completed"
+      status: "completed",
+      signatureHealth: "current"
     });
 
     expect(externalBinary.download).toHaveBeenCalledWith({
@@ -233,15 +239,111 @@ describe("attachment scan worker", () => {
     expect(graph.uploadFile).not.toHaveBeenCalled();
   });
 
-  it("rejects a stale signature before scanning or publishing", async () => {
-    const { graph, scanner, work, workerOptions } = await setup({
+  it("publishes with current health when the signature is younger than seven days", async () => {
+    const { graph, work, workerOptions } = await setup({
       signatureManifest: {
         ...freshSignature,
-        lastSuccessfulAt: "2026-07-20T03:00:00.000Z"
+        lastSuccessfulAt: "2026-07-17T04:00:00.001Z"
       }
     });
 
-    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toMatchObject({
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed",
+      signatureHealth: "current"
+    });
+
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes with warning health when the signature is exactly seven days old", async () => {
+    const { graph, work, workerOptions } = await setup({
+      signatureManifest: {
+        ...freshSignature,
+        lastSuccessfulAt: "2026-07-17T04:00:00.000Z"
+      }
+    });
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed",
+      signatureHealth: "warning"
+    });
+
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes with warning health when the signature is thirty days old", async () => {
+    const { graph, work, workerOptions } = await setup({
+      signatureManifest: {
+        ...freshSignature,
+        lastSuccessfulAt: "2026-06-24T04:00:00.000Z"
+      }
+    });
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed",
+      signatureHealth: "warning"
+    });
+
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes with warning health when the signature crosses the warning boundary during scanning", async () => {
+    const workerNow = vi
+      .fn<() => Date>()
+      .mockReturnValueOnce(new Date("2026-07-24T03:59:59.999Z"))
+      .mockReturnValueOnce(now);
+    const { graph, work, workerOptions } = await setup({
+      now: workerNow,
+      signatureManifest: {
+        ...freshSignature,
+        lastSuccessfulAt: "2026-07-17T04:00:00.000Z"
+      }
+    });
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed",
+      signatureHealth: "warning"
+    });
+
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
+    expect(workerNow).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the clock after the publication manifest read when assessing signature health", async () => {
+    let currentNow = new Date("2026-07-24T03:59:59.999Z");
+    const workerNow = vi.fn(() => currentNow);
+    const { graph, work, workerOptions } = await setup({ now: workerNow });
+    workerOptions.readSignatureManifest = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValueOnce({
+        ...freshSignature,
+        lastSuccessfulAt: "2026-07-17T04:00:00.000Z"
+      })
+      .mockImplementationOnce(async () => {
+        currentNow = now;
+        return {
+          ...freshSignature,
+          lastSuccessfulAt: "2026-07-17T04:00:00.000Z"
+        };
+      });
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
+      status: "completed",
+      signatureHealth: "warning"
+    });
+
+    expect(graph.uploadFile).toHaveBeenCalledTimes(1);
+    expect(workerNow).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [undefined, "missing"],
+    [{ ...freshSignature, signatureVersion: "invalid value" }, "malformed"],
+    [{ ...freshSignature, lastSuccessfulAt: "2026-07-24T04:00:00.001Z" }, "future-dated"]
+  ])("fails closed without uploading for a %s signature manifest", async (signatureManifest) => {
+    const { graph, scanner, work, workerOptions } = await setup({ signatureManifest });
+
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
       status: "failed",
       failureCode: "signature_stale",
       infrastructureFailure: true
@@ -251,40 +353,46 @@ describe("attachment scan worker", () => {
     expect(graph.uploadFile).not.toHaveBeenCalled();
   });
 
-  it("re-reads the replaced signature manifest immediately before publishing", async () => {
-    const { graph, scanner, work, workerOptions } = await setup();
-    const readSignatureManifest = vi
-      .fn<() => Promise<unknown>>()
-      .mockResolvedValueOnce(freshSignature)
-      .mockResolvedValueOnce({
+  it.each([
+    [
+      {
         ...freshSignature,
-        lastSuccessfulAt: "2026-07-20T03:00:00.000Z"
+        signatureVersion: "daily-20260725",
+        databaseDirectory: "sets/daily-20260725"
+      }
+    ],
+    [{ ...freshSignature, databaseDirectory: undefined }]
+  ])(
+    "does not publish a scan when the active signature version or database directory changes",
+    async (publicationManifest) => {
+      const { graph, scanner, work, workerOptions } = await setup();
+      workerOptions.readSignatureManifest = vi
+        .fn<() => Promise<unknown>>()
+        .mockResolvedValueOnce(freshSignature)
+        .mockResolvedValueOnce(publicationManifest);
+
+      await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toMatchObject({
+        status: "failed",
+        failureCode: "signature_stale",
+        infrastructureFailure: true
       });
-    workerOptions.readSignatureManifest = readSignatureManifest;
 
-    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toMatchObject({
-      status: "failed",
-      failureCode: "signature_stale",
-      infrastructureFailure: true
-    });
+      expect(scanner.scan).toHaveBeenCalledTimes(1);
+      expect(graph.uploadFile).not.toHaveBeenCalled();
+    }
+  );
 
-    expect(scanner.scan).toHaveBeenCalledTimes(1);
-    expect(graph.uploadFile).not.toHaveBeenCalled();
-    expect(readSignatureManifest).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not publish a scan when the active signature set changes during execution", async () => {
+  it("does not publish when only the signature manifest timestamp changes during scanning", async () => {
     const { graph, scanner, work, workerOptions } = await setup();
     workerOptions.readSignatureManifest = vi
       .fn<() => Promise<unknown>>()
       .mockResolvedValueOnce(freshSignature)
       .mockResolvedValueOnce({
         ...freshSignature,
-        signatureVersion: "daily-20260725",
-        databaseDirectory: "sets/daily-20260725"
+        lastSuccessfulAt: "2026-07-24T03:30:00.000Z"
       });
 
-    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toMatchObject({
+    await expect(runAttachmentScanWorker(work.id, workerOptions)).resolves.toEqual({
       status: "failed",
       failureCode: "signature_stale",
       infrastructureFailure: true

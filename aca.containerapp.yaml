@@ -1,4 +1,4 @@
-name: hhc-line-function-bot
+name: PLACEHOLDER_CONTAINER_APP_NAME
 type: Microsoft.App/containerApps
 location: PLACEHOLDER_AZURE_REGION
 properties:
@@ -15,37 +15,10 @@ properties:
       external: false
       targetPort: 3000
       transport: auto
-    secrets:
-      - name: line-helper-channel-secret
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: line-helper-channel-access-token
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: line-helper-admin-user-id
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: azure-openai-embedding-key
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: graph-client-secret
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: notion-token
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: database-url
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: redis-url
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: deepseek-api-key
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: observability-hmac-key
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: attachment-scan-queue-url
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: attachment-scan-queue-connection-string
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
-      - name: clamav-signature-storage-key
-        value: PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS
   template:
     containers:
       - name: hhc-line-function-bot
-        image: alive.azurecr.io/alive/hhc-line-function-bot:latest
+        image: PLACEHOLDER_BOT_IMAGE
         env:
           - name: SERVICE_NAME
             value: hhc-line-function-bot
@@ -66,7 +39,7 @@ properties:
           - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS
             value: "30000"
           - name: ATTACHMENT_SCAN_QUEUE_URL
-            secretRef: attachment-scan-queue-url
+            secretRef: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_URL_SECRET_REF
           - name: EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS
             value: "15000"
           - name: EXTERNAL_RESOURCE_MAX_REDIRECTS
@@ -74,21 +47,21 @@ properties:
           - name: PROFILE_CONFIG_PATH
             value: /app/config/profiles.json
           - name: LINE_HELPER_CHANNEL_SECRET
-            secretRef: line-helper-channel-secret
+            secretRef: PLACEHOLDER_LINE_HELPER_CHANNEL_SECRET_REF
           - name: LINE_HELPER_CHANNEL_ACCESS_TOKEN
-            secretRef: line-helper-channel-access-token
+            secretRef: PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF
           - name: LINE_HELPER_ADMIN_USER_ID
-            secretRef: line-helper-admin-user-id
+            secretRef: PLACEHOLDER_LINE_HELPER_ADMIN_USER_ID_SECRET_REF
           - name: EMBEDDING_PROVIDER
             value: azure_openai
           - name: AZURE_OPENAI_EMBEDDING_API_KEY
-            secretRef: azure-openai-embedding-key
+            secretRef: PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF
           - name: AZURE_OPENAI_EMBEDDING_ENDPOINT
-            value: https://bible-text-embedding-resource.cognitiveservices.azure.com/
+            value: PLACEHOLDER_AZURE_OPENAI_EMBEDDING_ENDPOINT
           - name: AZURE_OPENAI_EMBEDDING_DEPLOYMENT
-            value: text-embedding-3-small
+            value: PLACEHOLDER_AZURE_OPENAI_EMBEDDING_DEPLOYMENT
           - name: AZURE_OPENAI_EMBEDDING_API_VERSION
-            value: "2024-10-21"
+            value: PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_VERSION
           - name: EMBEDDING_MODEL
             value: text-embedding-3-small
           - name: EMBEDDING_BATCH_SIZE
@@ -96,9 +69,9 @@ properties:
           - name: EMBEDDING_TIMEOUT_MS
             value: "30000"
           - name: DEEPSEEK_API_KEY
-            secretRef: deepseek-api-key
+            secretRef: PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF
           - name: OBSERVABILITY_HMAC_KEY
-            secretRef: observability-hmac-key
+            secretRef: PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF
           - name: DEEPSEEK_BASE_URL
             value: https://api.deepseek.com
           - name: DEEPSEEK_MODEL
@@ -116,11 +89,11 @@ properties:
           - name: LLM_ROUTE_MAX_OUTPUT_TOKENS
             value: "256"
           - name: DATABASE_URL
-            secretRef: database-url
+            secretRef: PLACEHOLDER_DATABASE_URL_SECRET_REF
           - name: DATABASE_SSL
             value: "true"
           - name: REDIS_URL
-            secretRef: redis-url
+            secretRef: PLACEHOLDER_REDIS_URL_SECRET_REF
           - name: REDIS_KEY_PREFIX
             value: hhc-line-function-bot
           - name: REGISTRATION_INVITE_CODE_TTL_MINUTES
@@ -140,7 +113,7 @@ properties:
           - name: GRAPH_CLIENT_ID
             value: PLACEHOLDER_GRAPH_CLIENT_ID
           - name: GRAPH_CLIENT_SECRET
-            secretRef: graph-client-secret
+            secretRef: PLACEHOLDER_GRAPH_CLIENT_SECRET_REF
           - name: GRAPH_DRIVE_ID
             value: PLACEHOLDER_GRAPH_DRIVE_ID
           - name: GRAPH_PPT_FOLDER_ITEM_ID
@@ -164,13 +137,13 @@ properties:
           - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
             value: pdf,jpg,jpeg,png
           - name: SEARXNG_BASE_URL
-            value: PLACEHOLDER_SET_BY_DEPLOY_SCRIPT
+            value: PLACEHOLDER_SEARXNG_BASE_URL
           - name: SEARXNG_TIMEOUT_MS
             value: "8000"
           - name: NOTION_TOKEN
-            secretRef: notion-token
+            secretRef: PLACEHOLDER_NOTION_TOKEN_SECRET_REF
           - name: NOTION_SERVICE_DATABASE_ID
-            value: PLACEHOLDER_NOTION_DATABASE_ID
+            value: PLACEHOLDER_NOTION_SERVICE_DATABASE_ID
           - name: NOTION_DATE_PROPERTY
             value: PLACEHOLDER_NOTION_DATE_PROPERTY
           - name: NOTION_MEETING_PROPERTY
@@ -192,3 +165,11 @@ properties:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
+        resources:
+          cpu: 0.5
+          memory: 1Gi
+        volumeMounts: []
+    volumes: []
+    scale:
+      minReplicas: 0
+      maxReplicas: 10

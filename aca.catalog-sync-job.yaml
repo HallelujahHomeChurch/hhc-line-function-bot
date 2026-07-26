@@ -71,11 +71,11 @@ properties:
           - name: AZURE_OPENAI_EMBEDDING_API_KEY
             secretRef: azure-openai-embedding-key
           - name: AZURE_OPENAI_EMBEDDING_ENDPOINT
-            value: https://bible-text-embedding-resource.cognitiveservices.azure.com/
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: AZURE_OPENAI_EMBEDDING_DEPLOYMENT
-            value: text-embedding-3-small
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: AZURE_OPENAI_EMBEDDING_API_VERSION
-            value: "2024-10-21"
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: EMBEDDING_MODEL
             value: text-embedding-3-small
           - name: EMBEDDING_BATCH_SIZE

@@ -543,12 +543,17 @@ active work from terminal and missing/expired opaque work, so active deliveries
 remain for redelivery while terminal or expired-work deliveries are
 acknowledged. OneDrive upload and catalog upsert form one logical commit; catalog
 failure compensates by deleting the uploaded Graph item.
-Scanner results other than `clean`, or signatures without a valid at-most-72-hour
-manifest, fail closed. A separate two-day scheduled ACA Job stages and validates
-an immutable versioned database set, then atomically replaces the manifest that
-selects it. Scans retain their selected set and must observe the same manifest
-version immediately before publication. Deployment bootstraps and waits for one
-refresh before it enables the queue scanner. The finite scanner has a dedicated
+Scanner results other than `clean`, or signatures without a valid immutable
+manifest, fail closed. A pure signature policy runs both pre-scan and
+pre-publication: missing, malformed, future-dated, or mid-scan-changed manifests
+block publication, while a valid last-known-good immutable set remains usable
+regardless of age. Signature age is warning-only: it is never an age-based
+publication block after 7 days. A weekly `10 19 * * 0` UTC scheduled ACA Job stages
+and validates an immutable versioned database set, then atomically replaces the
+manifest that selects it. Scans retain their selected set and must observe the
+same manifest version immediately before publication. Deployment bootstraps and
+waits for one refresh before it enables the queue scanner. The finite scanner
+has no ingress, one replica per execution, 2 CPU / 4 GiB, and a dedicated
 minimal config surface: LINE access tokens, PostgreSQL, Redis, Graph, bounded
 download settings, queue access, and ClamAV state. It does not load LINE channel
 secrets, admin IDs, LLM/Notion credentials, or observability secrets. The

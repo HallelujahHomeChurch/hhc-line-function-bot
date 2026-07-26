@@ -1,11 +1,17 @@
 # Controlled Retrieval Product Roadmap Design
 
+> [!IMPORTANT]
+> **Superseded remaining direction (2026-07-26).** The completed milestones remain historical,
+> but all remaining R4-R8 direction is superseded by
+> [`2026-07-26-single-church-optimization-roadmap-design.md`](./2026-07-26-single-church-optimization-roadmap-design.md).
+> The SaaS, Ollama, and local-only directions below are not active roadmap direction.
+
 ## Status
 
-Approved direction on 2026-07-19. This document turns the controlled-agent,
-schedule-domain, cache/state-lifecycle, productization, and operations reviews
-into one dependency-ordered roadmap. It does not authorize implementation by
-itself; every milestone receives its own implementation plan and review gate.
+Historical baseline approved on 2026-07-19; remaining direction superseded on 2026-07-26.
+This document records the controlled-agent, schedule-domain, cache/state-lifecycle,
+productization, and operations review that produced the original dependency-ordered
+roadmap. It does not authorize implementation by itself.
 
 ## Product Decision
 
@@ -342,6 +348,13 @@ either integration without capability-specific changes.
   performs the existing validation, antivirus scan, OneDrive publication, and
   catalog upsert through the sole binary-publisher path. It reports through
   requester-scoped long-running job retrieval/postback rather than LINE push.
+
+> **Superseded for ClamAV operations:** The following completed-roadmap text
+> records the earlier contract. The approved single-church R4.0 contract in
+> [2026-07-26-single-church-optimization-roadmap-design.md](2026-07-26-single-church-optimization-roadmap-design.md)
+> replaces its two-day refresh and 72-hour age-block assumptions with weekly
+> refresh and warning-only signature age.
+
 - Use an Azure Files share for ClamAV signature data. A scheduled ACA Job
   refreshes and validates signatures every two days; scan jobs mount the share
   read-only and fail closed when signatures are absent, older than 72 hours,

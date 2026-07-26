@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   attachmentScanPublicationDeadline,
+  formatAttachmentScanJobStatus,
   readAttachmentScanJobEnvironment,
   receiveAttachmentScanWork,
   shouldAcknowledgeAttachmentScanResult
@@ -26,8 +27,19 @@ describe("attachment scan job environment", () => {
       workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
       databaseDirectory: "/var/lib/clamav/current",
       signatureManifestPath: "/var/lib/clamav/manifest.json",
-      scanTimeoutMs: 15_000
+      scanTimeoutMs: 15_000,
+      signaturePolicy: { warningAgeMs: 168 * 60 * 60 * 1000 }
     });
+  });
+
+  it("parses an explicit positive integer signature warning age in hours", () => {
+    expect(
+      readAttachmentScanJobEnvironment({
+        WORK_ID: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
+        CLAMAV_DATABASE_DIRECTORY: "/var/lib/clamav/current",
+        CLAMAV_SIGNATURE_WARNING_AGE_HOURS: "12"
+      }).signaturePolicy
+    ).toEqual({ warningAgeMs: 12 * 60 * 60 * 1000 });
   });
 
   it.each([
@@ -66,8 +78,31 @@ describe("attachment scan job environment", () => {
       queueName: "attachment-scan",
       databaseDirectory: "/var/lib/clamav/current",
       signatureManifestPath: "/var/lib/clamav/current/manifest.json",
-      scanTimeoutMs: 15_000
+      scanTimeoutMs: 15_000,
+      signaturePolicy: { warningAgeMs: 168 * 60 * 60 * 1000 }
     });
+  });
+
+  it.each(["0", "1.5", "not-a-number"])(
+    "rejects an invalid signature warning age without echoing it",
+    (value) => {
+      expect(() =>
+        readAttachmentScanJobEnvironment({
+          WORK_ID: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
+          CLAMAV_DATABASE_DIRECTORY: "/var/lib/clamav/current",
+          CLAMAV_SIGNATURE_WARNING_AGE_HOURS: value
+        })
+      ).toThrow("CLAMAV_SIGNATURE_WARNING_AGE_HOURS");
+    }
+  );
+
+  it("formats completed worker status without private scan details", () => {
+    expect(
+      formatAttachmentScanJobStatus({
+        status: "completed",
+        signatureHealth: "warning"
+      })
+    ).toEqual({ status: "completed", signatureHealth: "warning" });
   });
 
   it("leases and acknowledges exactly one opaque queue work item", async () => {
