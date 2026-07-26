@@ -1,8 +1,8 @@
 import type { AccessStore } from "../access/types.js";
 import type { RegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
+import { isDefaultUserFunctionAvailable } from "../application/access/effective-access.js";
 import { InMemoryConfirmationStore, type ConfirmationStore } from "./confirmation-store.js";
 import {
-  getFunctionDefinition,
   isFunctionGrantableForPrincipal,
   isGrantableFunctionName,
   userFacingFunctionNames
@@ -688,8 +688,4 @@ function readStringArrayArg(args: JsonRecord | undefined, keys: string[]): strin
 
 function mergeFunctionNames(left: FunctionName[], right: FunctionName[]): FunctionName[] {
   return Array.from(new Set([...left, ...right]));
-}
-
-function isDefaultUserFunctionAvailable(functionName: FunctionName): boolean {
-  return getFunctionDefinition(functionName)?.sideEffectLevel === "read";
 }

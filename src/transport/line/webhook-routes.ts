@@ -16,12 +16,15 @@ import {
 import { formatAgentTurnTraces, type AgentTraceStore } from "../../agent/trace-store.js";
 import type { AccessPrincipalType, AccessStore } from "../../access/types.js";
 import {
+  isDefaultUserFunctionAvailable,
+  resolveEffectiveAccessContext
+} from "../../application/access/effective-access.js";
+import {
   classifyGroupEngagement,
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
 } from "../../engagement.js";
 import {
-  getFunctionDefinition,
   isFunctionGrantableForPrincipal,
   isGrantableFunctionName,
   userFacingFunctionNames
@@ -349,12 +352,14 @@ async function handleWebhook(
     }
     const requestId = requestIdFactory();
     const requesterIsAdmin = await isAdminUser(profile, event.source.userId, accessStore);
-    const effectiveProfile = await resolveEffectiveProfile(
-      profile,
-      event,
-      accessStore,
-      requesterIsAdmin
-    );
+    const effectiveProfile = (
+      await resolveEffectiveAccessContext({
+        profile,
+        event,
+        accessStore,
+        requesterIsAdmin
+      })
+    ).profile;
     const requesterDisplayName = await resolveRequesterDisplayName(lineIdentity, event);
 
     if (event.type === "postback") {
@@ -669,85 +674,6 @@ async function handleWebhook(
   });
 }
 
-async function resolveEffectiveProfile(
-  profile: BotProfileConfig,
-  event: LineEvent,
-  accessStore: AccessStore,
-  requesterIsAdmin?: boolean
-): Promise<BotProfileConfig> {
-  const enabledFunctions = await resolveEffectiveFunctions(
-    profile,
-    event,
-    accessStore,
-    requesterIsAdmin
-  );
-  if (enabledFunctions.length === profile.enabledFunctions.length) {
-    const unchanged = enabledFunctions.every(
-      (name, index) => name === profile.enabledFunctions[index]
-    );
-    if (unchanged) {
-      return profile;
-    }
-  }
-  return { ...profile, enabledFunctions };
-}
-
-async function resolveEffectiveFunctions(
-  profile: BotProfileConfig,
-  event: LineEvent,
-  accessStore: AccessStore,
-  requesterIsAdmin?: boolean
-): Promise<FunctionName[]> {
-  const isAdmin =
-    requesterIsAdmin ?? (await isAdminUser(profile, event.source.userId, accessStore));
-  const profileFunctions = isAdmin
-    ? profile.enabledFunctions
-    : profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
-  const userGrants = event.source.userId
-    ? (await accessStore.listUserFunctionGrants(profile.name, event.source.userId)).filter((name) =>
-        isFunctionGrantableForPrincipal(name, "user")
-      )
-    : [];
-  const userRoleFunctions = event.source.userId
-    ? capabilitiesToFunctionNames(
-        await accessStore.listPrincipalCapabilities(profile.name, "user", event.source.userId),
-        "user"
-      )
-    : [];
-  if (event.source.type !== "group" || !event.source.groupId) {
-    return mergeFunctionNames(mergeFunctionNames(profileFunctions, userGrants), userRoleFunctions);
-  }
-  const groupGrants = (
-    await accessStore.listGroupFunctionGrants(profile.name, event.source.groupId)
-  ).filter((name) => isFunctionGrantableForPrincipal(name, "group"));
-  const groupRoleFunctions = capabilitiesToFunctionNames(
-    await accessStore.listPrincipalCapabilities(profile.name, "group", event.source.groupId),
-    "group"
-  );
-  return mergeFunctionNames(
-    mergeFunctionNames(mergeFunctionNames(profileFunctions, groupGrants), groupRoleFunctions),
-    mergeFunctionNames(userGrants, userRoleFunctions)
-  );
-}
-
-function capabilitiesToFunctionNames(
-  capabilities: string[],
-  principal: "user" | "group"
-): FunctionName[] {
-  return capabilities
-    .map((capability) => capability.match(/^function:([^:]+):execute$/u)?.[1])
-    .filter(
-      (name): name is FunctionName =>
-        typeof name === "string" &&
-        isGrantableFunctionName(name as FunctionName) &&
-        isFunctionGrantableForPrincipal(name as FunctionName, principal)
-    );
-}
-
-function isDefaultUserFunctionAvailable(functionName: FunctionName): boolean {
-  return getFunctionDefinition(functionName)?.sideEffectLevel === "read";
-}
-
 function activeTaskScopeForEvent(
   store: ConversationWindowStore,
   profile: BotProfileConfig,
@@ -863,7 +789,7 @@ async function allowEvent(
       if (
         await matchingTextMessageHandler(
           event,
-          await resolveEffectiveProfile(profile, event, accessStore),
+          (await resolveEffectiveAccessContext({ profile, event, accessStore })).profile,
           textMessageHandlers
         )
       ) {
