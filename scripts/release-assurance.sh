@@ -17,6 +17,9 @@ RELEASE_ROLLBACK_IMAGE="${RELEASE_ROLLBACK_IMAGE:-}"
 RELEASE_CATALOG_JOB_MUTATED="${RELEASE_CATALOG_JOB_MUTATED:-false}"
 RELEASE_SCAN_JOB_MUTATED="${RELEASE_SCAN_JOB_MUTATED:-false}"
 RELEASE_REFRESH_JOB_MUTATED="${RELEASE_REFRESH_JOB_MUTATED:-false}"
+RELEASE_PROBE_JOB_MUTATED="${RELEASE_PROBE_JOB_MUTATED:-false}"
+RELEASE_PERIODIC_JOB_MUTATED="${RELEASE_PERIODIC_JOB_MUTATED:-false}"
+RELEASE_SEARXNG_MUTATED="${RELEASE_SEARXNG_MUTATED:-false}"
 RELEASE_PROVIDER_CONTRACT_VERIFIED=false
 RELEASE_CLEANUP_FILES=()
 
@@ -51,6 +54,9 @@ capture_known_good_state() {
   : "${CATALOG_SYNC_JOB_NAME:?CATALOG_SYNC_JOB_NAME is required}"
   : "${ATTACHMENT_SCAN_JOB_NAME:?ATTACHMENT_SCAN_JOB_NAME is required}"
   : "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME:?CLAMAV_SIGNATURE_REFRESH_JOB_NAME is required}"
+  : "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"
+  : "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"
+  : "${SEARXNG_CONTAINER_APP_NAME:?SEARXNG_CONTAINER_APP_NAME is required}"
 
   if ! RELEASE_KNOWN_GOOD_REVISION="$(
     az containerapp show \
@@ -63,7 +69,7 @@ capture_known_good_state() {
     set_release_failure known_good_snapshot_failed
     return 1
   fi
-  if ! RELEASE_KNOWN_GOOD_IMAGE="$(
+  if ! RELEASE_KNOWN_GOOD_IMAGE_RAW="$(
     az containerapp revision show \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${CONTAINER_APP_NAME}" \
@@ -71,19 +77,101 @@ capture_known_good_state() {
       --query "properties.template.containers[0].image" \
       --output tsv \
       --only-show-errors
-  )" || [[ -z "${RELEASE_KNOWN_GOOD_IMAGE}" ]]; then
+  )" || [[ -z "${RELEASE_KNOWN_GOOD_IMAGE_RAW}" ]] \
+    || ! RELEASE_KNOWN_GOOD_IMAGE="$(resolve_release_image "${RELEASE_KNOWN_GOOD_IMAGE_RAW}")"; then
     set_release_failure known_good_snapshot_failed
     return 1
   fi
 
-  if ! RELEASE_KNOWN_GOOD_CATALOG_IMAGE="$(release_job_image "${CATALOG_SYNC_JOB_NAME}")" \
-    || [[ -z "${RELEASE_KNOWN_GOOD_CATALOG_IMAGE}" ]] \
-    || ! RELEASE_KNOWN_GOOD_SCAN_IMAGE="$(release_job_image "${ATTACHMENT_SCAN_JOB_NAME}")" \
-    || [[ -z "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" ]] \
-    || ! RELEASE_KNOWN_GOOD_REFRESH_IMAGE="$(release_job_image "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}")" \
-    || [[ -z "${RELEASE_KNOWN_GOOD_REFRESH_IMAGE}" ]]; then
+  if ! capture_release_job_snapshot CATALOG "${CATALOG_SYNC_JOB_NAME}" \
+    || ! capture_release_job_snapshot SCAN "${ATTACHMENT_SCAN_JOB_NAME}" \
+    || ! capture_release_job_snapshot REFRESH "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
+    || ! capture_release_job_snapshot PROBE "${RELEASE_PROBE_JOB_NAME}" \
+    || ! capture_release_job_snapshot PERIODIC "${PERIODIC_ASSURANCE_JOB_NAME}"; then
     set_release_failure known_good_snapshot_failed
     return 1
+  fi
+  if RELEASE_KNOWN_GOOD_SEARXNG_REVISION="$(
+    az containerapp show \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${SEARXNG_CONTAINER_APP_NAME}" \
+      --query properties.latestReadyRevisionName \
+      --output tsv \
+      --only-show-errors 2>/dev/null
+  )"; then
+    if [[ -z "${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" ]]; then
+      set_release_failure known_good_snapshot_failed
+      return 1
+    fi
+    RELEASE_KNOWN_GOOD_SEARXNG_EXISTS=true
+    if ! RELEASE_KNOWN_GOOD_SEARXNG_IMAGE="$(
+      az containerapp revision show \
+        --resource-group "${RESOURCE_GROUP}" \
+        --name "${SEARXNG_CONTAINER_APP_NAME}" \
+        --revision "${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" \
+        --query properties.template.containers[0].image \
+        --output tsv \
+        --only-show-errors
+    )" || [[ -z "${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}" ]] \
+      || ! RELEASE_KNOWN_GOOD_SEARXNG_IMAGE="$(
+        resolve_release_image "${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}"
+      )"; then
+      set_release_failure known_good_snapshot_failed
+      return 1
+    fi
+  else
+    RELEASE_KNOWN_GOOD_SEARXNG_EXISTS=false
+    RELEASE_KNOWN_GOOD_SEARXNG_REVISION=""
+    RELEASE_KNOWN_GOOD_SEARXNG_IMAGE=""
+  fi
+}
+
+resolve_release_image() {
+  local image="$1"
+  local digest
+  local repository_and_tag
+  local repository
+  if [[ "${image}" =~ ^([^@]+)@sha256:([a-f0-9]{64})$ ]]; then
+    printf '%s\n' "${image}"
+    return
+  fi
+  if [[ "${image}" != "${ACR_LOGIN_SERVER}/"* ]]; then
+    return 1
+  fi
+  repository_and_tag="${image#"${ACR_LOGIN_SERVER}/"}"
+  if [[ "${repository_and_tag}" != *:* ]]; then
+    return 1
+  fi
+  repository="${repository_and_tag%:*}"
+  if ! digest="$(
+    az acr manifest show-metadata \
+      --registry "${ACR_NAME}" \
+      --name "${repository_and_tag}" \
+      --query digest \
+      --output tsv \
+      --only-show-errors
+  )" || [[ ! "${digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    return 1
+  fi
+  printf '%s/%s@%s\n' "${ACR_LOGIN_SERVER}" "${repository}" "${digest}"
+}
+
+capture_release_job_snapshot() {
+  local key="$1"
+  local job_name="$2"
+  local image
+  if image="$(release_job_image "${job_name}" 2>/dev/null)"; then
+    if [[ -z "${image}" ]]; then
+      return 1
+    fi
+    printf -v "RELEASE_KNOWN_GOOD_${key}_EXISTS" '%s' true
+    if ! image="$(resolve_release_image "${image}")"; then
+      return 1
+    fi
+    printf -v "RELEASE_KNOWN_GOOD_${key}_IMAGE" '%s' "${image}"
+  else
+    printf -v "RELEASE_KNOWN_GOOD_${key}_EXISTS" '%s' false
+    printf -v "RELEASE_KNOWN_GOOD_${key}_IMAGE" '%s' ""
   fi
 }
 
@@ -101,6 +189,11 @@ mark_release_mutated() {
   RELEASE_MUTATED=true
 }
 
+mark_release_searxng_mutated() {
+  RELEASE_SEARXNG_MUTATED=true
+  mark_release_mutated
+}
+
 mark_release_job_mutated() {
   local job_name="$1"
   case "${job_name}" in
@@ -112,6 +205,12 @@ mark_release_job_mutated() {
       ;;
     "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}")
       RELEASE_REFRESH_JOB_MUTATED=true
+      ;;
+    "${RELEASE_PROBE_JOB_NAME}")
+      RELEASE_PROBE_JOB_MUTATED=true
+      ;;
+    "${PERIODIC_ASSURANCE_JOB_NAME}")
+      RELEASE_PERIODIC_JOB_MUTATED=true
       ;;
     *)
       set_release_failure unexpected_release_job
@@ -596,6 +695,14 @@ PY
 
 release_run_probe() {
   local execution_name
+  local execution_status=""
+  local probe_logs
+  local parsed
+  local name
+  local status
+  local code
+  local payload_status=""
+  local failure_reason=""
   if ! execution_name="$(
     az containerapp job start \
       --resource-group "${RESOURCE_GROUP}" \
@@ -607,14 +714,168 @@ release_run_probe() {
     fail_release_check release_probe release_probe_start_failed network_failed
     return
   fi
-  release_wait_for_job_execution \
-    "${RELEASE_PROBE_JOB_NAME}" "${execution_name}" \
-    release_probe release_probe_failed http_mismatch || return
-  record_release_check bot_health passed none
-  record_release_check bot_readiness passed none
-  record_release_check searxng_root passed none
-  record_release_check gateway_empty_webhook passed none
-  record_release_check clamav_signature passed none
+  for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
+    if ! execution_status="$(
+      az containerapp job execution show \
+        --resource-group "${RESOURCE_GROUP}" \
+        --name "${RELEASE_PROBE_JOB_NAME}" \
+        --job-execution-name "${execution_name}" \
+        --query "properties.status" \
+        --output tsv \
+        --only-show-errors
+    )"; then
+      fail_release_check release_probe release_probe_failed network_failed
+      return
+    fi
+    case "${execution_status}" in
+      Succeeded | Failed | Stopped)
+        break
+        ;;
+      *)
+        if ((attempt == RELEASE_POLL_ATTEMPTS)); then
+          fail_release_check release_probe release_probe_failed_timeout timeout
+          return
+        fi
+        sleep "${RELEASE_POLL_INTERVAL_SECONDS}"
+        ;;
+    esac
+  done
+  if ! probe_logs="$(
+    az containerapp job logs show \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${RELEASE_PROBE_JOB_NAME}" \
+      --execution "${execution_name}" \
+      --container release-probe \
+      --tail 20 \
+      --format json \
+      --only-show-errors
+  )"; then
+    fail_release_check release_probe release_probe_logs_failed network_failed
+    return
+  fi
+  if ! parsed="$(
+    RELEASE_PROBE_LOGS="${probe_logs}" \
+    RELEASE_PROBE_EXECUTION_STATUS="${execution_status}" \
+    python3 - <<'PY'
+import json
+import os
+
+check_codes = {
+    "bot_health": {
+        "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
+        "contract_mismatch",
+    },
+    "bot_readiness": {
+        "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
+        "contract_mismatch",
+    },
+    "searxng_root": {"none", "timeout", "http_mismatch", "network_failed"},
+    "gateway_empty_webhook": {
+        "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
+        "contract_mismatch",
+    },
+    "clamav_signature": {"none", "clamav_manifest_invalid", "signature_warning"},
+}
+
+def candidates(value):
+    if isinstance(value, dict):
+        if set(value) == {"status", "checks"}:
+            yield value
+        for key in ("Log", "log", "message"):
+            nested = value.get(key)
+            if isinstance(nested, str):
+                try:
+                    decoded = json.loads(nested)
+                except (TypeError, ValueError):
+                    continue
+                yield from candidates(decoded)
+        for nested in value.values():
+            if isinstance(nested, (dict, list)):
+                yield from candidates(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from candidates(nested)
+
+raw = os.environ["RELEASE_PROBE_LOGS"]
+decoded_values = []
+try:
+    decoded_values.append(json.loads(raw))
+except (TypeError, ValueError):
+    for line in raw.splitlines():
+        try:
+            decoded_values.append(json.loads(line))
+        except (TypeError, ValueError):
+            pass
+payloads = [item for decoded in decoded_values for item in candidates(decoded)]
+if len(payloads) != 1:
+    raise SystemExit(1)
+payload = payloads[0]
+if payload["status"] not in {"passed", "failed"} or not isinstance(payload["checks"], list):
+    raise SystemExit(1)
+observed = []
+names = set()
+for row in payload["checks"]:
+    if not isinstance(row, dict):
+        raise SystemExit(1)
+    allowed_fields = {"name", "status", "code"}
+    if row.get("name") == "clamav_signature":
+        allowed_fields.add("signatureHealth")
+    if not {"name", "status", "code"} <= set(row) or not set(row) <= allowed_fields:
+        raise SystemExit(1)
+    name, status, code = row["name"], row["status"], row["code"]
+    if name not in check_codes or name in names:
+        raise SystemExit(1)
+    if status not in {"passed", "failed", "warning"} or code not in check_codes[name]:
+        raise SystemExit(1)
+    if (status == "warning") != (code == "signature_warning"):
+        raise SystemExit(1)
+    if status == "passed" and code != "none":
+        raise SystemExit(1)
+    if status == "failed" and code in {"none", "signature_warning"}:
+        raise SystemExit(1)
+    if "signatureHealth" in row and row["signatureHealth"] not in {"current", "warning"}:
+        raise SystemExit(1)
+    names.add(name)
+    observed.append((name, status, "http_mismatch" if code == "contract_mismatch" else code))
+if names != set(check_codes):
+    raise SystemExit(1)
+has_failure = any(status == "failed" for _, status, _ in observed)
+if (payload["status"] == "failed") != has_failure:
+    raise SystemExit(1)
+execution_succeeded = os.environ["RELEASE_PROBE_EXECUTION_STATUS"] == "Succeeded"
+if execution_succeeded != (payload["status"] == "passed"):
+    print("RESULT|status_mismatch|release_probe_status_mismatch")
+    raise SystemExit(0)
+first_failure = next((name for name, status, _ in observed if status == "failed"), "")
+print(f"RESULT|{payload['status']}|{first_failure}")
+for name, status, code in observed:
+    print(f"{name}|{status}|{code}")
+PY
+  )"; then
+    fail_release_check release_probe release_probe_result_malformed malformed_json
+    return
+  fi
+  while IFS='|' read -r name status code; do
+    if [[ "${name}" == "RESULT" ]]; then
+      payload_status="${status}"
+      failure_reason="${code}"
+    elif [[ -n "${name}" ]]; then
+      record_release_check "${name}" "${status}" "${code}"
+    fi
+  done <<<"${parsed}"
+  if [[ "${payload_status}" == "status_mismatch" ]]; then
+    fail_release_check release_probe "${failure_reason}" http_mismatch
+    return
+  fi
+  if [[ "${payload_status}" == "failed" ]]; then
+    fail_release_check release_probe "${failure_reason}_failed" http_mismatch
+    return
+  fi
+  if [[ "${payload_status}" != "passed" ]]; then
+    fail_release_check release_probe release_probe_result_malformed malformed_json
+    return
+  fi
+  record_release_check release_probe passed none
 }
 
 restore_known_good_revision() {
@@ -630,6 +891,7 @@ restore_known_good_revision() {
       --resource-group "${RESOURCE_GROUP}" \
       --name "${CONTAINER_APP_NAME}" \
       --from-revision "${RELEASE_KNOWN_GOOD_REVISION}" \
+      --image "${RELEASE_KNOWN_GOOD_IMAGE}" \
       --query "name" \
       --output tsv \
       --only-show-errors
@@ -689,16 +951,42 @@ PY
     fi
   fi
 
+  if [[ "${RELEASE_SEARXNG_MUTATED}" == "true" ]]; then
+    restore_known_good_searxng || rollback_ok=false
+  fi
   if [[ "${RELEASE_CATALOG_JOB_MUTATED}" == "true" ]]; then
-    restore_changed_job_image "${CATALOG_SYNC_JOB_NAME}" "${RELEASE_KNOWN_GOOD_CATALOG_IMAGE}" \
+    restore_changed_job \
+      "${CATALOG_SYNC_JOB_NAME}" \
+      "${RELEASE_KNOWN_GOOD_CATALOG_EXISTS}" \
+      "${RELEASE_KNOWN_GOOD_CATALOG_IMAGE}" \
       || rollback_ok=false
   fi
   if [[ "${RELEASE_SCAN_JOB_MUTATED}" == "true" ]]; then
-    restore_changed_job_image "${ATTACHMENT_SCAN_JOB_NAME}" "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" \
+    restore_changed_job \
+      "${ATTACHMENT_SCAN_JOB_NAME}" \
+      "${RELEASE_KNOWN_GOOD_SCAN_EXISTS}" \
+      "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" \
       || rollback_ok=false
   fi
   if [[ "${RELEASE_REFRESH_JOB_MUTATED}" == "true" ]]; then
-    restore_changed_job_image "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" "${RELEASE_KNOWN_GOOD_REFRESH_IMAGE}" \
+    restore_changed_job \
+      "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
+      "${RELEASE_KNOWN_GOOD_REFRESH_EXISTS}" \
+      "${RELEASE_KNOWN_GOOD_REFRESH_IMAGE}" \
+      || rollback_ok=false
+  fi
+  if [[ "${RELEASE_PROBE_JOB_MUTATED}" == "true" ]]; then
+    restore_changed_job \
+      "${RELEASE_PROBE_JOB_NAME}" \
+      "${RELEASE_KNOWN_GOOD_PROBE_EXISTS}" \
+      "${RELEASE_KNOWN_GOOD_PROBE_IMAGE}" \
+      || rollback_ok=false
+  fi
+  if [[ "${RELEASE_PERIODIC_JOB_MUTATED}" == "true" ]]; then
+    restore_changed_job \
+      "${PERIODIC_ASSURANCE_JOB_NAME}" \
+      "${RELEASE_KNOWN_GOOD_PERIODIC_EXISTS}" \
+      "${RELEASE_KNOWN_GOOD_PERIODIC_IMAGE}" \
       || rollback_ok=false
   fi
 
@@ -710,11 +998,91 @@ PY
   return 1
 }
 
-restore_changed_job_image() {
+restore_known_good_searxng() {
+  local rollback_revision
+  local state_json
+  local image
+  if [[ "${RELEASE_KNOWN_GOOD_SEARXNG_EXISTS}" == "false" ]]; then
+    az containerapp delete \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${SEARXNG_CONTAINER_APP_NAME}" \
+      --yes \
+      --only-show-errors \
+      --output none
+    return
+  fi
+  if ! rollback_revision="$(
+    az containerapp revision copy \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${SEARXNG_CONTAINER_APP_NAME}" \
+      --from-revision "${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" \
+      --image "${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}" \
+      --query name \
+      --output tsv \
+      --only-show-errors
+  )" || [[ -z "${rollback_revision}" ]]; then
+    return 1
+  fi
+  for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
+    if state_json="$(
+      az containerapp show \
+        --resource-group "${RESOURCE_GROUP}" \
+        --name "${SEARXNG_CONTAINER_APP_NAME}" \
+        --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus}" \
+        --output json \
+        --only-show-errors
+    )" && image="$(
+      az containerapp revision show \
+        --resource-group "${RESOURCE_GROUP}" \
+        --name "${SEARXNG_CONTAINER_APP_NAME}" \
+        --revision "${rollback_revision}" \
+        --query properties.template.containers[0].image \
+        --output tsv \
+        --only-show-errors
+    )" && RELEASE_SEARXNG_ROLLBACK_STATE="${state_json}" \
+      RELEASE_SEARXNG_ROLLBACK_REVISION="${rollback_revision}" \
+      RELEASE_SEARXNG_ROLLBACK_IMAGE="${image}" \
+      RELEASE_SEARXNG_EXPECTED_IMAGE="${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}" \
+      python3 - <<'PY'
+import json
+import os
+
+state = json.loads(os.environ["RELEASE_SEARXNG_ROLLBACK_STATE"])
+revision = os.environ["RELEASE_SEARXNG_ROLLBACK_REVISION"]
+valid = (
+    state.get("latestRevision") == revision
+    and state.get("latestReadyRevision") == revision
+    and state.get("runningStatus") == "Running"
+    and os.environ["RELEASE_SEARXNG_ROLLBACK_IMAGE"]
+    == os.environ["RELEASE_SEARXNG_EXPECTED_IMAGE"]
+)
+raise SystemExit(0 if valid else 1)
+PY
+    then
+      return 0
+    fi
+    if ((attempt < RELEASE_POLL_ATTEMPTS)); then
+      sleep "${RELEASE_POLL_INTERVAL_SECONDS}"
+    fi
+  done
+  return 1
+}
+
+restore_changed_job() {
   local job_name="$1"
-  local known_image="$2"
+  local existed="$2"
+  local known_image="$3"
   local current_image
   local restored_image
+  if [[ "${existed}" == "false" ]]; then
+    az containerapp job delete \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${job_name}" \
+      --yes \
+      --only-show-errors \
+      --output none
+    return
+  fi
   if ! current_image="$(release_job_image "${job_name}")"; then
     return 1
   fi
@@ -732,7 +1100,7 @@ restore_changed_job_image() {
 }
 
 write_release_report() {
-  : "${RELEASE_REPORT_PATH:?RELEASE_REPORT_PATH is required}"
+  RELEASE_REPORT_PATH="${RELEASE_REPORT_PATH:-artifacts/release-assurance/report.json}"
   local known_good_revision="${RELEASE_KNOWN_GOOD_REVISION:-unavailable}"
   local known_good_image="${RELEASE_KNOWN_GOOD_IMAGE:-unavailable}"
   local target_revision="${RELEASE_TARGET_REVISION:-${known_good_revision}}"
@@ -748,8 +1116,8 @@ write_release_report() {
   RELEASE_REPORT_TARGET_STATUS="${target_status}" \
   RELEASE_REPORT_TARGET_REVISION="${target_revision}" \
   RELEASE_REPORT_TARGET_IMAGE="${target_image}" \
-  RELEASE_REPORT_COMMIT_SHA="${RELEASE_COMMIT_SHA:-${GITHUB_SHA:-}}" \
-  RELEASE_REPORT_ID="${RELEASE_ID:-${GITHUB_RUN_ID:-}}" \
+  RELEASE_REPORT_COMMIT_SHA="${RELEASE_COMMIT_SHA:-${GITHUB_SHA:-0000000000000000000000000000000000000000}}" \
+  RELEASE_REPORT_ID="${RELEASE_ID:-${GITHUB_RUN_ID:-unavailable}}" \
   RELEASE_FAILURE_REASON="${RELEASE_FAILURE_REASON}" \
   RELEASE_CHECK_RECORDS="${RELEASE_CHECK_RECORDS}" \
   RELEASE_STARTED_AT="${RELEASE_STARTED_AT}" \
@@ -787,9 +1155,18 @@ failure_map = {
     "periodic_definition_mismatch": "http_mismatch",
     "clamav_bootstrap_failed": "clamav_manifest_invalid",
     "clamav_bootstrap_failed_timeout": "timeout",
+    "clamav_bootstrap_start_failed": "network_failed",
     "release_probe_start_failed": "network_failed",
     "release_probe_failed": "http_mismatch",
     "release_probe_failed_timeout": "timeout",
+    "release_probe_logs_failed": "network_failed",
+    "release_probe_result_malformed": "malformed_json",
+    "release_probe_status_mismatch": "http_mismatch",
+    "bot_health_failed": "bot_health_failed",
+    "bot_readiness_failed": "bot_readiness_failed",
+    "searxng_root_failed": "searxng_root_failed",
+    "gateway_empty_webhook_failed": "gateway_webhook_failed",
+    "clamav_signature_failed": "clamav_manifest_invalid",
     "report_write_failed": "network_failed",
     "transaction_incomplete": "network_failed",
     "unclassified_release_failure": "network_failed",
@@ -819,6 +1196,7 @@ check_codes = {
     "http_mismatch",
     "malformed_json",
     "clamav_manifest_invalid",
+    "signature_warning",
 }
 
 def image_identity(value):
@@ -832,8 +1210,14 @@ def image_identity(value):
 checks = []
 for row in os.environ.get("RELEASE_CHECK_RECORDS", "").splitlines():
     name, status, observed_at, code = row.split("|")
-    if name not in check_names or status not in {"passed", "failed"} or code not in check_codes:
+    if name not in check_names or status not in {"passed", "failed", "warning"} or code not in check_codes:
         raise SystemExit("invalid release check")
+    if (status == "warning") != (code == "signature_warning"):
+        raise SystemExit("invalid release warning")
+    if status == "passed" and code != "none":
+        raise SystemExit("invalid passed release check")
+    if status == "failed" and code == "none":
+        raise SystemExit("invalid failed release check")
     checks.append(
         {"name": name, "status": status, "observedAt": observed_at, "code": code}
     )

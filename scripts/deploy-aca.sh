@@ -2,22 +2,36 @@
 
 set -euo pipefail
 
-: "${ACR_NAME:?ACR_NAME is required}"
-: "${ACR_LOGIN_SERVER:?ACR_LOGIN_SERVER is required}"
-: "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
-: "${SCAN_IMAGE_REPOSITORY:?SCAN_IMAGE_REPOSITORY is required}"
-: "${IMAGE_TAG:?IMAGE_TAG is required}"
-: "${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
-: "${CONTAINER_APP_NAME:?CONTAINER_APP_NAME is required}"
-: "${CATALOG_SYNC_JOB_NAME:?CATALOG_SYNC_JOB_NAME is required}"
-: "${ATTACHMENT_SCAN_JOB_NAME:?ATTACHMENT_SCAN_JOB_NAME is required}"
-: "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME:?CLAMAV_SIGNATURE_REFRESH_JOB_NAME is required}"
-: "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"
-: "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"
-: "${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME:?ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME is required}"
-: "${ATTACHMENT_SCAN_QUEUE_NAME:?ATTACHMENT_SCAN_QUEUE_NAME is required}"
-: "${CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME:?CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME is required}"
-: "${CLAMAV_SIGNATURE_FILE_SHARE_NAME:?CLAMAV_SIGNATURE_FILE_SHARE_NAME is required}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/release-assurance.sh"
+trap 'release_assurance_on_exit "$?"' EXIT
+
+required_release_environment=(
+  ACR_NAME
+  ACR_LOGIN_SERVER
+  IMAGE_REPOSITORY
+  SCAN_IMAGE_REPOSITORY
+  IMAGE_TAG
+  RESOURCE_GROUP
+  CONTAINER_APP_NAME
+  CATALOG_SYNC_JOB_NAME
+  ATTACHMENT_SCAN_JOB_NAME
+  CLAMAV_SIGNATURE_REFRESH_JOB_NAME
+  RELEASE_PROBE_JOB_NAME
+  PERIODIC_ASSURANCE_JOB_NAME
+  ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
+  ATTACHMENT_SCAN_QUEUE_NAME
+  CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME
+  CLAMAV_SIGNATURE_FILE_SHARE_NAME
+)
+for required_name in "${required_release_environment[@]}"; do
+  if [[ -z "${!required_name-}" ]]; then
+    set_release_failure preflight_failed
+    echo "Required release environment is unavailable: ${required_name}" >&2
+    exit 1
+  fi
+done
+
 : "${SEARXNG_CONTAINER_APP_NAME:=hhc-searxng}"
 : "${API_GATEWAY_CONTAINER_APP_NAME:=api-gateway}"
 : "${CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs}"
@@ -25,13 +39,17 @@ set -euo pipefail
 : "${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:=text-embedding-3-small}"
 : "${AZURE_OPENAI_EMBEDDING_API_VERSION:=2024-10-21}"
 
-image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
-scan_image_ref="${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+if ! image_ref="$(
+  resolve_release_image "${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+)" || ! scan_image_ref="$(
+  resolve_release_image "${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+)"; then
+  set_release_failure preflight_failed
+  echo "Could not resolve immutable release image digests" >&2
+  exit 1
+fi
 echo "Deploying ${image_ref} to ${CONTAINER_APP_NAME}"
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${script_dir}/release-assurance.sh"
-trap 'release_assurance_on_exit "$?"' EXIT
 bot_manifest_template="${script_dir}/../aca.containerapp.yaml"
 searxng_manifest_template="${script_dir}/../aca.searxng.containerapp.yaml"
 searxng_settings_template="${script_dir}/../infra/searxng/settings.yml"
@@ -68,8 +86,6 @@ if [[ ! -f "${bot_manifest_template}" \
   echo "Missing deployment configuration"
   exit 1
 fi
-
-capture_known_good_state
 
 managed_environment_id="$(az containerapp show \
   --resource-group "${RESOURCE_GROUP}" \
@@ -130,6 +146,13 @@ if [[ -z "${azure_openai_embedding_endpoint}" \
   echo "Required Azure embedding deployment is unavailable" >&2
   exit 1
 fi
+
+# Capture every traffic-serving and finite-workload identity before the first
+# production write. Compatible secret/storage reconciliation is inside the
+# same failure boundary even though rollback ownership is workload-scoped.
+capture_known_good_state
+mark_release_mutated
+
 azure_openai_embedding_key="$(az cognitiveservices account keys list \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${AZURE_OPENAI_EMBEDDING_RESOURCE_NAME}" \
@@ -310,12 +333,14 @@ if az containerapp show \
   --name "${SEARXNG_CONTAINER_APP_NAME}" \
   --only-show-errors \
   --output none 2>/dev/null; then
+  mark_release_searxng_mutated
   az containerapp update --yaml "${searxng_manifest}" \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${SEARXNG_CONTAINER_APP_NAME}" \
     --only-show-errors \
     --output none
 else
+  mark_release_searxng_mutated
   az containerapp create --yaml "${searxng_manifest}" \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${SEARXNG_CONTAINER_APP_NAME}" \
@@ -437,70 +462,6 @@ target_revision="$(az containerapp show \
 RELEASE_TARGET_REVISION="${target_revision}"
 RELEASE_TARGET_IMAGE="${image_ref}"
 RELEASE_TARGET_SCAN_IMAGE="${scan_image_ref}"
-
-echo "Waiting for revision ${target_revision} to become ready"
-revision_ready=false
-for attempt in {1..30}; do
-  app_state="$(az containerapp show \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${CONTAINER_APP_NAME}" \
-    --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,image:properties.template.containers[0].image}" \
-    --output json)"
-
-  read -r latest_revision latest_ready_revision running_status deployed_image < <(
-    APP_STATE="${app_state}" python3 - <<'PY'
-import json
-import os
-
-state = json.loads(os.environ["APP_STATE"])
-print("\t".join(str(state.get(key) or "") for key in [
-    "latestRevision",
-    "latestReadyRevision",
-    "runningStatus",
-    "image",
-]))
-PY
-  )
-  echo "Attempt ${attempt}: latest=${latest_revision}, ready=${latest_ready_revision}, status=${running_status}, image=${deployed_image}"
-
-  if [[ "${latest_revision}" == "${target_revision}" \
-    && "${latest_ready_revision}" == "${target_revision}" \
-    && "${running_status}" == "Running" \
-    && "${deployed_image}" == "${image_ref}" ]]; then
-    revision_ready=true
-    break
-  fi
-
-  sleep 10
-done
-
-if [[ "${revision_ready}" != "true" ]]; then
-  echo "Revision ${target_revision} did not become ready in time"
-  exit 1
-fi
-
-bot_dapr_json="$(az containerapp show \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${CONTAINER_APP_NAME}" \
-  --query "properties.configuration.dapr" \
-  --output json)"
-if ! BOT_DAPR_JSON="${bot_dapr_json}" python3 - <<'PY'
-import json
-import os
-
-dapr = json.loads(os.environ["BOT_DAPR_JSON"] or "null") or {}
-if (
-    dapr.get("enabled") is not True
-    or dapr.get("appId") != "hhc-line-function-bot"
-    or dapr.get("appPort") != 3000
-    or dapr.get("appProtocol") != "http"
-):
-    raise SystemExit(1)
-PY
-then
-  echo "Bot Dapr configuration changed unexpectedly" >&2
-  exit 1
-fi
 
 bot_fqdn="$(az containerapp show \
   --resource-group "${RESOURCE_GROUP}" \
@@ -671,49 +632,23 @@ deploy_job() {
   fi
 }
 
-start_job_and_wait() {
+start_release_job() {
   local job_name="$1"
+  local check_name="$2"
+  local failure_reason="$3"
   local execution_name
-  local execution_status
-
-  execution_name="$(
+  if ! execution_name="$(
     az containerapp job start \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${job_name}" \
       --query name \
       --output tsv \
       --only-show-errors
-  )"
-  if [[ -z "${execution_name}" ]]; then
-    echo "Unable to resolve the bootstrap execution for ${job_name}" >&2
-    exit 1
+  )" || [[ -z "${execution_name}" ]]; then
+    fail_release_check "${check_name}" "${failure_reason}" network_failed
+    return 1
   fi
-
-  for _attempt in $(seq 1 180); do
-    execution_status="$(
-      az containerapp job execution show \
-        --resource-group "${RESOURCE_GROUP}" \
-        --name "${job_name}" \
-        --job-execution-name "${execution_name}" \
-        --query properties.status \
-        --output tsv \
-        --only-show-errors
-    )"
-    case "${execution_status}" in
-      Succeeded)
-        echo "${execution_name}"
-        return
-        ;;
-      Failed | Stopped)
-        echo "Bootstrap execution for ${job_name} did not succeed" >&2
-        exit 1
-        ;;
-    esac
-    sleep 5
-  done
-
-  echo "Bootstrap execution for ${job_name} exceeded its deployment wait" >&2
-  exit 1
+  RELEASE_STARTED_EXECUTION_NAME="${execution_name}"
 }
 
 render_job_manifest \
@@ -744,13 +679,18 @@ render_job_manifest \
 
 mark_release_job_mutated "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"
 deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" "${clamav_refresh_job_manifest}"
-clamav_bootstrap_execution_name="$(start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}")"
-RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${clamav_bootstrap_execution_name}"
+start_release_job \
+  "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
+  clamav_refresh_job \
+  clamav_bootstrap_start_failed
+RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"
 mark_release_job_mutated "${ATTACHMENT_SCAN_JOB_NAME}"
 deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}"
 mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
+mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"
 deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"
+mark_release_job_mutated "${PERIODIC_ASSURANCE_JOB_NAME}"
 deploy_job "${PERIODIC_ASSURANCE_JOB_NAME}" "${periodic_assurance_job_manifest}"
 
 run_release_gates

@@ -50,7 +50,8 @@ on every deployment.
 
 1. Capture the current latest-ready revision and its immutable image before any
    deployment mutation.
-2. Render and deploy SearXNG, the bot, and the existing finite jobs as today.
+2. Capture the current SearXNG revision and all five finite-job states, then
+   reconcile secrets/storage and deploy SearXNG, the bot, and the jobs.
 3. Verify the target bot revision, image, 100 percent latest traffic, internal
    ingress, target port, transport, and exact Dapr contract.
 4. Run one finite release-probe ACA Job in the same managed environment.
@@ -59,12 +60,17 @@ on every deployment.
    executions.
 6. Write the successful release report.
 
-An EXIT trap owns failure handling after the deployment mutation begins. It
+An EXIT trap owns failure handling after any production write begins. It
 copies the full recorded known-good revision with
-`az containerapp revision copy --from-revision`, waits until the restored
-revision is latest-ready with the recorded image, and then writes a failed
-report whose rollback status is either `restored` or `failed`. It never pushes
-or bypasses `main`.
+`az containerapp revision copy --from-revision` while overriding the image with
+the recorded OCI digest, copies the recorded SearXNG revision when SearXNG was
+mutated, restores or removes every mutated job according to the five-job
+snapshot, waits until the restored revisions are latest-ready with the recorded
+digests, and then writes a failed report whose rollback status is either
+`restored` or `failed`. Compatible secret and environment-storage
+reconciliation remains at its authoritative value; `restored` is emitted only
+when all release-owned traffic and finite workloads match the snapshot. It
+never pushes or bypasses `main`.
 
 Single revision mode remains enabled. Azure keeps traffic on the prior revision
 when a new revision cannot become ready; the explicit copy-based restoration

@@ -130,8 +130,6 @@ describe("production profile configuration deployment contract", () => {
     );
     const botRenderer = deployment.slice(botRendererStart, botApplyStart);
     const botDeploy = deployment.indexOf('--yaml "${bot_manifest}"', botApplyStart);
-    const healthVerification = deployment.indexOf('echo "Waiting for revision ${target_revision}');
-    const daprVerification = deployment.indexOf("Bot Dapr configuration changed unexpectedly");
     const refreshedSecretSnapshot = deployment.indexOf(
       'bot_secrets_json="$(az containerapp secret list',
       botDeploy
@@ -143,7 +141,7 @@ describe("production profile configuration deployment contract", () => {
     const renderJobs = deployment.indexOf('render_job_manifest \\\n  "${clamav_refresh');
     const refreshDeploy = deployment.indexOf('deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"');
     const refreshBootstrap = deployment.indexOf(
-      'start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"'
+      'start_release_job \\\n  "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"'
     );
     const scanDeploy = deployment.indexOf('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
     const catalogDeploy = deployment.indexOf('deploy_job "${CATALOG_SYNC_JOB_NAME}"');
@@ -153,8 +151,6 @@ describe("production profile configuration deployment contract", () => {
       botRendererStart,
       botApplyStart,
       botDeploy,
-      healthVerification,
-      daprVerification,
       refreshedSecretSnapshot,
       refreshedEnvSnapshot,
       renderJobs,
@@ -166,10 +162,8 @@ describe("production profile configuration deployment contract", () => {
       expect(position).toBeGreaterThanOrEqual(0);
     }
     expect(searxngDeploy).toBeLessThan(botDeploy);
-    expect(botDeploy).toBeLessThan(healthVerification);
-    expect(healthVerification).toBeLessThan(daprVerification);
-    expect(daprVerification).toBeLessThan(refreshedSecretSnapshot);
-    expect(daprVerification).toBeLessThan(refreshedEnvSnapshot);
+    expect(botDeploy).toBeLessThan(refreshedSecretSnapshot);
+    expect(botDeploy).toBeLessThan(refreshedEnvSnapshot);
     expect(refreshedSecretSnapshot).toBeLessThan(renderJobs);
     expect(refreshedEnvSnapshot).toBeLessThan(renderJobs);
     expect(renderJobs).toBeLessThan(refreshDeploy);
@@ -561,12 +555,9 @@ describe("production profile configuration deployment contract", () => {
     const deployment = readProjectFile("scripts/deploy-aca.sh");
     const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
 
-    expect(deployment).toContain(
-      ': "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"'
-    );
-    expect(deployment).toContain(
-      ': "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"'
-    );
+    expect(deployment).toContain("required_release_environment=(");
+    expect(deployment).toMatch(/required_release_environment=\([\s\S]*RELEASE_PROBE_JOB_NAME/);
+    expect(deployment).toMatch(/required_release_environment=\([\s\S]*PERIODIC_ASSURANCE_JOB_NAME/);
     expect(deployment).toContain("API_GATEWAY_CONTAINER_APP_NAME:=api-gateway");
     expect(deployment).toContain('bot_base_url="https://${bot_fqdn}"');
     expect(deployment).toContain(
@@ -608,7 +599,8 @@ describe("production profile configuration deployment contract", () => {
     );
     expect(releaseWorkflow).toContain("uses: actions/upload-artifact@v4");
     expect(releaseWorkflow).toContain("if: always()");
-    expect(releaseWorkflow).toContain("path: artifacts/release-assurance/**");
+    expect(releaseWorkflow).toContain("path: artifacts/release-assurance/report.json");
+    expect(releaseWorkflow).toContain("if-no-files-found: error");
     expect(releaseWorkflow).not.toContain("pnpm ");
     const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
     const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v4");
@@ -661,6 +653,7 @@ describe("production profile configuration deployment contract", () => {
     const snapshot = deployment.indexOf("capture_known_good_state");
     const exitTrap = deployment.indexOf("release_assurance_on_exit");
     const mutationMark = deployment.indexOf("mark_release_mutated");
+    const firstProductionWrite = deployment.indexOf("az containerapp secret set");
     const botApply = deployment.indexOf(
       'az containerapp update \\\n  --resource-group "${RESOURCE_GROUP}"',
       mutationMark
@@ -674,6 +667,7 @@ describe("production profile configuration deployment contract", () => {
       snapshot,
       exitTrap,
       mutationMark,
+      firstProductionWrite,
       botApply,
       gate,
       report,
@@ -684,21 +678,24 @@ describe("production profile configuration deployment contract", () => {
     expect(helperSource).toBeLessThan(exitTrap);
     expect(exitTrap).toBeLessThan(snapshot);
     expect(exitTrap).toBeLessThan(mutationMark);
-    expect(mutationMark).toBeLessThan(botApply);
+    expect(snapshot).toBeLessThan(mutationMark);
+    expect(mutationMark).toBeLessThan(firstProductionWrite);
+    expect(firstProductionWrite).toBeLessThan(botApply);
     expect(botApply).toBeLessThan(gate);
     expect(gate).toBeLessThan(report);
     expect(report).toBeLessThan(complete);
-    expect(deployment.slice(mutationMark, botApply)).not.toContain("az ");
     expect(deployment).toContain('RELEASE_TARGET_REVISION="${target_revision}"');
     expect(deployment).toContain('RELEASE_TARGET_IMAGE="${image_ref}"');
     expect(deployment).toContain('RELEASE_TARGET_SCAN_IMAGE="${scan_image_ref}"');
     expect(deployment).toContain(
-      'RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${clamav_bootstrap_execution_name}"'
+      'RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"'
     );
     for (const jobName of [
       "CLAMAV_SIGNATURE_REFRESH_JOB_NAME",
       "ATTACHMENT_SCAN_JOB_NAME",
-      "CATALOG_SYNC_JOB_NAME"
+      "CATALOG_SYNC_JOB_NAME",
+      "RELEASE_PROBE_JOB_NAME",
+      "PERIODIC_ASSURANCE_JOB_NAME"
     ]) {
       expect(deployment.indexOf(`mark_release_job_mutated "\${${jobName}}"`)).toBeLessThan(
         deployment.indexOf(`deploy_job "\${${jobName}}"`)
@@ -845,7 +842,7 @@ describe("production profile configuration deployment contract", () => {
     );
     const refreshDeploy = deployment.indexOf('deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"');
     const refreshBootstrap = deployment.indexOf(
-      'start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"'
+      'start_release_job \\\n  "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"'
     );
     const scanDeploy = deployment.indexOf('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
     expect(queueSecretDeploy).toBeGreaterThanOrEqual(0);

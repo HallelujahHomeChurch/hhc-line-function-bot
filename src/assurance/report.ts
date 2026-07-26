@@ -226,6 +226,7 @@ function checks(value: unknown, kind: AssuranceReportKind): AssuranceCheck[] {
     const code = checkCode(source.code);
     if ((status === "warning") !== (code === "signature_warning")) invalid();
     if (status === "passed" && code !== "none") invalid();
+    if (status === "failed" && code === "none") invalid();
     return { name, status, observedAt: isoTimestamp(source.observedAt), code };
   });
 }

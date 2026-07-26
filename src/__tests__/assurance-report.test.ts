@@ -218,6 +218,23 @@ describe("buildAssuranceReport", () => {
     expect(buildAssuranceReport(report)).not.toHaveProperty("providerRequests");
   });
 
+  it("rejects a failed check whose code says none", () => {
+    const report = validReleaseReport();
+    report.status = "failed";
+    report.failureCode = "http_mismatch";
+    report.target.status = "failed";
+    report.checks = [
+      {
+        name: "release_probe",
+        status: "failed",
+        observedAt: timestamp,
+        code: "none"
+      }
+    ];
+
+    expect(() => buildAssuranceReport(report)).toThrow("assurance_report_invalid");
+  });
+
   it.each([
     ["passed release", {}],
     [

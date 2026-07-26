@@ -13,6 +13,8 @@ const GOOD_BOT_DIGEST = `sha256:${"1".repeat(64)}`;
 const GOOD_CATALOG_DIGEST = `sha256:${"2".repeat(64)}`;
 const GOOD_SCAN_DIGEST = `sha256:${"3".repeat(64)}`;
 const GOOD_REFRESH_DIGEST = `sha256:${"4".repeat(64)}`;
+const GOOD_RELEASE_PROBE_DIGEST = `sha256:${"5".repeat(64)}`;
+const GOOD_PERIODIC_DIGEST = `sha256:${"6".repeat(64)}`;
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((entry) => rm(entry, { recursive: true })));
@@ -40,6 +42,17 @@ describe("release assurance shell transaction", () => {
       expect(calls.some((args) => args.includes("job") && args.includes("update"))).toBe(false);
     }
   );
+
+  it("writes an early report when required deployment environment is missing", async () => {
+    const fixture = await createDeployFixture("missing_environment");
+    const result = fixture.run();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status).not.toBe(0);
+    expect(report.status).toBe("failed");
+    expect(report.failureCode).toBe("network_failed");
+    expect(report.rollback).toEqual({ status: "not_required" });
+  });
 
   it("captures known-good state, runs live gates, and writes an allowlisted digest-only report", async () => {
     const fixture = await createFixture("success");
@@ -91,6 +104,37 @@ describe("release assurance shell transaction", () => {
     expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
     expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
     expectForbiddenCallsAbsent(calls);
+  });
+
+  it("resolves a pre-R5 tagged known-good image to its actual OCI digest before rollback", async () => {
+    const fixture = await createFixture("known_good_tag");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    expect(report.knownGood.image).toBe(GOOD_BOT_DIGEST);
+    expect(calls).toContainEqual(
+      expect.arrayContaining([
+        "acr",
+        "manifest",
+        "show-metadata",
+        "--name",
+        "alive/hhc-line-function-bot:main-legacy",
+        "--query",
+        "digest"
+      ])
+    );
+    expect(calls).toContainEqual(
+      expect.arrayContaining([
+        "revision",
+        "copy",
+        "--from-revision",
+        "bot--known-good",
+        "--image",
+        `registry.example/alive/hhc-line-function-bot@${GOOD_BOT_DIGEST}`
+      ])
+    );
   });
 
   it("preserves a pre-mutation failure without attempting rollback", async () => {
@@ -241,7 +285,66 @@ describe("release assurance shell transaction", () => {
         `registry.example/fixture-secret/refresh@${GOOD_REFRESH_DIGEST}`
       ])
     );
+    expect(calls).toContainEqual(
+      expect.arrayContaining([
+        "job",
+        "update",
+        "--name",
+        "hhc-line-bot-release-probe",
+        "--image",
+        `registry.example/fixture-secret/release@${GOOD_RELEASE_PROBE_DIGEST}`
+      ])
+    );
+    expect(calls).toContainEqual(
+      expect.arrayContaining([
+        "job",
+        "update",
+        "--name",
+        "hhc-line-bot-periodic-assurance",
+        "--image",
+        `registry.example/fixture-secret/periodic@${GOOD_PERIODIC_DIGEST}`
+      ])
+    );
     expectForbiddenCallsAbsent(calls);
+  });
+
+  it.each([
+    ["release_probe_warning", "warning", "signature_warning"],
+    ["release_probe_child_failure", "failed", "bot_health_failed"]
+  ])("records actual release probe child checks for %s", async (scenario, status, failureCode) => {
+    const fixture = await createFixture(scenario);
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+    const signature = report.checks.find((check) => check.name === "clamav_signature");
+
+    expect(result.status, diagnostic(result, calls)).toBe(
+      scenario === "release_probe_warning" ? 0 : 42
+    );
+    expect(report.failureCode).toBe(scenario === "release_probe_warning" ? "none" : failureCode);
+    expect(signature).toMatchObject({
+      status: scenario === "release_probe_warning" ? status : "passed",
+      code: scenario === "release_probe_warning" ? failureCode : "none"
+    });
+    expect(calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")).toBe(
+      true
+    );
+  });
+
+  it.each([
+    "release_probe_logs_missing",
+    "release_probe_logs_malformed",
+    "release_probe_logs_multiple"
+  ])("fails closed when %s", async (scenario) => {
+    const fixture = await createFixture(scenario);
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    expect(report.status).toBe("failed");
+    expect(report.failureCode).toBe("malformed_json");
+    expect(report.checks.some((check) => check.name === "bot_health")).toBe(false);
   });
 
   it.each(["rollback_copy_failure", "rollback_image_mismatch"])(
@@ -267,6 +370,43 @@ describe("release assurance shell transaction", () => {
       expectForbiddenCallsAbsent(calls);
     }
   );
+
+  it("restores the snapshotted SearXNG revision before reporting rollback restored", async () => {
+    const fixture = await createFixture("searxng_restore");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    expect(report.rollback.status).toBe("restored");
+    expect(calls).toContainEqual(
+      expect.arrayContaining([
+        "revision",
+        "copy",
+        "--name",
+        "fixture-searxng",
+        "--from-revision",
+        "searx--ready",
+        "--image",
+        `docker.io/searxng/searxng@sha256:${"5".repeat(64)}`
+      ])
+    );
+  });
+
+  it("removes assurance jobs that did not exist in the known-good snapshot", async () => {
+    const fixture = await createFixture("absent_assurance_jobs");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    expect(report.rollback.status).toBe("restored");
+    for (const jobName of ["hhc-line-bot-release-probe", "hhc-line-bot-periodic-assurance"]) {
+      expect(calls).toContainEqual(
+        expect.arrayContaining(["job", "delete", "--name", jobName, "--yes"])
+      );
+    }
+  });
 
   it.each(["write", "fsync", "replace"])(
     "does not mark a report durable when its %s step fails",
@@ -355,7 +495,7 @@ exit 61
     driverPath,
     `#!/usr/bin/env bash
 export PATH="${toBashPath(binDirectory)}:\${PATH}"
-export ACR_NAME="fixture-acr"
+${scenario === "missing_environment" ? "" : 'export ACR_NAME="fixture-acr"'}
 export ACR_LOGIN_SERVER="fixture.invalid"
 export IMAGE_REPOSITORY="fixture/bot"
 export SCAN_IMAGE_REPOSITORY="fixture/scan"
@@ -463,6 +603,8 @@ export FAKE_AZ_STATE="${toBashPath(stateDirectory)}"
 export FAKE_SCENARIO="${scenario}"
 export FAKE_REPORT_IO_FAILURE="${scenario.startsWith("report_") ? scenario.slice(7, -8) : ""}"
 export RESOURCE_GROUP="fixture-resource-group"
+export ACR_NAME="fixture-acr"
+export ACR_LOGIN_SERVER="registry.example"
 export CONTAINER_APP_NAME="fixture-bot"
 export SEARXNG_CONTAINER_APP_NAME="fixture-searxng"
 export CATALOG_SYNC_JOB_NAME="hhc-line-bot-catalog-sync"
@@ -515,9 +657,14 @@ if [[ "\${FAKE_SCENARIO}" == "pre_mutation_failure" ]] \
   exit 23
 fi
 mark_release_mutated
+if [[ "\${FAKE_SCENARIO}" == "searxng_restore" ]]; then
+  mark_release_searxng_mutated
+fi
 mark_release_job_mutated "hhc-line-bot-clamav-refresh"
 mark_release_job_mutated "hhc-line-bot-attachment-scan"
 mark_release_job_mutated "hhc-line-bot-catalog-sync"
+mark_release_job_mutated "hhc-line-bot-release-probe"
+mark_release_job_mutated "hhc-line-bot-periodic-assurance"
 RELEASE_TARGET_REVISION="bot--target"
 RELEASE_TARGET_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 RELEASE_TARGET_SCAN_IMAGE="registry.example/fixture-secret/scan@sha256:${"8".repeat(64)}"
@@ -598,7 +745,9 @@ const query = value("--query");
 const oldImages = {
   "hhc-line-bot-catalog-sync": "registry.example/fixture-secret/catalog@${GOOD_CATALOG_DIGEST}",
   "hhc-line-bot-attachment-scan": "registry.example/fixture-secret/scan@${GOOD_SCAN_DIGEST}",
-  "hhc-line-bot-clamav-refresh": "registry.example/fixture-secret/refresh@${GOOD_REFRESH_DIGEST}"
+  "hhc-line-bot-clamav-refresh": "registry.example/fixture-secret/refresh@${GOOD_REFRESH_DIGEST}",
+  "hhc-line-bot-release-probe": "registry.example/fixture-secret/release@${GOOD_RELEASE_PROBE_DIGEST}",
+  "hhc-line-bot-periodic-assurance": "registry.example/fixture-secret/periodic@${GOOD_PERIODIC_DIGEST}"
 };
 const targetImages = {
   "hhc-line-bot-catalog-sync": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
@@ -647,8 +796,17 @@ if (command("containerapp", "show") && name === "fixture-bot") {
 if (command("containerapp", "revision", "show")) {
   if (query !== "properties.template.containers[0].image") process.exit(92);
   const revision = value("--revision");
-  if (revision === "bot--known-good") {
-    output("registry.example/fixture-secret/bot@${GOOD_BOT_DIGEST}");
+  if (
+    name === "fixture-searxng" &&
+    (revision === "searx--ready" || revision === "searx--rollback")
+  ) {
+    output("docker.io/searxng/searxng@sha256:${"5".repeat(64)}");
+  } else if (revision === "bot--known-good") {
+    output(
+      scenario === "known_good_tag"
+        ? "registry.example/alive/hhc-line-function-bot:main-legacy"
+        : "registry.example/fixture-secret/bot@${GOOD_BOT_DIGEST}"
+    );
   } else if (revision === "bot--target") {
     output(
       scenario === "target_image_mismatch"
@@ -665,7 +823,29 @@ if (command("containerapp", "revision", "show")) {
   process.exit(0);
 }
 
+if (command("acr", "manifest", "show-metadata")) {
+  if (
+    value("--registry") !== "fixture-acr" ||
+    value("--name") !== "alive/hhc-line-function-bot:main-legacy" ||
+    query !== "digest"
+  ) process.exit(101);
+  output("${GOOD_BOT_DIGEST}");
+  process.exit(0);
+}
+
 if (command("containerapp", "show") && name === "fixture-searxng") {
+  if (query === "properties.latestReadyRevisionName") {
+    output("searx--ready");
+    process.exit(0);
+  }
+  if (query === "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus}") {
+    output({
+      latestRevision: "searx--rollback",
+      latestReadyRevision: "searx--rollback",
+      runningStatus: "Running"
+    });
+    process.exit(0);
+  }
   if (query !== "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,image:properties.template.containers[0].image}") process.exit(94);
   output({
     latestRevision: "searx--ready",
@@ -696,6 +876,11 @@ if (command("containerapp", "job", "show")) {
     const restored = existsSync(path.join(state, "restored-" + name));
     if (!existsSync(snapshot)) {
       writeFileSync(snapshot, "1");
+      if (
+        scenario === "absent_assurance_jobs" &&
+        (name === "hhc-line-bot-release-probe" ||
+          name === "hhc-line-bot-periodic-assurance")
+      ) process.exit(44);
       const emptySnapshot =
         (scenario === "empty_catalog_snapshot" && name === "hhc-line-bot-catalog-sync") ||
         (scenario === "empty_scan_snapshot" && name === "hhc-line-bot-attachment-scan") ||
@@ -876,10 +1061,39 @@ if (command("containerapp", "job", "start")) {
   process.exit(0);
 }
 
+if (command("containerapp", "job", "logs", "show")) {
+  if (name !== "hhc-line-bot-release-probe") process.exit(102);
+  const checks = [
+    { name: "bot_health", status: scenario === "release_probe_child_failure" ? "failed" : "passed", code: scenario === "release_probe_child_failure" ? "http_mismatch" : "none" },
+    { name: "bot_readiness", status: "passed", code: "none" },
+    { name: "searxng_root", status: "passed", code: "none" },
+    { name: "gateway_empty_webhook", status: "passed", code: "none" },
+    { name: "clamav_signature", status: scenario === "release_probe_warning" ? "warning" : "passed", code: scenario === "release_probe_warning" ? "signature_warning" : "none", ...(scenario === "release_probe_warning" ? { signatureHealth: "warning" } : { signatureHealth: "current" }) }
+  ];
+  const payload = {
+    status: scenario === "release_probe_child_failure" ? "failed" : "passed",
+    checks
+  };
+  if (scenario === "release_probe_logs_missing") output([]);
+  else if (scenario === "release_probe_logs_malformed") output([{ Log: "{bad" }]);
+  else if (scenario === "release_probe_logs_multiple") {
+    output([{ Log: JSON.stringify(payload) }, { Log: JSON.stringify(payload) }]);
+  } else output([{ Log: JSON.stringify(payload) }]);
+  process.exit(0);
+}
+
 if (command("containerapp", "job", "execution", "show")) {
   const execution = value("--job-execution-name");
   if (name === "hhc-line-bot-release-probe" && execution === "probe-exec-current") {
-    output(scenario === "release_probe_failure" ? "Failed" : "Succeeded");
+    output(
+      scenario === "release_probe_failure" ||
+      scenario === "release_probe_child_failure" ||
+      scenario === "known_good_tag" ||
+      scenario === "searxng_restore" ||
+      scenario === "absent_assurance_jobs"
+        ? "Failed"
+        : "Succeeded"
+    );
   } else if (name === "hhc-line-bot-clamav-refresh" && execution === "refresh-exec-current") {
     output("Succeeded");
   } else process.exit(97);
@@ -900,6 +1114,10 @@ if (command("containerapp", "job", "execution", "list")) {
 }
 
 if (command("containerapp", "revision", "copy")) {
+  if (name === "fixture-searxng") {
+    output("searx--rollback");
+    process.exit(0);
+  }
   if (scenario === "rollback_copy_failure") process.exit(73);
   writeFileSync(path.join(state, "rollback"), "1");
   output("bot--rollback");
@@ -909,6 +1127,14 @@ if (command("containerapp", "revision", "copy")) {
 if (command("containerapp", "job", "update")) {
   if (!args.includes("--image") || !oldImages[name]) process.exit(99);
   writeFileSync(path.join(state, "restored-" + name), "1");
+  process.exit(0);
+}
+
+if (command("containerapp", "job", "delete")) {
+  if (
+    scenario !== "absent_assurance_jobs" ||
+    !["hhc-line-bot-release-probe", "hhc-line-bot-periodic-assurance"].includes(name)
+  ) process.exit(103);
   process.exit(0);
 }
 
