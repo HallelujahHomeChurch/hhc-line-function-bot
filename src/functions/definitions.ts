@@ -472,7 +472,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
   {
     name: "find_resource",
     displayName: "查教會資料",
-    shortDescription: "搜尋已同步的小哈資料庫或其他泛用教會資料。",
+    shortDescription: "搜尋目前可用的泛用教會資料。",
     examples: ["小哈 查教會資料 週報音檔", "小哈 找 2026-07 週報音檔"],
     requires: ["graph"],
     scope: "group_capable",
@@ -536,7 +536,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
       label: "查教會資料",
       command: "小哈 查教會資料"
     },
-    helpText: "查詢小哈資料庫或其他已授權的泛用教會資料。"
+    helpText: "查詢目前可用的泛用教會資料。"
   },
   {
     name: "query_wikipedia",
