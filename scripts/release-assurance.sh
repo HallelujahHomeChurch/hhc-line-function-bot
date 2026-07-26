@@ -91,14 +91,23 @@ capture_known_good_state() {
     set_release_failure known_good_snapshot_failed
     return 1
   fi
-  if RELEASE_KNOWN_GOOD_SEARXNG_REVISION="$(
-    az containerapp show \
-      --resource-group "${RESOURCE_GROUP}" \
-      --name "${SEARXNG_CONTAINER_APP_NAME}" \
-      --query properties.latestReadyRevisionName \
-      --output tsv \
-      --only-show-errors 2>/dev/null
-  )"; then
+  local searxng_exists
+  if ! searxng_exists="$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")"; then
+    set_release_failure known_good_snapshot_failed
+    return 1
+  fi
+  if [[ "${searxng_exists}" == "true" ]]; then
+    if ! RELEASE_KNOWN_GOOD_SEARXNG_REVISION="$(
+      az containerapp show \
+        --resource-group "${RESOURCE_GROUP}" \
+        --name "${SEARXNG_CONTAINER_APP_NAME}" \
+        --query properties.latestReadyRevisionName \
+        --output tsv \
+        --only-show-errors
+    )"; then
+      set_release_failure known_good_snapshot_failed
+      return 1
+    fi
     if [[ -z "${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" ]]; then
       set_release_failure known_good_snapshot_failed
       return 1
@@ -159,8 +168,17 @@ resolve_release_image() {
 capture_release_job_snapshot() {
   local key="$1"
   local job_name="$2"
+  local exists
   local image
-  if image="$(release_job_image "${job_name}" 2>/dev/null)"; then
+  local manifest_json
+  local manifest_path
+  if ! exists="$(release_job_exists "${job_name}")"; then
+    return 1
+  fi
+  if [[ "${exists}" == "true" ]]; then
+    if ! image="$(release_job_image "${job_name}")"; then
+      return 1
+    fi
     if [[ -z "${image}" ]]; then
       return 1
     fi
@@ -168,11 +186,51 @@ capture_release_job_snapshot() {
     if ! image="$(resolve_release_image "${image}")"; then
       return 1
     fi
+    if ! manifest_json="$(release_job_manifest_json "${job_name}")"; then
+      return 1
+    fi
+    manifest_path="$(mktemp)"
+    RELEASE_CLEANUP_FILES+=("${manifest_path}")
+    if ! normalize_release_job_manifest "${manifest_json}" "${image}" "${manifest_path}"; then
+      return 1
+    fi
     printf -v "RELEASE_KNOWN_GOOD_${key}_IMAGE" '%s' "${image}"
+    printf -v "RELEASE_KNOWN_GOOD_${key}_MANIFEST" '%s' "${manifest_path}"
   else
     printf -v "RELEASE_KNOWN_GOOD_${key}_EXISTS" '%s' false
     printf -v "RELEASE_KNOWN_GOOD_${key}_IMAGE" '%s' ""
+    printf -v "RELEASE_KNOWN_GOOD_${key}_MANIFEST" '%s' ""
   fi
+}
+
+release_containerapp_exists() {
+  local app_name="$1"
+  local observed
+  if ! observed="$(
+    az containerapp list \
+      --resource-group "${RESOURCE_GROUP}" \
+      --query "[?name=='${app_name}'].name | [0]" \
+      --output tsv \
+      --only-show-errors
+  )"; then
+    return 1
+  fi
+  [[ -n "${observed}" ]] && printf 'true\n' || printf 'false\n'
+}
+
+release_job_exists() {
+  local job_name="$1"
+  local observed
+  if ! observed="$(
+    az containerapp job list \
+      --resource-group "${RESOURCE_GROUP}" \
+      --query "[?name=='${job_name}'].name | [0]" \
+      --output tsv \
+      --only-show-errors
+  )"; then
+    return 1
+  fi
+  [[ -n "${observed}" ]] && printf 'true\n' || printf 'false\n'
 }
 
 release_job_image() {
@@ -183,6 +241,55 @@ release_job_image() {
     --query "properties.template.containers[0].image" \
     --output tsv \
     --only-show-errors
+}
+
+release_job_manifest_json() {
+  local job_name="$1"
+  az containerapp job show \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${job_name}" \
+    --query "{name:name,type:type,location:location,identity:{type:identity.type,userAssignedIdentities:identity.userAssignedIdentities},properties:{environmentId:properties.environmentId,configuration:{registries:properties.configuration.registries,triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,scheduleTriggerConfig:properties.configuration.scheduleTriggerConfig,eventTriggerConfig:properties.configuration.eventTriggerConfig,manualTriggerConfig:properties.configuration.manualTriggerConfig},template:properties.template}}" \
+    --output json \
+    --only-show-errors
+}
+
+normalize_release_job_manifest() {
+  local manifest_json="$1"
+  local image="$2"
+  local destination="$3"
+  RELEASE_JOB_MANIFEST_JSON="${manifest_json}" \
+  RELEASE_JOB_MANIFEST_IMAGE="${image}" \
+  RELEASE_JOB_MANIFEST_DESTINATION="${destination}" \
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+value = json.loads(os.environ["RELEASE_JOB_MANIFEST_JSON"])
+if not isinstance(value, dict):
+    raise SystemExit(1)
+properties = value.get("properties")
+template = properties.get("template") if isinstance(properties, dict) else None
+containers = template.get("containers") if isinstance(template, dict) else None
+if not isinstance(containers, list) or len(containers) != 1 or not isinstance(containers[0], dict):
+    raise SystemExit(1)
+containers[0]["image"] = os.environ["RELEASE_JOB_MANIFEST_IMAGE"]
+identity = value.get("identity")
+if isinstance(identity, dict):
+    normalized_identity = {}
+    if identity.get("type") is not None:
+        normalized_identity["type"] = identity["type"]
+    user_assigned = identity.get("userAssignedIdentities")
+    if isinstance(user_assigned, dict):
+        normalized_identity["userAssignedIdentities"] = {
+            resource_id: {} for resource_id in user_assigned
+        }
+    value["identity"] = normalized_identity
+Path(os.environ["RELEASE_JOB_MANIFEST_DESTINATION"]).write_text(
+    json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
 }
 
 mark_release_mutated() {
@@ -931,6 +1038,16 @@ valid = (
     state.get("latestRevision") == revision
     and state.get("latestReadyRevision") == revision
     and state.get("runningStatus") == "Running"
+    and state.get("traffic") == [{"revisionName": revision, "weight": 100}]
+    and state.get("external") is False
+    and state.get("targetPort") == 3000
+    and state.get("transport") == "auto"
+    and state.get("dapr") == {
+        "enabled": True,
+        "appId": "hhc-line-function-bot",
+        "appPort": 3000,
+        "appProtocol": "http",
+    }
     and os.environ["RELEASE_ROLLBACK_IMAGE_CANDIDATE"]
     == os.environ["RELEASE_EXPECTED_ROLLBACK_IMAGE"]
 )
@@ -959,6 +1076,7 @@ PY
       "${CATALOG_SYNC_JOB_NAME}" \
       "${RELEASE_KNOWN_GOOD_CATALOG_EXISTS}" \
       "${RELEASE_KNOWN_GOOD_CATALOG_IMAGE}" \
+      "${RELEASE_KNOWN_GOOD_CATALOG_MANIFEST}" \
       || rollback_ok=false
   fi
   if [[ "${RELEASE_SCAN_JOB_MUTATED}" == "true" ]]; then
@@ -966,6 +1084,7 @@ PY
       "${ATTACHMENT_SCAN_JOB_NAME}" \
       "${RELEASE_KNOWN_GOOD_SCAN_EXISTS}" \
       "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" \
+      "${RELEASE_KNOWN_GOOD_SCAN_MANIFEST}" \
       || rollback_ok=false
   fi
   if [[ "${RELEASE_REFRESH_JOB_MUTATED}" == "true" ]]; then
@@ -973,6 +1092,7 @@ PY
       "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
       "${RELEASE_KNOWN_GOOD_REFRESH_EXISTS}" \
       "${RELEASE_KNOWN_GOOD_REFRESH_IMAGE}" \
+      "${RELEASE_KNOWN_GOOD_REFRESH_MANIFEST}" \
       || rollback_ok=false
   fi
   if [[ "${RELEASE_PROBE_JOB_MUTATED}" == "true" ]]; then
@@ -980,6 +1100,7 @@ PY
       "${RELEASE_PROBE_JOB_NAME}" \
       "${RELEASE_KNOWN_GOOD_PROBE_EXISTS}" \
       "${RELEASE_KNOWN_GOOD_PROBE_IMAGE}" \
+      "${RELEASE_KNOWN_GOOD_PROBE_MANIFEST}" \
       || rollback_ok=false
   fi
   if [[ "${RELEASE_PERIODIC_JOB_MUTATED}" == "true" ]]; then
@@ -987,6 +1108,7 @@ PY
       "${PERIODIC_ASSURANCE_JOB_NAME}" \
       "${RELEASE_KNOWN_GOOD_PERIODIC_EXISTS}" \
       "${RELEASE_KNOWN_GOOD_PERIODIC_IMAGE}" \
+      "${RELEASE_KNOWN_GOOD_PERIODIC_MANIFEST}" \
       || rollback_ok=false
   fi
 
@@ -1008,7 +1130,8 @@ restore_known_good_searxng() {
       --name "${SEARXNG_CONTAINER_APP_NAME}" \
       --yes \
       --only-show-errors \
-      --output none
+      --output none || return
+    [[ "$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")" == "false" ]]
     return
   fi
   if ! rollback_revision="$(
@@ -1028,7 +1151,7 @@ restore_known_good_searxng() {
       az containerapp show \
         --resource-group "${RESOURCE_GROUP}" \
         --name "${SEARXNG_CONTAINER_APP_NAME}" \
-        --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus}" \
+        --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory}" \
         --output json \
         --only-show-errors
     )" && image="$(
@@ -1053,6 +1176,14 @@ valid = (
     state.get("latestRevision") == revision
     and state.get("latestReadyRevision") == revision
     and state.get("runningStatus") == "Running"
+    and state.get("traffic") == [{"revisionName": revision, "weight": 100}]
+    and state.get("external") is False
+    and state.get("targetPort") == 8080
+    and state.get("transport") == "http"
+    and state.get("minReplicas") == 1
+    and state.get("maxReplicas") == 1
+    and state.get("cpu") == 0.25
+    and state.get("memory") == "0.5Gi"
     and os.environ["RELEASE_SEARXNG_ROLLBACK_IMAGE"]
     == os.environ["RELEASE_SEARXNG_EXPECTED_IMAGE"]
 )
@@ -1072,31 +1203,30 @@ restore_changed_job() {
   local job_name="$1"
   local existed="$2"
   local known_image="$3"
-  local current_image
-  local restored_image
+  local known_manifest="$4"
+  local observed_json
+  local observed_manifest
   if [[ "${existed}" == "false" ]]; then
     az containerapp job delete \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${job_name}" \
       --yes \
       --only-show-errors \
-      --output none
+      --output none || return
+    [[ "$(release_job_exists "${job_name}")" == "false" ]]
     return
-  fi
-  if ! current_image="$(release_job_image "${job_name}")"; then
-    return 1
-  fi
-  if [[ "${current_image}" == "${known_image}" ]]; then
-    return 0
   fi
   az containerapp job update \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${job_name}" \
-    --image "${known_image}" \
+    --yaml "${known_manifest}" \
     --only-show-errors \
     --output none || return
-  restored_image="$(release_job_image "${job_name}")" || return
-  [[ "${restored_image}" == "${known_image}" ]]
+  observed_json="$(release_job_manifest_json "${job_name}")" || return
+  observed_manifest="$(mktemp)"
+  RELEASE_CLEANUP_FILES+=("${observed_manifest}")
+  normalize_release_job_manifest "${observed_json}" "${known_image}" "${observed_manifest}" || return
+  cmp -s -- "${known_manifest}" "${observed_manifest}"
 }
 
 write_release_report() {
