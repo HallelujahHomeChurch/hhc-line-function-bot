@@ -616,6 +616,33 @@ describe("production profile configuration deployment contract", () => {
     expect(upload).toBeGreaterThan(deploy);
   });
 
+  it("schedules weekly periodic assurance with OIDC and always uploads its fixed report", () => {
+    expect(projectFileExists(".github/workflows/periodic-assurance.yml")).toBe(true);
+    const workflow = readProjectFile(".github/workflows/periodic-assurance.yml");
+
+    expect(workflow).toContain('cron: "30 20 * * 1"');
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain("permissions:\n  contents: read\n  id-token: write");
+    expect(workflow).toContain("uses: azure/login@v2");
+    expect(workflow).toContain("client-id: ${{ vars.AZURE_CLIENT_ID }}");
+    expect(workflow).toContain("tenant-id: ${{ vars.AZURE_TENANT_ID }}");
+    expect(workflow).toContain("subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}");
+    expect(workflow).not.toMatch(/\$\{\{\s*secrets\./);
+    expect(workflow).toContain("bash scripts/run-periodic-assurance.sh");
+    expect(workflow).toContain(
+      "PERIODIC_REPORT_PATH: artifacts/release-assurance/periodic-report.json"
+    );
+    expect(workflow).toContain("uses: actions/upload-artifact@v4");
+    expect(workflow).toContain("if: always()");
+    expect(workflow).toContain("path: artifacts/release-assurance/periodic-report.json");
+    expect(workflow).not.toMatch(/containerapp (?:update|revision|ingress)/);
+    expect(workflow).not.toMatch(/deepseek|embedding|eval:agent:live/iu);
+    const runner = workflow.indexOf("bash scripts/run-periodic-assurance.sh");
+    const upload = workflow.indexOf("uses: actions/upload-artifact@v4");
+    expect(runner).toBeGreaterThanOrEqual(0);
+    expect(upload).toBeGreaterThan(runner);
+  });
+
   it("wraps every bot and dependent-job mutation in the recoverable release transaction", () => {
     const deployment = readProjectFile("scripts/deploy-aca.sh");
     const helper = readProjectFile("scripts/release-assurance.sh");
