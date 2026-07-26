@@ -197,6 +197,32 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
       return graphItemToDriveItem(item, driveId);
     },
 
+    async ensureFolder(driveId: string, parentItemId: string, name: string): Promise<DriveItem> {
+      try {
+        const item = (await client.api(`/drives/${driveId}/items/${parentItemId}/children`).post({
+          name,
+          folder: {},
+          "@microsoft.graph.conflictBehavior": "fail"
+        })) as GraphItem;
+        if (!item.id || !item.name || !item.folder) {
+          throw new Error("graph_ensure_folder_missing_item");
+        }
+        return graphItemToDriveItem(item, driveId);
+      } catch (error) {
+        if (graphStatusCode(error) !== 409) throw error;
+        const encodedName = encodeURIComponent(name);
+        const item = (await client
+          .api(
+            `/drives/${driveId}/items/${parentItemId}:/${encodedName}?$select=id,name,webUrl,folder,parentReference`
+          )
+          .get()) as GraphItem;
+        if (!item.id || !item.name || !item.folder) {
+          throw new Error("graph_ensure_folder_conflict_invalid");
+        }
+        return graphItemToDriveItem(item, driveId);
+      }
+    },
+
     async deleteItem(driveId: string, itemId: string): Promise<void> {
       await client.api(`/drives/${driveId}/items/${itemId}`).delete();
     }
