@@ -218,11 +218,12 @@ git commit -m "feat: enforce warning-only ClamAV age policy"
 Extend `src/__tests__/attachment-scan-job.test.ts` to require:
 
 ```ts
-{
+// prettier-ignore
+const expectedEnvironment = {
   signaturePolicy: {
-    warningAgeMs: 168 * 60 * 60 * 1000;
-  }
-}
+    warningAgeMs: 168 * 60 * 60 * 1000,
+  },
+};
 ```
 
 Test the default and an explicit `CLAMAV_SIGNATURE_WARNING_AGE_HOURS` value.
