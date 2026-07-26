@@ -4,7 +4,7 @@
 
 **Goal:** Make the checked-in ACA manifests the production runtime contract, align ClamAV signature freshness with the approved weekly operating model, and prove the corrected contract through deterministic tests, Kernel acceptance, CI, and one production release.
 
-**Architecture:** Keep the existing modular monolith and finite ACA Job design. Add one pure ClamAV signature-policy module used by the worker and its job entrypoint. The scan Job manifest supplies the approved 7-day warning and 8-day fail-closed thresholds. `aca.containerapp.yaml` owns bot Dapr, ingress, probes, scale, resources, mounts, and environment-variable structure; `scripts/deploy-aca.sh` owns environment-specific values, secret-reference names, secret values, image selection, rendering, application order, and rollout verification.
+**Architecture:** Keep the existing modular monolith and finite ACA Job design. Add one pure ClamAV signature-policy module used by the worker and its job entrypoint. The scan Job manifest supplies the approved 7-day warning threshold, while the worker continues using the last successfully promoted immutable signature set regardless of age. `aca.containerapp.yaml` owns bot Dapr, ingress, probes, scale, resources, mounts, and environment-variable structure; `scripts/deploy-aca.sh` owns environment-specific values, secret-reference names, secret values, image selection, rendering, application order, and rollout verification.
 
 **Tech Stack:** TypeScript, Vitest, Fastify service image, Azure Container Apps and Jobs YAML, Bash, Azure CLI, GitHub Actions, Kernel v1 deterministic acceptance corpus.
 
@@ -14,7 +14,7 @@
 - Use TDD for every behavior or deployment-contract change: write the failing assertion, run it and observe the intended failure, make the smallest implementation change, then rerun it.
 - Do not add a YAML parsing dependency. The existing manifest contract tests intentionally inspect stable checked-in text and deployment-script ordering.
 - Do not expose secret values in source, rendered manifests, tests, logs, commits, pull requests, or command output.
-- Keep ClamAV refresh weekly at `10 19 * * 0` UTC, warn after 7 days, and fail closed only after 8 days.
+- Keep ClamAV refresh weekly at `10 19 * * 0` UTC and warn after 7 days. Signature age alone must never block publication.
 - Keep the finite scanner at `2 CPU / 4 GiB`, without ingress, with one execution at a time and a read-only signature mount.
 - Keep secret creation, secret-reference mapping, and secret-value rotation in `scripts/deploy-aca.sh`; the checked-in bot manifest contains active secret-reference placeholders but no `configuration.secrets` values.
 - Preserve the deployment safety order: provision secrets, deploy SearXNG, deploy bot, verify bot, deploy refresh Job, bootstrap and await a successful refresh, then enable/update the scan Job.
@@ -31,28 +31,31 @@
 - Modify: `src/attachments/scan-worker.ts`
 - Modify: `src/__tests__/clamav-signature-refresh.test.ts`
 
-- [ ] **Step 1: Add failing boundary tests for current, warning, stale, malformed, and future manifests**
+- [ ] **Step 1: Add failing boundary tests for current, warning, aged, malformed, and future manifests**
 
 In `src/__tests__/clamav-signature-refresh.test.ts`, replace the old “over-72-hour” table with direct tests for a new pure classifier:
 
 ```ts
 import {
-  CLAMAV_SIGNATURE_MAX_AGE_MS,
   CLAMAV_SIGNATURE_WARNING_AGE_MS,
-  classifyClamAvSignatureManifest
+  assessClamAvSignatureManifest
 } from "../attachments/clamav-signature-policy.js";
 ```
 
 Cover these exact boundaries at a fixed `now`:
 
 ```ts
-expect(classify(validAt(now), now)).toBe("current");
-expect(classify(validAt(nowMinus(CLAMAV_SIGNATURE_WARNING_AGE_MS)), now)).toBe("warning");
-expect(classify(validAt(nowMinus(CLAMAV_SIGNATURE_MAX_AGE_MS)), now)).toBe("warning");
-expect(classify(validAt(nowMinus(CLAMAV_SIGNATURE_MAX_AGE_MS + 1)), now)).toBe("stale");
-expect(classify(undefined, now)).toBe("stale");
-expect(classify({ version: 2 }, now)).toBe("stale");
-expect(classify(validAt(nowPlus(1)), now)).toBe("stale");
+expect(assess(validAt(now), now)).toMatchObject({ status: "usable", health: "current" });
+expect(
+  assess(validAt(nowMinus(CLAMAV_SIGNATURE_WARNING_AGE_MS)), now)
+).toMatchObject({ status: "usable", health: "warning" });
+expect(assess(validAt(nowMinus(30 * 24 * 60 * 60 * 1000)), now)).toMatchObject({
+  status: "usable",
+  health: "warning"
+});
+expect(assess(undefined, now)).toEqual({ status: "invalid" });
+expect(assess({ version: 2 }, now)).toEqual({ status: "invalid" });
+expect(assess(validAt(nowPlus(1)), now)).toEqual({ status: "invalid" });
 ```
 
 Retain validation of the optional immutable `sets/<signatureVersion>` database directory.
@@ -73,7 +76,6 @@ Create `src/attachments/clamav-signature-policy.ts` with these public types and 
 
 ```ts
 export const CLAMAV_SIGNATURE_WARNING_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-export const CLAMAV_SIGNATURE_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000;
 
 export interface ClamAvSignatureManifest {
   version: 1;
@@ -82,29 +84,35 @@ export interface ClamAvSignatureManifest {
   databaseDirectory?: string;
 }
 
-export interface ClamAvSignatureAgePolicy {
+export interface ClamAvSignaturePolicy {
   warningAgeMs: number;
-  maxAgeMs: number;
 }
 
-export type ClamAvSignatureHealth = "current" | "warning" | "stale";
+export type ClamAvSignatureHealth = "current" | "warning";
 
-export function classifyClamAvSignatureManifest(
+export type ClamAvSignatureAssessment =
+  | {
+      status: "usable";
+      health: ClamAvSignatureHealth;
+      manifest: ClamAvSignatureManifest;
+    }
+  | { status: "invalid" };
+
+export function assessClamAvSignatureManifest(
   value: unknown,
   now: Date,
-  policy?: ClamAvSignatureAgePolicy
-): ClamAvSignatureHealth;
+  policy?: ClamAvSignaturePolicy
+): ClamAvSignatureAssessment;
 ```
 
-The classifier must:
+The assessment must:
 
-- return `stale` for missing/malformed manifests, invalid timestamps, future timestamps, invalid signature versions, or invalid database-directory references;
-- return `current` when age is strictly below `warningAgeMs`;
-- return `warning` from `warningAgeMs` through `maxAgeMs`, inclusive;
-- return `stale` only when age exceeds `maxAgeMs`;
-- reject invalid policy input where thresholds are non-positive or `warningAgeMs >= maxAgeMs`.
+- return `invalid` for missing/malformed manifests, invalid timestamps, future timestamps, invalid signature versions, or invalid database-directory references;
+- return usable `current` when age is strictly below `warningAgeMs`;
+- return usable `warning` at and after `warningAgeMs`, with no age-based rejection ceiling;
+- reject invalid policy input where `warningAgeMs` is non-positive.
 
-Move `ClamAvSignatureManifest` out of `scan-worker.ts`. Re-export `isCurrentClamAvSignatureManifest` from `scan-worker.ts` as a compatibility wrapper returning `classify(...) !== "stale"` until all callers are migrated.
+Move `ClamAvSignatureManifest` out of `scan-worker.ts`. Re-export `isCurrentClamAvSignatureManifest` from `scan-worker.ts` as a compatibility wrapper returning `assessClamAvSignatureManifest(...).status === "usable"` until all callers are migrated.
 
 - [ ] **Step 4: Run the focused policy test**
 
@@ -138,9 +146,9 @@ In `src/__tests__/scan-worker.test.ts`, add or update tests proving:
 
 - a manifest younger than 7 days publishes and returns `signatureHealth: "current"`;
 - a manifest exactly 7 days old publishes and returns `signatureHealth: "warning"`;
-- a manifest exactly 8 days old still publishes and returns `signatureHealth: "warning"`;
-- a manifest older than 8 days fails with `signature_stale` and performs zero uploads;
-- if the manifest crosses the 8-day boundary before publication, the worker fails and performs zero uploads;
+- a manifest 30 days old still publishes and returns `signatureHealth: "warning"`;
+- a manifest that crosses the 7-day warning boundary before publication still publishes and returns `signatureHealth: "warning"`;
+- a missing, malformed, or future-dated manifest fails with `signature_stale` and performs zero uploads;
 - if the signature version or database directory changes during the scan, publication still fails closed.
 
 Use injected `now()` values only; do not use wall-clock sleeps.
@@ -162,7 +170,7 @@ Change the successful result branch to:
 ```ts
 type CompletedAttachmentScanWorkerResult = {
   status: "completed";
-  signatureHealth: Exclude<ClamAvSignatureHealth, "stale">;
+  signatureHealth: ClamAvSignatureHealth;
 };
 ```
 
@@ -171,10 +179,10 @@ existing `AttachmentScanWorkerResult` union. Change
 `AttachmentScanWorkerOptions` to accept:
 
 ```ts
-signaturePolicy?: ClamAvSignatureAgePolicy;
+signaturePolicy?: ClamAvSignaturePolicy;
 ```
 
-Remove `signatureMaxAgeMs`. Classify the manifest before download and immediately before publication. A `stale` result must call `failWork(..., "signature_stale", true)`. Return the publication-time health with a completed result. Keep the existing equality checks for `signatureVersion` and `databaseDirectory`.
+Remove `signatureMaxAgeMs`. Assess the manifest before download and immediately before publication. An `invalid` result must call `failWork(..., "signature_stale", true)` for compatibility with the existing failure-code contract. A usable result must continue regardless of age. Return the publication-time health with a completed result. Keep the existing equality checks for `signatureVersion` and `databaseDirectory`.
 
 - [ ] **Step 4: Run focused scan tests**
 
@@ -190,7 +198,7 @@ Expected: PASS.
 
 ```bash
 git add src/attachments/scan-worker.ts src/__tests__/scan-worker.test.ts
-git commit -m "feat: enforce ClamAV warning and stale thresholds"
+git commit -m "feat: enforce warning-only ClamAV age policy"
 ```
 
 ---
@@ -211,15 +219,13 @@ Extend `src/__tests__/attachment-scan-job.test.ts` to require:
 ```ts
 {
   signaturePolicy: {
-    warningAgeMs: 168 * 60 * 60 * 1000,
-    maxAgeMs: 192 * 60 * 60 * 1000
+    warningAgeMs: 168 * 60 * 60 * 1000
   }
 }
 ```
 
-Test defaults and explicit `CLAMAV_SIGNATURE_WARNING_AGE_HOURS` /
-`CLAMAV_SIGNATURE_MAX_AGE_HOURS` values. Reject zero, non-integer, non-numeric,
-and `warning >= max` configurations.
+Test the default and an explicit `CLAMAV_SIGNATURE_WARNING_AGE_HOURS` value.
+Reject zero, non-integer, and non-numeric configurations.
 
 Add a test that a completed worker status is serialized only as:
 
@@ -237,8 +243,6 @@ In `src/__tests__/profile-config-deployment-contract.test.ts`, assert that the s
 ```yaml
 - name: CLAMAV_SIGNATURE_WARNING_AGE_HOURS
   value: "168"
-- name: CLAMAV_SIGNATURE_MAX_AGE_HOURS
-  value: "192"
 ```
 
 - [ ] **Step 2: Run focused tests and observe missing configuration**
@@ -256,16 +260,16 @@ Expected: FAIL because the environment parser, sanitized status, and manifest va
 Update `AttachmentScanJobEnvironment` with:
 
 ```ts
-signaturePolicy: ClamAvSignatureAgePolicy;
+signaturePolicy: ClamAvSignaturePolicy;
 ```
 
-Parse positive integer hours, defaulting to 168 and 192, validate the ordering, convert once to milliseconds, and pass the resulting policy into `runAttachmentScanWorker`.
+Parse positive integer hours, defaulting to 168, convert once to milliseconds, and pass the resulting policy into `runAttachmentScanWorker`.
 
 When a worker completes, keep the process exit code `0` and expose only `status` plus `signatureHealth` through `formatAttachmentScanJobStatus`. Existing ignored and failed status handling remains unchanged.
 
-- [ ] **Step 4: Add the two fixed env values to the scan Job manifest**
+- [ ] **Step 4: Add the fixed warning env value to the scan Job manifest**
 
-Add the two environment variables immediately after `CLAMAV_SCAN_TIMEOUT_MS` in `aca.attachment-scan-job.yaml`. Do not add them to the always-on bot or catalog Job.
+Add the warning environment variable immediately after `CLAMAV_SCAN_TIMEOUT_MS` in `aca.attachment-scan-job.yaml`. Do not add it to the always-on bot or catalog Job.
 
 - [ ] **Step 5: Run the focused tests**
 
@@ -401,45 +405,30 @@ git commit -m "refactor: deploy bot from checked-in ACA manifest"
 
 ---
 
-## Task 5: Version the Kernel attachment-safety acceptance boundary
+## Task 5: Replace the Kernel age-blocking boundary
 
 **Files:**
 
-- Modify: `src/evals/kernel/contracts.ts`
-- Modify: `src/evals/kernel/corpus.ts`
 - Modify: `src/evals/kernel/cases/remote-runtime.ts`
 - Modify: `src/__tests__/kernel-corpus.test.ts`
 
-- [ ] **Step 1: Add failing Kernel expectations for warning and stale behavior**
+- [ ] **Step 1: Add a failing Kernel expectation for aged-signature publication**
 
-Replace the old stale case ID with:
-
-```text
-kernel-v1/write/signature-stale-no-publish@2
-```
-
-and add:
+Replace the old age-blocking case ID with:
 
 ```text
-kernel-v1/write/signature-warning-publishes@1
+kernel-v1/write/signature-aged-publishes@1
 ```
 
-The warning case uses a manifest age of `7 days + 1 ms` and passes only when:
+The replacement case uses a manifest age of `30 days` and passes only when:
 
 - worker status is `completed`;
 - `signatureHealth` is `warning`;
 - exactly one upload occurred.
 
-The stale case uses a manifest age of `8 days + 1 ms` and passes only when:
-
-- failure code is `signature_stale`;
-- zero uploads occurred.
-
-Change `KernelAcceptanceCase.version` from the literal `1` to `number`. Update
-`validateKernelCorpus` so it parses the positive integer after `@`, rejects
-zero/non-integers, and rejects a case when the parsed ID version differs from
-`entry.version`. Update the expected ID list. Existing `@1` cases retain
-`version: 1`; the replaced stale case has `version: 2`.
+Keep the missing-manifest and infected-file no-publication cases unchanged.
+Update the expected ID list; the Kernel v1 ID and `version: 1` contract remain
+unchanged.
 
 - [ ] **Step 2: Run the Kernel corpus test and observe the old-boundary failure**
 
@@ -449,13 +438,13 @@ Run:
 pnpm vitest run src/__tests__/kernel-corpus.test.ts
 ```
 
-Expected: FAIL because the new versioned IDs and warning case are not yet present.
+Expected: FAIL because the new warning-only age case is not yet present.
 
-- [ ] **Step 3: Implement the two deterministic Kernel cases**
+- [ ] **Step 3: Implement the deterministic Kernel replacement case**
 
 Use the existing in-memory scan fixture and fixed clock. Do not call Azure, LINE, DeepSeek, embedding, Redis, or PostgreSQL.
 
-Keep both cases in the existing `write_safety_bypass` recurrence family and remote-runtime suite so `pnpm eval:kernel` exercises them.
+Keep the replacement case in the existing `write_safety_bypass` recurrence family and remote-runtime suite so `pnpm eval:kernel` exercises it.
 
 - [ ] **Step 4: Run the Kernel gates**
 
@@ -466,12 +455,12 @@ pnpm vitest run src/__tests__/kernel-corpus.test.ts
 pnpm eval:kernel
 ```
 
-Expected: PASS with both new signature-policy cases reported as passed.
+Expected: PASS with the aged-signature publication case reported as passed.
 
 - [ ] **Step 5: Commit Kernel acceptance**
 
 ```bash
-git add src/evals/kernel/contracts.ts src/evals/kernel/corpus.ts src/evals/kernel/cases/remote-runtime.ts src/__tests__/kernel-corpus.test.ts
+git add src/evals/kernel/cases/remote-runtime.ts src/__tests__/kernel-corpus.test.ts
 git commit -m "test: version ClamAV freshness Kernel boundary"
 ```
 
@@ -494,7 +483,7 @@ Extend `src/__tests__/modular-monolith-docs.test.ts` to require the active docs 
 
 - weekly `10 19 * * 0` UTC refresh;
 - warning after 7 days;
-- fail closed after 8 days;
+- no age-based publication block;
 - scanner resources `2 CPU / 4 GiB`;
 - manifest/deploy-script ownership split.
 
@@ -514,10 +503,10 @@ Expected: FAIL on the old 72-hour and 1-vCPU text.
 
 Make these exact corrections:
 
-- `AGENTS.md`: scanner is `2 CPU / 4 GiB`; refresh is weekly; warn after 7 days and fail closed after 8 days.
-- `README.md`: explain sanitized `signatureHealth` output, the 7/8-day policy, and manifest-driven bot deployment.
+- `AGENTS.md`: scanner is `2 CPU / 4 GiB`; refresh is weekly; warn after 7 days and never block solely because of signature age.
+- `README.md`: explain sanitized `signatureHealth` output, the warning-only age policy, and manifest-driven bot deployment.
 - `docs/architecture-context.md`: describe the pure signature policy and both pre-scan/pre-publication checks.
-- `docs/runbooks/production-operations.md`: document weekly schedule, alert threshold, hard-stop threshold, manifest verification, and the operator response when health is `warning`.
+- `docs/runbooks/production-operations.md`: document the weekly schedule, warning threshold, absence of an age-based hard stop, manifest verification, and the operator response when health is `warning`.
 - `docs/superpowers/specs/2026-07-19-controlled-retrieval-product-roadmap-design.md`: mark its old 72-hour/two-day scanner text as superseded by the approved single-church R4.0 contract and link to `2026-07-26-single-church-optimization-roadmap-design.md`.
 
 Do not rewrite historical completed implementation plans; they remain evidence of the earlier contract.
@@ -596,7 +585,6 @@ git add \
   docs/superpowers/specs/2026-07-19-controlled-retrieval-product-roadmap-design.md \
   scripts/deploy-aca.sh src/attachments/clamav-signature-policy.ts \
   src/attachments/scan-worker.ts src/tools/run-attachment-scan-job.ts \
-  src/evals/kernel/contracts.ts src/evals/kernel/corpus.ts \
   src/evals/kernel/cases/remote-runtime.ts src/__tests__/attachment-scan-job.test.ts \
   src/__tests__/clamav-signature-refresh.test.ts src/__tests__/kernel-corpus.test.ts \
   src/__tests__/modular-monolith-docs.test.ts \
@@ -637,7 +625,7 @@ gh pr create \
   --body "Corrects the approved weekly ClamAV freshness policy, makes the checked-in ACA manifest authoritative for the bot rollout, and adds deterministic Kernel coverage. Verification: full PR CI gate."
 ```
 
-The PR body must summarize the 7/8-day signature policy, manifest ownership correction, Kernel coverage, and verification commands. It must not contain secret values or live configuration exports.
+The PR body must summarize the warning-only signature-age policy, manifest ownership correction, Kernel coverage, and verification commands. It must not contain secret values or live configuration exports.
 
 - [ ] **Step 3: Wait for required `PR CI` and enable auto-merge**
 
@@ -671,7 +659,7 @@ Verify:
 - bot has one healthy active revision;
 - internal ingress, target port, and Dapr app ID/port/protocol match the manifest;
 - public gateway path still reaches `/healthz` and the canonical LINE webhook route;
-- scan Job has `2 CPU / 4 GiB`, max one execution, no ingress, read-only ClamAV storage, and 168/192-hour age variables;
+- scan Job has `2 CPU / 4 GiB`, max one execution, no ingress, read-only ClamAV storage, and the 168-hour warning variable;
 - refresh Job has cron `10 19 * * 0`, max one execution, no ingress, and read/write ClamAV storage;
 - latest bootstrap refresh execution succeeded;
 - no bot secret named `attachment-scan-queue-connection-string` or `clamav-signature-storage-key` remains;

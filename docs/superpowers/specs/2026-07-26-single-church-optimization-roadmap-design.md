@@ -188,11 +188,13 @@ attachment outage.
 
 - Preserve the approved weekly ClamAV refresh schedule at
   `10 19 * * 0` UTC.
-- Replace the incompatible 72-hour rejection threshold with an eight-day
-  maximum signature age.
-- Emit an operational warning when the active signature set reaches seven
-  days. Continue to fail closed when the manifest is missing, malformed,
-  changes during scanning, comes from the future, or exceeds eight days.
+- Remove the incompatible age-based rejection threshold. Emit an operational
+  warning when the active signature set reaches seven days, but continue
+  scanning with the last successfully promoted immutable signature set
+  regardless of age.
+- Continue to fail closed when the manifest is missing, malformed, changes
+  during scanning, comes from the future, or ClamAV cannot complete a clean
+  scan. Signature age alone must never block publication.
 - Preserve immutable signature-set promotion, previous-good retention, and the
   deployment bootstrap refresh.
 - Align the scanner resource contract with the ACA-valid deployed pair of
@@ -205,16 +207,18 @@ attachment outage.
   verification.
 - Remove retired bot-manifest secret and environment placeholders rather than
   relying indefinitely on post-deployment cleanup.
-- Add deployment-contract tests for refresh cadence, maximum signature age,
-  resources, Dapr configuration, internal ingress, and retired settings.
+- Add deployment-contract tests for refresh cadence, the warning-only
+  signature-age policy, resources, Dapr configuration, internal ingress, and
+  retired settings.
 
 ### Exit Criteria
 
-- Weekly refresh and the accepted signature age cannot contradict in CI.
-- One successful weekly refresh keeps attachment scanning available for the
-  complete interval until the next scheduled execution.
-- One missed refresh produces an alert at seven days and blocks publication
-  after eight days.
+- Weekly refresh and the warning-only signature-age policy cannot contradict in
+  CI.
+- One successful refresh keeps attachment scanning available until a newer
+  immutable signature set is promoted.
+- One or more missed refreshes produce an operational warning from seven days
+  onward without blocking publication solely because of signature age.
 - Code, manifests, deployment tests, README, architecture context, AGENTS, and
   the operations runbook state the same active contract.
 - Kernel v1 and the attachment security cases remain green.
