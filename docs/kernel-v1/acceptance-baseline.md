@@ -51,13 +51,19 @@ turns ended with successful schedule results, but its stricter journey
 assertion failed; the two runs have consumed 4 DeepSeek requests and 0
 embedding batches in total.
 
-Both failed runs removed their Docker resources and Redis namespace. The shell
+A diagnostic single-case run against commit
+`45d6e6db` then isolated the refinement failure to its initial turn; it made 2
+DeepSeek requests and 0 embedding batches. The three runs have therefore
+consumed 6 DeepSeek requests and 0 embedding batches in total.
+
+All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
 label after successful cleanup before propagating driver exit code `1`; this
-diagnostic attribution is corrected. Allowlisted refinement boundary codes are
-now emitted so the next single-case evidence run can distinguish provider,
-turn-count, initial-turn, continuation-turn, and validator-reason failures
-without exposing message content.
+diagnostic attribution is corrected. The diagnostic now attributes the failure
+to `driver_result`. Allowlisted refinement boundary codes are further narrowed
+so the next single-case evidence run can distinguish an initial capability
+failure from `not_found`, `ambiguous`, `unavailable`, or missing result
+evidence, without exposing message content.
 
 Final Kernel v1 acceptance is therefore not recorded. Do not mark R4
 implementation started until an operator explicitly authorizes another bounded

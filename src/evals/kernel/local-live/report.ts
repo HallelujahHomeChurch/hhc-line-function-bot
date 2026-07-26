@@ -30,7 +30,11 @@ const CASE_STRING_VALUES = {
     "journey_assertion_failed",
     "provider_evidence_failed",
     "turn_count_failed",
-    "initial_turn_failed",
+    "initial_capability_failed",
+    "initial_result_not_found",
+    "initial_result_ambiguous",
+    "initial_result_unavailable",
+    "initial_result_missing",
     "continuation_turn_failed",
     "continuation_reason_failed"
   ]),

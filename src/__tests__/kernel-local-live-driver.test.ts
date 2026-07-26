@@ -300,6 +300,48 @@ describe("Kernel local live journey outcome evaluation", () => {
       passed: false,
       failureCode: "turn_count_failed"
     });
+
+    const initialFailureCases = [
+      {
+        steps: [{ phase: "plan_validation", disposition: "chat" }],
+        failureCode: "initial_capability_failed"
+      },
+      {
+        steps: [
+          { phase: "plan_validation", action: "query_schedule" },
+          { phase: "result_envelope", resultStatus: "not_found" }
+        ],
+        failureCode: "initial_result_not_found"
+      },
+      {
+        steps: [
+          { phase: "plan_validation", action: "query_schedule" },
+          { phase: "result_envelope", resultStatus: "ambiguous" }
+        ],
+        failureCode: "initial_result_ambiguous"
+      },
+      {
+        steps: [
+          { phase: "plan_validation", action: "query_schedule" },
+          { phase: "result_envelope", resultStatus: "unavailable" }
+        ],
+        failureCode: "initial_result_unavailable"
+      },
+      {
+        steps: [{ phase: "plan_validation", action: "query_schedule" }],
+        failureCode: "initial_result_missing"
+      }
+    ] satisfies Array<{ steps: AgentTurnTraceStep[]; failureCode: string }>;
+
+    for (const { steps, failureCode } of initialFailureCases) {
+      expect(
+        evaluateKernelLocalLiveOutcome({
+          caseId: "schedule-refinement",
+          traces: [trace(steps), successfulTrace("query_schedule")],
+          observations: successfulProviderObservations("schedule-refinement")
+        })
+      ).toMatchObject({ passed: false, failureCode });
+    }
   });
 
   it("finalizes the allowlisted suite result only after host cleanup", () => {

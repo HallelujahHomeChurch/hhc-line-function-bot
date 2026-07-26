@@ -335,7 +335,12 @@ function outcomeFailureCode(
     return "provider_evidence_failed";
   }
   if (evidence.turns.length !== 2) return "turn_count_failed";
-  if (!turnSucceeded(evidence.turns[0], "query_schedule")) return "initial_turn_failed";
+  const initialTurn = evidence.turns[0];
+  if (initialTurn?.capability !== "query_schedule") return "initial_capability_failed";
+  if (initialTurn.resultClass === "not_found") return "initial_result_not_found";
+  if (initialTurn.resultClass === "ambiguous") return "initial_result_ambiguous";
+  if (initialTurn.resultClass === "unavailable") return "initial_result_unavailable";
+  if (initialTurn.resultClass !== "success") return "initial_result_missing";
   if (!turnSucceeded(evidence.turns[1], "query_schedule")) return "continuation_turn_failed";
   if (evidence.turns[1]?.validatorReason !== "active_task_refinement") {
     return "continuation_reason_failed";

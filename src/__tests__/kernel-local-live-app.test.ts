@@ -454,6 +454,27 @@ describe("Kernel local live fixtures", () => {
       agentResult: { status: "success" }
     });
     await expect(
+      querySchedule(
+        {
+          query: "synthetic service",
+          dateIntent: "specific_date",
+          specificDate: "2026-07-27",
+          meeting: "Synthetic Service",
+          domainKey: "synthetic_service"
+        },
+        {
+          profile: config.profiles[0],
+          event: {
+            type: "message",
+            source: { type: "user", userId: "U_KERNEL_USER_A" },
+            message: { type: "text", text: "查 synthetic service 2026-07-27 服事" }
+          }
+        }
+      )
+    ).resolves.toMatchObject({
+      agentResult: { status: "success" }
+    });
+    await expect(
       runtime.stores.catalog.listSources({
         profileName: "acceptance",
         sourceKeys: ["xiaoha_database"]
