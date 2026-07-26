@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { KernelAcceptanceCase, KernelCaseObservation } from "../evals/kernel/contracts.js";
+import { PRODUCT_EXPERIENCE_KERNEL_CASES } from "../evals/kernel/cases/product-experience.js";
+import { KERNEL_ACCEPTANCE_CASES } from "../evals/kernel/corpus.js";
 import { evaluateKernelGate } from "../evals/kernel/evaluate.js";
 
 function observation(caseId: string, passed: boolean): KernelCaseObservation {
@@ -75,5 +77,17 @@ describe("Kernel v1 evaluator", () => {
     });
     expect(report.failedCaseIds).toEqual(["kernel-v1/resource/error@1"]);
     expect(JSON.stringify(report)).not.toContain("private provider payload");
+  });
+
+  it("passes all seven deterministic R4.1 product-experience boundaries offline", async () => {
+    const report = await evaluateKernelGate({
+      cases: KERNEL_ACCEPTANCE_CASES,
+      now: () => new Date("2026-07-26T08:00:00.000Z")
+    });
+
+    expect(report.passed).toBe(true);
+    expect(report.totalCases).toBe(KERNEL_ACCEPTANCE_CASES.length);
+    expect(report.failedCaseIds).toEqual([]);
+    expect(PRODUCT_EXPERIENCE_KERNEL_CASES).toHaveLength(7);
   });
 });

@@ -2,8 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import { RECURRENCE_FAMILIES } from "../evals/kernel/contracts.js";
 import { KERNEL_ACCEPTANCE_CASES, validateKernelCorpus } from "../evals/kernel/corpus.js";
+import { PRODUCT_EXPERIENCE_KERNEL_CASES } from "../evals/kernel/cases/product-experience.js";
 import { REMOTE_RUNTIME_KERNEL_CASES } from "../evals/kernel/cases/remote-runtime.js";
 import { SCHEDULE_KERNEL_CASES } from "../evals/kernel/cases/schedule.js";
+
+const R41_PRODUCT_EXPERIENCE_CASE_IDS = [
+  "kernel-v1/product_experience/effective-discovery-direct@1",
+  "kernel-v1/product_experience/effective-discovery-group@1",
+  "kernel-v1/product_experience/effective-discovery-granted-user@1",
+  "kernel-v1/product_experience/effective-discovery-admin@1",
+  "kernel-v1/product_experience/registration-first-read@1",
+  "kernel-v1/product_experience/result-guidance-classes@1",
+  "kernel-v1/product_experience/branch-group-isolation@1"
+] as const;
 
 describe("Kernel v1 versioned acceptance corpus", () => {
   it("uses unique stable versioned case IDs", () => {
@@ -113,6 +124,37 @@ describe("Kernel v1 versioned acceptance corpus", () => {
 
     expect(observations.map(({ caseId, passed }) => ({ caseId, passed }))).toEqual(
       REMOTE_RUNTIME_KERNEL_CASES.map(({ id }) => ({ caseId: id, passed: true }))
+    );
+  });
+
+  it("contains every versioned R4.1 product-experience boundary exactly once", () => {
+    const corpusIds = KERNEL_ACCEPTANCE_CASES.map(({ id }) => id);
+    const productExperienceIds = PRODUCT_EXPERIENCE_KERNEL_CASES.map(({ id }) => id);
+
+    expect(productExperienceIds).toEqual(R41_PRODUCT_EXPERIENCE_CASE_IDS);
+    expect(corpusIds.filter((id) => R41_PRODUCT_EXPERIENCE_CASE_IDS.includes(id as never))).toEqual(
+      R41_PRODUCT_EXPERIENCE_CASE_IDS
+    );
+  });
+
+  it("accepts exact discovery, registration-first-read, result guidance, and branch isolation", async () => {
+    const observations = await Promise.all(
+      PRODUCT_EXPERIENCE_KERNEL_CASES.map((entry) =>
+        entry.run({ now: () => new Date("2026-07-26T08:00:00.000Z") })
+      )
+    );
+
+    expect(observations.map(({ caseId, passed }) => ({ caseId, passed }))).toEqual(
+      R41_PRODUCT_EXPERIENCE_CASE_IDS.map((caseId) => ({ caseId, passed: true }))
+    );
+    expect(observations.find(({ caseId }) => caseId.endsWith("registration-first-read@1"))).toEqual(
+      expect.objectContaining({ boundary: "entrance_access", coreJourneySucceeded: true })
+    );
+    expect(observations.find(({ caseId }) => caseId.endsWith("result-guidance-classes@1"))).toEqual(
+      expect.objectContaining({ boundary: "response_projection", unavailableMisclassified: false })
+    );
+    expect(observations.find(({ caseId }) => caseId.endsWith("branch-group-isolation@1"))).toEqual(
+      expect.objectContaining({ boundary: "active_task_lifecycle", securityViolations: [] })
     );
   });
 });

@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { runAccessMigrations } from "../access/migrations.js";
+import { PostgresAccessStore } from "../access/postgres-access-store.js";
 import { runAgentMemoryMigrations } from "../agent/migrations.js";
 import { PostgresAgentMemoryStore } from "../agent/postgres-memory-store.js";
 import { runCatalogMigrations } from "../catalog/migrations.js";
@@ -148,6 +149,31 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
       await runAccessMigrations(pool);
       await runKnowledgeMigrations(pool);
     }
+
+    const accessStore = new PostgresAccessStore(pool);
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "synthetic-branch-group",
+      displayName: "Synthetic branch",
+      createdBy: "synthetic-admin"
+    });
+    await accessStore.recordPrincipalSuccess({
+      profileName: "helper",
+      type: "group",
+      principalId: "synthetic-branch-group",
+      functionName: "query_schedule",
+      occurredAt: "2026-07-26T08:00:00.000Z"
+    });
+    await expect(
+      accessStore.listPrincipals("helper", { includeDisabled: true })
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        principalId: "synthetic-branch-group",
+        lastSuccessFunctionName: "query_schedule",
+        lastSuccessAt: "2026-07-26T08:00:00.000Z"
+      })
+    );
 
     const schedule = await new PostgresScheduleStore(pool).searchItems({
       profileName: "helper",

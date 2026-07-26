@@ -171,7 +171,7 @@ Completed R0-R3
   -> Completed Controlled Retrieval Kernel v1
   -> Completed R3.5
   -> Completed R4.0 Production Contract Correction
-  -> R4.1 Internal Product Experience
+  -> Completed R4.1 Internal Product Experience
   -> R5.0 Lean Release Assurance
   -> Stable Maintenance
 ```
@@ -224,6 +224,17 @@ attachment outage.
 - Kernel v1 and the attachment security cases remain green.
 
 ## R4.1 — Internal Product Experience
+
+### Status
+
+Implementation and local acceptance are complete. The deterministic Kernel gate
+passes 113 cases, including the seven versioned R4.1 boundaries, and the owned
+Redis/pgvector PostgreSQL integration gate passes without skipped dependencies.
+No DeepSeek or Azure embedding call was used for this acceptance.
+
+Production verification remains pending the Task 9 pull-request, deployment,
+and live production checks. This status does not claim LINE-platform delivery,
+production adoption, or any other external acceptance evidence.
 
 ### Outcome
 
@@ -355,6 +366,10 @@ implementation plan for each independently deployable milestone:
 R4.0 must complete before R4.1 because it corrects a current attachment
 availability defect. R5.0 is the final delivery milestone and establishes the
 release probes and rollback evidence required before stable maintenance.
+
+R4.1 implementation and local acceptance are complete; its production
+verification remains pending Task 9. R5.0 is the only remaining roadmap
+milestone, followed by Stable Maintenance.
 
 Each behavior or lifecycle change after R3 must update the versioned Kernel
 corpus and run the applicable deterministic, Redis/PostgreSQL integration, and
