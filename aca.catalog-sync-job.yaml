@@ -37,6 +37,8 @@ properties:
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: attachment-scan-queue-url
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+      - name: observability-hmac-key
+        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
   template:
     containers:
       - name: catalog-sync
@@ -66,6 +68,8 @@ properties:
             value: hhc-line-function-bot
           - name: ATTACHMENT_SCAN_QUEUE_URL
             secretRef: attachment-scan-queue-url
+          - name: OBSERVABILITY_HMAC_KEY
+            secretRef: observability-hmac-key
           - name: EMBEDDING_PROVIDER
             value: azure_openai
           - name: AZURE_OPENAI_EMBEDDING_API_KEY

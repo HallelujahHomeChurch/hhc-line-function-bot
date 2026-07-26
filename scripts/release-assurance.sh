@@ -435,7 +435,7 @@ else:
     elif (
         state.get("external") is not False
         or state.get("targetPort") != 3000
-        or state.get("transport") != "auto"
+        or str(state.get("transport") or "").lower() != "auto"
     ):
         print("bot_ingress_mismatch")
     elif (
@@ -526,7 +526,7 @@ valid = (
     and traffic_ok
     and state.get("external") is False
     and state.get("targetPort") == 8080
-    and state.get("transport") == "http"
+    and str(state.get("transport") or "").lower() == "http"
     and state.get("minReplicas") == 1
     and state.get("maxReplicas") == 1
     and state.get("cpu") == 0.25
@@ -639,7 +639,23 @@ def env_contract(entries, expected):
 
 valid = common_valid
 if check_name == "catalog_job":
-    valid = valid and trigger.get("cronExpression") == "*/15 * * * *"
+    hmac_env = [
+        entry
+        for entry in (env if isinstance(env, list) else [])
+        if isinstance(entry, dict) and entry.get("name") == "OBSERVABILITY_HMAC_KEY"
+    ]
+    valid = (
+        valid
+        and trigger.get("cronExpression") == "*/15 * * * *"
+        and args == ["dist/tools/sync-catalog.js"]
+        and hmac_env
+        == [
+            {
+                "name": "OBSERVABILITY_HMAC_KEY",
+                "secretRef": "observability-hmac-key",
+            }
+        ]
+    )
 elif check_name == "clamav_refresh_job":
     valid = (
         valid
@@ -1041,7 +1057,7 @@ valid = (
     and state.get("traffic") == [{"revisionName": revision, "weight": 100}]
     and state.get("external") is False
     and state.get("targetPort") == 3000
-    and state.get("transport") == "auto"
+    and str(state.get("transport") or "").lower() == "auto"
     and state.get("dapr") == {
         "enabled": True,
         "appId": "hhc-line-function-bot",
@@ -1181,7 +1197,7 @@ valid = (
     and state.get("traffic") == [{"revisionName": revision, "weight": 100}]
     and state.get("external") is False
     and state.get("targetPort") == 8080
-    and state.get("transport") == "http"
+    and str(state.get("transport") or "").lower() == "http"
     and state.get("minReplicas") == 1
     and state.get("maxReplicas") == 1
     and state.get("cpu") == 0.25

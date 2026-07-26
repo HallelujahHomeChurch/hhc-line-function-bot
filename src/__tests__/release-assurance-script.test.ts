@@ -218,6 +218,7 @@ describe("release assurance shell transaction", () => {
     "catalog_definition_failure",
     "catalog_cron_mismatch",
     "catalog_image_mismatch",
+    "catalog_hmac_env_mismatch",
     "catalog_no_recent_success",
     "refresh_definition_failure",
     "refresh_cron_mismatch",
@@ -833,7 +834,7 @@ if (command("containerapp", "show") && name === "fixture-bot") {
           : [{ revisionName: rolledBack ? "bot--rollback" : "bot--target", weight: 100 }],
       external: false,
       targetPort: !rolledBack && scenario === "bot_ingress_mismatch" ? 3001 : 3000,
-      transport: !rolledBack && scenario === "bot_ingress_transport_mismatch" ? "tcp" : "auto",
+      transport: !rolledBack && scenario === "bot_ingress_transport_mismatch" ? "Tcp" : "Auto",
       dapr:
         !rolledBack && scenario === "bot_dapr_mismatch"
           ? { enabled: false, appId: "wrong", appPort: 1, appProtocol: "tcp" }
@@ -901,7 +902,7 @@ if (command("containerapp", "show") && name === "fixture-searxng") {
       traffic: [{ revisionName: "searx--rollback", weight: 100 }],
       external: false,
       targetPort: 8080,
-      transport: scenario === "searxng_restore_contract_mismatch" ? "auto" : "http",
+      transport: scenario === "searxng_restore_contract_mismatch" ? "Auto" : "Http",
       minReplicas: 1,
       maxReplicas: 1,
       cpu: 0.25,
@@ -920,7 +921,7 @@ if (command("containerapp", "show") && name === "fixture-searxng") {
         : [{ revisionName: "searx--ready", weight: 100 }],
     external: false,
     targetPort: 8080,
-    transport: scenario === "searxng_transport_mismatch" ? "auto" : "http",
+    transport: scenario === "searxng_transport_mismatch" ? "Auto" : "Http",
     minReplicas: scenario === "searxng_scale_mismatch" ? 0 : 1,
     maxReplicas: 1,
     cpu: scenario === "searxng_definition_failure" ? 1 : 0.25,
@@ -1020,7 +1021,12 @@ if (command("containerapp", "job", "show")) {
         replicaCompletionCount: 1
       },
       args: ["dist/tools/sync-catalog.js"],
-      env: [],
+      env: [
+        {
+          name: "OBSERVABILITY_HMAC_KEY",
+          secretRef: "observability-hmac-key"
+        }
+      ],
       resources: {},
       volumeMounts: [],
       volumes: []
@@ -1151,6 +1157,7 @@ if (command("containerapp", "job", "show")) {
   if (scenario === "catalog_definition_failure" && name === "hhc-line-bot-catalog-sync") definition.replicaTimeout = 1;
   if (scenario === "catalog_cron_mismatch" && name === "hhc-line-bot-catalog-sync") definition.schedule.cronExpression = "0 * * * *";
   if (scenario === "catalog_image_mismatch" && name === "hhc-line-bot-catalog-sync") definition.image = "registry.example/fixture-secret/bot@sha256:${"7".repeat(64)}";
+  if (scenario === "catalog_hmac_env_mismatch" && name === "hhc-line-bot-catalog-sync") definition.env = [];
   if (scenario === "refresh_definition_failure" && name === "hhc-line-bot-clamav-refresh") definition.replicaTimeout = 1;
   if (scenario === "refresh_cron_mismatch" && name === "hhc-line-bot-clamav-refresh") definition.schedule.cronExpression = "0 0 * * *";
   if (scenario === "refresh_mount_mismatch" && name === "hhc-line-bot-clamav-refresh") definition.volumes[0].storageName = "clamav-signatures-readonly";
