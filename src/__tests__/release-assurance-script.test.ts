@@ -85,6 +85,23 @@ describe("release assurance shell transaction", () => {
     expect(calls.some((args) => args.includes("job") && args.includes("update"))).toBe(false);
   });
 
+  it.each([
+    ["source load", "preseeded_provider_contract_pre_mutation_failure", 23],
+    ["gate entry", "preseeded_provider_contract_target_failure", 42]
+  ])(
+    "does not trust a provider-contract flag preseeded before %s",
+    async (_boundary, scenario, expectedExit) => {
+      const fixture = await createFixture(scenario);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+      expect(result.status, diagnostic(result, calls)).toBe(expectedExit);
+      expect(report.status).toBe("failed");
+      expect(report).not.toHaveProperty("providerRequests");
+    }
+  );
+
   it.each(["empty_catalog_snapshot", "empty_scan_snapshot", "empty_refresh_snapshot"])(
     "fails an incomplete %s before any mutation",
     async (scenario) => {
@@ -349,9 +366,13 @@ export RELEASE_COMMIT_SHA="${"a".repeat(40)}"
 export RELEASE_POLL_ATTEMPTS="3"
 export RELEASE_POLL_INTERVAL_SECONDS="1"
 export RELEASE_EXPECTED_SEARXNG_IMAGE="docker.io/searxng/searxng@sha256:${"5".repeat(64)}"
+export RELEASE_PROVIDER_CONTRACT_VERIFIED="${scenario === "preseeded_provider_contract_pre_mutation_failure" ? "true" : "false"}"
 source "${toBashPath(path.join(ROOT, "scripts/release-assurance.sh"))}"
 trap 'release_assurance_on_exit "$?"' EXIT
 capture_known_good_state
+if [[ "\${FAKE_SCENARIO}" == "preseeded_provider_contract_target_failure" ]]; then
+  RELEASE_PROVIDER_CONTRACT_VERIFIED=true
+fi
 if [[ "\${FAKE_SCENARIO}" == report_*_failure ]]; then
   mark_release_mutated
   set_release_failure "preflight_failed"
@@ -378,7 +399,8 @@ if [[ "\${FAKE_SCENARIO}" == "unknown_failure_reason" ]]; then
   set_release_failure "unknown_fixture_reason"
   exit 29
 fi
-if [[ "\${FAKE_SCENARIO}" == "pre_mutation_failure" ]]; then
+if [[ "\${FAKE_SCENARIO}" == "pre_mutation_failure" ]] \
+  || [[ "\${FAKE_SCENARIO}" == "preseeded_provider_contract_pre_mutation_failure" ]]; then
   set_release_failure "preflight_failed"
   exit 23
 fi
@@ -484,7 +506,8 @@ if (command("containerapp", "show") && name === "fixture-bot") {
       latestRevision: rolledBack ? "bot--rollback" : "bot--target",
       latestReadyRevision: rolledBack
         ? "bot--rollback"
-        : scenario === "target_revision_mismatch"
+        : scenario === "target_revision_mismatch" ||
+            scenario === "preseeded_provider_contract_target_failure"
           ? "bot--known-good"
           : "bot--target",
       runningStatus: "Running",
