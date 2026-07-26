@@ -6,6 +6,11 @@
 - Deterministic result: `PASS`
 - Redis/PostgreSQL integration cases: `22`
 - Integration result: `PASS`
+- Local-live cases: `8`
+- Local-live result: `PASS`
+- Local-live provider evidence: `9` DeepSeek requests, `3` embedding batches
+- Kernel v1 acceptance: `PASS`
+- Roadmap entry state: `R4-ready`
 
 | Metric                          | Numerator | Denominator |  Value |
 | ------------------------------- | --------: | ----------: | -----: |
@@ -113,6 +118,13 @@ A subsequent zero-provider `write-preview-confirm` run passed all five webhook
 turns, quick-reply states, pre-confirm queue exclusion, the single queue and
 scan-work evidence, namespace cleanup, Compose cleanup, and secret cleanup.
 
+A final consolidated run against
+`b2846a0947357444d1a46b5b74e100132e4e9d48` passed all eight cases with exactly
+9 successful DeepSeek requests, 3 successful embedding batches, no provider
+failure or budget-exhaustion observation, and successful namespace, Compose,
+and secret cleanup. Cumulative diagnostic and acceptance use was 47 DeepSeek
+requests and 10 embedding batches.
+
 All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
 label after successful cleanup before propagating driver exit code `1`; this
@@ -122,14 +134,10 @@ so the next single-case evidence run can distinguish an initial capability
 failure from `not_found`, `ambiguous`, `unavailable`, or missing result
 evidence, without exposing message content.
 
-Final Kernel v1 acceptance is therefore not recorded. Do not mark R4
-implementation started until an operator explicitly authorizes another bounded
-full run and `artifacts/kernel-v1/local-live-report.json` reports all eight
-cases `PASS` with exactly 9 successful DeepSeek requests, 3 successful
-embedding batches, no provider failure/budget-exhaustion observation, and
-successful cleanup. That bounded local report is the approved privacy-safe
-replacement for the previously pending production observation window; no raw
-LINE conversation or human tester is required.
+Final Kernel v1 acceptance is recorded. The bounded local report is the approved
+privacy-safe replacement for the previously pending production observation
+window; no raw LINE conversation or human tester is required. The roadmap may
+now enter R4.
 
 The local simulation cannot prove LINE platform delivery or reply-token
 behavior, production latency, production PostgreSQL/Redis failover, or Graph,
