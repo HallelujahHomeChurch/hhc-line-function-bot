@@ -400,7 +400,7 @@ describe("Kernel local live application composition", () => {
     ]);
     expect(replies[0]?.text).toContain("- 查服事表：");
     expect(replies[0]?.text).toContain("- 查已加入知識：");
-    expect(replies[0]?.text).toContain("- 保存連結資源：");
+    expect(replies[0]?.text).toContain("- 保存檔案：");
     expect(replies[0]?.text).not.toContain("/help admin");
     await app.close();
   });

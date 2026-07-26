@@ -4,6 +4,7 @@ import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
+import type { ControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
@@ -114,6 +115,27 @@ function defaultAccessStore(): InMemoryAccessStore {
       }
     ]
   });
+}
+
+class PostCommitProjectionFailureAccessStore extends InMemoryAccessStore {
+  private committed = false;
+
+  override async addPrincipal(
+    input: Parameters<InMemoryAccessStore["addPrincipal"]>[0]
+  ): ReturnType<InMemoryAccessStore["addPrincipal"]> {
+    const principal = await super.addPrincipal(input);
+    this.committed = true;
+    return principal;
+  }
+
+  override async hasActivePrincipal(
+    ...args: Parameters<InMemoryAccessStore["hasActivePrincipal"]>
+  ): ReturnType<InMemoryAccessStore["hasActivePrincipal"]> {
+    if (this.committed) {
+      throw new Error("post_commit_projection_failed");
+    }
+    return super.hasActivePrincipal(...args);
+  }
 }
 
 function createTestApp(
@@ -269,22 +291,7 @@ describe("LINE entrance", () => {
       enabledFunctions: ["find_ppt_slides"],
       text: "小哈 不支援的要求"
     });
-    expect(replyText).toHaveBeenCalledWith(
-      "reply-token",
-      "目前這個對話或你的權限不能使用這項功能。輸入 /help 可查看目前可用功能。",
-      {
-        quickReplies: [
-          {
-            label: "查看可用功能",
-            action: {
-              type: "message",
-              label: "查看可用功能",
-              text: "/help"
-            }
-          }
-        ]
-      }
-    );
+    expect(replyText).toHaveBeenCalledWith("reply-token", "目前不支援這個請求。", undefined);
   });
 
   it("emits route and function observer events without raw message text", async () => {
@@ -1030,7 +1037,10 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("可以查詢");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
-    expect(replyText.mock.calls[0]?.[1]).not.toContain("/registry");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/registry <code>");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/whoami");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/memories");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/forget-memory <id>");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("owner:");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("freshness:");
     expect(replyText).toHaveBeenCalledWith(
@@ -1583,22 +1593,7 @@ describe("LINE entrance", () => {
       expect.any(Function)
     );
     expect(legacyRoute).not.toHaveBeenCalled();
-    expect(replyText).toHaveBeenCalledWith(
-      "reply-token",
-      "目前這個對話或你的權限不能使用這項功能。輸入 /help 可查看目前可用功能。",
-      {
-        quickReplies: [
-          {
-            label: "查看可用功能",
-            action: {
-              type: "message",
-              label: "查看可用功能",
-              text: "/help"
-            }
-          }
-        ]
-      }
-    );
+    expect(replyText).toHaveBeenCalledWith("reply-token", "目前不支援這個請求。", undefined);
   });
 
   it("does not apply group function grants to direct users", async () => {
@@ -2197,7 +2192,14 @@ describe("LINE entrance", () => {
     expect(route).not.toHaveBeenCalled();
     const helpText = String(replyText.mock.calls[0]?.[1]);
     const introText = String(replyText.mock.calls[1]?.[1]);
-    expect(introText).toBe(`我是小哈，家教會的小幫手。\n\n${helpText}`);
+    expect(helpText).toContain("- 查投影片：");
+    expect(helpText).toContain("- 查服事表：");
+    expect(introText).toContain("- 查投影片：");
+    expect(introText).toContain("- 查服事表：");
+    for (const command of ["/registry", "/whoami", "/memories", "/forget-memory"]) {
+      expect(helpText).toContain(command);
+      expect(introText).not.toContain(command);
+    }
     expect(replyText.mock.calls[1]?.[2]?.quickReplies).toEqual(
       replyText.mock.calls[0]?.[2]?.quickReplies
     );
@@ -2887,6 +2889,96 @@ describe("LINE entrance", () => {
     ]);
   });
 
+  it("returns a truthful direct-registration success when post-commit capability projection fails", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const accessStore = new PostCommitProjectionFailureAccessStore();
+    const registrationInviteCodeStore = new InMemoryRegistrationInviteCodeStore({
+      codeFactory: () => "HHCDIRECT",
+      now: () => new Date("2026-07-07T00:30:00.000Z")
+    });
+    await registrationInviteCodeStore.create({
+      profileName: "helper",
+      createdBy: "Uroot",
+      ttlMinutes: 60,
+      now: new Date("2026-07-07T00:00:00.000Z")
+    });
+    const app = createApp(accessConfig(), {
+      accessStore,
+      registrationInviteCodeStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Unew" },
+      message: { type: "text", text: "/registry HHCDIRECT" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "已開通，你現在可以使用小哈。",
+      undefined
+    );
+    await expect(accessStore.listPrincipals("helper")).resolves.toMatchObject([
+      { type: "user", principalId: "Unew" }
+    ]);
+    await expect(registrationInviteCodeStore.consume("helper", "HHCDIRECT")).resolves.toBe(false);
+  });
+
+  it("returns a truthful group-registration success when post-commit capability projection fails", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const accessStore = new PostCommitProjectionFailureAccessStore();
+    const registrationInviteCodeStore = new InMemoryRegistrationInviteCodeStore({
+      codeFactory: () => "HHCGROUPFAIL",
+      now: () => new Date("2026-07-07T00:30:00.000Z")
+    });
+    await registrationInviteCodeStore.create({
+      profileName: "helper",
+      createdBy: "Uroot",
+      ttlMinutes: 60,
+      now: new Date("2026-07-07T00:00:00.000Z")
+    });
+    const app = createApp(accessConfig(), {
+      accessStore,
+      registrationInviteCodeStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cnew", userId: "Unew" },
+      message: { type: "text", text: "/registry HHCGROUPFAIL" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "已開通，你現在可以使用小哈。",
+      undefined
+    );
+    await expect(accessStore.listPrincipals("helper")).resolves.toMatchObject([
+      { type: "group", principalId: "Cnew" }
+    ]);
+    await expect(registrationInviteCodeStore.consume("helper", "HHCGROUPFAIL")).resolves.toBe(
+      false
+    );
+  });
+
   it("does not let admins register the current group without an invite code", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -3351,6 +3443,12 @@ describe("LINE entrance", () => {
       functionName: "find_resource",
       createdBy: "Uroot"
     });
+    await accessStore.addGroupFunctionGrant({
+      profileName: "helper",
+      groupId: "Cdisabled",
+      functionName: "find_resource",
+      createdBy: "Uroot"
+    });
     await accessStore.addUserFunctionGrant({
       profileName: "helper",
       userId: "Uroot",
@@ -3367,6 +3465,12 @@ describe("LINE entrance", () => {
       profileName: "helper",
       principalType: "group",
       principalId: "Cactive",
+      roleId: groupRole.id
+    });
+    await accessStore.bindRoleToPrincipal({
+      profileName: "helper",
+      principalType: "group",
+      principalId: "Cdisabled",
       roleId: groupRole.id
     });
     await accessStore.recordPrincipalSuccess({
@@ -3416,6 +3520,9 @@ describe("LINE entrance", () => {
     expect(reply).toContain("last-success: 查投影片 @ 2026-07-26T10:00:00.000Z");
     expect(reply).toContain("group: Cdisabled (舊服事群)");
     expect(reply).toContain("state: disabled");
+    expect(reply).toMatch(
+      /group: Cdisabled \(舊服事群\)\n {2}state: disabled\n {2}effective: \(none\)/u
+    );
     expect(reply).not.toContain("user: Udisabled");
   });
 
@@ -3947,6 +4054,51 @@ describe("LINE entrance", () => {
     expect(replyText).toHaveBeenCalledWith("reply-token", "已選擇第 1 個投影片", undefined);
   });
 
+  it("invokes the shared completion boundary exactly once for an executed postback", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const complete = vi.fn<ControlledCompletionObserver["complete"]>(async ({ result }) => ({
+      ...result,
+      replyText: "沒有找到符合條件的結果。請換一個關鍵字再試。"
+    }));
+    const app = createTestApp(testConfig(), {
+      router: { route: vi.fn() },
+      completionObserver: { complete },
+      postbackHandlers: {
+        select_schedule: vi.fn().mockResolvedValue({
+          ok: true,
+          replyText: "原始未找到",
+          executedAction: "query_schedule",
+          agentResult: { status: "not_found", replyText: "原始未找到" }
+        })
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "postback",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      postback: { data: "action=select_schedule&requestId=req-1&index=0" }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "query_schedule", durationMs: expect.any(Number) })
+    );
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      "沒有找到符合條件的結果。請換一個關鍵字再試。",
+      undefined
+    );
+  });
+
   it("keeps selection-session reads out of requester-scoped active tasks", async () => {
     const config = testConfig();
     config.profiles[0] = {
@@ -4047,7 +4199,7 @@ describe("LINE entrance", () => {
     expect(recordActiveTask).not.toHaveBeenCalled();
   });
 
-  it("stores slow agent turns and lets the same requester retrieve the result by postback", async () => {
+  it("retrieves an already-observed slow agent result without observing it again", async () => {
     const config = testConfig();
     config.profiles[0] = {
       ...config.profiles[0],
@@ -4055,6 +4207,9 @@ describe("LINE entrance", () => {
     };
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const deferred = createDeferred<FunctionExecutionResult | undefined>();
+    const completionObserver: ControlledCompletionObserver = {
+      complete: vi.fn(async ({ result }) => result)
+    };
     const agentTurnRuntime = {
       handleTextTurn: vi.fn().mockReturnValue(deferred.promise)
     };
@@ -4062,6 +4217,7 @@ describe("LINE entrance", () => {
       router: { route: vi.fn() },
       agentTurnRuntime,
       agentJobStore: new InMemoryAgentJobStore(),
+      completionObserver,
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -4085,7 +4241,25 @@ describe("LINE entrance", () => {
     const data =
       quickReplies[0]?.action.type === "postback" ? quickReplies[0].action.data : undefined;
 
-    deferred.resolve({ ok: true, replyText: "finished result" });
+    const finishedResult = {
+      ok: true,
+      replyText: "finished result",
+      executedAction: "query_schedule" as const
+    };
+    await completionObserver.complete({
+      context: {
+        profile: config.profiles[0]!,
+        event: {
+          type: "message",
+          source: { type: "user", userId: "Uallowed" },
+          message: { type: "text", text: "lookup" }
+        },
+        requestId: "slow-runtime"
+      },
+      action: "query_schedule",
+      result: finishedResult
+    });
+    deferred.resolve(finishedResult);
     await deferred.promise;
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -4104,6 +4278,7 @@ describe("LINE entrance", () => {
 
     expect(postbackRes.statusCode).toBe(200);
     expect(replyText).toHaveBeenLastCalledWith("reply-token-2", "finished result", undefined);
+    expect(completionObserver.complete).toHaveBeenCalledTimes(1);
   });
 
   it("keeps group follow-up routing scoped to the same requester conversation window", async () => {

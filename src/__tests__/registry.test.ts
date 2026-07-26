@@ -162,6 +162,12 @@ describe("function registry", () => {
   it("registers catalog source admin handlers that list, enable, disable, sync, and audit", async () => {
     const catalog = new InMemoryCatalogStore();
     await catalog.upsertSource(weeklyAudioSource);
+    await catalog.upsertSource({
+      ...weeklyAudioSource,
+      sourceKey: "unassigned_audio",
+      ownerLabel: "   ",
+      freshnessResponsibility: "\t"
+    });
     const accessStore = new InMemoryAccessStore();
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
@@ -211,6 +217,8 @@ describe("function registry", () => {
     expect(listBefore.replyText).toContain("enabled=false");
     expect(listBefore.replyText).toContain("owner: 週報同工");
     expect(listBefore.replyText).toContain("freshness: 每週一前確認音檔");
+    expect(listBefore.replyText).toContain("owner: 尚未指定");
+    expect(listBefore.replyText).toContain("freshness: 尚未指定");
     expect(listBefore.replyText).not.toContain("weekly-folder");
     expect(enable.replyText).toContain("enabled weekly_report_audio");
     expect(status.replyText).toContain("enabled=true");

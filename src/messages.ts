@@ -5,6 +5,7 @@ export const messages = {
   functionNotConfigured: "這個功能尚未設定完成。",
   requestFailed: "處理請求時發生錯誤，請稍後再試。",
   permissionDenied: "目前這個對話或你的權限不能使用這項功能。輸入 /help 可查看目前可用功能。",
+  explicitWriteIntentRequired: "若要保存或更新，請明確說明要執行的操作與內容。",
   missingInputNextAction: "請回覆一項需要的資訊。",
   notFoundGuidance: "沒有找到符合條件的結果。請換一個關鍵字再試。",
   unavailableGuidance: "這項功能目前暫時無法使用，請稍後再試。",

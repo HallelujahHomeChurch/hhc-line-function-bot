@@ -95,6 +95,22 @@ describe("resource binary publisher", () => {
     expect(graph.deleteItem).toHaveBeenCalledWith("drive-1", "uploaded-ppt");
   });
 
+  it("does not expose the backing publish provider when upload is unavailable", async () => {
+    const { catalog, graph } = await setup();
+    graph.uploadFile = undefined;
+    const publisher = createResourceBinaryPublisher({ catalog, graph });
+
+    const outcome = await publisher.publishVerifiedResource({
+      resource: prepare(),
+      scan: { status: "clean", signatureVersion: "daily-20260724" },
+      now: new Date("2026-07-11T10:00:00.000Z")
+    });
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.result.replyText).toContain("檔案發布服務");
+    expect(outcome.result.replyText).not.toContain("OneDrive");
+  });
+
   it("uploads and indexes a verified binary exactly once", async () => {
     const { catalog, graph, publisher } = await setup();
 

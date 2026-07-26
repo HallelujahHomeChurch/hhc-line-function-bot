@@ -171,7 +171,7 @@ Completed R0-R3
   -> Completed Controlled Retrieval Kernel v1
   -> Completed R3.5
   -> Completed R4.0 Production Contract Correction
-  -> Completed R4.1 Internal Product Experience
+  -> R4.1 Local Acceptance Complete (Production Verification Pending)
   -> R5.0 Lean Release Assurance
   -> Stable Maintenance
 ```

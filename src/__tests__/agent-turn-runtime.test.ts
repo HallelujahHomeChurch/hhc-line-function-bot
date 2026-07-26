@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
+import type { ControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
 import type { AgentPlanner } from "../agent/planner.js";
@@ -218,6 +219,84 @@ describe("AgentTurnRuntime controlled path", () => {
     });
   });
 
+  it("presents a stale catalog snapshot's actual timestamp without leaking it into telemetry or task state", async () => {
+    const catalog = new InMemoryCatalogStore();
+    const source = await catalog.upsertSource({
+      profileName: "helper",
+      sourceKey: "xiaoha_database",
+      adapterType: "onedrive",
+      domain: "general",
+      defaultItemKind: "church_document",
+      rootLocation: { driveId: "drive-1", folderItemId: "root" },
+      enabled: true,
+      syncPolicy: { mode: "scheduled", intervalMinutes: 10 },
+      capabilities: { read: ["helper"], write: [] }
+    });
+    await catalog.publishSourceSnapshot({
+      sourceId: source.id,
+      expectedRevision: "0",
+      publishedAt: "2026-07-14T08:00:00.000Z",
+      items: [
+        {
+          sourceId: source.id,
+          itemKind: "church_document",
+          domain: "general",
+          title: "較早的教會資料",
+          storageRef: { provider: "external_link", url: "https://example.test/stale" }
+        }
+      ]
+    });
+    const routeEvents: RouteObserverEvent[] = [];
+    const traceStore = new InMemoryAgentTraceStore();
+    const conversationWindowStore = new InMemoryConversationWindowStore({ now });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {
+        find_resource: createFindResourceHandler({
+          catalog,
+          graph: { listFolderChildren: vi.fn(), createSharingLink: vi.fn() },
+          now
+        })
+      },
+      textMessageHandlers: {},
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      conversationWindowStore,
+      agentTraceStore: traceStore,
+      routeObserver: (observed) => {
+        routeEvents.push(observed);
+      },
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "execute",
+          capability: "find_resource",
+          arguments: { query: "較早的教會資料" },
+          reasonCode: "explicit_intent"
+        })
+      },
+      now
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(["find_resource"]),
+      event: event("查教會資料 較早的教會資料"),
+      requestId: "stale-resource"
+    });
+    const activeTask = await conversationWindowStore.activeTask({
+      profileName: "helper",
+      sourceKey: "group:C1",
+      requesterUserId: "U1"
+    });
+    const traces = await traceStore.list();
+
+    expect(result?.replyText).toContain("資料時間：2026-07-14T08:00:00.000Z");
+    expect(result?.diagnostics?.dataAsOf).toBe("2026-07-14T08:00:00.000Z");
+    expect(JSON.stringify(result?.agentResult)).not.toContain("2026-07-14T08:00:00.000Z");
+    expect(JSON.stringify(routeEvents)).not.toContain("2026-07-14T08:00:00.000Z");
+    expect(JSON.stringify(traces)).not.toContain("2026-07-14T08:00:00.000Z");
+    expect(JSON.stringify(activeTask)).not.toContain("2026-07-14T08:00:00.000Z");
+  });
+
   it("answers a bare role follow-up from the exact next schedule selected in the prior turn", async () => {
     const { runtime, lastErrorStore } = await fixture();
 
@@ -340,8 +419,8 @@ describe("AgentTurnRuntime controlled path", () => {
       requestId: "u2"
     });
 
-    expect(result?.replyText).toContain("權限");
-    expect(result?.replyText).toContain("/help");
+    expect(result?.replyText).toBe("目前不支援這個請求。");
+    expect(result?.quickReplies).toBeUndefined();
   });
 
   it("fails closed with a clarification when the controlled planner is unavailable", async () => {
@@ -425,6 +504,46 @@ describe("AgentTurnRuntime controlled path", () => {
     ]);
   });
 
+  it.each([
+    ["function_disabled", "權限", true],
+    ["source_not_allowed", "權限", true],
+    ["write_evidence_missing", "明確", false],
+    ["candidate_not_allowed", "不支援", false],
+    ["planner_denied", "不支援", false],
+    ["capability_not_agent_enabled", "暫時無法使用", false],
+    ["invalid_policy", "處理請求時發生錯誤", false]
+  ] as const)(
+    "renders validator deny %s through its truthful class",
+    async (reasonCode, phrase, hasHelp) => {
+      const runtime = createAgentTurnRuntime({
+        functionRegistry: {},
+        textMessageHandlers: {},
+        inFlightStore: new MemoryInFlightStore(),
+        lastErrorStore: new InMemoryLastErrorStore(10),
+        lastRouteStore: new InMemoryLastRouteStore(10),
+        controlledAgentRouter: {
+          resolve: vi.fn().mockResolvedValue({
+            disposition: "deny",
+            reasonCode
+          })
+        },
+        now
+      });
+
+      const result = await runtime.handleTextTurn({
+        profile: profile(),
+        event: event("下一場服事"),
+        requestId: `deny-${reasonCode}`
+      });
+
+      expect(result?.replyText).toContain(phrase);
+      expect(result?.replyText.includes("/help")).toBe(hasHelp);
+      expect(Boolean(result?.quickReplies?.some((item) => item.action.type === "message"))).toBe(
+        hasHelp
+      );
+    }
+  );
+
   it("keeps the definition-owned missing-slot prompt with one bounded next action", async () => {
     const sessionStore = new InMemorySessionStore({ now });
     const runtime = createAgentTurnRuntime({
@@ -482,7 +601,8 @@ describe("AgentTurnRuntime controlled path", () => {
           ? {
               diagnostics: {
                 executionMode: "catalog_snapshot_read" as const,
-                freshnessStatus: "stale_allowed" as const
+                freshnessStatus: "stale_allowed" as const,
+                dataAsOf: "2026-07-14T08:00:00.000Z"
               }
             }
           : {})
@@ -513,6 +633,9 @@ describe("AgentTurnRuntime controlled path", () => {
       });
 
       expect(result?.replyText).toContain(phrase);
+      if (state === "stale_allowed") {
+        expect(result?.replyText).toContain("資料時間：2026-07-14T08:00:00.000Z");
+      }
       expect(result?.agentResult).toBe(agentResult);
       expect(result?.responseData).toBe(responseData);
       expect(result?.quickReplies).toBeUndefined();
@@ -690,5 +813,79 @@ describe("AgentTurnRuntime controlled path", () => {
     expect(querySchedule).toHaveBeenCalledOnce();
     expect(retrieveMemory).not.toHaveBeenCalled();
     expect(second?.replyText).toBe("晨更家族：中平家族");
+  });
+
+  it("invokes the shared completion boundary exactly once for direct execution", async () => {
+    const complete = vi.fn<ControlledCompletionObserver["complete"]>(async ({ result }) => result);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {
+        query_schedule: vi.fn<FunctionHandler>().mockResolvedValue({
+          ok: true,
+          replyText: "服事表結果",
+          agentResult: { status: "success", replyText: "服事表結果" }
+        })
+      },
+      textMessageHandlers: {},
+      completionObserver: { complete },
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({
+          disposition: "execute",
+          capability: "query_schedule",
+          arguments: { query: "下一場" },
+          reasonCode: "explicit_intent"
+        })
+      },
+      now
+    });
+
+    await runtime.handleTextTurn({
+      profile: profile(),
+      event: event("下一場服事"),
+      requestId: "direct-completion"
+    });
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "query_schedule", durationMs: expect.any(Number) })
+    );
+  });
+
+  it("invokes the shared completion boundary exactly once for an executed text continuation", async () => {
+    const complete = vi.fn<ControlledCompletionObserver["complete"]>(async ({ result }) => result);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {
+        confirm_memory: {
+          turnStage: "pending_function",
+          matches: async () => true,
+          handle: async () => ({
+            ok: true,
+            replyText: "已保存",
+            executedAction: "save_memory",
+            writePhase: "commit",
+            agentResult: { status: "success", replyText: "已保存" }
+          })
+        }
+      },
+      completionObserver: { complete },
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+
+    await runtime.handleTextTurn({
+      profile: profile(["save_memory"]),
+      event: event("保存"),
+      requestId: "continuation-completion"
+    });
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "save_memory", durationMs: expect.any(Number) })
+    );
   });
 });

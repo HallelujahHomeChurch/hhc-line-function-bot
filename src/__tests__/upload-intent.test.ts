@@ -76,4 +76,42 @@ describe("group upload intent", () => {
       })
     ).resolves.toMatchObject({ expiresAt: "2026-07-15T10:02:00.000Z" });
   });
+
+  it("turns the same activation into direct-chat attachment guidance without group intent state", async () => {
+    const store = new InMemorySessionStore({ now: () => new Date("2026-07-15T10:00:00Z") });
+    const handler = createUploadIntentTextMessageHandler({ sessionStore: store });
+    const context = {
+      requestId: "upload-direct",
+      profile: {
+        name: "helper",
+        webhookPath: "/api/line/webhook/helper",
+        channelSecret: "secret",
+        channelAccessToken: "token",
+        allowDirectUser: true,
+        allowRooms: false,
+        allowedMessageTypes: ["text" as const, "file" as const],
+        groupRequireWakeWord: true,
+        wakeKeywords: ["小哈"],
+        acceptMention: true,
+        enabledFunctions: ["save_resource" as const]
+      },
+      event: {
+        type: "message" as const,
+        source: { type: "user" as const, userId: "U1" },
+        message: { type: "text" as const, text: "小哈我要上傳檔案" }
+      }
+    };
+
+    await expect(handler.matches({ text: "小哈我要上傳檔案" }, context)).resolves.toBe(true);
+    await expect(handler.handle({ text: "小哈我要上傳檔案" }, context)).resolves.toMatchObject({
+      replyText: "請直接上傳一個圖片或檔案。"
+    });
+    await expect(
+      store.takeUploadIntent({
+        profileName: "helper",
+        source: { type: "user", userId: "U1" },
+        requesterUserId: "U1"
+      })
+    ).resolves.toBeUndefined();
+  });
 });

@@ -189,6 +189,8 @@ describe("effective capability projection", () => {
     expect(help.replyText).toContain("- 查服事表：依日期、聚會或服事類型查詢目前可用的服事安排。");
     expect(help.replyText).toContain("- 記住資訊：保存使用者明確請我記住的文字資訊。");
     expect(help.replyText).toContain("- 查教會資料：搜尋目前可用的泛用教會資料。");
+    expect(help.replyText).toContain("- 保存檔案：");
+    expect(help.replyText).toMatch(/上傳.*掃毒.*發布/u);
     expect(introduction.replyText).toMatch(/^我是小哈，家教會的小幫手。/u);
     expect(introduction.quickReplies).toEqual(help.quickReplies);
     expect(registration.replyText).toContain("小哈 下一場服事表");

@@ -1,6 +1,7 @@
 import { searchCatalogWithFreshness } from "../catalog/retrieval.js";
 import { catalogSourceAllowsRead, type CatalogStore } from "../catalog/store.js";
 import { findResourceArgumentsSchema } from "../function-arguments.js";
+import type { RetrievalDiagnostics } from "../observability/retrieval-diagnostics.js";
 import type { FunctionExecutionResult, FunctionHandler, GraphDriveClient } from "../types.js";
 import { createValidatedSharingLink } from "./validated-sharing-link.js";
 
@@ -93,10 +94,23 @@ export function createFindResourceHandler(options: FindResourceOptions): Functio
     }
 
     const result = await createCatalogItemReply(options.graph, items[0], now());
-    if (retrieval.status === "stale_allowed") {
-      return { ...result, replyText: `${result.replyText}\n資料可能不是最新版本。` };
-    }
-    return result;
+    return { ...result, diagnostics: catalogDiagnostics(retrieval) };
+  };
+}
+
+function catalogDiagnostics(
+  retrieval: Awaited<ReturnType<typeof searchCatalogWithFreshness>>
+): RetrievalDiagnostics {
+  return {
+    executionMode: "catalog_snapshot_read",
+    freshnessStatus:
+      retrieval.status === "fresh"
+        ? "fresh"
+        : retrieval.status === "stale_allowed"
+          ? "stale_allowed"
+          : "stale_rejected",
+    sourceRevision: retrieval.revision ? "present" : "missing",
+    dataAsOf: retrieval.dataAsOf
   };
 }
 

@@ -48,10 +48,13 @@ export function createUploadIntentTextMessageHandler(input: {
   return {
     turnStage: "attachment",
     matches: async (request, context) =>
-      context.event.source.type === "group" &&
+      (context.event.source.type === "group" || context.event.source.type === "user") &&
       context.profile.enabledFunctions.includes("save_resource") &&
       isUploadActivation(request.text),
     handle: async (_request, context) => {
+      if (context.event.source.type === "user") {
+        return { ok: true, replyText: "請直接上傳一個圖片或檔案。" };
+      }
       const stored = await createUploadIntent({
         sessionStore: input.sessionStore,
         requestId: context.requestId ?? input.requestIdFactory?.() ?? randomUUID(),

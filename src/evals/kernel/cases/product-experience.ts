@@ -8,8 +8,11 @@ import { renderCapabilityHelp } from "../../../application/capabilities/capabili
 import { projectEffectiveCapabilities } from "../../../application/capabilities/effective-capability-projection.js";
 import {
   applyResultGuidance,
-  type ControlledResultState
+  controlledResultStateForValidatorDeny,
+  type ControlledResultState,
+  type ValidatorDenyReason
 } from "../../../application/turn/result-guidance.js";
+import { createControlledCompletionObserver } from "../../../application/turn/completion-observer.js";
 import { InMemoryCatalogStore } from "../../../catalog/store.js";
 import { getFunctionDefinition } from "../../../functions/definitions.js";
 import { InMemoryKnowledgeStore } from "../../../knowledge/store.js";
@@ -78,27 +81,27 @@ const expectedDiscovery: Record<DiscoveryKind, ExpectedDiscovery> = {
     reads: ["query_schedule", "find_sheet_music"],
     writes: [],
     displayed: ["查服事表", "查歌譜"],
-    omitted: ["查投影片", "記住資訊", "保存連結資源"]
+    omitted: ["查投影片", "記住資訊", "保存檔案"]
   },
   group: {
     effective: ["find_sheet_music", "query_schedule", "find_ppt_slides"],
     reads: ["find_ppt_slides", "query_schedule", "find_sheet_music"],
     writes: [],
     displayed: ["查投影片", "查服事表", "查歌譜"],
-    omitted: ["記住資訊", "保存連結資源"]
+    omitted: ["記住資訊", "保存檔案"]
   },
   granted_user: {
     effective: ["find_sheet_music", "query_schedule", "save_memory"],
     reads: ["query_schedule", "find_sheet_music"],
     writes: ["save_memory"],
     displayed: ["查服事表", "查歌譜", "記住資訊"],
-    omitted: ["查投影片", "保存連結資源"]
+    omitted: ["查投影片", "保存檔案"]
   },
   admin: {
     effective: PROFILE_FUNCTIONS,
     reads: ["query_schedule", "find_sheet_music"],
     writes: ["save_memory", "save_resource"],
-    displayed: ["查服事表", "查歌譜", "記住資訊", "保存連結資源"],
+    displayed: ["查服事表", "查歌譜", "記住資訊", "保存檔案"],
     omitted: ["查投影片"]
   }
 };
@@ -114,7 +117,9 @@ function discoveryCase(slug: string, kind: DiscoveryKind): KernelAcceptanceCase 
     });
     const projection = projectEffectiveCapabilities({ context: access });
     const help = renderCapabilityHelp(projection, "help");
+    const introduction = renderCapabilityHelp(projection, "introduction");
     const expected = expectedDiscovery[kind];
+    const publicCommands = ["/registry", "/whoami", "/memories", "/forget-memory"];
     const passed =
       access.authorized &&
       sameValues(access.profile.enabledFunctions, expected.effective) &&
@@ -128,7 +133,11 @@ function discoveryCase(slug: string, kind: DiscoveryKind): KernelAcceptanceCase 
       ) &&
       expected.displayed.every((label) => help.replyText.includes(`- ${label}：`)) &&
       expected.omitted.every((label) => !help.replyText.includes(`- ${label}：`)) &&
+      publicCommands.every(
+        (command) => help.replyText.includes(command) && !introduction.replyText.includes(command)
+      ) &&
       (help.quickReplies?.length ?? 0) <= 3 &&
+      sameQuickReplies(help.quickReplies, introduction.quickReplies) &&
       expected.writes.length > 0 === help.replyText.includes("可以保存或更新");
 
     return observation({
@@ -269,13 +278,52 @@ function registrationFirstReadCase(): KernelAcceptanceCase {
             }
           ])
         : [];
+      const fallbackStore = new InMemoryAccessStore();
+      const fallbackInviteCodes = new InMemoryRegistrationInviteCodeStore({
+        codeFactory: () => "R41FALLBACK",
+        now: context.now
+      });
+      await fallbackInviteCodes.create({
+        profileName: PROFILE_NAME,
+        createdBy: "U_SYNTHETIC_ADMIN",
+        ttlMinutes: 60,
+        now: context.now()
+      });
+      const fallbackEvent = textEvent({ type: "user", userId: OTHER_REQUESTER });
+      const fallbackCompletion = await handlePublicAccessCommand({
+        text: "/registry R41FALLBACK",
+        profile: registrationProfile,
+        event: fallbackEvent,
+        accessStore: fallbackStore,
+        registrationInviteCodeStore: fallbackInviteCodes,
+        lineIdentity: {
+          getUserDisplayName: async () => "Fallback member",
+          getGroupDisplayName: async () => undefined
+        },
+        adminHandlers: {},
+        productContext: { requestId: `${id}-fallback` },
+        policies: publicAccessPolicies,
+        resolveCurrentAccess: async () => {
+          throw new Error("synthetic_post_commit_projection_failure");
+        }
+      });
+      const fallbackPersisted = await fallbackStore.hasActivePrincipal(
+        PROFILE_NAME,
+        "user",
+        OTHER_REQUESTER
+      );
+      const fallbackConsumed = !(await fallbackInviteCodes.consume(PROFILE_NAME, "R41FALLBACK"));
       const passed =
         !before.authorized &&
         after.authorized &&
         completion?.replyText.includes("已開通，你現在可以使用小哈。") === true &&
         text === "小哈 下一場服事表" &&
         executions === 1 &&
-        result?.resultStatus === "success";
+        result?.resultStatus === "success" &&
+        fallbackCompletion?.replyText === "已開通，你現在可以使用小哈。" &&
+        fallbackCompletion.quickReplies === undefined &&
+        fallbackPersisted &&
+        fallbackConsumed;
 
       return observation({
         id,
@@ -358,6 +406,16 @@ function resultGuidanceClassesCase(): KernelAcceptanceCase {
           ]
         },
         {
+          state: "write_intent_required",
+          result: { ok: true, replyText: "" },
+          expectedReplyText: "若要保存或更新，請明確說明要執行的操作與內容。"
+        },
+        {
+          state: "unsupported",
+          result: { ok: true, replyText: "" },
+          expectedReplyText: "目前不支援這個請求。"
+        },
+        {
           state: "missing_input",
           result: { ok: true, replyText: "" },
           expectedReplyText: "要查哪一天、哪一場聚會，或哪一類服事？\n請回覆一項需要的資訊。"
@@ -383,8 +441,14 @@ function resultGuidanceClassesCase(): KernelAcceptanceCase {
         },
         {
           state: "stale_allowed",
-          result: controlledResult("success", "合成舊資料"),
-          staleAt: "2026-07-26T07:00:00.000Z",
+          result: {
+            ...controlledResult("success", "合成舊資料"),
+            diagnostics: {
+              executionMode: "catalog_snapshot_read",
+              freshnessStatus: "stale_allowed",
+              dataAsOf: "2026-07-26T07:00:00.000Z"
+            }
+          },
           expectedReplyText:
             "合成舊資料\n資料時間：2026-07-26T07:00:00.000Z。這份較早的資料仍可使用，不會自動重新查詢。"
         },
@@ -416,16 +480,43 @@ function resultGuidanceClassesCase(): KernelAcceptanceCase {
           expectedReplyText: "處理請求時發生錯誤，請稍後再試。"
         }
       ];
-      const guided = samples.map((sample) => ({
-        sample,
-        result: applyResultGuidance({
-          state: sample.state,
-          result: sample.result,
-          definition,
-          supportsViewFull: sample.supportsViewFull,
-          staleAt: sample.staleAt
-        })
-      }));
+      const completionObserver = createControlledCompletionObserver({});
+      const guided = await Promise.all(
+        samples.map(async (sample) => ({
+          sample,
+          result:
+            sample.state === "stale_allowed"
+              ? await completionObserver.complete({
+                  context: {
+                    profile: profile(["query_schedule"]),
+                    event: textEvent({
+                      type: "group",
+                      groupId: GROUP_ALPHA,
+                      userId: REQUESTER
+                    }),
+                    requestId: `${id}-stale`
+                  },
+                  action: "query_schedule",
+                  result: sample.result
+                })
+              : applyResultGuidance({
+                  state: sample.state,
+                  result: sample.result,
+                  definition,
+                  supportsViewFull: sample.supportsViewFull,
+                  staleAt: sample.result.diagnostics?.dataAsOf
+                })
+        }))
+      );
+      const denyMatrix: Array<[ValidatorDenyReason, ControlledResultState]> = [
+        ["function_disabled", "permission_denied"],
+        ["source_not_allowed", "permission_denied"],
+        ["write_evidence_missing", "write_intent_required"],
+        ["candidate_not_allowed", "unsupported"],
+        ["planner_denied", "unsupported"],
+        ["capability_not_agent_enabled", "unavailable"],
+        ["invalid_policy", "error"]
+      ];
       const output = guided
         .map(({ result }) => result.replyText)
         .join("\n")
@@ -441,8 +532,12 @@ function resultGuidanceClassesCase(): KernelAcceptanceCase {
       const unavailablePassed =
         checks.find(({ state }) => state === "unavailable")?.passed === true;
       const passed =
-        guided.length === 8 &&
+        guided.length === 10 &&
         checks.every(({ passed: checkPassed }) => checkPassed) &&
+        denyMatrix.every(
+          ([reason, expectedState]) =>
+            controlledResultStateForValidatorDeny(reason) === expectedState
+        ) &&
         [
           "deepseek",
           "openai",

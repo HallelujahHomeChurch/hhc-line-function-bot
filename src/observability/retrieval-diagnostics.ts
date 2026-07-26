@@ -30,6 +30,11 @@ export interface RetrievalDiagnostics {
   sourceRevision?: "present" | "missing";
   queryFingerprint?: string;
   referenceFingerprint?: string;
+  /**
+   * Reply-presentation metadata only. Sanitizers must exclude this from
+   * telemetry, traces, planner input, task frames, and result envelopes.
+   */
+  dataAsOf?: string;
 }
 
 export function diagnosticFingerprint(

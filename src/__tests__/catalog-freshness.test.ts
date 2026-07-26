@@ -54,6 +54,36 @@ describe("catalog publication freshness", () => {
     ).resolves.toMatchObject({ status: "not_found", revision: "slides:1" });
   });
 
+  it("carries the actual stale snapshot timestamp for reply presentation", async () => {
+    const catalog = new InMemoryCatalogStore();
+    const source = await catalog.upsertSource(sourceInput);
+    await catalog.publishSourceSnapshot({
+      sourceId: source.id,
+      expectedRevision: "0",
+      publishedAt: "2026-07-20T00:00:00.000Z",
+      items: [
+        {
+          sourceId: source.id,
+          itemKind: "ppt_slide",
+          domain: "presentation",
+          title: "較早的投影片.pptx",
+          storageRef: { provider: "graph", driveId: "d", itemId: "stale" }
+        }
+      ]
+    });
+
+    await expect(
+      searchCatalogWithFreshness({
+        catalog,
+        search: { profileName: "helper", query: "較早", domains: ["presentation"] },
+        now: new Date("2026-07-20T00:30:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      status: "stale_allowed",
+      dataAsOf: "2026-07-20T00:00:00.000Z"
+    });
+  });
+
   it("keeps the prior revision when a publication loses the revision race", async () => {
     const catalog = new InMemoryCatalogStore();
     const source = await catalog.upsertSource(sourceInput);

@@ -13,13 +13,25 @@ export function renderCapabilityHelp(
       ? ["我是小哈，家教會的小幫手。", "", "我目前可以協助："]
       : ["我目前可以協助："];
   const sections = capabilitySections(projection);
+  const commandSection =
+    mode === "help"
+      ? [
+          "",
+          "常用指令",
+          "- /registry <code>：使用邀請碼開通",
+          "- /whoami：查看目前身分與來源",
+          "- /memories：查看已保存的文字記憶",
+          "- /forget-memory <id>：刪除指定的文字記憶"
+        ]
+      : [];
 
   return {
     ok: true,
     replyText: [
       ...heading,
       "",
-      ...(sections.length > 0 ? sections : ["目前還沒有開放可使用的項目。"])
+      ...(sections.length > 0 ? sections : ["目前還沒有開放可使用的項目。"]),
+      ...commandSection
     ].join("\n"),
     quickReplies: projection.onboarding.map((presentation) => presentation.quickReply).slice(0, 3)
   };

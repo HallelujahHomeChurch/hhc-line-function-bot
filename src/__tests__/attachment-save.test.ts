@@ -299,6 +299,9 @@ describe("attachment save pipeline", () => {
 
     expect(result?.quickReplies).toHaveLength(2);
     expect(result?.replyText).toContain("OriginalDeck.pptx");
+    expect(result?.replyText).toContain("下載、驗證並掃毒");
+    expect(result?.replyText).toContain("保存並發布");
+    expect(result?.replyText).not.toContain("OneDrive");
     expect(lineContent.getMessageContent).not.toHaveBeenCalled();
     expect(graph.uploadFile).not.toHaveBeenCalled();
     await expect(

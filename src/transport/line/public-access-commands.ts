@@ -180,8 +180,7 @@ async function handleRegistryCommand(
     hmacKey: input.productContext.hmacKey,
     resultClass: "success"
   });
-  const current = await input.resolveCurrentAccess();
-  return renderRegistrationCompletion(projectEffectiveCapabilities({ context: current }));
+  return renderPostCommitRegistration(input);
 }
 
 async function handleGroupRegistryCommand(
@@ -222,8 +221,18 @@ async function handleGroupRegistryCommand(
     hmacKey: input.productContext.hmacKey,
     resultClass: "success"
   });
-  const current = await input.resolveCurrentAccess();
-  return renderRegistrationCompletion(projectEffectiveCapabilities({ context: current }));
+  return renderPostCommitRegistration(input);
+}
+
+async function renderPostCommitRegistration(
+  input: Parameters<typeof handlePublicAccessCommand>[0]
+): Promise<FunctionExecutionResult> {
+  try {
+    const current = await input.resolveCurrentAccess();
+    return renderRegistrationCompletion(projectEffectiveCapabilities({ context: current }));
+  } catch {
+    return { ok: true, replyText: "已開通，你現在可以使用小哈。" };
+  }
 }
 
 export function registrationPrompt(profile: BotProfileConfig, event: LineEvent): string {

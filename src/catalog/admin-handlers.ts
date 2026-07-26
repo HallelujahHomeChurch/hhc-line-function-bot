@@ -166,11 +166,15 @@ function formatCatalogSources(title: string, sources: CatalogSourceRecord[]): st
           `read=${source.capabilities.read.join(",") || "(none)"}`,
           `write=${source.capabilities.write.join(",") || "(none)"}`
         ].join(" "),
-        `  owner: ${source.ownerLabel ?? "尚未指定"}`,
-        `  freshness: ${source.freshnessResponsibility ?? "尚未指定"}`
+        `  owner: ${responsibilityLabel(source.ownerLabel)}`,
+        `  freshness: ${responsibilityLabel(source.freshnessResponsibility)}`
       ].join("\n")
     )
   ].join("\n");
+}
+
+function responsibilityLabel(value: string | undefined): string {
+  return value?.trim() || "尚未指定";
 }
 
 function summarizeSyncResult(result: SyncCatalogSourcesResult): Record<string, unknown> {

@@ -422,7 +422,7 @@ function confirmationPreview(pending: PendingAttachmentSession, target: Attachme
       `名稱：${target.title}`,
       ...sourceLines,
       `類型：${labelForItemKind(target.itemKind)}`,
-      "確認後會下載、驗證並掃毒，通過後才會上傳到 OneDrive。"
+      "確認後會下載、驗證並掃毒，通過後才會保存並發布。"
     ].join("\n"),
     quickReplies: confirmationQuickReplies()
   };

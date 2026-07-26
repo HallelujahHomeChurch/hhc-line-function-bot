@@ -19,6 +19,7 @@ import {
   isDefaultUserFunctionAvailable,
   resolveEffectiveAccessContext
 } from "../../application/access/effective-access.js";
+import type { ControlledCompletionObserver } from "../../application/turn/completion-observer.js";
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import {
   classifyGroupEngagement,
@@ -103,6 +104,7 @@ export interface AppDependencies {
   conversationWindowStore: ConversationWindowStore;
   textFallbackGenerator?: TextGenerationProvider;
   controlledAgentRouter?: ControlledAgentRouter;
+  completionObserver: ControlledCompletionObserver;
 }
 
 interface AllowResult {
@@ -255,7 +257,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         agentJobStore,
         conversationWindowStore,
         webhookEventStore,
-        deps.sessionStore
+        deps.sessionStore,
+        deps.completionObserver
       );
     });
   }
@@ -291,7 +294,8 @@ async function handleWebhook(
   agentJobStore: AgentJobStore,
   conversationWindowStore: ConversationWindowStore,
   webhookEventStore: WebhookEventStore,
-  sessionStore: SessionStore | undefined
+  sessionStore: SessionStore | undefined,
+  completionObserver: ControlledCompletionObserver
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -369,7 +373,7 @@ async function handleWebhook(
         continue;
       }
       const startedAt = Date.now();
-      const result = await handlePostbackEvent(
+      const { result, completionEligible } = await handlePostbackEvent(
         event,
         effectiveProfile,
         postbackHandlers,
@@ -377,12 +381,13 @@ async function handleWebhook(
         requesterDisplayName,
         agentJobStore
       );
-      const postbackFunctionName =
-        result.executedAction ??
-        functionNameForAgentResource(
-          result.agentResource?.resourceType,
-          effectiveProfile.enabledFunctions
-        );
+      const postbackFunctionName = completionEligible
+        ? (result.executedAction ??
+          functionNameForAgentResource(
+            result.agentResource?.resourceType,
+            effectiveProfile.enabledFunctions
+          ))
+        : undefined;
       if (postbackFunctionName) {
         await applyActiveTaskTransition({
           store: conversationWindowStore,
@@ -402,19 +407,35 @@ async function handleWebhook(
           result
         });
       }
+      const durationMs = elapsedMs(startedAt);
+      const completedResult = postbackFunctionName
+        ? await completionObserver.complete({
+            context: {
+              profile: effectiveProfile,
+              event,
+              requestId,
+              requesterDisplayName,
+              requesterIsAdmin
+            },
+            action: postbackFunctionName,
+            result,
+            durationMs,
+            clarificationCount: 0
+          })
+        : result;
       await emitRouteEvent(routeObserver, {
         kind: "postback",
         profileName: profile.name,
         sourceType: event.source.type,
         requestId,
         action: parsePostbackData(event.postback?.data ?? "")?.action,
-        ok: result.ok,
-        durationMs: elapsedMs(startedAt)
+        ok: completedResult.ok,
+        durationMs
       });
       await line.replyText(
         event.replyToken,
-        result.replyText,
-        result.quickReplies ? { quickReplies: result.quickReplies } : undefined
+        completedResult.replyText,
+        completedResult.quickReplies ? { quickReplies: completedResult.quickReplies } : undefined
       );
       continue;
     }
@@ -1531,23 +1552,13 @@ async function groupEffectiveFunctionDisplayNames(
   accessStore: AccessStore,
   groupId: string
 ): Promise<string[]> {
-  const profileDefaults = profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
-  const grants = (await accessStore.listGroupFunctionGrants(profile.name, groupId)).filter((name) =>
-    isFunctionGrantableForPrincipal(name, "group")
-  );
-  const roleFunctions = (
-    await accessStore.listPrincipalCapabilities(profile.name, "group", groupId)
-  )
-    .map((capability) => capability.match(/^function:([^:]+):execute$/u)?.[1])
-    .filter((name): name is FunctionName =>
-      Boolean(
-        name &&
-        isFunctionName(name) &&
-        isGrantableFunctionName(name) &&
-        isFunctionGrantableForPrincipal(name, "group")
-      )
-    );
-  return mergeFunctionNames(mergeFunctionNames(profileDefaults, grants), roleFunctions).flatMap(
+  const context = await resolveEffectiveAccessContext({
+    profile,
+    event: { type: "access-summary", source: { type: "group", groupId } },
+    accessStore,
+    requesterIsAdmin: false
+  });
+  return context.profile.enabledFunctions.flatMap(
     (name) => getFunctionDefinition(name)?.displayName ?? []
   );
 }
