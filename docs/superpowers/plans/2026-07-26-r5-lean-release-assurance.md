@@ -40,6 +40,7 @@ Storage, ClamAV.
 ### Task 1: Add Versioned Assurance Reports And The Deploy-Time Probe
 
 **Files:**
+
 - Create: `src/assurance/report.ts`
 - Create: `src/assurance/release-probe.ts`
 - Create: `src/tools/run-release-probe.ts`
@@ -48,11 +49,12 @@ Storage, ClamAV.
 - Modify: `src/__tests__/entrance.test.ts`
 
 **Interfaces:**
+
 - Produces:
   `buildAssuranceReport(input: AssuranceReportInput): AssuranceReport`
 - Produces:
   `runReleaseProbe(input: ReleaseProbeInput,
-  dependencies: ReleaseProbeDependencies): Promise<ReleaseProbeResult>`
+dependencies: ReleaseProbeDependencies): Promise<ReleaseProbeResult>`
 - The CLI reads `BOT_BASE_URL`, `SEARXNG_BASE_URL`,
   `GATEWAY_WEBHOOK_URL`, `LINE_HELPER_CHANNEL_SECRET`, and
   `CLAMAV_SIGNATURE_MANIFEST_PATH`.
@@ -129,6 +131,7 @@ git commit -m "feat: add provider-free release probe"
 ### Task 2: Add The Weekly External Dependency Probe
 
 **Files:**
+
 - Create: `src/assurance/periodic-probe.ts`
 - Create: `src/tools/run-periodic-assurance.ts`
 - Create: `src/__tests__/periodic-assurance.test.ts`
@@ -136,10 +139,11 @@ git commit -m "feat: add provider-free release probe"
 - Modify: `src/types.ts`
 
 **Interfaces:**
+
 - Produces:
   `runPeriodicAssurance(input: PeriodicAssuranceInput,
-  dependencies: PeriodicAssuranceDependencies):
-  Promise<PeriodicAssuranceResult>`
+dependencies: PeriodicAssuranceDependencies):
+Promise<PeriodicAssuranceResult>`
 - Adds optional
   `ensureFolder?(driveId, parentItemId, name): Promise<DriveItem>` to
   `GraphDriveClient`.
@@ -192,6 +196,7 @@ git commit -m "feat: add bounded periodic assurance"
 ### Task 3: Define Finite Assurance Jobs
 
 **Files:**
+
 - Create: `aca.release-probe-job.yaml`
 - Create: `aca.periodic-assurance-job.yaml`
 - Modify: `scripts/deploy-aca.sh`
@@ -199,6 +204,7 @@ git commit -m "feat: add bounded periodic assurance"
 - Modify: `src/__tests__/profile-config-deployment-contract.test.ts`
 
 **Interfaces:**
+
 - Release Job name: `hhc-line-bot-release-probe`
 - Periodic Job name: `hhc-line-bot-periodic-assurance`
 - Both are Manual, one replica, retry limit zero, no ingress, 0.25 CPU /
@@ -250,12 +256,14 @@ git commit -m "deploy: define finite assurance jobs"
 ### Task 4: Make Deployment A Recoverable Release Transaction
 
 **Files:**
+
 - Create: `scripts/release-assurance.sh`
 - Create: `src/__tests__/release-assurance-script.test.ts`
 - Modify: `scripts/deploy-aca.sh`
 - Modify: `src/__tests__/profile-config-deployment-contract.test.ts`
 
 **Interfaces:**
+
 - `capture_known_good_state`
 - `mark_release_mutated`
 - `run_release_gates`
@@ -326,12 +334,14 @@ git commit -m "deploy: make releases recoverable"
 ### Task 5: Automate Weekly Assurance
 
 **Files:**
+
 - Create: `.github/workflows/periodic-assurance.yml`
 - Create: `scripts/run-periodic-assurance.sh`
 - Create: `src/__tests__/periodic-assurance-script.test.ts`
 - Modify: `src/__tests__/profile-config-deployment-contract.test.ts`
 
 **Interfaces:**
+
 - Cron: `30 20 * * 1`
 - Manual dispatch supported.
 - Output:
@@ -373,6 +383,7 @@ git commit -m "ops: schedule weekly production assurance"
 ### Task 6: Align Operations And Close The Roadmap
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 - Modify: `docs/architecture-context.md`
@@ -382,6 +393,7 @@ git commit -m "ops: schedule weekly production assurance"
 - Modify: `src/__tests__/modular-monolith-docs.test.ts`
 
 **Interfaces:**
+
 - Documents name R5.0 as the final milestone.
 - Documentation distinguishes deterministic rollback proof, production release
   acceptance, weekly dependency assurance, and natural LINE delivery evidence.
@@ -417,6 +429,7 @@ git commit -m "docs: enter stable maintenance after R5"
 ### Task 7: Complete Review, Delivery, And Production Acceptance
 
 **Files:**
+
 - Modify only files required by review findings.
 
 - [ ] **Step 1: Run all local gates**
