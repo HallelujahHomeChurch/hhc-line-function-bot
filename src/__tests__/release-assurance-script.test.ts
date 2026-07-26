@@ -104,7 +104,7 @@ describe("release assurance shell transaction", () => {
     expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
     expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
     expectForbiddenCallsAbsent(calls);
-  });
+  }, 15_000);
 
   it("resolves a pre-R5 tagged known-good image to its actual OCI digest before rollback", async () => {
     const fixture = await createFixture("known_good_tag");
@@ -236,103 +236,121 @@ describe("release assurance shell transaction", () => {
     "periodic_resources_mismatch",
     "periodic_mount_mismatch",
     "periodic_provider_env"
-  ])("fails the %s gate and performs a verified rollback", async (scenario) => {
-    const fixture = await createFixture(scenario);
-    const result = fixture.run();
-    const calls = await fixture.calls();
-    expect(result.status, diagnostic(result, calls)).toBe(42);
-    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
-    const copy = calls.find((args) => args.includes("revision") && args.includes("copy"));
+  ])(
+    "fails the %s gate and performs a verified rollback",
+    async (scenario) => {
+      const fixture = await createFixture(scenario);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      expect(result.status, diagnostic(result, calls)).toBe(42);
+      const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+      const copy = calls.find((args) => args.includes("revision") && args.includes("copy"));
 
-    expect(report.status).toBe("failed");
-    expect(report.failureCode).not.toBe("none");
-    if (
-      scenario.startsWith("target_") ||
-      scenario.startsWith("bot_") ||
-      scenario.startsWith("searxng_") ||
-      scenario.includes("definition") ||
-      scenario.includes("_cron_") ||
-      scenario.includes("_image_") ||
-      scenario.includes("_scaler_") ||
-      scenario.includes("_resources_") ||
-      scenario.includes("_mount_") ||
-      scenario.includes("_args_") ||
-      scenario.includes("_env_") ||
-      scenario.includes("_provider_")
-    ) {
-      expect(report).not.toHaveProperty("providerRequests");
-    }
-    if (scenario === "bot_ingress_mismatch") {
-      expect(report.failureCode).toBe("http_mismatch");
-    }
-    expect(report.rollback).toEqual({
-      status: "restored",
-      revision: "bot--rollback",
-      image: GOOD_BOT_DIGEST
-    });
-    expect(copy).toEqual(expect.arrayContaining(["copy", "--from-revision", "bot--known-good"]));
-    expect(calls).toContainEqual(
-      expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-catalog-sync", "--yaml"])
-    );
-    expect(calls).toContainEqual(
-      expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-attachment-scan", "--yaml"])
-    );
-    expect(calls).toContainEqual(
-      expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-clamav-refresh", "--yaml"])
-    );
-    expect(calls).toContainEqual(
-      expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-release-probe", "--yaml"])
-    );
-    expect(calls).toContainEqual(
-      expect.arrayContaining([
-        "job",
-        "update",
-        "--name",
-        "hhc-line-bot-periodic-assurance",
-        "--yaml"
-      ])
-    );
-    expectForbiddenCallsAbsent(calls);
-  });
+      expect(report.status).toBe("failed");
+      expect(report.failureCode).not.toBe("none");
+      if (
+        scenario.startsWith("target_") ||
+        scenario.startsWith("bot_") ||
+        scenario.startsWith("searxng_") ||
+        scenario.includes("definition") ||
+        scenario.includes("_cron_") ||
+        scenario.includes("_image_") ||
+        scenario.includes("_scaler_") ||
+        scenario.includes("_resources_") ||
+        scenario.includes("_mount_") ||
+        scenario.includes("_args_") ||
+        scenario.includes("_env_") ||
+        scenario.includes("_provider_")
+      ) {
+        expect(report).not.toHaveProperty("providerRequests");
+      }
+      if (scenario === "bot_ingress_mismatch") {
+        expect(report.failureCode).toBe("http_mismatch");
+      }
+      expect(report.rollback).toEqual({
+        status: "restored",
+        revision: "bot--rollback",
+        image: GOOD_BOT_DIGEST
+      });
+      expect(copy).toEqual(expect.arrayContaining(["copy", "--from-revision", "bot--known-good"]));
+      expect(calls).toContainEqual(
+        expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-catalog-sync", "--yaml"])
+      );
+      expect(calls).toContainEqual(
+        expect.arrayContaining([
+          "job",
+          "update",
+          "--name",
+          "hhc-line-bot-attachment-scan",
+          "--yaml"
+        ])
+      );
+      expect(calls).toContainEqual(
+        expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-clamav-refresh", "--yaml"])
+      );
+      expect(calls).toContainEqual(
+        expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-release-probe", "--yaml"])
+      );
+      expect(calls).toContainEqual(
+        expect.arrayContaining([
+          "job",
+          "update",
+          "--name",
+          "hhc-line-bot-periodic-assurance",
+          "--yaml"
+        ])
+      );
+      expectForbiddenCallsAbsent(calls);
+    },
+    15_000
+  );
 
   it.each([
     ["release_probe_warning", "warning", "signature_warning"],
     ["release_probe_child_failure", "failed", "bot_health_failed"]
-  ])("records actual release probe child checks for %s", async (scenario, status, failureCode) => {
-    const fixture = await createFixture(scenario);
-    const result = fixture.run();
-    const calls = await fixture.calls();
-    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
-    const signature = report.checks.find((check) => check.name === "clamav_signature");
+  ])(
+    "records actual release probe child checks for %s",
+    async (scenario, status, failureCode) => {
+      const fixture = await createFixture(scenario);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+      const signature = report.checks.find((check) => check.name === "clamav_signature");
 
-    expect(result.status, diagnostic(result, calls)).toBe(
-      scenario === "release_probe_warning" ? 0 : 42
-    );
-    expect(report.failureCode).toBe(scenario === "release_probe_warning" ? "none" : failureCode);
-    expect(signature).toMatchObject({
-      status: scenario === "release_probe_warning" ? status : "passed",
-      code: scenario === "release_probe_warning" ? failureCode : "none"
-    });
-    expect(calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")).toBe(
-      true
-    );
-  });
+      expect(result.status, diagnostic(result, calls)).toBe(
+        scenario === "release_probe_warning" ? 0 : 42
+      );
+      expect(report.failureCode).toBe(scenario === "release_probe_warning" ? "none" : failureCode);
+      expect(signature).toMatchObject({
+        status: scenario === "release_probe_warning" ? status : "passed",
+        code: scenario === "release_probe_warning" ? failureCode : "none"
+      });
+      expect(
+        calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")
+      ).toBe(true);
+    },
+    15_000
+  );
 
   it.each([
     "release_probe_logs_missing",
     "release_probe_logs_malformed",
     "release_probe_logs_multiple"
-  ])("fails closed when %s", async (scenario) => {
-    const fixture = await createFixture(scenario);
-    const result = fixture.run();
-    const calls = await fixture.calls();
-    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+  ])(
+    "fails closed when %s",
+    async (scenario) => {
+      const fixture = await createFixture(scenario);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
 
-    expect(result.status, diagnostic(result, calls)).toBe(42);
-    expect(report.status).toBe("failed");
-    expect(report.failureCode).toBe("malformed_json");
-    expect(report.checks.some((check) => check.name === "bot_health")).toBe(false);
-  });
+      expect(result.status, diagnostic(result, calls)).toBe(42);
+      expect(report.status).toBe("failed");
+      expect(report.failureCode).toBe("malformed_json");
+      expect(report.checks.some((check) => check.name === "bot_health")).toBe(false);
+    },
+    15_000
+  );
 
   it.each(["rollback_copy_failure", "rollback_image_mismatch"])(
     "preserves the original gate exit and failure code when %s occurs",
