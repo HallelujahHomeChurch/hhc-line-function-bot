@@ -52,4 +52,32 @@ describe("product events", () => {
       expect.not.objectContaining({ actorFingerprint: expect.anything() })
     );
   });
+
+  it("allowlists a privacy-safe first success without raw identity or content", async () => {
+    const observer = vi.fn();
+
+    await emitProductEvent(observer, {
+      eventName: "first_success",
+      requestId: "req-first",
+      profileName: "helper-private",
+      source: { type: "group", groupId: "C-private", userId: "U-private" },
+      hmacKey: "0123456789abcdef0123456789abcdef",
+      action: "query_schedule",
+      resultClass: "success",
+      rawText: "private prompt",
+      rawResult: "private result"
+    } as never);
+
+    expect(observer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "product_event",
+        eventName: "first_success",
+        action: "query_schedule",
+        resultClass: "success"
+      })
+    );
+    expect(JSON.stringify(observer.mock.calls)).not.toMatch(
+      /helper-private|C-private|U-private|private prompt|private result/u
+    );
+  });
 });

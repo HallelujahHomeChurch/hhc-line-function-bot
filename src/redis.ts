@@ -7,6 +7,7 @@ import type { RedisCacheClient } from "./cache/redis-cache-store.js";
 import type { DiagnosticRedisClient } from "./diagnostics/dependencies.js";
 import type { RedisInFlightClient } from "./in-flight/in-flight-store.js";
 import type { RedisLastErrorClient } from "./observability/create-last-error-store.js";
+import type { RedisFirstSuccessClient } from "./observability/first-success-store.js";
 import type { RedisRateLimitClient } from "./rate-limit.js";
 import type { RedisSessionClient } from "./state/redis-session-store.js";
 import type { RedisAgentJobClient } from "./agent/jobs.js";
@@ -19,6 +20,7 @@ export interface RedisRuntime {
   client: RedisCacheClient &
     RedisSessionClient &
     RedisLastErrorClient &
+    RedisFirstSuccessClient &
     RedisRateLimitClient &
     RedisRegistrationInviteCodeClient &
     RedisConfirmationClient &

@@ -5,6 +5,11 @@ import {
   type ProductionRuntimeConfig
 } from "../bootstrap/runtime-contracts.js";
 import { createFunctionRegistries } from "../functions/registry.js";
+import {
+  createFirstSuccessStore,
+  InMemoryFirstSuccessStore,
+  RedisFirstSuccessStore
+} from "../observability/first-success-store.js";
 import { createTestRuntime } from "../testing/create-test-runtime.js";
 import type { AppConfig } from "../types.js";
 
@@ -30,11 +35,24 @@ describe("runtime composition", () => {
     expect(runtime.stores.catalog.constructor.name).toBe("InMemoryCatalogStore");
     expect(runtime.stores.knowledge.constructor.name).toBe("InMemoryKnowledgeStore");
     expect(runtime.stores.schedule.constructor.name).toBe("InMemoryScheduleStore");
+    expect(runtime.stores.firstSuccess.constructor.name).toBe("InMemoryFirstSuccessStore");
   });
 
   it("does not let production registry construction invent missing stores", () => {
     expect(() => createFunctionRegistries({} as AppConfig, {} as never)).toThrow(
       "Function registry requires explicitly constructed stores"
     );
+  });
+
+  it("selects Redis first-success composition when Redis is configured", () => {
+    expect(createFirstSuccessStore()).toBeInstanceOf(InMemoryFirstSuccessStore);
+    expect(
+      createFirstSuccessStore({
+        client: {
+          set: async () => "OK"
+        },
+        keyPrefix: "test"
+      })
+    ).toBeInstanceOf(RedisFirstSuccessStore);
   });
 });

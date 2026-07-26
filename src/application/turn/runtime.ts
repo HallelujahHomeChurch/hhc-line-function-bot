@@ -21,6 +21,10 @@ import { createIntroReply } from "../../intro.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
 import { stateAgeBucket } from "../../observability/retrieval-diagnostics.js";
 import { emitProductEvent } from "../../observability/product-events.js";
+import type {
+  FirstSuccessScope,
+  FirstSuccessStore
+} from "../../observability/first-success-store.js";
 import type { LastErrorStore } from "../../observability/last-error-store.js";
 import type { LastRouteRecord, LastRouteStore } from "../../observability/last-route-store.js";
 import { normalizeFunctionArguments } from "../../functions/argument-normalization.js";
@@ -97,6 +101,7 @@ export interface AgentTurnRuntimeOptions {
   timeZone?: string;
   now?: () => Date;
   observabilityHmacKey?: string;
+  firstSuccessStore?: FirstSuccessStore;
 }
 
 export interface AgentTextTurnInput {
@@ -704,6 +709,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             durationMs,
             ...result.diagnostics
           });
+          const resultClass = productResultClass(result);
           await emitProductEvent(options.routeObserver, {
             eventName: "function_completed",
             requestId: input.requestId,
@@ -711,10 +717,13 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             source: input.event.source,
             hmacKey: options.observabilityHmacKey,
             action: route.action,
-            resultClass: productResultClass(result),
+            resultClass,
             durationMs,
             clarificationCount: 0
           });
+          if (resultClass === "success") {
+            await recordFirstSuccess(options, input, route.action);
+          }
           if (result.writePhase) {
             await emitProductEvent(options.routeObserver, {
               eventName: result.writePhase === "commit" ? "write_committed" : "write_previewed",
@@ -815,6 +824,52 @@ function productResultClass(
 ): "success" | "not_found" | "ambiguous" | "unavailable" | "error" {
   if (!result.ok) return "error";
   return result.agentResult?.status ?? "success";
+}
+
+const FIRST_SUCCESS_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+
+async function recordFirstSuccess(
+  options: AgentTurnRuntimeOptions,
+  input: AgentTextTurnInput,
+  action: FunctionName
+): Promise<void> {
+  const scope = firstSuccessScope(input);
+  if (!options.firstSuccessStore || !scope) {
+    return;
+  }
+  try {
+    const result = await options.firstSuccessStore.tryMark(scope, FIRST_SUCCESS_TTL_MS);
+    if (result !== "first") {
+      return;
+    }
+    await emitProductEvent(options.routeObserver, {
+      eventName: "first_success",
+      requestId: input.requestId,
+      profileName: input.profile.name,
+      source: input.event.source,
+      hmacKey: options.observabilityHmacKey,
+      action,
+      resultClass: "success"
+    });
+  } catch {
+    // First-success measurement is best-effort and must never change the reply.
+  }
+}
+
+function firstSuccessScope(input: AgentTextTurnInput): FirstSuccessScope | undefined {
+  const source = input.event.source;
+  const requesterUserId = source.userId;
+  const sourceId =
+    source.type === "group" ? source.groupId : source.type === "user" ? source.userId : undefined;
+  if ((source.type !== "group" && source.type !== "user") || !sourceId || !requesterUserId) {
+    return undefined;
+  }
+  return {
+    profileName: input.profile.name,
+    sourceType: source.type,
+    sourceId,
+    requesterUserId
+  };
 }
 
 async function recordGroupSuccessSummary(

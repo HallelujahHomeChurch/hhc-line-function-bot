@@ -196,7 +196,8 @@ const PRODUCT_EVENT_NAMES = new Set([
   "function_completed",
   "write_previewed",
   "write_committed",
-  "retry_observed"
+  "retry_observed",
+  "first_success"
 ]);
 const SOURCE_TYPES = new Set(["user", "group", "room"]);
 const PHASES = new Set([

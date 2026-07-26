@@ -11,11 +11,18 @@ import { createPendingFunctionTextMessageHandler } from "../functions/pending-fu
 import { createFindResourceHandler } from "../functions/find-resource.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
+import type { FirstSuccessStore } from "../observability/first-success-store.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
 import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
 import { InMemoryScheduleStore } from "../schedules/store.js";
 import { InMemorySessionStore } from "../state/session-store.js";
-import type { BotProfileConfig, FunctionHandler, LineEvent } from "../types.js";
+import type {
+  BotProfileConfig,
+  FunctionHandler,
+  LineEvent,
+  RouteObserver,
+  RouteObserverEvent
+} from "../types.js";
 
 const now = () => new Date("2026-07-14T08:40:00.000Z");
 
@@ -73,7 +80,12 @@ function planner(): AgentPlanner {
   };
 }
 
-async function fixture() {
+async function fixture(
+  options: {
+    firstSuccessStore?: FirstSuccessStore;
+    routeObserver?: RouteObserver;
+  } = {}
+) {
   const schedules = new InMemoryScheduleStore();
   for (const [sourceKey, date, role, assignee] of [
     ["media_team_service_schedule", "2026-07-14", "音控", "已結束同工"],
@@ -110,6 +122,8 @@ async function fixture() {
     lastRouteStore: new InMemoryLastRouteStore(10),
     conversationWindowStore,
     controlledAgentRouter: createControlledAgentRouter({ planner: planner(), now }),
+    firstSuccessStore: options.firstSuccessStore,
+    routeObserver: options.routeObserver,
     now,
     timeZone: "Asia/Taipei"
   });
@@ -222,6 +236,81 @@ describe("AgentTurnRuntime controlled path", () => {
     expect(first?.replyText).not.toContain("已結束同工");
     expect(second?.replyText).toBe("音控：下一場音控");
     expect(second?.replyText).not.toContain("錯誤來源同工");
+  });
+
+  it("emits first success once after a successful controlled function", async () => {
+    const firstSuccessStore = {
+      tryMark: vi.fn().mockResolvedValueOnce("first").mockResolvedValueOnce("existing")
+    };
+    const events: RouteObserverEvent[] = [];
+    const { runtime } = await fixture({
+      firstSuccessStore,
+      routeObserver: (observed) => {
+        events.push(observed);
+      }
+    });
+
+    const first = await runtime.handleTextTurn({
+      profile: profile(),
+      event: event("下一場影視團隊服事表"),
+      requestId: "first-success-1"
+    });
+    const second = await runtime.handleTextTurn({
+      profile: profile(),
+      event: event("下一場影視團隊服事表"),
+      requestId: "first-success-2"
+    });
+
+    expect(first?.ok).toBe(true);
+    expect(second?.ok).toBe(true);
+    expect(firstSuccessStore.tryMark).toHaveBeenCalledTimes(2);
+    expect(firstSuccessStore.tryMark).toHaveBeenCalledWith(
+      {
+        profileName: "helper",
+        sourceType: "group",
+        sourceId: "C1",
+        requesterUserId: "U1"
+      },
+      31_536_000_000
+    );
+    expect(
+      events.filter(
+        (observed) => observed.kind === "product_event" && observed.eventName === "first_success"
+      )
+    ).toEqual([
+      expect.objectContaining({
+        action: "query_schedule",
+        resultClass: "success"
+      })
+    ]);
+    expect(
+      events.findIndex((observed) => observed.eventName === "function_completed")
+    ).toBeLessThan(events.findIndex((observed) => observed.eventName === "first_success"));
+    expect(JSON.stringify(events)).not.toMatch(/C1|U1|下一場影視團隊服事表/u);
+  });
+
+  it("keeps the successful reply when first-success marking fails", async () => {
+    const events: RouteObserverEvent[] = [];
+    const tryMark = vi.fn().mockRejectedValue(new Error("redis unavailable"));
+    const { runtime } = await fixture({
+      firstSuccessStore: {
+        tryMark
+      },
+      routeObserver: (observed) => {
+        events.push(observed);
+      }
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(),
+      event: event("下一場影視團隊服事表"),
+      requestId: "first-success-failed"
+    });
+
+    expect(result?.ok).toBe(true);
+    expect(result?.replyText).toContain("7月17日");
+    expect(tryMark).toHaveBeenCalledTimes(1);
+    expect(events.some((observed) => observed.eventName === "first_success")).toBe(false);
   });
 
   it("answers a complete next-schedule role request in one turn", async () => {
@@ -398,6 +487,7 @@ describe("AgentTurnRuntime controlled path", () => {
             }
           : {})
       });
+      const firstSuccessStore = { tryMark: vi.fn().mockResolvedValue("first") };
       const runtime = createAgentTurnRuntime({
         functionRegistry: { query_schedule: handler },
         textMessageHandlers: {},
@@ -412,6 +502,7 @@ describe("AgentTurnRuntime controlled path", () => {
             reasonCode: "explicit_intent"
           })
         },
+        firstSuccessStore,
         now
       });
 
@@ -425,6 +516,7 @@ describe("AgentTurnRuntime controlled path", () => {
       expect(result?.agentResult).toBe(agentResult);
       expect(result?.responseData).toBe(responseData);
       expect(result?.quickReplies).toBeUndefined();
+      expect(firstSuccessStore.tryMark).toHaveBeenCalledTimes(state === "stale_allowed" ? 1 : 0);
     }
   );
 
