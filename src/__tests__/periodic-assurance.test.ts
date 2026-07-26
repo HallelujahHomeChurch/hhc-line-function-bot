@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  mapPeriodicAssuranceCodeToReport,
   runPeriodicAssurance,
   type PeriodicAssuranceDependencies,
   type PeriodicAssuranceInput
 } from "../assurance/periodic-probe.js";
-import { readOneNotionResult, runPeriodicAssuranceCli } from "../tools/run-periodic-assurance.js";
+import { buildAssuranceReport } from "../assurance/report.js";
+import {
+  createPeriodicAssuranceDependencies,
+  readOneNotionResult,
+  runPeriodicAssuranceCli
+} from "../tools/run-periodic-assurance.js";
 
 const NOW = new Date("2026-07-27T01:00:00.000Z");
 const INPUT: PeriodicAssuranceInput = {
@@ -234,9 +240,132 @@ describe("periodic assurance", () => {
       code: "clamav_eicar_failed"
     });
   });
+
+  it("continues both scans when an old valid signature manifest is a warning", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.readSignatureManifest).mockResolvedValue({
+      ...MANIFEST,
+      lastSuccessfulAt: "2026-07-19T00:00:00.000Z"
+    });
+
+    const result = await runPeriodicAssurance(INPUT, deps);
+
+    expect(result.checks).toContainEqual({
+      name: "clamav_signature",
+      status: "warning",
+      code: "signature_warning"
+    });
+    expect(deps.scanSample).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "future",
+      manifest: { ...MANIFEST, lastSuccessfulAt: "2026-07-27T02:00:00.000Z" }
+    },
+    { name: "invalid", manifest: { ...MANIFEST, databaseDirectory: "sets/other" } }
+  ])("fails a $name manifest without scanning", async ({ manifest }) => {
+    const deps = dependencies();
+    vi.mocked(deps.readSignatureManifest).mockResolvedValue(manifest);
+
+    const result = await runPeriodicAssurance(INPUT, deps);
+
+    expect(result.checks).toContainEqual({
+      name: "clamav_signature",
+      status: "failed",
+      code: "clamav_manifest_invalid"
+    });
+    expect(deps.scanSample).not.toHaveBeenCalled();
+  });
+
+  it("maps periodic failures into the assurance report allowlist", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.deleteDiagnostic).mockRejectedValue(new Error("private Graph error"));
+    const result = await runPeriodicAssurance(INPUT, deps);
+    const observedAt = NOW.toISOString();
+
+    const report = buildAssuranceReport({
+      version: 1,
+      kind: "periodic",
+      releaseId: "periodic-20260727",
+      commitSha: "a".repeat(40),
+      startedAt: observedAt,
+      completedAt: observedAt,
+      status: result.status,
+      failureCode: mapPeriodicAssuranceCodeToReport(
+        result.checks.find((check) => check.status === "failed")!.code
+      ),
+      target: {
+        resource: "periodic_assurance",
+        revision: "weekly",
+        image: `sha256:${"b".repeat(64)}`,
+        status: "failed"
+      },
+      knownGood: {
+        revision: "weekly-previous",
+        image: `sha256:${"c".repeat(64)}`
+      },
+      checks: result.checks.map((check) => ({
+        name: check.name,
+        status: check.status,
+        observedAt,
+        code: mapPeriodicAssuranceCodeToReport(check.code)
+      })),
+      rollback: { status: "not_required" },
+      providerRequests: result.providerRequests
+    });
+
+    expect(report.failureCode).toBe("network_failed");
+    expect(report.checks.at(-1)?.code).toBe("network_failed");
+  });
 });
 
 describe("periodic assurance CLI", () => {
+  it("configures every real SDK adapter with retries disabled", () => {
+    const createGraph = vi.fn().mockReturnValue({
+      getItemById: vi.fn(),
+      ensureFolder: vi.fn(),
+      uploadFile: vi.fn(),
+      deleteItem: vi.fn()
+    });
+    const createNotion = vi.fn().mockReturnValue({
+      databases: { retrieve: vi.fn() },
+      dataSources: { retrieve: vi.fn(), query: vi.fn() }
+    });
+    const createQueue = vi.fn().mockReturnValue({
+      getProperties: vi.fn(),
+      peekMessages: vi.fn()
+    });
+
+    createPeriodicAssuranceDependencies(
+      {
+        GRAPH_TENANT_ID: "tenant",
+        GRAPH_CLIENT_ID: "client",
+        GRAPH_CLIENT_SECRET: "secret",
+        GRAPH_DRIVE_ID: "drive-1",
+        GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID: "other-folder",
+        NOTION_TOKEN: "notion-token",
+        ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING: "queue-connection",
+        ATTACHMENT_SCAN_QUEUE_NAME: "attachment-scan"
+      },
+      {
+        createGraph,
+        createNotion,
+        createQueue
+      }
+    );
+
+    expect(createGraph).toHaveBeenCalledWith(expect.any(Object), { noRetry: true });
+    expect(createNotion).toHaveBeenCalledWith({
+      auth: "notion-token",
+      logLevel: "error",
+      retry: false
+    });
+    expect(createQueue).toHaveBeenCalledWith("queue-connection", "attachment-scan", {
+      retryOptions: { maxTries: 1 }
+    });
+  });
+
   it("resolves an existing Notion database to one bounded data-source result", async () => {
     const retrieveDataSource = vi.fn().mockRejectedValue(new Error("not a data source"));
     const retrieveDatabase = vi.fn().mockResolvedValue({

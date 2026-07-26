@@ -11,6 +11,13 @@ vi.mock("@azure/identity", () => ({
 vi.mock("@microsoft/microsoft-graph-client", () => ({
   Client: {
     initWithMiddleware: () => ({ api: graph.api })
+  },
+  RetryHandlerOptions: class {
+    readonly maxRetries: number;
+
+    constructor(_delay: number, maxRetries: number) {
+      this.maxRetries = maxRetries;
+    }
   }
 }));
 
@@ -124,5 +131,32 @@ describe("Graph diagnostics folder", () => {
       2,
       "/drives/drive-1/items/parent-1:/assurance-diagnostics?$select=id,name,webUrl,folder,parentReference"
     );
+  });
+
+  it("applies a zero-retry middleware option only when the caller requests it", async () => {
+    const request = {
+      middlewareOptions: vi.fn(),
+      get: vi.fn().mockResolvedValue({
+        id: "item-1",
+        name: "item",
+        parentReference: { driveId: "drive-1" }
+      })
+    };
+    request.middlewareOptions.mockReturnValue(request);
+    graph.api.mockReturnValue(request);
+
+    const noRetryClient = createGraphDriveClient(CONFIG, { noRetry: true });
+    await noRetryClient.getItemById!("drive-1", "item-1");
+
+    expect(request.middlewareOptions).toHaveBeenCalledOnce();
+    const [options] = request.middlewareOptions.mock.calls[0] as [[{ maxRetries: number }]];
+    expect(options).toHaveLength(1);
+    expect(options[0]?.maxRetries).toBe(0);
+
+    request.middlewareOptions.mockClear();
+    const defaultClient = createGraphDriveClient(CONFIG);
+    await defaultClient.getItemById!("drive-1", "item-1");
+
+    expect(request.middlewareOptions).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ import { posix } from "node:path";
 
 import { assessClamAvSignatureManifest } from "../attachments/clamav-signature-policy.js";
 import type { ClamAvCliScanResult } from "../attachments/clamav-cli.js";
+import type { AssuranceCheck, AssuranceFailureCode } from "./report.js";
 import type { DriveItem } from "../types.js";
 
 export type PeriodicAssuranceCheckName =
@@ -69,6 +70,14 @@ export interface PeriodicAssuranceResult {
   checks: PeriodicAssuranceCheckResult[];
   queue: { depth: number; oldestAgeSeconds: number | null };
   providerRequests: { deepseek: 0; embedding: 0 };
+}
+
+export function mapPeriodicAssuranceCodeToReport(
+  code: PeriodicAssuranceFailureCode
+): AssuranceCheck["code"] {
+  if (code === "none" || code === "clamav_manifest_invalid") return code;
+  if (code === "signature_warning") return code;
+  return "network_failed" satisfies AssuranceFailureCode;
 }
 
 const DIAGNOSTICS_FOLDER_NAME = "assurance-diagnostics";

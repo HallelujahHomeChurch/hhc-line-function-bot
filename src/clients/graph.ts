@@ -1,5 +1,5 @@
 import { ClientSecretCredential } from "@azure/identity";
-import { Client } from "@microsoft/microsoft-graph-client";
+import { Client, RetryHandlerOptions } from "@microsoft/microsoft-graph-client";
 
 import type { DriveItem, GraphConfig, GraphDriveClient } from "../types.js";
 
@@ -26,7 +26,14 @@ interface GraphPage {
   "@odata.deltaLink"?: string;
 }
 
-export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
+export interface CreateGraphDriveClientOptions {
+  noRetry?: boolean;
+}
+
+export function createGraphDriveClient(
+  config: GraphConfig,
+  options: CreateGraphDriveClientOptions = {}
+): GraphDriveClient {
   const credential = new ClientSecretCredential(
     config.tenantId,
     config.clientId,
@@ -43,6 +50,11 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
       }
     }
   });
+  const retryOptions = options.noRetry ? [new RetryHandlerOptions(0, 0)] : undefined;
+  const request = (path: string) => {
+    const graphRequest = client.api(path);
+    return retryOptions ? graphRequest.middlewareOptions(retryOptions) : graphRequest;
+  };
 
   const listFolderChildren = async (
     driveId: string,
@@ -52,7 +64,7 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
     let path = `/drives/${driveId}/items/${folderItemId}/children?$top=200&$select=id,name,webUrl,file,folder,remoteItem,parentReference`;
 
     while (path) {
-      const page = (await client.api(path).get()) as GraphPage;
+      const page = (await request(path).get()) as GraphPage;
       for (const item of page.value ?? []) {
         if (item.id && item.name) {
           items.push(graphItemToDriveItem(item, driveId));
@@ -78,7 +90,7 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
         : `/drives/${driveId}/items/${folderItemId}/delta?$select=id,name,webUrl,file,folder,deleted,remoteItem,parentReference`;
       let nextDeltaLink = "";
       while (path) {
-        const page = (await client.api(path).get()) as GraphPage;
+        const page = (await request(path).get()) as GraphPage;
         for (const item of page.value ?? []) {
           if (!item.id) {
             continue;
@@ -105,11 +117,9 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
 
     async getItemByPath(driveId: string, itemPath: string): Promise<DriveItem | undefined> {
       const encodedPath = itemPath.split("/").filter(Boolean).map(encodeURIComponent).join("/");
-      const item = (await client
-        .api(
-          `/drives/${driveId}/root:/${encodedPath}?$select=id,name,webUrl,file,folder,remoteItem,parentReference`
-        )
-        .get()) as GraphItem;
+      const item = (await request(
+        `/drives/${driveId}/root:/${encodedPath}?$select=id,name,webUrl,file,folder,remoteItem,parentReference`
+      ).get()) as GraphItem;
       if (!item.id || !item.name) {
         return undefined;
       }
@@ -118,11 +128,9 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
 
     async getItemById(driveId: string, itemId: string): Promise<DriveItem | undefined> {
       try {
-        const item = (await client
-          .api(
-            `/drives/${driveId}/items/${itemId}?$select=id,name,webUrl,file,folder,remoteItem,parentReference`
-          )
-          .get()) as GraphItem;
+        const item = (await request(
+          `/drives/${driveId}/items/${itemId}?$select=id,name,webUrl,file,folder,remoteItem,parentReference`
+        ).get()) as GraphItem;
         if (!item.id || !item.name || item.deleted) return undefined;
         return graphItemToDriveItem(item, driveId);
       } catch (error) {
@@ -166,7 +174,7 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
       itemId: string,
       expirationDateTime: string
     ): Promise<string> {
-      const response = (await client.api(`/drives/${driveId}/items/${itemId}/createLink`).post({
+      const response = (await request(`/drives/${driveId}/items/${itemId}/createLink`).post({
         type: config.linkType,
         scope: config.linkScope,
         expirationDateTime
@@ -187,8 +195,9 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
       contentType: string
     ): Promise<DriveItem> {
       const encodedName = encodeURIComponent(fileName);
-      const item = (await client
-        .api(`/drives/${driveId}/items/${parentItemId}:/${encodedName}:/content`)
+      const item = (await request(
+        `/drives/${driveId}/items/${parentItemId}:/${encodedName}:/content`
+      )
         .header("Content-Type", contentType)
         .put(Buffer.from(data))) as GraphItem;
       if (!item.id || !item.name) {
@@ -199,7 +208,7 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
 
     async ensureFolder(driveId: string, parentItemId: string, name: string): Promise<DriveItem> {
       try {
-        const item = (await client.api(`/drives/${driveId}/items/${parentItemId}/children`).post({
+        const item = (await request(`/drives/${driveId}/items/${parentItemId}/children`).post({
           name,
           folder: {},
           "@microsoft.graph.conflictBehavior": "fail"
@@ -211,11 +220,9 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
       } catch (error) {
         if (graphStatusCode(error) !== 409) throw error;
         const encodedName = encodeURIComponent(name);
-        const item = (await client
-          .api(
-            `/drives/${driveId}/items/${parentItemId}:/${encodedName}?$select=id,name,webUrl,folder,parentReference`
-          )
-          .get()) as GraphItem;
+        const item = (await request(
+          `/drives/${driveId}/items/${parentItemId}:/${encodedName}?$select=id,name,webUrl,folder,parentReference`
+        ).get()) as GraphItem;
         if (!item.id || !item.name || !item.folder) {
           throw new Error("graph_ensure_folder_conflict_invalid");
         }
@@ -224,7 +231,7 @@ export function createGraphDriveClient(config: GraphConfig): GraphDriveClient {
     },
 
     async deleteItem(driveId: string, itemId: string): Promise<void> {
-      await client.api(`/drives/${driveId}/items/${itemId}`).delete();
+      await request(`/drives/${driveId}/items/${itemId}`).delete();
     }
   };
 }

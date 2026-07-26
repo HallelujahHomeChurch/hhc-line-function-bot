@@ -12,8 +12,8 @@ import {
   type PeriodicAssuranceDependencies,
   type PeriodicAssuranceInput
 } from "../assurance/periodic-probe.js";
-import { createGraphDriveClient } from "../clients/graph.js";
-import type { GraphConfig } from "../types.js";
+import { createGraphDriveClient, type CreateGraphDriveClientOptions } from "../clients/graph.js";
+import type { GraphConfig, GraphDriveClient } from "../types.js";
 
 const DEFAULT_SCAN_TIMEOUT_MS = 15_000;
 
@@ -28,6 +28,30 @@ export interface PeriodicNotionClient {
     query(input: { data_source_id: string; page_size: 1 }): Promise<{ results: unknown[] }>;
   };
 }
+
+export interface PeriodicQueueClient {
+  getProperties(): Promise<{ approximateMessagesCount?: number }>;
+  peekMessages(input: { numberOfMessages: 1 }): Promise<{
+    peekedMessageItems: Array<{ insertedOn: Date }>;
+  }>;
+}
+
+export interface PeriodicAssuranceAdapterFactories {
+  createGraph(config: GraphConfig, options: CreateGraphDriveClientOptions): GraphDriveClient;
+  createNotion(options: { auth: string; logLevel: LogLevel; retry: false }): PeriodicNotionClient;
+  createQueue(
+    connectionString: string,
+    queueName: string,
+    options: { retryOptions: { maxTries: 1 } }
+  ): PeriodicQueueClient;
+}
+
+const defaultAdapterFactories: PeriodicAssuranceAdapterFactories = {
+  createGraph: createGraphDriveClient,
+  createNotion: (options) => new Client(options) as unknown as PeriodicNotionClient,
+  createQueue: (connectionString, queueName, options) =>
+    QueueServiceClient.fromConnectionString(connectionString, options).getQueueClient(queueName)
+};
 
 export async function runPeriodicAssuranceCli(
   env: Record<string, string | undefined>,
@@ -76,20 +100,24 @@ function readInput(env: Record<string, string | undefined>): PeriodicAssuranceIn
   };
 }
 
-function createPeriodicAssuranceDependencies(
-  env: Record<string, string | undefined>
+export function createPeriodicAssuranceDependencies(
+  env: Record<string, string | undefined>,
+  factories: PeriodicAssuranceAdapterFactories = defaultAdapterFactories
 ): PeriodicAssuranceDependencies {
-  const graph = createGraphDriveClient(graphConfig(env));
+  const graph = factories.createGraph(graphConfig(env), { noRetry: true });
   if (!graph.getItemById || !graph.ensureFolder || !graph.uploadFile || !graph.deleteItem) {
     throw new Error("periodic_assurance_graph_adapter_invalid");
   }
-  const notion = new Client({
+  const notion = factories.createNotion({
     auth: required(env, "NOTION_TOKEN"),
-    logLevel: LogLevel.ERROR
+    logLevel: LogLevel.ERROR,
+    retry: false
   });
-  const queue = QueueServiceClient.fromConnectionString(
-    required(env, "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING")
-  ).getQueueClient(required(env, "ATTACHMENT_SCAN_QUEUE_NAME"));
+  const queue = factories.createQueue(
+    required(env, "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING"),
+    required(env, "ATTACHMENT_SCAN_QUEUE_NAME"),
+    { retryOptions: { maxTries: 1 } }
+  );
 
   return {
     readGraphMetadata: (driveId, itemId) => graph.getItemById!(driveId, itemId),
