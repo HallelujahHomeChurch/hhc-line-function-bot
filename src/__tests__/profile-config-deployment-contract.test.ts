@@ -104,7 +104,7 @@ describe("production profile configuration deployment contract", () => {
       expect(manifest.match(new RegExp(placeholder, "g"))).toHaveLength(1);
     }
     expect(manifest.match(/secretRef:/g)).toHaveLength(secretRefs.length);
-    expect(manifest).not.toMatch(/\n    secrets:/);
+    expect(manifest).not.toMatch(/\n {4}secrets:/);
     expect(manifest).not.toContain("PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS");
     expect(manifest).not.toContain("attachment-scan-queue-connection-string");
     expect(manifest).not.toContain("clamav-signature-storage-key");

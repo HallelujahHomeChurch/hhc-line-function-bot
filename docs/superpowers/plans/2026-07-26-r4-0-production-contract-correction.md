@@ -46,9 +46,10 @@ Cover these exact boundaries at a fixed `now`:
 
 ```ts
 expect(assess(validAt(now), now)).toMatchObject({ status: "usable", health: "current" });
-expect(
-  assess(validAt(nowMinus(CLAMAV_SIGNATURE_WARNING_AGE_MS)), now)
-).toMatchObject({ status: "usable", health: "warning" });
+expect(assess(validAt(nowMinus(CLAMAV_SIGNATURE_WARNING_AGE_MS)), now)).toMatchObject({
+  status: "usable",
+  health: "warning"
+});
 expect(assess(validAt(nowMinus(30 * 24 * 60 * 60 * 1000)), now)).toMatchObject({
   status: "usable",
   health: "warning"
@@ -219,7 +220,7 @@ Extend `src/__tests__/attachment-scan-job.test.ts` to require:
 ```ts
 {
   signaturePolicy: {
-    warningAgeMs: 168 * 60 * 60 * 1000
+    warningAgeMs: 168 * 60 * 60 * 1000;
   }
 }
 ```
