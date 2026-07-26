@@ -5,6 +5,10 @@ import type { CatalogStore } from "../../catalog/store.js";
 import type { EmbeddingClient } from "../../clients/embedding.js";
 import type { KnowledgeStore } from "../../knowledge/store.js";
 import type { ScheduleStore } from "../../schedules/store.js";
+import {
+  KERNEL_LOCAL_LIVE_CASE_IDS,
+  kernelLocalLiveDirectUserId
+} from "../../evals/kernel/local-live/contracts.js";
 
 const PROFILE_NAME = "acceptance";
 const CREATED_BY = "U_KERNEL_ADMIN";
@@ -32,6 +36,15 @@ export async function seedKernelLocalLiveFixtures(options: {
 }): Promise<void> {
   const now = options.now?.() ?? new Date();
   await Promise.all([
+    ...KERNEL_LOCAL_LIVE_CASE_IDS.map((caseId) =>
+      options.accessStore.addPrincipal({
+        profileName: PROFILE_NAME,
+        type: "user",
+        principalId: kernelLocalLiveDirectUserId(caseId),
+        displayName: `Synthetic ${caseId}`,
+        createdBy: CREATED_BY
+      })
+    ),
     options.accessStore.addPrincipal({
       profileName: PROFILE_NAME,
       type: "user",
@@ -56,7 +69,7 @@ export async function seedKernelLocalLiveFixtures(options: {
   ]);
   await options.accessStore.addUserFunctionGrant({
     profileName: PROFILE_NAME,
-    userId: "U_KERNEL_USER_A",
+    userId: kernelLocalLiveDirectUserId("write-preview-confirm"),
     functionName: "save_resource",
     createdBy: CREATED_BY
   });

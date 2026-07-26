@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { createProviderBudget } from "../evals/kernel/local-live/budget.js";
+import { kernelLocalLiveDirectUserId } from "../evals/kernel/local-live/contracts.js";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { createQueryScheduleHandler } from "../capabilities/query-schedule/handler.js";
 import { createKernelLocalLiveApp } from "../testing/kernel-local-live/create-app.js";
@@ -396,7 +397,10 @@ describe("Kernel local live fixtures", () => {
       accessStore.hasActivePrincipal("acceptance", "group", "G_KERNEL_GROUP")
     ).resolves.toBe(true);
     await expect(
-      accessStore.listUserFunctionGrants("acceptance", "U_KERNEL_USER_A")
+      accessStore.listUserFunctionGrants(
+        "acceptance",
+        kernelLocalLiveDirectUserId("write-preview-confirm")
+      )
     ).resolves.toContain("save_resource");
     await expect(
       runtime.stores.schedule.searchItems({ profileName: "acceptance", limit: 10 })

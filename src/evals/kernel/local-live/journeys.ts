@@ -1,5 +1,5 @@
 import { selectKernelLocalLiveCases } from "./cases.js";
-import type { KernelLocalLiveCaseId } from "./contracts.js";
+import { kernelLocalLiveDirectUserId, type KernelLocalLiveCaseId } from "./contracts.js";
 import type { KernelLocalLiveTurn } from "./webhook.js";
 
 export type KernelLocalLiveExpectedOutcome =
@@ -18,7 +18,6 @@ export interface KernelLocalLiveJourneyDefinition {
   turns: readonly Readonly<KernelLocalLiveTurn>[];
 }
 
-const USER_A = { type: "user" as const, userId: "U_KERNEL_USER_A" };
 const GROUP_USER_B = {
   type: "group" as const,
   groupId: "G_KERNEL_GROUP",
@@ -28,35 +27,81 @@ const GROUP_USER_B = {
 export const KERNEL_LOCAL_LIVE_JOURNEYS: readonly Readonly<KernelLocalLiveJourneyDefinition>[] =
   Object.freeze([
     journey("schedule-explicit", "execute", [
-      textTurn("schedule-explicit", 0, USER_A, "查 synthetic service 2026-07-27 投影服事")
+      textTurn(
+        "schedule-explicit",
+        0,
+        directUser("schedule-explicit"),
+        "查 synthetic service 2026-07-27 投影服事"
+      )
     ]),
     journey("schedule-refinement", "active_task_continuation", [
-      textTurn("schedule-refinement", 0, USER_A, "查 synthetic service 2026-07-27 服事"),
-      textTurn("schedule-refinement", 1, USER_A, "只看投影")
+      textTurn(
+        "schedule-refinement",
+        0,
+        directUser("schedule-refinement"),
+        "查 synthetic service 2026-07-27 服事"
+      ),
+      textTurn("schedule-refinement", 1, directUser("schedule-refinement"), "只看投影")
     ]),
-    journey("schedule-ambiguity", "clarify", [textTurn("schedule-ambiguity", 0, USER_A, "查服事")]),
+    journey("schedule-ambiguity", "clarify", [
+      textTurn("schedule-ambiguity", 0, directUser("schedule-ambiguity"), "查服事")
+    ]),
     journey("capability-switch", "explicit_switch", [
-      textTurn("capability-switch", 0, USER_A, "查 synthetic service 2026-07-27 投影服事"),
-      textTurn("capability-switch", 1, USER_A, "改查知識 synthetic alpha procedure")
+      textTurn(
+        "capability-switch",
+        0,
+        directUser("capability-switch"),
+        "查 synthetic service 2026-07-27 投影服事"
+      ),
+      textTurn(
+        "capability-switch",
+        1,
+        directUser("capability-switch"),
+        "改查知識 synthetic alpha procedure"
+      )
     ]),
     journey("knowledge-follow-up", "grounded_follow_up", [
-      textTurn("knowledge-follow-up", 0, USER_A, "查知識 synthetic alpha procedure"),
-      textTurn("knowledge-follow-up", 1, USER_A, "那最後由哪個角色驗證？")
+      textTurn(
+        "knowledge-follow-up",
+        0,
+        directUser("knowledge-follow-up"),
+        "查知識 synthetic alpha procedure"
+      ),
+      textTurn(
+        "knowledge-follow-up",
+        1,
+        directUser("knowledge-follow-up"),
+        "那最後由哪個角色驗證？"
+      )
     ]),
     journey("group-requester-isolation", "requester_isolated", [
       textTurn("group-requester-isolation", 0, GROUP_USER_B, "只看投影")
     ]),
     journey("provider-unavailable", "providers_unavailable", [
-      textTurn("provider-unavailable", 0, USER_A, "查 synthetic service 2026-07-27 Projection 服事")
+      textTurn(
+        "provider-unavailable",
+        0,
+        directUser("provider-unavailable"),
+        "查 synthetic service 2026-07-27 Projection 服事"
+      )
     ]),
     journey("write-preview-confirm", "confirmed_local_write", [
-      fileTurn("write-preview-confirm", 0, USER_A),
-      textTurn("write-preview-confirm", 1, USER_A, "是"),
-      textTurn("write-preview-confirm", 2, USER_A, "一般資料"),
-      textTurn("write-preview-confirm", 3, USER_A, "Synthetic Document"),
-      textTurn("write-preview-confirm", 4, USER_A, "保存")
+      fileTurn("write-preview-confirm", 0, directUser("write-preview-confirm")),
+      textTurn("write-preview-confirm", 1, directUser("write-preview-confirm"), "是"),
+      textTurn("write-preview-confirm", 2, directUser("write-preview-confirm"), "一般資料"),
+      textTurn(
+        "write-preview-confirm",
+        3,
+        directUser("write-preview-confirm"),
+        "Synthetic Document"
+      ),
+      textTurn("write-preview-confirm", 4, directUser("write-preview-confirm"), "保存")
     ])
   ] satisfies KernelLocalLiveJourneyDefinition[]);
+
+function directUser(caseId: KernelLocalLiveCaseId) {
+  return { type: "user" as const, userId: kernelLocalLiveDirectUserId(caseId) };
+}
 
 export function selectKernelLocalLiveJourneys(
   caseId?: string

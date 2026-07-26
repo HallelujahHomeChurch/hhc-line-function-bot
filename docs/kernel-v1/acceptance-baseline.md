@@ -72,6 +72,15 @@ embedding batch. The shared knowledge argument normalizer now removes explicit
 capability prefixes such as `查知識` or `改查知識` from the retrieval query while
 leaving ordinary follow-up questions unchanged.
 
+The following full run against `5e4794ff` reached the same explicit switch and
+returned a successful knowledge result, but its exact provider evidence was one
+DeepSeek request short. It made 5 DeepSeek requests and 1 embedding batch,
+bringing the live-run total to 21 DeepSeek requests and 2 embedding batches.
+The harness had reused one synthetic direct requester across cases, allowing a
+prior pending collection or active task to intercept a later case before the
+planner. Direct-chat cases now use distinct synthetic requesters while turns
+within each case retain the same requester.
+
 All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
 label after successful cleanup before propagating driver exit code `1`; this

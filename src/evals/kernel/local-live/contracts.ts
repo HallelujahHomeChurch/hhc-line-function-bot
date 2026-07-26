@@ -11,6 +11,10 @@ export const KERNEL_LOCAL_LIVE_CASE_IDS = [
 
 export type KernelLocalLiveCaseId = (typeof KERNEL_LOCAL_LIVE_CASE_IDS)[number];
 
+export function kernelLocalLiveDirectUserId(caseId: KernelLocalLiveCaseId): string {
+  return `U_KERNEL_${caseId.replaceAll("-", "_").toUpperCase()}`;
+}
+
 export type KernelLocalLiveJourney =
   | "schedule_explicit"
   | "schedule_refinement"

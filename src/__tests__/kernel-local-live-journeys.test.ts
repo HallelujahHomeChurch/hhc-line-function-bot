@@ -51,6 +51,16 @@ describe("Kernel local live journeys", () => {
     }
   });
 
+  it("isolates direct-chat state by using one requester per case", () => {
+    const directRequesters = KERNEL_LOCAL_LIVE_JOURNEYS.flatMap(({ caseId, turns }) =>
+      turns[0]?.source.type === "user" ? [[caseId, turns[0].requesterUserId] as const] : []
+    );
+
+    expect(new Set(directRequesters.map(([, requester]) => requester)).size).toBe(
+      directRequesters.length
+    );
+  });
+
   it("allows only one explicit declared case selection", () => {
     expect(
       selectKernelLocalLiveJourneys("knowledge-follow-up").map(({ caseId }) => caseId)
