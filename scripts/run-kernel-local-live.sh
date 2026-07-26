@@ -237,6 +237,7 @@ cleanup
 if [[ "$CLEANUP_FAILED" == "true" ]]; then
   exit 2
 fi
+CURRENT_STAGE="driver_result"
 
 export KERNEL_LOCAL_LIVE_ARTIFACT_ROOT="$ARTIFACT_ROOT"
 export KERNEL_LOCAL_LIVE_COMPOSE_CLEAN=true

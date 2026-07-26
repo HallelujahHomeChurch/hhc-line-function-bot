@@ -43,12 +43,21 @@ memory-backed secret files.
 A newly authorized full run against commit
 `2c124f3f13c03a4a7a7e4b31b59b30e6395f43f0` stopped after
 `schedule-explicit` returned `not_found`; it made 1 DeepSeek request and 0
-embedding batches, and did not execute the remaining cases. The run also
-exposed an idempotency defect where cleanup treated already-absent secret
-resources as failure even though a host inspection found no remaining
-containers or volumes. The deterministic current-message schedule role
-normalizer and cleanup idempotency are corrected on the branch, but have not
-been reverified with live providers.
+embedding batches, and did not execute the remaining cases. After the
+deterministic current-message schedule role normalizer was corrected, a second
+full run against commit `7a4a9c7983bc4cf0c54863de053941973c9dde99`
+passed `schedule-explicit` and reached `schedule-refinement`. Both refinement
+turns ended with successful schedule results, but its stricter journey
+assertion failed; the two runs have consumed 4 DeepSeek requests and 0
+embedding batches in total.
+
+Both failed runs removed their Docker resources and Redis namespace. The shell
+reported the failure stage as `cleanup` because it did not advance the stage
+label after successful cleanup before propagating driver exit code `1`; this
+diagnostic attribution is corrected. Allowlisted refinement boundary codes are
+now emitted so the next single-case evidence run can distinguish provider,
+turn-count, initial-turn, continuation-turn, and validator-reason failures
+without exposing message content.
 
 Final Kernel v1 acceptance is therefore not recorded. Do not mark R4
 implementation started until an operator explicitly authorizes another bounded

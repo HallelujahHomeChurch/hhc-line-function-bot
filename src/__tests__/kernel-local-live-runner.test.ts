@@ -37,6 +37,9 @@ describe("Kernel local live disposable runner", () => {
     expect(shell).toContain('"${DOCKER_TIMEOUT_COMMAND[@]}" compose');
     expect(shell).toContain("down --volumes --remove-orphans");
     expect(shell).toContain("kernel_local_live_failed_stage:");
+    expect(shell.indexOf('CURRENT_STAGE="driver_result"')).toBeGreaterThan(
+      shell.indexOf("cleanup")
+    );
     expect(shell).toContain("git status --porcelain --untracked-files=all");
     expect(shell.indexOf("git status --porcelain")).toBeLessThan(
       shell.indexOf("git rev-parse HEAD")

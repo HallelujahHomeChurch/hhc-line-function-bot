@@ -289,6 +289,19 @@ describe("Kernel local live journey outcome evaluation", () => {
     ).toMatchObject({ passed: false });
   });
 
+  it("reports the allowlisted schedule-refinement boundary that failed", () => {
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "schedule-refinement",
+        traces: [successfulTrace("query_schedule")],
+        observations: successfulProviderObservations("schedule-refinement")
+      })
+    ).toMatchObject({
+      passed: false,
+      failureCode: "turn_count_failed"
+    });
+  });
+
   it("finalizes the allowlisted suite result only after host cleanup", () => {
     const suite = {
       schemaVersion: 1,

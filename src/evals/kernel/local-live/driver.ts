@@ -290,7 +290,7 @@ export function evaluateKernelLocalLiveOutcome(input: {
         kind === "provider" && provider === "azure_openai" && outcome === "success"
     ).length
   };
-  const passed = outcomePassed(input.caseId, {
+  const evidence = {
     steps,
     disposition,
     capability,
@@ -302,11 +302,12 @@ export function evaluateKernelLocalLiveOutcome(input: {
     turns: input.traces.map(({ steps: turnSteps }) => turnEvidence(turnSteps)),
     replyQuickReplyLabels: input.replyQuickReplyLabels ?? [],
     preFinalQueueDetected: input.preFinalQueueDetected === true
-  });
+  };
+  const passed = outcomePassed(input.caseId, evidence);
   return {
     caseId: input.caseId,
     passed,
-    ...(passed ? {} : { failureCode: "journey_assertion_failed" }),
+    ...(passed ? {} : { failureCode: outcomeFailureCode(input.caseId, evidence) }),
     ...(disposition ? { disposition } : {}),
     ...(capability && FUNCTION_NAMES.includes(capability as (typeof FUNCTION_NAMES)[number])
       ? { capability }
@@ -316,6 +317,30 @@ export function evaluateKernelLocalLiveOutcome(input: {
     ...(lifecycleOutcome ? { lifecycleOutcome } : {}),
     providerCounts
   };
+}
+
+function outcomeFailureCode(
+  caseId: KernelLocalLiveCaseId,
+  evidence: Parameters<typeof outcomePassed>[1]
+): string {
+  if (caseId !== "schedule-refinement") return "journey_assertion_failed";
+  const declaredCase = KERNEL_LOCAL_LIVE_CASES.find(({ id }) => id === caseId)!;
+  if (
+    evidence.caseObservations.some(
+      ({ kind, outcome }) => kind === "provider" && outcome !== "success"
+    ) ||
+    evidence.providerCounts.deepseek !== declaredCase.deepSeekMax ||
+    evidence.providerCounts.azure_openai !== declaredCase.embeddingBatchMax
+  ) {
+    return "provider_evidence_failed";
+  }
+  if (evidence.turns.length !== 2) return "turn_count_failed";
+  if (!turnSucceeded(evidence.turns[0], "query_schedule")) return "initial_turn_failed";
+  if (!turnSucceeded(evidence.turns[1], "query_schedule")) return "continuation_turn_failed";
+  if (evidence.turns[1]?.validatorReason !== "active_task_refinement") {
+    return "continuation_reason_failed";
+  }
+  return "journey_assertion_failed";
 }
 
 export function finalizeKernelLocalLiveSuiteResult(

@@ -26,7 +26,14 @@ const CASE_KEYS = new Set([
 const PROVIDER_KEYS = new Set(["deepSeekRequests", "embeddingBatches"]);
 const CLEANUP_KEYS = new Set(["namespace", "compose", "secretFiles", "passed"]);
 const CASE_STRING_VALUES = {
-  failureCode: new Set(["journey_assertion_failed"]),
+  failureCode: new Set([
+    "journey_assertion_failed",
+    "provider_evidence_failed",
+    "turn_count_failed",
+    "initial_turn_failed",
+    "continuation_turn_failed",
+    "continuation_reason_failed"
+  ]),
   disposition: new Set([
     "execute",
     "continue",
