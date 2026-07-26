@@ -459,6 +459,28 @@ then
   exit 1
 fi
 
+retired_bot_secrets=(
+  bot-profiles-base64-json
+  attachment-scan-queue-connection-string
+  clamav-signature-storage-key
+  openai-api-key
+)
+for retired_bot_secret in "${retired_bot_secrets[@]}"; do
+  retired_bot_secret_name="$(az containerapp secret list \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${CONTAINER_APP_NAME}" \
+    --query "[?name=='${retired_bot_secret}'].name | [0]" \
+    --output tsv)"
+  if [[ -n "${retired_bot_secret_name}" ]]; then
+    az containerapp secret remove \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${CONTAINER_APP_NAME}" \
+      --secret-names "${retired_bot_secret}" \
+      --only-show-errors \
+      --output none
+  fi
+done
+
 bot_secrets_json="$(az containerapp secret list \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
@@ -469,34 +491,6 @@ bot_env_json="$(az containerapp show \
   --name "${CONTAINER_APP_NAME}" \
   --query "properties.template.containers[0].env" \
   --output json)"
-
-legacy_profile_secret="$(az containerapp secret list \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${CONTAINER_APP_NAME}" \
-  --query "[?name=='bot-profiles-base64-json'].name | [0]" \
-  --output tsv)"
-if [[ -n "${legacy_profile_secret}" ]]; then
-  az containerapp secret remove \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${CONTAINER_APP_NAME}" \
-    --secret-names bot-profiles-base64-json \
-    --only-show-errors \
-    --output none
-fi
-
-legacy_clamav_storage_secret="$(az containerapp secret list \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${CONTAINER_APP_NAME}" \
-  --query "[?name=='clamav-signature-storage-key'].name | [0]" \
-  --output tsv)"
-if [[ -n "${legacy_clamav_storage_secret}" ]]; then
-  az containerapp secret remove \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${CONTAINER_APP_NAME}" \
-    --secret-names clamav-signature-storage-key \
-    --only-show-errors \
-    --output none
-fi
 
 render_job_manifest() {
   local template_path="$1"
@@ -664,19 +658,5 @@ deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" "${clamav_refresh_job_manifest
 start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"
 deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
-
-legacy_openai_embedding_secret="$(az containerapp secret list \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${CONTAINER_APP_NAME}" \
-  --query "[?name=='openai-api-key'].name | [0]" \
-  --output tsv)"
-if [[ -n "${legacy_openai_embedding_secret}" ]]; then
-  az containerapp secret remove \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${CONTAINER_APP_NAME}" \
-    --secret-names openai-api-key \
-    --only-show-errors \
-    --output none
-fi
 
 echo "Deployed ${image_ref} to revision ${target_revision}"

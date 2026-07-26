@@ -143,7 +143,7 @@ properties:
           - name: NOTION_TOKEN
             secretRef: PLACEHOLDER_NOTION_TOKEN_SECRET_REF
           - name: NOTION_SERVICE_DATABASE_ID
-            value: PLACEHOLDER_NOTION_DATABASE_ID
+            value: PLACEHOLDER_NOTION_SERVICE_DATABASE_ID
           - name: NOTION_DATE_PROPERTY
             value: PLACEHOLDER_NOTION_DATE_PROPERTY
           - name: NOTION_MEETING_PROPERTY
@@ -168,6 +168,8 @@ properties:
         resources:
           cpu: 0.5
           memory: 1Gi
+        volumeMounts: []
+    volumes: []
     scale:
       minReplicas: 0
       maxReplicas: 10

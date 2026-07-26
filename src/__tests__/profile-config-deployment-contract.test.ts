@@ -179,6 +179,80 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).not.toContain("az containerapp dapr enable");
   });
 
+  it("keeps every bot template placeholder in lockstep with the guarded renderer map", () => {
+    const manifest = readProjectFile("aca.containerapp.yaml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const rendererStart = deployment.indexOf('BOT_MANIFEST_TEMPLATE="${bot_manifest_template}"');
+    const rendererEnd = deployment.indexOf(
+      'az containerapp update \\\n  --resource-group "${RESOURCE_GROUP}"',
+      rendererStart
+    );
+    const renderer = deployment.slice(rendererStart, rendererEnd);
+    const templatePlaceholders = manifest.match(/\bPLACEHOLDER_[A-Z0-9_]+\b/g) ?? [];
+    const directRendererPlaceholders = [
+      ...renderer.matchAll(/^\s+"(PLACEHOLDER_[A-Z0-9_]+)":/gm)
+    ].map((match) => match[1]);
+    const sourceEnvBlock = renderer.slice(
+      renderer.indexOf("source_env_names = ["),
+      renderer.indexOf("]\nfor name in source_env_names:")
+    );
+    const sourceEnvPlaceholders = [...sourceEnvBlock.matchAll(/^\s+"([A-Z][A-Z0-9_]+)",$/gm)].map(
+      (match) => `PLACEHOLDER_${match[1]}`
+    );
+    const rendererPlaceholders = [...directRendererPlaceholders, ...sourceEnvPlaceholders];
+
+    expect(rendererStart).toBeGreaterThanOrEqual(0);
+    expect(rendererEnd).toBeGreaterThan(rendererStart);
+    expect(renderer).toContain("if text.count(placeholder) != 1:");
+    expect([...new Set(templatePlaceholders)].sort()).toEqual(
+      [...new Set(rendererPlaceholders)].sort()
+    );
+    for (const placeholder of new Set(templatePlaceholders)) {
+      expect(templatePlaceholders.filter((candidate) => candidate === placeholder)).toHaveLength(1);
+    }
+    expect(rendererPlaceholders).toHaveLength(new Set(rendererPlaceholders).size);
+  });
+
+  it("cleans all retired bot secrets before dependent job snapshots", () => {
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const botDeploy = deployment.indexOf('--yaml "${bot_manifest}"');
+    const retiredSecretCleanup = deployment.indexOf("retired_bot_secrets=(");
+    const refreshedSecretSnapshot = deployment.indexOf(
+      'bot_secrets_json="$(az containerapp secret list',
+      botDeploy
+    );
+    const refreshedEnvSnapshot = deployment.indexOf(
+      'bot_env_json="$(az containerapp show',
+      botDeploy
+    );
+    const retiredSecretCleanupBlock = deployment.slice(
+      retiredSecretCleanup,
+      refreshedSecretSnapshot
+    );
+
+    expect(retiredSecretCleanup).toBeGreaterThan(botDeploy);
+    expect(retiredSecretCleanup).toBeLessThan(refreshedSecretSnapshot);
+    expect(retiredSecretCleanup).toBeLessThan(refreshedEnvSnapshot);
+    for (const retiredSecret of [
+      "bot-profiles-base64-json",
+      "attachment-scan-queue-connection-string",
+      "clamav-signature-storage-key",
+      "openai-api-key"
+    ]) {
+      expect(retiredSecretCleanupBlock).toContain(retiredSecret);
+    }
+    expect(deployment).toContain(
+      'ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING="${attachment_scan_queue_connection_string}"'
+    );
+  });
+
+  it("explicitly clears bot container and template mounts", () => {
+    const manifest = readProjectFile("aca.containerapp.yaml");
+
+    expect(manifest).toContain("        volumeMounts: []");
+    expect(manifest).toContain("\n    volumes: []\n    scale:");
+  });
+
   it("ships file-backed profiles and does not deploy an ACA profile secret", () => {
     const dockerfile = readProjectFile("Dockerfile");
     const manifest = readProjectFile("aca.containerapp.yaml");
@@ -454,7 +528,6 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).not.toContain(
       '"attachment-scan-queue-url=${attachment_scan_queue_connection_string}"'
     );
-    expect(deployment).toContain("legacy_openai_embedding_secret");
     expect(deployment).not.toContain('"OPENAI_API_KEY=secretref:openai-api-key"');
     expect(bot).not.toContain("name: OPENAI_API_KEY");
     expect(bot).not.toContain("name: OPENAI_BASE_URL");
