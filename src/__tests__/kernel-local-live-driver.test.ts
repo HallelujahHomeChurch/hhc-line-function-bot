@@ -271,6 +271,14 @@ describe("Kernel local live journey outcome evaluation", () => {
         replyQuickReplyLabels: writeReplyQuickReplyLabels()
       })
     ).toMatchObject({ passed: false, failureCode: "write_trace_missing_turn_3" });
+    expect(
+      evaluateKernelLocalLiveOutcome({
+        caseId: "write-preview-confirm",
+        traces: traces.map((entry, index) => (index === 0 ? trace([]) : entry)),
+        observations: [queue, scanWork],
+        replyQuickReplyLabels: writeReplyQuickReplyLabels()
+      })
+    ).toMatchObject({ passed: true });
   });
 
   it("rejects partial multi-turn evidence and a queue emitted before confirmation", () => {

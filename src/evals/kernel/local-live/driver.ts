@@ -333,8 +333,12 @@ function outcomeFailureCode(
 ): string {
   if (caseId === "write-preview-confirm") {
     if (evidence.turns.length !== 5) return "write_turn_count_failed";
-    const missingTraceIndex = evidence.turns.findIndex(({ steps }) => steps.length === 0);
-    if (missingTraceIndex >= 0) return `write_trace_missing_turn_${missingTraceIndex + 1}`;
+    const missingTextTraceIndex = evidence.turns
+      .slice(1)
+      .findIndex(({ steps }) => steps.length === 0);
+    if (missingTextTraceIndex >= 0) {
+      return `write_trace_missing_turn_${missingTextTraceIndex + 2}`;
+    }
     if (!matchesWriteReplyStates(evidence.replyQuickReplyLabels)) {
       return "write_reply_states_failed";
     }
@@ -510,7 +514,7 @@ function outcomePassed(
           ({ kind, outcome }) => kind === "scan_work" && outcome === "queued"
         ).length === 1 &&
         evidence.turns.length === 5 &&
-        evidence.turns.every(({ steps }) => steps.length > 0) &&
+        evidence.turns.slice(1).every(({ steps }) => steps.length > 0) &&
         matchesWriteReplyStates(evidence.replyQuickReplyLabels) &&
         !evidence.preFinalQueueDetected
       );

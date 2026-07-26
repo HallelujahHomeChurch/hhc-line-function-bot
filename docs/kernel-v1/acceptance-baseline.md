@@ -104,6 +104,11 @@ no agent trace, which could shift later evidence onto the wrong ordinal. It now
 retains one safe trace slot per webhook and reports the exact missing turn
 without storing message content.
 
+The exact missing slot was turn 1, the transport-level LINE file intake. That
+turn intentionally returns attachment quick replies without entering the
+controlled-agent trace. The write contract now permits an empty file-turn trace
+while requiring traces for text turns 2 through 5.
+
 All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
 label after successful cleanup before propagating driver exit code `1`; this
