@@ -1,10 +1,12 @@
 import { runAccessMigrations } from "../../../access/migrations.js";
 import { runAgentMemoryMigrations } from "../../../agent/migrations.js";
+import { activeTaskFromResult } from "../../../agent/active-task.js";
 import { runCatalogMigrations } from "../../../catalog/migrations.js";
 import { PostgresCatalogStore } from "../../../catalog/postgres-store.js";
 import { catalogStorageIdentity, type CatalogItemInput } from "../../../catalog/store.js";
 import { runKnowledgeMigrations } from "../../../knowledge/migrations.js";
 import { PostgresKnowledgeStore } from "../../../knowledge/postgres-store.js";
+import { createQueryKnowledgeHandler } from "../../../functions/query-knowledge.js";
 import { runScheduleMigrations } from "../../../schedules/migrations.js";
 import type { KernelBoundary } from "../contracts.js";
 import type { KernelIntegrationCaseResult } from "./redis-matrix.js";
@@ -83,7 +85,13 @@ const MATRIX_FAILURE_CODES = new Set([
   "knowledge_stale_failure_not_rejected",
   "knowledge_ready_health_overwritten",
   "knowledge_routing_metadata_overwritten",
-  "knowledge_revision_not_rotated"
+  "knowledge_revision_not_rotated",
+  "knowledge_active_task_missing",
+  "knowledge_active_anchor_invalid",
+  "knowledge_active_source_missing",
+  "knowledge_active_anchor_missing",
+  "knowledge_anchored_search_missing",
+  "knowledge_anchored_follow_up_unavailable"
 ]);
 
 function boundedFailureCode(error: unknown): string {
@@ -438,12 +446,22 @@ async function knowledgeRollbackAndStaleFailure(
     topics: ["atomic"],
     sampleQueries: ["stable content"],
     documents: [knowledgeDocument("doc-opaque-1", "stable-content", "Stable content")],
-    embeddings: []
+    embeddings: [
+      {
+        documentExternalId: "doc-opaque-1",
+        contentHash: "stable-content",
+        provider: "azure_openai",
+        model: "text-embedding-3-small",
+        dimensions: 1536,
+        embedding: oneHotVector()
+      }
+    ]
   });
   assert(
     (await right.search({ profileName: PROFILE, query: "Stable content" })).length === 1,
     "knowledge_baseline_not_searchable"
   );
+  await assertKnowledgeAnchoredFollowUp(right);
 
   const staged = await left.upsertSource({
     profileName: PROFILE,
@@ -521,6 +539,105 @@ async function knowledgeRollbackAndStaleFailure(
     "knowledge_routing_metadata_overwritten"
   );
   assert(promoted.stagingRevision !== first.stagingRevision, "knowledge_revision_not_rotated");
+}
+
+async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): Promise<void> {
+  const now = new Date("2026-07-21T12:01:00.000Z");
+  const handler = createQueryKnowledgeHandler({
+    store,
+    embedding: {
+      provider: "azure_openai",
+      model: "text-embedding-3-small",
+      dimensions: 1536,
+      async embed() {
+        return [oneHotVector()];
+      }
+    },
+    textGenerator: {
+      providerName: "deepseek",
+      async completeText() {
+        return "Synthetic answer";
+      }
+    }
+  });
+  const profile = {
+    name: PROFILE,
+    webhookPath: `/api/line/webhook/${PROFILE}`,
+    channelSecret: "synthetic-secret",
+    channelAccessToken: "synthetic-token",
+    allowDirectUser: true,
+    allowRooms: false,
+    allowedMessageTypes: ["text" as const],
+    groupRequireWakeWord: false,
+    wakeKeywords: [],
+    acceptMention: true,
+    enabledFunctions: ["query_knowledge" as const],
+    allowedProviders: ["deepseek" as const],
+    allowSubscriptionProviders: false,
+    controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
+    schedulePolicy: { meetingWindows: [], domains: [] }
+  };
+  const event = {
+    type: "message" as const,
+    source: { type: "user" as const, userId: "U_KERNEL" },
+    message: { type: "text" as const, text: "Stable content" }
+  };
+  const first = await handler({ query: "Stable content" }, { profile, event });
+  const task = activeTaskFromResult("query_knowledge", first, now, 600_000);
+  assert(task, "knowledge_active_task_missing");
+  const sourceId = task.anchors.sourceId;
+  const documentId = task.anchors.documentId;
+  const sectionKey = task.anchors.sectionKey;
+  assert(
+    typeof sourceId === "string" &&
+      typeof documentId === "string" &&
+      typeof sectionKey === "string",
+    "knowledge_active_anchor_invalid"
+  );
+  assert(
+    (await store.listSources({ profileName: PROFILE })).some(({ id }) => id === sourceId),
+    "knowledge_active_source_missing"
+  );
+  assert(
+    await store.hasAnchor({ profileName: PROFILE, sourceId, documentId, sectionKey }),
+    "knowledge_active_anchor_missing"
+  );
+  assert(
+    (
+      await store.search({
+        profileName: PROFILE,
+        query: "Follow-up content",
+        queryEmbedding: oneHotVector(),
+        embeddingProvider: "azure_openai",
+        embeddingModel: "text-embedding-3-small",
+        embeddingDimensions: 1536,
+        sourceId,
+        documentId,
+        sectionKey,
+        ordinal: 0
+      })
+    ).length > 0,
+    "knowledge_anchored_search_missing"
+  );
+  const followUp = await handler(
+    { query: "Follow-up content" },
+    {
+      profile,
+      event: { ...event, message: { type: "text", text: "Follow-up content" } },
+      activeTask: {
+        capability: task.currentCapability,
+        anchors: task.anchors,
+        references: task.references,
+        entities: task.entities,
+        supportedOperations: task.supportedOperations
+      }
+    }
+  );
+  assert(followUp.agentResult?.status === "success", "knowledge_anchored_follow_up_unavailable");
+}
+
+function oneHotVector(): number[] {
+  return Array.from({ length: 1536 }, (_, index) => (index === 0 ? 1 : 0));
 }
 
 function catalogItem(sourceId: string, identity: string, title: string): CatalogItemInput {

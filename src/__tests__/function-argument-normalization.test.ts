@@ -54,6 +54,16 @@ describe("function argument normalization", () => {
     });
   });
 
+  it("removes an explicit knowledge capability prefix from the retrieval query", () => {
+    expect(
+      normalizeFunctionArguments(
+        "query_knowledge",
+        { query: "改查知識 synthetic alpha procedure" },
+        { text: "改查知識 synthetic alpha procedure" }
+      )
+    ).toMatchObject({ query: "synthetic alpha procedure" });
+  });
+
   it("clears a model-inferred schedule range when the user only asks for service staff", () => {
     expect(
       normalizeFunctionArguments(
@@ -204,6 +214,51 @@ describe("function argument normalization", () => {
       query: "下次世緯家園服事是什麼時候",
       dateIntent: "next_meeting"
     });
+  });
+
+  it("normalizes a generic suffix from a current-message schedule role", () => {
+    expect(
+      normalizeFunctionArguments(
+        "query_schedule",
+        {
+          query: "synthetic service",
+          dateIntent: "specific_date",
+          specificDate: "2026-07-27",
+          role: "投影服事"
+        },
+        {
+          text: "查 synthetic service 2026-07-27 投影服事",
+          inferStructuredEvidence: true,
+          now: new Date("2026-07-26T00:00:00.000Z"),
+          timeZone: "Asia/Taipei"
+        }
+      )
+    ).toMatchObject({
+      query: "synthetic service",
+      dateIntent: "specific_date",
+      specificDate: "2026-07-27",
+      role: "投影"
+    });
+  });
+
+  it("does not treat a generic schedule noun as a role filter", () => {
+    const normalized = normalizeFunctionArguments(
+      "query_schedule",
+      {
+        query: "synthetic service",
+        dateIntent: "specific_date",
+        specificDate: "2026-07-27",
+        role: "服事"
+      },
+      {
+        text: "查 synthetic service 2026-07-27 服事",
+        inferStructuredEvidence: true,
+        now: new Date("2026-07-26T00:00:00.000Z"),
+        timeZone: "Asia/Taipei"
+      }
+    );
+
+    expect(normalized).not.toHaveProperty("role");
   });
 
   it("clears model-inferred content when the user only asks to remember a schedule", () => {

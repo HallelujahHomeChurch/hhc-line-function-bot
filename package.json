@@ -17,6 +17,7 @@
     "eval:agent:live": "tsx src/tools/eval-agent-planner-live.ts",
     "eval:kernel": "tsx src/tools/eval-kernel.ts",
     "eval:kernel:integration": "tsx src/tools/eval-kernel-integration.ts",
+    "eval:kernel:local-live": "bash scripts/run-kernel-local-live.sh",
     "eval:retrieval-product": "vitest run src/__tests__/retrieval-product-evals.test.ts",
     "catalog:sync": "tsx src/tools/sync-catalog.ts",
     "attachment-scan:run": "node dist/tools/run-attachment-scan-job.js",

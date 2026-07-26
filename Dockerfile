@@ -17,6 +17,14 @@ FROM base AS prod-deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
+FROM node:24-bookworm-slim AS kernel-local-live
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=prod-deps /app/package.json ./package.json
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+USER node
+
 FROM node:24-bookworm-slim AS attachment-scan-worker
 ARG CLAMAV_VERSION=1.4.3+dfsg-1~deb12u2
 WORKDIR /app
