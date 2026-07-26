@@ -310,6 +310,7 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).toContain("memory: 4Gi");
     expect(scanJob).toContain("mountPath: /var/lib/clamav");
     expect(scanJob).toContain("storageName: clamav-signatures-readonly");
+    expect(scanJob).toContain('name: CLAMAV_SIGNATURE_WARNING_AGE_HOURS\n            value: "168"');
     expect(scanJob).not.toContain("ingress:");
 
     expect(refreshJob).toContain("type: Microsoft.App/jobs");
