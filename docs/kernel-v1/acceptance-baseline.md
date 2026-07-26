@@ -64,6 +64,14 @@ therefore consumed 11 DeepSeek requests and 0 embedding batches in total. The
 shared normalizer now drops model-inferred generic schedule nouns such as
 `服事` from the role filter while preserving explicit known roles.
 
+The next full run against `67a8a830` passed schedule execution, refinement, and
+ambiguity, then stopped when the explicit switch correctly executed
+`query_knowledge` but returned `not_found`. It made 5 DeepSeek requests and 1
+embedding batch, bringing the live-run total to 16 DeepSeek requests and 1
+embedding batch. The shared knowledge argument normalizer now removes explicit
+capability prefixes such as `查知識` or `改查知識` from the retrieval query while
+leaving ordinary follow-up questions unchanged.
+
 All failed runs removed their Docker resources and Redis namespace. The shell
 reported the failure stage as `cleanup` because it did not advance the stage
 label after successful cleanup before propagating driver exit code `1`; this

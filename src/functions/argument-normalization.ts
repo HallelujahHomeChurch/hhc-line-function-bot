@@ -171,17 +171,32 @@ function normalizeKnowledgeArguments(
   args: JsonRecord,
   input: FunctionArgumentNormalizationInput
 ): JsonRecord {
-  if (typeof args.ordinal === "number") return args;
-  const text = `${stringArg(args, "query") ?? ""} ${input.text}`.normalize("NFKC");
+  const explicitQuery = extractExplicitKnowledgeQuery(input.text);
+  const normalizedArgs = explicitQuery === undefined ? args : { ...args, query: explicitQuery };
+  if (typeof normalizedArgs.ordinal === "number") return normalizedArgs;
+  const text = `${stringArg(normalizedArgs, "query") ?? ""} ${input.text}`.normalize("NFKC");
   const digit = text.match(/第\s*(\d+)\s*(?:個|項|站|天|步|地點)/u)?.[1];
-  if (digit && Number(digit) > 0) return { ...args, ordinal: Number(digit) - 1 };
+  if (digit && Number(digit) > 0) {
+    return { ...normalizedArgs, ordinal: Number(digit) - 1 };
+  }
   const chinese: Array<[RegExp, number]> = [
     [/第?一(?:個|項|站|天|步|地點)/u, 0],
     [/第?二(?:個|項|站|天|步|地點)/u, 1],
     [/第?三(?:個|項|站|天|步|地點)/u, 2]
   ];
   const match = chinese.find(([pattern]) => pattern.test(text));
-  return match ? { ...args, ordinal: match[1] } : args;
+  return match ? { ...normalizedArgs, ordinal: match[1] } : normalizedArgs;
+}
+
+function extractExplicitKnowledgeQuery(text: string): string | undefined {
+  const normalized = text.normalize("NFKC").trim().replace(wakeWordPattern, "").trim();
+  const prefix =
+    /^(?:(?:請|麻煩|幫我|幫忙)\s*)?(?:(?:改(?:成|為)?|換(?:成)?)\s*)?(?:查詢?|找|搜尋)\s*(?:已加入的?)?知識(?:查詢)?|^知識查詢/u;
+  if (!prefix.test(normalized)) return undefined;
+  return normalized
+    .replace(prefix, "")
+    .replace(/^[\s:：，,]+/u, "")
+    .trim();
 }
 
 function normalizePptSlideArguments(

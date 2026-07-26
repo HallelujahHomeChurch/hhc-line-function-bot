@@ -54,6 +54,16 @@ describe("function argument normalization", () => {
     });
   });
 
+  it("removes an explicit knowledge capability prefix from the retrieval query", () => {
+    expect(
+      normalizeFunctionArguments(
+        "query_knowledge",
+        { query: "改查知識 synthetic alpha procedure" },
+        { text: "改查知識 synthetic alpha procedure" }
+      )
+    ).toMatchObject({ query: "synthetic alpha procedure" });
+  });
+
   it("clears a model-inferred schedule range when the user only asks for service staff", () => {
     expect(
       normalizeFunctionArguments(
