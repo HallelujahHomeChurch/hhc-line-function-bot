@@ -616,6 +616,62 @@ describe("production profile configuration deployment contract", () => {
     expect(upload).toBeGreaterThan(deploy);
   });
 
+  it("wraps every bot and dependent-job mutation in the recoverable release transaction", () => {
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const helper = readProjectFile("scripts/release-assurance.sh");
+    const helperSource = deployment.indexOf('source "${script_dir}/release-assurance.sh"');
+    const snapshot = deployment.indexOf("capture_known_good_state");
+    const exitTrap = deployment.indexOf("release_assurance_on_exit");
+    const mutationMark = deployment.indexOf("mark_release_mutated");
+    const botApply = deployment.indexOf(
+      'az containerapp update \\\n  --resource-group "${RESOURCE_GROUP}"',
+      mutationMark
+    );
+    const gate = deployment.indexOf("run_release_gates");
+    const report = deployment.indexOf("write_release_report");
+    const complete = deployment.indexOf("complete_release_transaction");
+
+    for (const position of [
+      helperSource,
+      snapshot,
+      exitTrap,
+      mutationMark,
+      botApply,
+      gate,
+      report,
+      complete
+    ]) {
+      expect(position).toBeGreaterThanOrEqual(0);
+    }
+    expect(helperSource).toBeLessThan(snapshot);
+    expect(snapshot).toBeLessThan(exitTrap);
+    expect(exitTrap).toBeLessThan(mutationMark);
+    expect(mutationMark).toBeLessThan(botApply);
+    expect(botApply).toBeLessThan(gate);
+    expect(gate).toBeLessThan(report);
+    expect(report).toBeLessThan(complete);
+    expect(deployment.slice(mutationMark, botApply)).not.toContain("az ");
+    expect(deployment).toContain('RELEASE_TARGET_REVISION="${target_revision}"');
+    expect(deployment).toContain('RELEASE_TARGET_IMAGE="${image_ref}"');
+    expect(deployment).toContain('RELEASE_TARGET_SCAN_IMAGE="${scan_image_ref}"');
+    expect(deployment).toContain(
+      'RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${clamav_bootstrap_execution_name}"'
+    );
+    for (const jobName of [
+      "CLAMAV_SIGNATURE_REFRESH_JOB_NAME",
+      "ATTACHMENT_SCAN_JOB_NAME",
+      "CATALOG_SYNC_JOB_NAME"
+    ]) {
+      expect(deployment.indexOf(`mark_release_job_mutated "\${${jobName}}"`)).toBeLessThan(
+        deployment.indexOf(`deploy_job "\${${jobName}}"`)
+      );
+    }
+    expect(deployment).not.toContain("trap 'rm -f");
+    expect(helper).toContain("RELEASE_POLL_ATTEMPTS:=30");
+    expect(helper).toContain("az containerapp revision copy");
+    expect(helper).toContain('--from-revision "${RELEASE_KNOWN_GOOD_REVISION}"');
+  });
+
   it("provisions finite queue scans and atomic scheduled ClamAV signature refreshes", () => {
     const scanJob = readProjectFile("aca.attachment-scan-job.yaml");
     const refreshJob = readProjectFile("aca.clamav-signature-refresh-job.yaml");

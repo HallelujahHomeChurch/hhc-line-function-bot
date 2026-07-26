@@ -30,6 +30,7 @@ scan_image_ref="${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 echo "Deploying ${image_ref} to ${CONTAINER_APP_NAME}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/release-assurance.sh"
 bot_manifest_template="${script_dir}/../aca.containerapp.yaml"
 searxng_manifest_template="${script_dir}/../aca.searxng.containerapp.yaml"
 searxng_settings_template="${script_dir}/../infra/searxng/settings.yml"
@@ -45,7 +46,15 @@ attachment_scan_job_manifest="$(mktemp)"
 clamav_refresh_job_manifest="$(mktemp)"
 release_probe_job_manifest="$(mktemp)"
 periodic_assurance_job_manifest="$(mktemp)"
-trap 'rm -f "${bot_manifest}" "${searxng_manifest}" "${catalog_job_manifest}" "${attachment_scan_job_manifest}" "${clamav_refresh_job_manifest}" "${release_probe_job_manifest}" "${periodic_assurance_job_manifest}"' EXIT
+RELEASE_CLEANUP_FILES=(
+  "${bot_manifest}"
+  "${searxng_manifest}"
+  "${catalog_job_manifest}"
+  "${attachment_scan_job_manifest}"
+  "${clamav_refresh_job_manifest}"
+  "${release_probe_job_manifest}"
+  "${periodic_assurance_job_manifest}"
+)
 
 if [[ ! -f "${bot_manifest_template}" \
   || ! -f "${searxng_manifest_template}" \
@@ -58,6 +67,9 @@ if [[ ! -f "${bot_manifest_template}" \
   echo "Missing deployment configuration"
   exit 1
 fi
+
+capture_known_good_state
+trap 'release_assurance_on_exit "$?"' EXIT
 
 managed_environment_id="$(az containerapp show \
   --resource-group "${RESOURCE_GROUP}" \
@@ -401,6 +413,7 @@ if "PLACEHOLDER_" in text:
 Path(os.environ["BOT_MANIFEST"]).write_text(text)
 PY
 
+mark_release_mutated
 az containerapp update \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
@@ -413,6 +426,9 @@ target_revision="$(az containerapp show \
   --name "${CONTAINER_APP_NAME}" \
   --query "properties.latestRevisionName" \
   --output tsv)"
+RELEASE_TARGET_REVISION="${target_revision}"
+RELEASE_TARGET_IMAGE="${image_ref}"
+RELEASE_TARGET_SCAN_IMAGE="${scan_image_ref}"
 
 echo "Waiting for revision ${target_revision} to become ready"
 revision_ready=false
@@ -677,6 +693,7 @@ start_job_and_wait() {
     )"
     case "${execution_status}" in
       Succeeded)
+        echo "${execution_name}"
         return
         ;;
       Failed | Stopped)
@@ -717,11 +734,19 @@ render_job_manifest \
   "${PERIODIC_ASSURANCE_JOB_NAME}" \
   "${scan_image_ref}"
 
+mark_release_job_mutated "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"
 deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" "${clamav_refresh_job_manifest}"
-start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"
+clamav_bootstrap_execution_name="$(start_job_and_wait "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}")"
+RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${clamav_bootstrap_execution_name}"
+mark_release_job_mutated "${ATTACHMENT_SCAN_JOB_NAME}"
 deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}"
+mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
 deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"
 deploy_job "${PERIODIC_ASSURANCE_JOB_NAME}" "${periodic_assurance_job_manifest}"
+
+run_release_gates
+write_release_report
+complete_release_transaction
 
 echo "Deployed ${image_ref} to revision ${target_revision}"
