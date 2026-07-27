@@ -108,6 +108,13 @@ describe("release assurance shell transaction", () => {
     expect(calls.some((args) => args.slice(0, 3).join(" ") === "monitor log-analytics query")).toBe(
       true
     );
+    const analyticsCall = calls.find(
+      (args) => args.slice(0, 3).join(" ") === "monitor log-analytics query"
+    );
+    const analyticsQuery = analyticsCall?.[analyticsCall.indexOf("--analytics-query") + 1] ?? "";
+    expect(analyticsQuery.indexOf("| order by TimeGenerated asc")).toBeLessThan(
+      analyticsQuery.indexOf("| project Log_s")
+    );
     expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
     expectForbiddenCallsAbsent(calls);
   }, 15_000);
