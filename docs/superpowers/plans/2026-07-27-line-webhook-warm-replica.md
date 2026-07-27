@@ -22,10 +22,12 @@
 ### Task 1: Enforce And Implement The Warm Bot Replica
 
 **Files:**
+
 - Modify: `src/__tests__/profile-config-deployment-contract.test.ts`
 - Modify: `aca.containerapp.yaml`
 
 **Interfaces:**
+
 - Consumes: the checked-in ACA bot manifest contract.
 - Produces: a manifest whose bot scale block is exactly one minimum and ten maximum replicas.
 
@@ -56,9 +58,9 @@ Expected: FAIL because `aca.containerapp.yaml` still contains
 Change only the bot scale block:
 
 ```yaml
-    scale:
-      minReplicas: 1
-      maxReplicas: 10
+scale:
+  minReplicas: 1
+  maxReplicas: 10
 ```
 
 - [ ] **Step 4: Run the focused test and verify GREEN**
@@ -81,11 +83,13 @@ git commit -m "Keep LINE webhook replica warm"
 ### Task 2: Record The Operational Contract
 
 **Files:**
+
 - Modify: `src/__tests__/modular-monolith-docs.test.ts`
 - Modify: `docs/runbooks/production-operations.md`
 - Modify: `docs/superpowers/specs/2026-07-27-line-webhook-warm-replica-design.md`
 
 **Interfaces:**
+
 - Consumes: the manifest contract from Task 1.
 - Produces: operator guidance that distinguishes the always-warm webhook service from finite jobs.
 
@@ -148,10 +152,12 @@ git commit -m "Document warm LINE webhook capacity"
 ### Task 3: Validate, Review, Merge, And Verify Production
 
 **Files:**
+
 - Verify: all files changed by Tasks 1 and 2.
 - No additional production file is expected.
 
 **Interfaces:**
+
 - Consumes: Tasks 1 and 2.
 - Produces: a merged and deployed production contract with live evidence.
 
