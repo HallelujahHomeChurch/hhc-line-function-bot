@@ -93,9 +93,7 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).toContain("path: /healthz");
     expect(manifest).toContain("type: Readiness");
     expect(manifest).toContain("path: /readyz");
-    expect(manifest).toContain("scale:");
-    expect(manifest).toContain("minReplicas:");
-    expect(manifest).toContain("maxReplicas:");
+    expect(manifest).toContain("scale:\n      minReplicas: 1\n      maxReplicas: 10");
     expect(manifest).toContain("resources:");
     expect(manifest).toContain("cpu:");
     expect(manifest).toContain("memory:");
