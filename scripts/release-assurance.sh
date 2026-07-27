@@ -733,8 +733,8 @@ elif check_name == "periodic_assurance_job":
             },
         )
         and isinstance(resources, dict)
-        and resources.get("cpu") == 0.25
-        and resources.get("memory") == "0.5Gi"
+        and resources.get("cpu") == 2
+        and resources.get("memory") == "4Gi"
         and mounts == expected_mounts
         and volumes == readonly_volumes
     )

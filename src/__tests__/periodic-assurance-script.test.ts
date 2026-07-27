@@ -50,7 +50,8 @@ describe("periodic assurance shell runner", () => {
     expect(report.checks.every((check) => check.status !== "failed")).toBe(true);
     expect(reportText).not.toContain("private-registry");
     expect(reportText).not.toContain("fake-private-error");
-    expectJobLifecycle(calls, { polls: 2, logs: 1 });
+    expectJobLifecycle(calls, { polls: 2, logs: 0 });
+    expectAnalyticsLogObservation(calls);
     expectRecentScanObservation(calls);
     expectForbiddenCallsAbsent(calls);
   });
@@ -76,7 +77,8 @@ describe("periodic assurance shell runner", () => {
     );
     expect(report.providerRequests).toEqual({ deepseek: 0, embedding: 0 });
     expect(reportText).not.toContain("fake-private-error");
-    expectJobLifecycle(calls, { polls: 1, logs: 1 });
+    expectJobLifecycle(calls, { polls: 1, logs: 0 });
+    expectAnalyticsLogObservation(calls);
     expectRecentScanObservation(calls);
     expectForbiddenCallsAbsent(calls);
   });
@@ -109,7 +111,8 @@ describe("periodic assurance shell runner", () => {
         expect.objectContaining({ name: check, status: "failed", code })
       );
       expect(reportText).not.toContain("fake-private-error");
-      expectJobLifecycle(calls, { polls: 1, logs: 1 });
+      expectJobLifecycle(calls, { polls: 1, logs: 0 });
+      expectAnalyticsLogObservation(calls);
       expectRecentScanObservation(calls);
       expectForbiddenCallsAbsent(calls);
     }
@@ -135,7 +138,8 @@ describe("periodic assurance shell runner", () => {
       expect(report.failureCode).toBe("malformed_json");
       expect(report.checks).toEqual([]);
       expect(reportText).not.toContain("fake-private-error");
-      expectJobLifecycle(calls, { polls: 1, logs: 1 });
+      expectJobLifecycle(calls, { polls: 1, logs: 0 });
+      expectAnalyticsLogObservation(calls);
       expectForbiddenCallsAbsent(calls);
     }
   );
@@ -178,6 +182,39 @@ describe("periodic assurance shell runner", () => {
     expectForbiddenCallsAbsent(calls);
   });
 
+  it("waits for the bounded analytics payload instead of accepting an earlier empty result", async () => {
+    const fixture = await createFixture("analytics_delayed_payload");
+
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    expect(result.status, diagnostic(result, calls)).toBe(0);
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(report.status).toBe("passed");
+    expect(report.failureCode).toBe("none");
+    expectAnalyticsLogObservation(calls, 2);
+    expect(calls.filter((args) => args[0] === "sleep")).toHaveLength(2);
+    expectForbiddenCallsAbsent(calls);
+  }, 30_000);
+
+  it("suppresses raw analytics errors and emits only a stable network failure", async () => {
+    const fixture = await createFixture("analytics_unavailable");
+
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const reportText = await readFile(fixture.reportPath, "utf8");
+    const report = JSON.parse(reportText) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(1);
+    expect(report.status).toBe("failed");
+    expect(report.failureCode).toBe("network_failed");
+    expect(report.checks).toEqual([]);
+    expect(String(result.stderr)).not.toContain("fake-private-analytics-error");
+    expect(reportText).not.toContain("fake-private-analytics-error");
+    expectAnalyticsLogObservation(calls, 3);
+    expectForbiddenCallsAbsent(calls);
+  }, 30_000);
+
   it("fails the attachment control-plane check when a recent scan execution failed", async () => {
     const fixture = await createFixture("recent_scan_failure");
 
@@ -196,7 +233,8 @@ describe("periodic assurance shell runner", () => {
         code: "http_mismatch"
       })
     );
-    expectJobLifecycle(calls, { polls: 2, logs: 1 });
+    expectJobLifecycle(calls, { polls: 2, logs: 0 });
+    expectAnalyticsLogObservation(calls);
     expectRecentScanObservation(calls);
     expectForbiddenCallsAbsent(calls);
   });
@@ -293,6 +331,21 @@ function expectRecentScanObservation(calls: string[][]): void {
   ).toHaveLength(1);
 }
 
+function expectAnalyticsLogObservation(calls: string[][], count = 1): void {
+  const queries = calls.filter(
+    (args) =>
+      command(args, "monitor", "log-analytics", "query") &&
+      value(args, "--workspace") === "fixture-workspace-id"
+  );
+  expect(queries).toHaveLength(count);
+  for (const args of queries) {
+    const query = value(args, "--analytics-query");
+    expect(query).toContain("| where Log_s contains '\"providerRequests\"'");
+    expect(query).toContain("| top 1 by TimeGenerated desc");
+    expect(query).toContain("| project Log_s");
+  }
+}
+
 function expectForbiddenCallsAbsent(calls: string[][]): void {
   const flattened = calls.map((args) => args.join(" ")).join("\n");
   expect(flattened).not.toMatch(/\btraffic\b/iu);
@@ -353,7 +406,12 @@ if scenario == "azure_unavailable":
     sys.exit(17)
 
 if command("containerapp", "job", "show"):
-    print("private-registry.example/fixture/scan@${PERIODIC_IMAGE_DIGEST}")
+    if value("--query") == "properties.environmentId":
+        print("/subscriptions/fixture/resourceGroups/fixture-resource-group/providers/Microsoft.App/managedEnvironments/fixture-environment")
+    else:
+        print("private-registry.example/fixture/scan@${PERIODIC_IMAGE_DIGEST}")
+elif command("containerapp", "env", "show"):
+    print("fixture-workspace-id")
 elif command("containerapp", "job", "start"):
     print("periodic-exec-17")
 elif command("containerapp", "job", "execution", "show"):
@@ -385,7 +443,17 @@ elif command("containerapp", "job", "execution", "list"):
         "status":"Failed" if scenario in {"periodic_and_scan_failure", "clamav_failure_and_scan_failure", "recent_scan_failure"} else "Succeeded",
         "startTime":started,
     }))
-elif command("containerapp", "job", "logs", "show"):
+elif command("monitor", "log-analytics", "query"):
+    if scenario == "analytics_unavailable":
+        print("fake-private-analytics-error", file=sys.stderr)
+        sys.exit(17)
+    if scenario == "analytics_delayed_payload":
+        count_path = state / "analytics-count"
+        count = int(count_path.read_text() or "0") + 1 if count_path.exists() else 1
+        count_path.write_text(str(count))
+        if count == 1:
+            print("[]")
+            sys.exit(0)
     checks = [
         {"name":"graph_metadata","status":"passed","code":"none"},
         {"name":"notion_query","status":"passed","code":"none"},
@@ -418,8 +486,8 @@ elif command("containerapp", "job", "logs", "show"):
         "providerRequests":{"deepseek":0,"embedding":0},
     }
     print(json.dumps([
-        {"TimeStamp":"2026-07-27T01:00:00Z","Log":"fake-private-error: do not serialize"},
-        {"TimeStamp":"2026-07-27T01:00:01Z","Log":json.dumps(payload, separators=(",", ":"))},
+        {"Log_s":"fake-private-error: do not serialize"},
+        {"Log_s":json.dumps(payload, separators=(",", ":"))},
     ]))
 else:
     print("unexpected fake az command: " + " ".join(args), file=sys.stderr)

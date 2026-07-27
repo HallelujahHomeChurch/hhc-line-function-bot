@@ -420,7 +420,8 @@ describe("release assurance shell transaction", () => {
         );
       }
       expectForbiddenCallsAbsent(calls);
-    }
+    },
+    30_000
   );
 
   it("does not report restored when a job definition differs from its snapshot", async () => {
@@ -1218,7 +1219,7 @@ if (command("containerapp", "job", "show")) {
         },
         { name: "CLAMAV_SCAN_TIMEOUT_MS", value: "15000" }
       ],
-      resources: { cpu: 0.25, memory: "0.5Gi", ephemeralStorage: "" },
+      resources: { cpu: 2, memory: "4Gi", ephemeralStorage: "" },
       volumeMounts: [{ volumeName: "clamav-signatures", mountPath: "/var/lib/clamav" }],
       volumes: [
         {

@@ -29,6 +29,104 @@ execution_status=""
 periodic_logs=""
 scan_execution="null"
 
+periodic_logs_from_analytics() {
+  local requested_execution="$1"
+  local environment_id
+  local environment_name
+  local workspace_id
+  local analytics_query
+  local analytics_logs=""
+  local attempt
+
+  if [[ ! "${PERIODIC_ASSURANCE_JOB_NAME}" =~ ^[a-z0-9-]+$ \
+    || ! "${requested_execution}" =~ ^[a-z0-9-]+$ ]]; then
+    return 1
+  fi
+  if ! environment_id="$(
+    az containerapp job show \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${PERIODIC_ASSURANCE_JOB_NAME}" \
+      --query "properties.environmentId" \
+      --output tsv \
+      --only-show-errors 2>/dev/null
+  )" || [[ -z "${environment_id}" ]]; then
+    return 1
+  fi
+  environment_name="${environment_id##*/}"
+  if [[ ! "${environment_name}" =~ ^[a-z0-9-]+$ ]]; then
+    return 1
+  fi
+  if ! workspace_id="$(
+    az containerapp env show \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${environment_name}" \
+      --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId" \
+      --output tsv \
+      --only-show-errors 2>/dev/null
+  )" || [[ -z "${workspace_id}" ]]; then
+    return 1
+  fi
+
+  analytics_query="ContainerAppConsoleLogs_CL
+| where ContainerJobName_s == '${PERIODIC_ASSURANCE_JOB_NAME}'
+| where ContainerGroupName_s startswith '${requested_execution}-'
+| where Log_s contains '\"providerRequests\"'
+| where Log_s contains '\"checks\"'
+| top 1 by TimeGenerated desc
+| project Log_s"
+  for ((attempt = 1; attempt <= PERIODIC_POLL_ATTEMPTS; attempt += 1)); do
+    if analytics_logs="$(
+      az monitor log-analytics query \
+        --workspace "${workspace_id}" \
+        --analytics-query "${analytics_query}" \
+        --timespan PT30M \
+        --output json \
+        --only-show-errors 2>/dev/null
+    )" && PERIODIC_ANALYTICS_LOGS="${analytics_logs}" python3 - <<'PY'
+import json
+import os
+
+try:
+    rows = json.loads(os.environ["PERIODIC_ANALYTICS_LOGS"])
+except (TypeError, ValueError):
+    raise SystemExit(1)
+
+
+def has_payload(value):
+    if isinstance(value, dict):
+        if {"status", "checks", "providerRequests"} <= set(value):
+            return True
+        for key in ("Log_s", "Log", "log", "message"):
+            nested = value.get(key)
+            if isinstance(nested, str):
+                try:
+                    if has_payload(json.loads(nested)):
+                        return True
+                except (TypeError, ValueError):
+                    pass
+        return any(
+            has_payload(nested)
+            for nested in value.values()
+            if isinstance(nested, (dict, list))
+        )
+    if isinstance(value, list):
+        return any(has_payload(nested) for nested in value)
+    return False
+
+
+raise SystemExit(0 if has_payload(rows) else 1)
+PY
+    then
+      printf '%s' "${analytics_logs}"
+      return 0
+    fi
+    if ((attempt < PERIODIC_POLL_ATTEMPTS)); then
+      sleep "${PERIODIC_POLL_INTERVAL_SECONDS}"
+    fi
+  done
+  return 1
+}
+
 if ! periodic_image="$(
   az containerapp job show \
     --resource-group "${RESOURCE_GROUP}" \
@@ -84,16 +182,7 @@ if [[ "${runner_failure}" == "none" ]]; then
 fi
 
 if [[ "${execution_status}" == "Succeeded" || "${execution_status}" == "Failed" || "${execution_status}" == "Stopped" ]]; then
-  if ! periodic_logs="$(
-    az containerapp job logs show \
-      --resource-group "${RESOURCE_GROUP}" \
-      --name "${PERIODIC_ASSURANCE_JOB_NAME}" \
-      --execution "${execution_name}" \
-      --container periodic-assurance \
-      --tail 20 \
-      --format json \
-      --only-show-errors 2>/dev/null
-  )"; then
+  if ! periodic_logs="$(periodic_logs_from_analytics "${execution_name}")"; then
     runner_failure=network_failed
   fi
 fi
@@ -167,7 +256,7 @@ def payload_candidates(value):
     if isinstance(value, dict):
         if {"status", "checks", "providerRequests"} <= set(value):
             yield value
-        for key in ("Log", "log", "message"):
+        for key in ("Log", "Log_s", "log", "message"):
             candidate = value.get(key)
             if isinstance(candidate, str):
                 try:
@@ -282,7 +371,10 @@ if payload is not None:
         payload_status, checks = validate_payload(payload)
     except ValueError:
         runner_failure = "malformed_json"
-elif os.environ["PERIODIC_EXECUTION_STATUS"] in {"Succeeded", "Failed", "Stopped"}:
+elif (
+    runner_failure == "none"
+    and os.environ["PERIODIC_EXECUTION_STATUS"] in {"Succeeded", "Failed", "Stopped"}
+):
     runner_failure = "malformed_json"
 workload_failure_code = (
     next(check["code"] for check in checks if check["status"] == "failed")
