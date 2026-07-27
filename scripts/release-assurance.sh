@@ -702,7 +702,9 @@ elif check_name == "release_probe":
                 },
             },
         )
-        and resources == {"cpu": 0.25, "memory": "0.5Gi"}
+        and isinstance(resources, dict)
+        and resources.get("cpu") == 0.25
+        and resources.get("memory") == "0.5Gi"
         and mounts == expected_mounts
         and volumes == readonly_volumes
     )
@@ -730,7 +732,9 @@ elif check_name == "periodic_assurance_job":
                 "CLAMAV_SCAN_TIMEOUT_MS": {"value": "15000"},
             },
         )
-        and resources == {"cpu": 0.25, "memory": "0.5Gi"}
+        and isinstance(resources, dict)
+        and resources.get("cpu") == 0.25
+        and resources.get("memory") == "0.5Gi"
         and mounts == expected_mounts
         and volumes == readonly_volumes
     )
@@ -1050,20 +1054,29 @@ import os
 
 state = json.loads(os.environ["RELEASE_ROLLBACK_STATE"])
 revision = os.environ["RELEASE_ROLLBACK_REVISION_CANDIDATE"]
+traffic = state.get("traffic")
+traffic_ok = (
+    isinstance(traffic, list)
+    and len(traffic) == 1
+    and traffic[0].get("weight") == 100
+    and (
+        traffic[0].get("revisionName") == revision
+        or traffic[0].get("latestRevision") is True
+    )
+)
+dapr = state.get("dapr") or {}
 valid = (
     state.get("latestRevision") == revision
     and state.get("latestReadyRevision") == revision
     and state.get("runningStatus") == "Running"
-    and state.get("traffic") == [{"revisionName": revision, "weight": 100}]
+    and traffic_ok
     and state.get("external") is False
     and state.get("targetPort") == 3000
     and str(state.get("transport") or "").lower() == "auto"
-    and state.get("dapr") == {
-        "enabled": True,
-        "appId": "hhc-line-function-bot",
-        "appPort": 3000,
-        "appProtocol": "http",
-    }
+    and dapr.get("enabled") is True
+    and dapr.get("appId") == "hhc-line-function-bot"
+    and dapr.get("appPort") == 3000
+    and dapr.get("appProtocol") == "http"
     and os.environ["RELEASE_ROLLBACK_IMAGE_CANDIDATE"]
     == os.environ["RELEASE_EXPECTED_ROLLBACK_IMAGE"]
 )
@@ -1190,11 +1203,21 @@ import os
 
 state = json.loads(os.environ["RELEASE_SEARXNG_ROLLBACK_STATE"])
 revision = os.environ["RELEASE_SEARXNG_ROLLBACK_REVISION"]
+traffic = state.get("traffic")
+traffic_ok = (
+    isinstance(traffic, list)
+    and len(traffic) == 1
+    and traffic[0].get("weight") == 100
+    and (
+        traffic[0].get("revisionName") == revision
+        or traffic[0].get("latestRevision") is True
+    )
+)
 valid = (
     state.get("latestRevision") == revision
     and state.get("latestReadyRevision") == revision
     and state.get("runningStatus") == "Running"
-    and state.get("traffic") == [{"revisionName": revision, "weight": 100}]
+    and traffic_ok
     and state.get("external") is False
     and state.get("targetPort") == 8080
     and str(state.get("transport") or "").lower() == "http"

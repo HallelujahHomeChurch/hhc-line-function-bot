@@ -826,12 +826,13 @@ if (command("containerapp", "show") && name === "fixture-bot") {
           : "bot--target",
       runningStatus: "Running",
       traffic:
-        !rolledBack &&
-        (scenario === "target_traffic_mismatch" ||
-          scenario === "rollback_copy_failure" ||
-          scenario === "rollback_image_mismatch")
+        rolledBack
+          ? [{ latestRevision: true, weight: 100 }]
+          : scenario === "target_traffic_mismatch" ||
+              scenario === "rollback_copy_failure" ||
+              scenario === "rollback_image_mismatch"
           ? [{ revisionName: "bot--known-good", weight: 100 }]
-          : [{ revisionName: rolledBack ? "bot--rollback" : "bot--target", weight: 100 }],
+          : [{ revisionName: "bot--target", weight: 100 }],
       external: false,
       targetPort: !rolledBack && scenario === "bot_ingress_mismatch" ? 3001 : 3000,
       transport: !rolledBack && scenario === "bot_ingress_transport_mismatch" ? "Tcp" : "Auto",
@@ -842,7 +843,13 @@ if (command("containerapp", "show") && name === "fixture-bot") {
               enabled: true,
               appId: "hhc-line-function-bot",
               appPort: 3000,
-              appProtocol: "http"
+              appProtocol: "http",
+              appHealth: null,
+              enableApiLogging: false,
+              httpMaxRequestSize: null,
+              httpReadBufferSize: null,
+              logLevel: "warn",
+              maxConcurrency: null
             }
     });
   } else process.exit(91);
@@ -899,7 +906,7 @@ if (command("containerapp", "show") && name === "fixture-searxng") {
       latestRevision: "searx--rollback",
       latestReadyRevision: "searx--rollback",
       runningStatus: "Running",
-      traffic: [{ revisionName: "searx--rollback", weight: 100 }],
+      traffic: [{ latestRevision: true, weight: 100 }],
       external: false,
       targetPort: 8080,
       transport: scenario === "searxng_restore_contract_mismatch" ? "Auto" : "Http",
@@ -1107,7 +1114,7 @@ if (command("containerapp", "job", "show")) {
           value: "/var/lib/clamav/current/manifest.json"
         }
       ],
-      resources: { cpu: 0.25, memory: "0.5Gi" },
+      resources: { cpu: 0.25, memory: "0.5Gi", ephemeralStorage: "" },
       volumeMounts: [{ volumeName: "clamav-signatures", mountPath: "/var/lib/clamav" }],
       volumes: [
         {
@@ -1142,7 +1149,7 @@ if (command("containerapp", "job", "show")) {
         },
         { name: "CLAMAV_SCAN_TIMEOUT_MS", value: "15000" }
       ],
-      resources: { cpu: 0.25, memory: "0.5Gi" },
+      resources: { cpu: 0.25, memory: "0.5Gi", ephemeralStorage: "" },
       volumeMounts: [{ volumeName: "clamav-signatures", mountPath: "/var/lib/clamav" }],
       volumes: [
         {
