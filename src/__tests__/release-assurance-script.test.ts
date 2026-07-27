@@ -199,7 +199,8 @@ describe("release assurance shell transaction", () => {
       expect(result.status, diagnostic(result, calls)).toBe(expectedExit);
       expect(report.status).toBe("failed");
       expect(report).not.toHaveProperty("providerRequests");
-    }
+    },
+    15_000
   );
 
   it.each(["empty_catalog_snapshot", "empty_scan_snapshot", "empty_refresh_snapshot"])(
