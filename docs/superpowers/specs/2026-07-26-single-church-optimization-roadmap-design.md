@@ -2,13 +2,12 @@
 
 ## Status
 
-Approved direction on 2026-07-26.
+Approved direction on 2026-07-26. Completed and accepted on 2026-07-27.
 
 The approved delivery finish line is R5.0 Lean Release Assurance. R4.1
-production verification is complete. R5.0 implementation is complete; PR CI,
-production release acceptance, and the first periodic assurance run remain
-pending. Stable Maintenance is the only successor to R5.0. No R5.1/R5.2, SaaS,
-or local-model follow-up is planned.
+production verification is complete. R5.0 production acceptance is complete.
+Stable Maintenance is the only successor to R5.0. The project is now in that
+state. No R5.1/R5.2, SaaS, or local-model follow-up is planned.
 
 This design replaces the remaining R4 through R8 direction in
 `2026-07-19-controlled-retrieval-product-roadmap-design.md`. The completed R0,
@@ -174,8 +173,8 @@ Completed R0-R3
   -> Completed R3.5
   -> Completed R4.0 Production Contract Correction
   -> Completed R4.1 Production Verification
-  -> R5.0 Lean Release Assurance (Implementation Complete; Acceptance Pending)
-  -> Stable Maintenance
+  -> Completed R5.0 Lean Release Assurance
+  -> Stable Maintenance (Current)
 ```
 
 ## R4.0 — Production Contract Correction
@@ -292,9 +291,18 @@ an honest next step for every controlled result class.
 
 ### Status
 
-R5.0 implementation is complete; PR CI, production release acceptance, and the
-first periodic assurance run remain pending. Do not claim that release or live
-LINE acceptance has happened until those external observations are recorded.
+R5.0 production acceptance is complete. Production release
+[30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171)
+deployed commit `43d7b6e749298418a75f4d1e1f19f48db8e3853c` as revision
+`hhc-line-function-bot--0000149`; all 15 release checks passed. Weekly assurance
+[30237568728](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237568728)
+passed all seven dependency checks. Both reports attest zero DeepSeek and zero
+embedding requests.
+
+This acceptance proves the bounded release contract, rollback machinery, public
+Gateway-to-Dapr-to-bot route, and periodic dependencies. It does not turn the
+signed empty webhook probe into proof of LINE-platform delivery or reply-token
+behavior, and no recruited human LINE acceptance session was required.
 
 ### Outcome
 
@@ -375,9 +383,8 @@ R4.0 must complete before R4.1 because it corrects a current attachment
 availability defect. R5.0 is the final delivery milestone and establishes the
 release probes and rollback evidence required before stable maintenance.
 
-R4.1 production verification is complete. R5.0 implementation is complete, but
-PR CI, production release acceptance, and the first periodic assurance run
-remain pending. Stable Maintenance is the only successor to R5.0.
+R4.1 production verification is complete. R5.0 production acceptance is
+complete. The project is now in Stable Maintenance, the only successor to R5.0.
 
 Each behavior or lifecycle change after R3 must update the versioned Kernel
 corpus and run the applicable deterministic, Redis/PostgreSQL integration, and

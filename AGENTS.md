@@ -250,7 +250,7 @@ Testing map:
 - If the user asks for code changes but not deployment, leave the verified branch/PR unmerged and report that production release is intentionally pending.
 - GitHub Actions is the sole CI/CD system. Do not restore Azure DevOps or add a second automatic deployment path.
 - Controlled routing is always authoritative. Do not reintroduce runtime switches, shadow routing, a second router, or a semantic fallback provider; roll back through a reviewed application deployment while retaining the DeepSeek-only lane policy.
-- R4.1 production verification is complete. R5.0 implementation is complete, but its PR CI, production release acceptance, and first periodic assurance run remain pending; Stable Maintenance is its only successor. Do not add R5.1/R5.2, SaaS, or local-model follow-up work.
+- R4.1 production verification is complete. R5.0 production acceptance is complete. The project is now in Stable Maintenance; do not add R5.1/R5.2, SaaS, or local-model follow-up work.
 - Release assurance is provider-free: after the provider-free job definitions are verified, the signed empty webhook probe and release report attest `providerRequests: { deepseek: 0, embedding: 0 }`; an earlier failed report omits that unverified attestation. It proves gateway/Dapr/bot reachability only, never LINE delivery or reply-token behavior. The normal rollback copies the known-good revision while pinning its resolved OCI digest into a new revision; use a manual image change only as bounded emergency fallback.
 
 ## Deployment Context

@@ -115,11 +115,18 @@ describe("R5.0 release-assurance documentation", () => {
     ]);
 
     expect(roadmap).toContain("R4.1 production verification is complete.");
-    expect(roadmap).toMatch(
-      /R5\.0 implementation is complete; PR CI,\s+production release acceptance, and the first periodic assurance run remain\s+pending\./
+    expect(roadmap).toContain("R5.0 production acceptance is complete.");
+    expect(roadmap).not.toContain(
+      "production release acceptance, and the first periodic assurance run remain pending"
     );
     expect(roadmap).toContain("Stable Maintenance is the only successor to R5.0.");
     expect(roadmap).toMatch(/No R5\.1\/R5\.2, SaaS,\s+or local-model follow-up is planned\./);
+    expect(roadmap).toContain(
+      "https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171"
+    );
+    expect(roadmap).toContain(
+      "https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237568728"
+    );
 
     expect(operations).toContain("hhc-line-bot-release-probe");
     expect(operations).toContain("artifacts/release-assurance/report.json");
@@ -138,6 +145,7 @@ describe("R5.0 release-assurance documentation", () => {
     ]) {
       expect(content, name).toContain("R5.0");
       expect(content, name).toContain("Stable Maintenance");
+      expect(content, name).toContain("R5.0 production acceptance is complete.");
     }
   });
 });

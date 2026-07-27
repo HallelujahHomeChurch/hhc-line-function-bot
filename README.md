@@ -521,9 +521,11 @@ Agents should create a `codex/*` branch, push it, open a PR, and request auto-me
 
 ### R5.0 release assurance status
 
-R4.1 production verification is complete. R5.0 implementation is complete, but PR CI, production release acceptance, and the first periodic assurance run remain pending. After those observations are recorded, Stable Maintenance is the only successor; this roadmap does not create R5.1/R5.2, SaaS, or local-model follow-up work.
+R4.1 production verification is complete. R5.0 production acceptance is complete. The project is now in Stable Maintenance; this roadmap does not create R5.1/R5.2, SaaS, or local-model follow-up work.
 
 `Production Release` records its provider-free deployment transaction in `artifacts/release-assurance/report.json`. The `hhc-line-bot-release-probe` sends a signed empty `events: []` webhook through the public gateway, while the report attests `providerRequests: { deepseek: 0, embedding: 0 }`. That proves the bounded release route and checks, not real LINE delivery or reply-token behavior. The weekly `hhc-line-bot-periodic-assurance` job writes `artifacts/release-assurance/periodic-report.json` with dependency evidence independent of release acceptance.
+
+The accepted baseline is production release [30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171), which deployed revision `hhc-line-function-bot--0000149` with all 15 release checks passing, and weekly assurance [30237568728](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237568728), whose seven dependency checks passed. Both reports attest zero DeepSeek and zero embedding requests.
 
 ## Verification
 
