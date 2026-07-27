@@ -714,7 +714,7 @@ pipeline and YAML definition have been removed.
 
 ## R5.0 Release Assurance
 
-R4.1 production verification is complete. R5.0 implementation is complete, but PR CI, production release acceptance, and the first periodic assurance run remain pending. Stable Maintenance is the only successor; no R5.1/R5.2, SaaS, or local-model follow-up is planned.
+R4.1 production verification is complete. R5.0 production acceptance is complete. The project is now in Stable Maintenance; no R5.1/R5.2, SaaS, or local-model follow-up is planned.
 
 The deploy transaction snapshots a known-good revision and image, deploys the
 target, and writes `artifacts/release-assurance/report.json`. Its release probe
@@ -725,3 +725,11 @@ new rollback revision and restore changed job images; a manual image update is
 only the bounded emergency fallback. Weekly dependency evidence is separate:
 `hhc-line-bot-periodic-assurance` writes
 `artifacts/release-assurance/periodic-report.json` after its own run.
+
+The accepted baseline is production release
+[30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171),
+which deployed revision `hhc-line-function-bot--0000149` with all 15 checks
+passing, and weekly assurance
+[30237568728](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237568728),
+whose seven dependency checks passed. Both reports attest zero DeepSeek and
+zero embedding requests.

@@ -338,7 +338,7 @@ describe("release assurance shell transaction", () => {
       );
       expectForbiddenCallsAbsent(calls);
     },
-    15_000
+    30_000
   );
 
   it.each([

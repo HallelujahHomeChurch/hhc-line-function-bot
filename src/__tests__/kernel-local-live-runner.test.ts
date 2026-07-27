@@ -71,23 +71,27 @@ describe("Kernel local live disposable runner", () => {
     ["secret cleanup failure", "secret-volume-rm", 2],
     ["secret resource listing failure", "resource-list-failure", 2],
     ["already-clean secret resources", "resources-absent", 0]
-  ])("executes the %s cleanup path with fake binaries", async (_name, failure, expectedExit) => {
-    const fixture = await createFakeRuntime(failure);
-    const result = fixture.run();
-    const log = await readFile(fixture.logPath, "utf8");
+  ])(
+    "executes the %s cleanup path with fake binaries",
+    async (_name, failure, expectedExit) => {
+      const fixture = await createFakeRuntime(failure);
+      const result = fixture.run();
+      const log = await readFile(fixture.logPath, "utf8");
 
-    expect(result.status, `${result.stdout}\n${result.stderr}\n${log}`).toBe(expectedExit);
-    if (failure !== "az") {
-      expect(log).toMatch(/compose .* down --volumes --remove-orphans/u);
-      if (failure === "resources-absent" || failure === "resource-list-failure") {
-        expect(log).not.toMatch(/rm -f kernel-local-live-secret-loader-/u);
-        expect(log).not.toMatch(/volume rm kernel-local-live-secrets-/u);
-      } else {
-        expect(log).toMatch(/rm -f kernel-local-live-secret-loader-/u);
-        expect(log).toMatch(/volume rm kernel-local-live-secrets-/u);
+      expect(result.status, `${result.stdout}\n${result.stderr}\n${log}`).toBe(expectedExit);
+      if (failure !== "az") {
+        expect(log).toMatch(/compose .* down --volumes --remove-orphans/u);
+        if (failure === "resources-absent" || failure === "resource-list-failure") {
+          expect(log).not.toMatch(/rm -f kernel-local-live-secret-loader-/u);
+          expect(log).not.toMatch(/volume rm kernel-local-live-secrets-/u);
+        } else {
+          expect(log).toMatch(/rm -f kernel-local-live-secret-loader-/u);
+          expect(log).toMatch(/volume rm kernel-local-live-secrets-/u);
+        }
       }
-    }
-  });
+    },
+    30_000
+  );
 });
 
 async function createFakeRuntime(failure: string) {

@@ -170,7 +170,15 @@ Before enabling `query_knowledge`, confirm `select extversion from pg_extension 
 
 ## R5.0 Release Assurance
 
-R4.1 production verification is complete. R5.0 implementation is complete, but PR CI, production release acceptance, and the first periodic assurance run remain pending. Stable Maintenance is the only successor; no R5.1/R5.2, SaaS, or local-model follow-up is planned.
+R4.1 production verification is complete. R5.0 production acceptance is complete. The project is now in Stable Maintenance; no R5.1/R5.2, SaaS, or local-model follow-up is planned.
+
+The accepted baseline is production release
+[30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171),
+which deployed revision `hhc-line-function-bot--0000149` with all 15 release
+checks passing, and weekly assurance
+[30237568728](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237568728),
+whose seven dependency checks passed. Both reports attest
+`providerRequests: { deepseek: 0, embedding: 0 }`.
 
 `Production Release` runs `scripts/deploy-aca.sh` as one bounded transaction.
 It snapshots the known-good bot revision and immutable image, applies the new
