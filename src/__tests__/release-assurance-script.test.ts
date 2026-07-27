@@ -102,6 +102,12 @@ describe("release assurance shell transaction", () => {
     expect(reportText).not.toContain("missing_line_signature");
     expect(reportText).not.toContain("registry.example");
     expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
+    expect(calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")).toBe(
+      false
+    );
+    expect(calls.some((args) => args.slice(0, 3).join(" ") === "monitor log-analytics query")).toBe(
+      true
+    );
     expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
     expectForbiddenCallsAbsent(calls);
   }, 15_000);
@@ -349,6 +355,9 @@ describe("release assurance shell transaction", () => {
       });
       expect(
         calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")
+      ).toBe(false);
+      expect(
+        calls.some((args) => args.slice(0, 3).join(" ") === "monitor log-analytics query")
       ).toBe(true);
     },
     15_000
@@ -390,6 +399,18 @@ describe("release assurance shell transaction", () => {
               image: `sha256:${"6".repeat(64)}`
             }
       );
+      if (scenario !== "rollback_copy_failure") {
+        expect(calls).toContainEqual(
+          expect.arrayContaining([
+            "revision",
+            "show",
+            "--name",
+            "fixture-bot",
+            "--revision",
+            "bot--rollback"
+          ])
+        );
+      }
       expectForbiddenCallsAbsent(calls);
     }
   );
@@ -1262,25 +1283,36 @@ if (command("containerapp", "env", "show")) {
 
 if (command("monitor", "log-analytics", "query")) {
   if (value("--workspace") !== "fixture-workspace") process.exit(108);
-  output([
+  if (scenario === "release_probe_logs_malformed") {
+    output([{ Log_s: "{" }]);
+    process.exit(0);
+  }
+  const checks = [
     {
-      Log_s: JSON.stringify({
-        status: "passed",
-        checks: [
-          { name: "bot_health", status: "passed", code: "none" },
-          { name: "bot_readiness", status: "passed", code: "none" },
-          { name: "searxng_root", status: "passed", code: "none" },
-          { name: "gateway_empty_webhook", status: "passed", code: "none" },
-          {
-            name: "clamav_signature",
-            status: "passed",
-            code: "none",
-            signatureHealth: "current"
-          }
-        ]
-      })
+      name: "bot_health",
+      status: scenario === "release_probe_child_failure" ? "failed" : "passed",
+      code:
+        scenario === "release_probe_child_failure" ? "http_mismatch" : "none"
+    },
+    { name: "bot_readiness", status: "passed", code: "none" },
+    { name: "searxng_root", status: "passed", code: "none" },
+    { name: "gateway_empty_webhook", status: "passed", code: "none" },
+    {
+      name: "clamav_signature",
+      status: scenario === "release_probe_warning" ? "warning" : "passed",
+      code: scenario === "release_probe_warning" ? "signature_warning" : "none",
+      signatureHealth: scenario === "release_probe_warning" ? "warning" : "current"
     }
-  ]);
+  ];
+  const payload = {
+    status: scenario === "release_probe_child_failure" ? "failed" : "passed",
+    checks
+  };
+  output(
+    scenario === "release_probe_logs_multiple"
+      ? [{ Log_s: JSON.stringify(payload) }, { Log_s: JSON.stringify(payload) }]
+      : [{ Log_s: JSON.stringify(payload) }]
+  );
   process.exit(0);
 }
 
@@ -1321,12 +1353,12 @@ if (command("containerapp", "job", "execution", "list")) {
 
 if (command("containerapp", "revision", "copy")) {
   if (name === "fixture-searxng") {
-    output(scenario === "searxng_restore_noop" ? "searx--copy-candidate" : "searx--rollback");
+    output("fixture-searxng");
     process.exit(0);
   }
   if (scenario === "rollback_copy_failure") process.exit(73);
   writeFileSync(path.join(state, "rollback"), "1");
-  output("bot--rollback");
+  output("fixture-bot");
   process.exit(0);
 }
 

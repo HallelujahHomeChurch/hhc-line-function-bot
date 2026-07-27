@@ -888,7 +888,6 @@ release_run_probe() {
   local code
   local payload_status=""
   local failure_reason=""
-  local use_analytics_logs=false
   if ! execution_name="$(
     az containerapp job start \
       --resource-group "${RESOURCE_GROUP}" \
@@ -926,38 +925,9 @@ release_run_probe() {
         ;;
     esac
   done
-  if ! probe_logs="$(
-    az containerapp job logs show \
-      --resource-group "${RESOURCE_GROUP}" \
-      --name "${RELEASE_PROBE_JOB_NAME}" \
-      --execution "${execution_name}" \
-      --container release-probe \
-      --tail 20 \
-      --format json \
-      --only-show-errors
-  )"; then
-    use_analytics_logs=true
-  elif RELEASE_DIRECT_PROBE_LOGS="${probe_logs}" python3 - <<'PY'
-import json
-import os
-
-raw = os.environ["RELEASE_DIRECT_PROBE_LOGS"].strip()
-if not raw:
-    raise SystemExit(0)
-try:
-    decoded = json.loads(raw)
-except (TypeError, ValueError):
-    raise SystemExit(1)
-raise SystemExit(0 if decoded == [] else 1)
-PY
-  then
-    use_analytics_logs=true
-  fi
-  if [[ "${use_analytics_logs}" == "true" ]]; then
-    if ! probe_logs="$(release_probe_logs_from_analytics "${execution_name}")"; then
-      fail_release_check release_probe release_probe_logs_failed network_failed
-      return
-    fi
+  if ! probe_logs="$(release_probe_logs_from_analytics "${execution_name}")"; then
+    fail_release_check release_probe release_probe_logs_failed network_failed
+    return
   fi
   if ! parsed="$(
     RELEASE_PROBE_LOGS="${probe_logs}" \
@@ -1092,16 +1062,14 @@ restore_known_good_revision() {
   local state_json
   local image
 
-  if ! rollback_revision="$(
-    az containerapp revision copy \
+  if ! az containerapp revision copy \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${CONTAINER_APP_NAME}" \
       --from-revision "${RELEASE_KNOWN_GOOD_REVISION}" \
       --image "${RELEASE_KNOWN_GOOD_IMAGE}" \
-      --query "name" \
-      --output tsv \
+      --output none \
       --only-show-errors
-  )" || [[ -z "${rollback_revision}" ]]; then
+  then
     rollback_ok=false
   else
     for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
@@ -1112,6 +1080,18 @@ restore_known_good_revision() {
           --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,dapr:properties.configuration.dapr}" \
           --output json \
           --only-show-errors
+      )" && rollback_revision="$(
+        RELEASE_ROLLBACK_STATE="${state_json}" python3 - <<'PY'
+import json
+import os
+import re
+
+state = json.loads(os.environ["RELEASE_ROLLBACK_STATE"])
+revision = state.get("latestRevision")
+if not isinstance(revision, str) or not re.fullmatch(r"[a-z0-9-]+", revision):
+    raise SystemExit(1)
+print(revision)
+PY
       )" && image="$(
         az containerapp revision show \
           --resource-group "${RESOURCE_GROUP}" \
@@ -1229,7 +1209,6 @@ PY
 }
 
 restore_known_good_searxng() {
-  local rollback_revision
   local verified_revision
   local state_json
   local image
@@ -1245,16 +1224,14 @@ restore_known_good_searxng() {
     fi
     return 0
   fi
-  if ! rollback_revision="$(
-    az containerapp revision copy \
+  if ! az containerapp revision copy \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${SEARXNG_CONTAINER_APP_NAME}" \
       --from-revision "${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" \
       --image "${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}" \
-      --query name \
-      --output tsv \
+      --output none \
       --only-show-errors
-  )" || [[ -z "${rollback_revision}" ]]; then
+  then
     return 1
   fi
   for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
@@ -1266,20 +1243,14 @@ restore_known_good_searxng() {
         --output json \
         --only-show-errors
     )" && verified_revision="$(
-      RELEASE_SEARXNG_ROLLBACK_STATE="${state_json}" \
-      RELEASE_SEARXNG_COPY_REVISION="${rollback_revision}" \
-      RELEASE_SEARXNG_KNOWN_GOOD_REVISION="${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" \
-      python3 - <<'PY'
+      RELEASE_SEARXNG_ROLLBACK_STATE="${state_json}" python3 - <<'PY'
 import json
 import os
+import re
 
 state = json.loads(os.environ["RELEASE_SEARXNG_ROLLBACK_STATE"])
 active = state.get("latestRevision")
-allowed = {
-    os.environ["RELEASE_SEARXNG_COPY_REVISION"],
-    os.environ["RELEASE_SEARXNG_KNOWN_GOOD_REVISION"],
-}
-if active not in allowed:
+if not isinstance(active, str) or not re.fullmatch(r"[a-z0-9-]+", active):
     raise SystemExit(1)
 print(active)
 PY
