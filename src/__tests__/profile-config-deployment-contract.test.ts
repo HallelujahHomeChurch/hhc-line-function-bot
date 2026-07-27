@@ -525,8 +525,8 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
     expect(job).toContain("args:\n          - dist/tools/run-periodic-assurance.js");
     expect(job).not.toContain("command:");
-    expect(job).toContain("cpu: 0.25");
-    expect(job).toContain("memory: 0.5Gi");
+    expect(job).toContain("cpu: 2");
+    expect(job).toContain("memory: 4Gi");
     expect(job).toContain("name: GRAPH_CLIENT_SECRET");
     expect(job).toContain("secretRef: graph-client-secret");
     expect(job).toContain("name: NOTION_TOKEN");
