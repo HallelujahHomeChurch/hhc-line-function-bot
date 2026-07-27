@@ -81,6 +81,12 @@ jobs:
             --target attachment-scan-worker \
             --file Dockerfile \
             .
+      - name: Refresh Azure OIDC session before deploy
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Deploy image and wait for healthy revision
         run: bash scripts/deploy-aca.sh
       - name: Upload release assurance report

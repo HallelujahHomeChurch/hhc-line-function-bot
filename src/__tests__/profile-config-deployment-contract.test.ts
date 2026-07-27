@@ -604,8 +604,15 @@ describe("production profile configuration deployment contract", () => {
     expect(releaseWorkflow).toContain("path: artifacts/release-assurance/report.json");
     expect(releaseWorkflow).toContain("if-no-files-found: error");
     expect(releaseWorkflow).not.toContain("pnpm ");
+    const azureLoginSteps = [...releaseWorkflow.matchAll(/uses: azure\/login@v2/gu)];
+    const finalImageBuild = releaseWorkflow.lastIndexOf("az acr build");
+    const refreshedLogin = azureLoginSteps.at(1)?.index ?? -1;
     const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
     const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v4");
+    expect(azureLoginSteps).toHaveLength(2);
+    expect(finalImageBuild).toBeGreaterThanOrEqual(0);
+    expect(refreshedLogin).toBeGreaterThan(finalImageBuild);
+    expect(deploy).toBeGreaterThan(refreshedLogin);
     expect(deploy).toBeGreaterThanOrEqual(0);
     expect(upload).toBeGreaterThan(deploy);
   });
