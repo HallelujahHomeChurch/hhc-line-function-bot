@@ -847,8 +847,8 @@ release_probe_logs_from_analytics() {
   analytics_query="ContainerAppConsoleLogs_CL
 | where ContainerJobName_s == '${RELEASE_PROBE_JOB_NAME}'
 | where ContainerGroupName_s startswith '${execution_name}-'
-| project Log_s
-| order by TimeGenerated asc"
+| order by TimeGenerated asc
+| project Log_s"
   for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
     if analytics_logs="$(
       az monitor log-analytics query \
