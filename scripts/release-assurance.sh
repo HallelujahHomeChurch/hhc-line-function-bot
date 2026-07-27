@@ -820,6 +820,64 @@ PY
   record_release_check catalog_job passed none
 }
 
+release_probe_logs_from_analytics() {
+  local execution_name="$1"
+  local workspace_id
+  local analytics_query
+  local analytics_logs=""
+  local attempt
+
+  if [[ -z "${managed_environment_name:-}" \
+    || ! "${managed_environment_name}" =~ ^[a-z0-9-]+$ \
+    || ! "${RELEASE_PROBE_JOB_NAME}" =~ ^[a-z0-9-]+$ \
+    || ! "${execution_name}" =~ ^[a-z0-9-]+$ ]]; then
+    return 1
+  fi
+  if ! workspace_id="$(
+    az containerapp env show \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${managed_environment_name}" \
+      --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId" \
+      --output tsv \
+      --only-show-errors
+  )" || [[ -z "${workspace_id}" ]]; then
+    return 1
+  fi
+
+  analytics_query="ContainerAppConsoleLogs_CL
+| where ContainerJobName_s == '${RELEASE_PROBE_JOB_NAME}'
+| where ContainerGroupName_s startswith '${execution_name}-'
+| project Log_s
+| order by TimeGenerated asc"
+  for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
+    if analytics_logs="$(
+      az monitor log-analytics query \
+        --workspace "${workspace_id}" \
+        --analytics-query "${analytics_query}" \
+        --timespan PT30M \
+        --output json \
+        --only-show-errors
+    )" && RELEASE_ANALYTICS_LOGS="${analytics_logs}" python3 - <<'PY'
+import json
+import os
+
+try:
+    rows = json.loads(os.environ["RELEASE_ANALYTICS_LOGS"])
+except (TypeError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(rows, list) and rows else 1)
+PY
+    then
+      printf '%s' "${analytics_logs}"
+      return 0
+    fi
+    if ((attempt < RELEASE_POLL_ATTEMPTS)); then
+      sleep "${RELEASE_POLL_INTERVAL_SECONDS}"
+    fi
+  done
+  return 1
+}
+
 release_run_probe() {
   local execution_name
   local execution_status=""
@@ -830,6 +888,7 @@ release_run_probe() {
   local code
   local payload_status=""
   local failure_reason=""
+  local use_analytics_logs=false
   if ! execution_name="$(
     az containerapp job start \
       --resource-group "${RESOURCE_GROUP}" \
@@ -877,8 +936,28 @@ release_run_probe() {
       --format json \
       --only-show-errors
   )"; then
-    fail_release_check release_probe release_probe_logs_failed network_failed
-    return
+    use_analytics_logs=true
+  elif RELEASE_DIRECT_PROBE_LOGS="${probe_logs}" python3 - <<'PY'
+import json
+import os
+
+raw = os.environ["RELEASE_DIRECT_PROBE_LOGS"].strip()
+if not raw:
+    raise SystemExit(0)
+try:
+    decoded = json.loads(raw)
+except (TypeError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if decoded == [] else 1)
+PY
+  then
+    use_analytics_logs=true
+  fi
+  if [[ "${use_analytics_logs}" == "true" ]]; then
+    if ! probe_logs="$(release_probe_logs_from_analytics "${execution_name}")"; then
+      fail_release_check release_probe release_probe_logs_failed network_failed
+      return
+    fi
   fi
   if ! parsed="$(
     RELEASE_PROBE_LOGS="${probe_logs}" \
@@ -908,7 +987,7 @@ def candidates(value):
     if isinstance(value, dict):
         if set(value) == {"status", "checks"}:
             yield value
-        for key in ("Log", "log", "message"):
+        for key in ("Log", "Log_s", "log", "message"):
             nested = value.get(key)
             if isinstance(nested, str):
                 try:
@@ -1151,6 +1230,7 @@ PY
 
 restore_known_good_searxng() {
   local rollback_revision
+  local verified_revision
   local state_json
   local image
   if [[ "${RELEASE_KNOWN_GOOD_SEARXNG_EXISTS}" == "false" ]]; then
@@ -1185,16 +1265,34 @@ restore_known_good_searxng() {
         --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory}" \
         --output json \
         --only-show-errors
+    )" && verified_revision="$(
+      RELEASE_SEARXNG_ROLLBACK_STATE="${state_json}" \
+      RELEASE_SEARXNG_COPY_REVISION="${rollback_revision}" \
+      RELEASE_SEARXNG_KNOWN_GOOD_REVISION="${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" \
+      python3 - <<'PY'
+import json
+import os
+
+state = json.loads(os.environ["RELEASE_SEARXNG_ROLLBACK_STATE"])
+active = state.get("latestRevision")
+allowed = {
+    os.environ["RELEASE_SEARXNG_COPY_REVISION"],
+    os.environ["RELEASE_SEARXNG_KNOWN_GOOD_REVISION"],
+}
+if active not in allowed:
+    raise SystemExit(1)
+print(active)
+PY
     )" && image="$(
       az containerapp revision show \
         --resource-group "${RESOURCE_GROUP}" \
         --name "${SEARXNG_CONTAINER_APP_NAME}" \
-        --revision "${rollback_revision}" \
+        --revision "${verified_revision}" \
         --query properties.template.containers[0].image \
         --output tsv \
         --only-show-errors
     )" && RELEASE_SEARXNG_ROLLBACK_STATE="${state_json}" \
-      RELEASE_SEARXNG_ROLLBACK_REVISION="${rollback_revision}" \
+      RELEASE_SEARXNG_ROLLBACK_REVISION="${verified_revision}" \
       RELEASE_SEARXNG_ROLLBACK_IMAGE="${image}" \
       RELEASE_SEARXNG_EXPECTED_IMAGE="${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}" \
       python3 - <<'PY'
