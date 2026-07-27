@@ -132,6 +132,10 @@ describe("R5.0 release-assurance documentation", () => {
     expect(operations).toContain("artifacts/release-assurance/report.json");
     expect(operations).toContain("hhc-line-bot-periodic-assurance");
     expect(operations).toContain("artifacts/release-assurance/periodic-report.json");
+    expect(operations).toContain("The LINE webhook Container App keeps `minReplicas: 1`");
+    expect(operations).toContain(
+      "Attachment scanning and ClamAV refresh remain finite ACA Jobs"
+    );
     expect(operations).toContain("az containerapp revision copy");
     expect(operations).toContain("--from-revision");
     expect(operations).toContain("providerRequests: { deepseek: 0, embedding: 0 }");

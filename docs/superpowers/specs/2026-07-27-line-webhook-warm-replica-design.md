@@ -2,8 +2,8 @@
 
 ## Status
 
-The user approved the recommended warm-replica direction on 2026-07-27. This
-written specification is pending final review before implementation.
+The user approved this specification on 2026-07-27. Implementation is
+authorized.
 
 ## Problem
 

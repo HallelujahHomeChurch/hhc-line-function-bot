@@ -101,7 +101,9 @@ The line bot does not expose LLM auth callback routes. Public gateway routing sh
 
 Catalog sources live in PostgreSQL `catalog_sources`. Startup and the sync job run an idempotent seed from environment-backed roots such as `GRAPH_POP_SHEET_FOLDER_ITEM_ID`, not real folder IDs in git. Keep actual Graph drive/folder IDs in ACA environment settings or secrets.
 
-The webhook service should stay long-running on `node dist/index.js`. Catalog sync runs as a separate ACA Scheduled Job from the same image:
+The webhook service should stay long-running on `node dist/index.js`. The LINE webhook Container App keeps `minReplicas: 1` because LINE delivery is latency-sensitive and must not wait for ACA scale-from-zero. It retains `maxReplicas: 10` and `0.5 CPU / 1 GiB` per replica. Attachment scanning and ClamAV refresh remain finite ACA Jobs because they are asynchronous and are not part of the synchronous reply-token path.
+
+Catalog sync runs as a separate ACA Scheduled Job from the same image:
 
 ```text
 node dist/tools/sync-catalog.js
