@@ -161,8 +161,6 @@ const profileSchema = z.object({
   wakeKeywords: z.array(z.string()).default([]),
   acceptMention: z.boolean().default(true),
   enabledFunctions: z.array(z.enum(FUNCTION_NAMES)).default([]),
-  adminUserId: z.string().optional(),
-  adminUserIdEnv: z.string().trim().min(1).optional(),
   adminDirectOnly: z.boolean().default(true),
   directAccessPolicy: z.enum(["managed", "public", "blocked"]).optional(),
   groupAccessPolicy: z.enum(["managed", "blocked"]).optional(),
@@ -379,8 +377,28 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     },
     observability: {
       ...(observabilityHmacKey ? { hmacKey: observabilityHmacKey } : {})
+    },
+    account: {
+      baseUrl: readAccountApiBaseUrl(env),
+      timeoutMs: readInt(env.ACCOUNT_API_TIMEOUT_MS, 3000)
     }
   };
+}
+
+function readAccountApiBaseUrl(env: NodeJS.ProcessEnv): string {
+  const explicit = env.ACCOUNT_API_BASE_URL?.trim();
+  if (explicit) {
+    const url = new URL(explicit);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("ACCOUNT_API_BASE_URL must use HTTP or HTTPS");
+    }
+    return explicit.replace(/\/+$/u, "");
+  }
+  const appId = env.ACCOUNT_API_APP_ID?.trim() || "account-api";
+  if (!/^[a-z0-9][a-z0-9-]*$/u.test(appId)) {
+    throw new Error("ACCOUNT_API_APP_ID is invalid");
+  }
+  return `http://127.0.0.1:${readInt(env.DAPR_HTTP_PORT, 3500)}/v1.0/invoke/${appId}/method`;
 }
 
 function readAttachmentScanQueueUrl(env: NodeJS.ProcessEnv): string | undefined {
@@ -404,13 +422,10 @@ type NormalizedProfile = Omit<
   | "channelSecretEnv"
   | "channelAccessToken"
   | "channelAccessTokenEnv"
-  | "adminUserId"
-  | "adminUserIdEnv"
   | "smallTalk"
 > & {
   channelSecret: string;
   channelAccessToken: string;
-  adminUserId?: string;
   smallTalk: SmallTalkConfig;
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
@@ -433,22 +448,13 @@ function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): Norma
     profile.channelAccessTokenEnv,
     env
   );
-  const adminUserId = resolveOptionalProfileValue(
-    profile.name,
-    "adminUserId",
-    profile.adminUserId,
-    profile.adminUserIdEnv,
-    env
-  );
   const profileConfig = { ...profile };
   delete profileConfig.channelSecretEnv;
   delete profileConfig.channelAccessTokenEnv;
-  delete profileConfig.adminUserIdEnv;
   return {
     ...profileConfig,
     channelSecret,
     channelAccessToken,
-    ...(adminUserId ? { adminUserId } : {}),
     smallTalk: normalizeSmallTalkConfig(profile.smallTalk),
     allowedProviders,
     providerPolicy: normalizeProviderPolicy({
@@ -635,9 +641,11 @@ function assertNoLegacyProfileFields(parsedProfiles: unknown): void {
     if (
       profile &&
       typeof profile === "object" &&
-      Object.prototype.hasOwnProperty.call(profile, "adminUserIds")
+      (Object.prototype.hasOwnProperty.call(profile, "adminUserId") ||
+        Object.prototype.hasOwnProperty.call(profile, "adminUserIdEnv") ||
+        Object.prototype.hasOwnProperty.call(profile, "adminUserIds"))
     ) {
-      throw new Error("adminUserIds is no longer supported; use adminUserId");
+      throw new Error("LINE admin profile settings are no longer supported; use Account roles");
     }
     if (
       profile &&
@@ -691,11 +699,6 @@ function assertProductionSafeProfiles(profiles: ParsedProfile[]): void {
     if (profile.channelAccessToken) {
       throw new Error(
         `Production profile ${profile.name} must use channelAccessTokenEnv instead of channelAccessToken`
-      );
-    }
-    if (profile.adminUserId) {
-      throw new Error(
-        `Production profile ${profile.name} must use adminUserIdEnv instead of adminUserId`
       );
     }
     if (profile.smallTalk.mode === "llm") {

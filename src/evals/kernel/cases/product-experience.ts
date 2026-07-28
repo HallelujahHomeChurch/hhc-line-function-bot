@@ -113,7 +113,8 @@ function discoveryCase(slug: string, kind: DiscoveryKind): KernelAcceptanceCase 
     const access = await resolveEffectiveAccessContext({
       profile: profile(PROFILE_FUNCTIONS),
       event: fixture.event,
-      accessStore: fixture.store
+      accessStore: fixture.store,
+      requesterIsAdmin: kind === "admin"
     });
     const projection = projectEffectiveCapabilities({ context: access });
     const help = renderCapabilityHelp(projection, "help");
@@ -237,6 +238,7 @@ function registrationFirstReadCase(): KernelAcceptanceCase {
         },
         adminHandlers: {},
         productContext: { requestId: `${id}-registration` },
+        requesterIsAdmin: false,
         policies: publicAccessPolicies,
         resolveCurrentAccess: async () =>
           resolveEffectiveAccessContext({
@@ -302,6 +304,7 @@ function registrationFirstReadCase(): KernelAcceptanceCase {
         },
         adminHandlers: {},
         productContext: { requestId: `${id}-fallback` },
+        requesterIsAdmin: false,
         policies: publicAccessPolicies,
         resolveCurrentAccess: async () => {
           throw new Error("synthetic_post_commit_projection_failure");
@@ -345,19 +348,11 @@ const publicAccessPolicies: PublicAccessCommandPolicies = {
   formatAdminHelp: () => "",
   directAccessPolicy: (currentProfile) => currentProfile.directAccessPolicy ?? "blocked",
   groupAccessPolicy: (currentProfile) => currentProfile.groupAccessPolicy ?? "blocked",
-  isBootstrapSuperAdmin: (currentProfile, userId) => currentProfile.adminUserId === userId,
-  isAdminUser: async (currentProfile, userId, store) =>
-    Boolean(
-      userId &&
-      (currentProfile.adminUserId === userId ||
-        (await store.hasActivePrincipal(currentProfile.name, "admin", userId)))
-    ),
-  isDirectUserAllowed: async (currentProfile, userId, store) =>
+  isDirectUserAllowed: async (currentProfile, userId, store, requesterIsAdmin) =>
     Boolean(
       userId &&
       (currentProfile.directAccessPolicy === "public" ||
-        currentProfile.adminUserId === userId ||
-        (await store.hasActivePrincipal(currentProfile.name, "admin", userId)) ||
+        requesterIsAdmin ||
         (await store.hasActivePrincipal(currentProfile.name, "user", userId)))
     ),
   isGroupAllowed: async (currentProfile, groupId, store) =>

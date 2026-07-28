@@ -1,5 +1,6 @@
 import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
 import { createDeepSeekProvider } from "../clients/deepseek.js";
+import { createAccountAdminClient } from "../account/account-admin-client.js";
 import { createAdminActionRouter } from "../admin-action-router.js";
 import { RedisConfirmationStore } from "../actions/confirmation-store.js";
 import { createAdminActionRegistry } from "../actions/admin-registry.js";
@@ -88,6 +89,10 @@ export async function createLocalRuntime(config: AppConfig): Promise<Application
 async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const redis = await createRedisRuntime(config.redis);
   const postgres = await createPostgresRuntime(config.database);
+  const accountAdminClient = createAccountAdminClient({
+    baseUrl: config.account?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
+    timeoutMs: config.account?.timeoutMs ?? 3000
+  });
 
   const providers = {
     deepseek: createDeepSeekProvider({
@@ -377,7 +382,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       redis: redis?.client
     }),
     routeObserver,
-    completionObserver
+    completionObserver,
+    accountAdminClient
   });
 
   return {

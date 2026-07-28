@@ -88,6 +88,20 @@ async function withJsonFile<T>(
 }
 
 describe("config", () => {
+  it("uses the Account API Dapr endpoint by default and accepts a local override", () => {
+    expect(loadConfigFromEnv(baseEnv()).account).toEqual({
+      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
+      timeoutMs: 3000
+    });
+    expect(
+      loadConfigFromEnv({
+        ...baseEnv(),
+        ACCOUNT_API_BASE_URL: "http://localhost:8080/",
+        ACCOUNT_API_TIMEOUT_MS: "1500"
+      }).account
+    ).toEqual({ baseUrl: "http://localhost:8080", timeoutMs: 1500 });
+  });
+
   it("loads an optional observability HMAC key outside production", () => {
     expect(loadConfigFromEnv(baseEnv()).observability).toEqual({});
     expect(
@@ -161,7 +175,6 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
           channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
-          adminUserIdEnv: "LINE_HELPER_ADMIN_USER_ID",
           enabledFunctions: ["query_schedule"],
           registration: { enabled: true }
         }
@@ -172,7 +185,6 @@ describe("config", () => {
           PROFILE_CONFIG_PATH: path,
           LINE_HELPER_CHANNEL_SECRET: "secret",
           LINE_HELPER_CHANNEL_ACCESS_TOKEN: "token",
-          LINE_HELPER_ADMIN_USER_ID: "admin",
           DATABASE_URL: "postgres://placeholder",
           REDIS_URL: "redis://placeholder",
           OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef"
@@ -241,8 +253,7 @@ describe("config", () => {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
-          channelAccessToken: "token",
-          adminUserId: "admin"
+          channelAccessToken: "token"
         }
       ],
       async (path) => {
@@ -412,52 +423,26 @@ describe("config", () => {
     expect(config.graph?.defaultIncludePdf).toBe(false);
   });
 
-  it("loads profile admin settings from adminUserId only", () => {
-    const config = loadConfigFromEnv({
-      ...profilesEnv([
-        {
-          name: "main",
-          webhookPath: "/api/line/webhook/main",
-          channelSecret: "secret",
-          channelAccessToken: "token",
-          enabledFunctions: ["query_schedule"],
-          adminUserId: "Uadmin",
-          adminDirectOnly: true
-        }
-      ])
-    });
-
-    expect(config.profiles[0]).toMatchObject({
-      adminUserId: "Uadmin",
-      adminDirectOnly: true
-    });
-    expect(config.profiles[0]).not.toHaveProperty("adminUserIds");
-  });
-
-  it("resolves profile credentials and bootstrap admin from environment references", () => {
+  it("resolves profile credentials from environment references", () => {
     const config = loadConfigFromEnv({
       ...profilesEnv([
         {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
           channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
-          channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
-          adminUserIdEnv: "LINE_HELPER_ADMIN_USER_ID"
+          channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN"
         }
       ]),
       LINE_HELPER_CHANNEL_SECRET: "resolved-secret",
-      LINE_HELPER_CHANNEL_ACCESS_TOKEN: "resolved-token",
-      LINE_HELPER_ADMIN_USER_ID: "Uadmin"
+      LINE_HELPER_CHANNEL_ACCESS_TOKEN: "resolved-token"
     });
 
     expect(config.profiles[0]).toMatchObject({
       channelSecret: "resolved-secret",
-      channelAccessToken: "resolved-token",
-      adminUserId: "Uadmin"
+      channelAccessToken: "resolved-token"
     });
     expect(config.profiles[0]).not.toHaveProperty("channelSecretEnv");
     expect(config.profiles[0]).not.toHaveProperty("channelAccessTokenEnv");
-    expect(config.profiles[0]).not.toHaveProperty("adminUserIdEnv");
   });
 
   it("rejects missing environment references for profile credentials", () => {
@@ -476,41 +461,24 @@ describe("config", () => {
     ).toThrow("Profile helper environment reference LINE_HELPER_CHANNEL_ACCESS_TOKEN is missing");
   });
 
-  it("loads a single bootstrap admin user id", () => {
-    const config = loadConfigFromEnv({
-      ...profilesEnv([
-        {
-          name: "helper",
-          webhookPath: "/api/line/webhook/helper",
-          channelSecret: "secret",
-          channelAccessToken: "token",
-          enabledFunctions: ["query_schedule"],
-          adminUserId: "Uadmin"
-        }
-      ])
-    });
-
-    expect(config.profiles[0]).toMatchObject({
-      adminUserId: "Uadmin"
-    });
-    expect(config.profiles[0]).not.toHaveProperty("adminUserIds");
-  });
-
-  it("rejects legacy adminUserIds profile settings", () => {
-    expect(() =>
-      loadConfigFromEnv({
-        ...profilesEnv([
-          {
-            name: "helper",
-            webhookPath: "/api/line/webhook/helper",
-            channelSecret: "secret",
-            channelAccessToken: "token",
-            adminUserIds: ["U1"]
-          }
-        ])
-      })
-    ).toThrow("adminUserIds is no longer supported");
-  });
+  it.each(["adminUserId", "adminUserIdEnv", "adminUserIds"])(
+    "rejects retired LINE admin profile setting %s",
+    (field) => {
+      expect(() =>
+        loadConfigFromEnv({
+          ...profilesEnv([
+            {
+              name: "helper",
+              webhookPath: "/api/line/webhook/helper",
+              channelSecret: "secret",
+              channelAccessToken: "token",
+              [field]: field === "adminUserIds" ? ["U1"] : "U1"
+            }
+          ])
+        })
+      ).toThrow("LINE admin profile settings are no longer supported");
+    }
+  );
 
   it("rejects legacy static user and group allowlists", () => {
     expect(() =>

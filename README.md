@@ -22,9 +22,9 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Free Wikipedia-only lookup: Chinese Wikipedia first, English fallback, then source-bounded summary generation.
 - Catalog-driven resource search foundation: OneDrive-style sources can be registered as catalog sources and indexed into a unified item table abstraction. User-facing lookup functions do not expose whether data came from OneDrive, Notion, PostgreSQL, or a future source.
 - Optional Redis backend for sessions, cache, recent errors, rate limiting, and one-time registration invite codes.
-- Per-profile access policy with PostgreSQL-backed user/group/admin registration.
+- Per-profile access policy with PostgreSQL-backed user/group registration.
 - Public `/help`, `/registry <code>`, and `/whoami` commands.
-- Direct-chat admin commands for a single bootstrap `adminUserId` plus DB-managed admins.
+- Direct-chat admin commands authorized by the linked HHC account and Account roles.
 - Admin natural language for selected management actions: invite-code creation and group function scope management.
 - Minimal `/healthz`, data-layer `/readyz`, and admin-only `/diag` diagnostics.
 - Destructive admin-action confirmation infrastructure through `/confirm <code>`.
@@ -103,7 +103,7 @@ Each profile controls:
 - Optional registration flow.
 - Wake keywords and mention handling.
 - Enabled functions.
-- Single bootstrap superadmin user id.
+- HHC account binding for administrator authorization.
 
 The checked-in [`config/profiles.json`](config/profiles.json) is the sole complete
 production example and source of truth. It deliberately contains only the currently
@@ -112,13 +112,13 @@ credential secret references have been provisioned in ACA and `pnpm config:valid
 passes.
 Profile names must use lowercase letters, numbers, dash, or underscore. The `webhookPath` must match the profile name exactly; for example, profile `helper` must use `/api/line/webhook/helper`.
 
-Use `adminUserIdEnv` for the single bootstrap superadmin in production. `channelSecretEnv`, `channelAccessTokenEnv`, and `adminUserIdEnv` resolve from ACA secrets at startup. Direct `channelSecret`, `channelAccessToken`, and `adminUserId` are local/test-only. LLM small-talk profiles must configure all four `smallTalk.prompting` layers in `config/profiles.json`; the runtime does not supply a helper-specific persona or safety fallback. Legacy `adminUserIds`, `allowedUserIds`, and `allowedGroupIds` are rejected.
+`channelSecretEnv` and `channelAccessTokenEnv` resolve LINE credentials from ACA secrets at startup. Admin authorization is not profile configuration: the bot calls account-api through Dapr and trusts the linked account's `admin` role. LLM small-talk profiles must configure all four `smallTalk.prompting` layers in `config/profiles.json`; the runtime does not supply a helper-specific persona or safety fallback. Legacy LINE admin settings and static allowlists are rejected.
 
 ## Access Control
 
 Profiles can choose separate policies for direct chat and groups:
 
-- `directAccessPolicy: "managed"`: only DB users/admins or the bootstrap superadmin can use functions. If `registration.enabled=true`, unknown direct users receive a registration prompt.
+- `directAccessPolicy: "managed"`: registered DB users and Account-authorized admins can use functions. If `registration.enabled=true`, unknown direct users receive a registration prompt.
 - `directAccessPolicy: "public"`: any direct user can use the profile. This is suitable for a future official one-to-one bot.
 - `directAccessPolicy: "blocked"`: direct users are blocked except slash diagnostics such as `/whoami` and admin authorization checks.
 - `groupAccessPolicy: "managed"`: groups must be added through DB access management.
@@ -341,7 +341,7 @@ Set `DATABASE_URL` to persist access state and agent memory. If PostgreSQL is co
 
 Sheet music search reads a fresh PostgreSQL catalog snapshot when available. A proven fresh miss can proceed to the existing consent-based web fallback; a never-published or unavailable snapshot may perform a current provider lookup instead of treating stale state as a definitive miss. The old unversioned 30-minute provider index cache is removed, so a later query can see newly added files.
 
-Admin commands use slash syntax and are gated by each profile's bootstrap `adminUserId` or DB-managed admin principals. Ordinary `/help` lists public commands plus only the current requester's effective capabilities. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
+Admin commands use slash syntax and are gated by account-api. An unbound direct user receives a short-lived HHC account binding URL; Account API failures deny admin access. Ordinary `/help` lists public commands plus only the current requester's effective capabilities. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
 
 Admins can also use natural language for selected admin actions: invite-code creation and function-scope management. Invite-code creation is direct-chat only. Function scope grant/revoke/list is the only group natural-language exception, and only when an admin clearly asks to manage the current group.
 
@@ -378,8 +378,6 @@ Advanced commands:
 /group-add <groupId> [name]
 /invite-code-create
 /confirm <code>
-/admin-add <userId>
-/admin-remove <userId>
 /status
 /profile
 /diag
@@ -456,7 +454,7 @@ Supported attachment targets in this flow:
 - `詩歌歌譜`: writes to the `hymn_sheet_music` OneDrive root and indexes `hymn_sheet`.
 - `小哈資料庫` / `教會資料`: writes to `xiaoha_database` subfolders and indexes `church_document`, `church_image`, or `church_other` with 90-day retention.
 
-The always-on bot process has no TCP or HTTP scanner endpoint configuration. The finite attachment-scan worker uses a dedicated minimal configuration loader: profile name and LINE access token, PostgreSQL, Redis, Graph publication, bounded download limits, queue access, and ClamAV paths only. It does not require LINE channel secrets, bootstrap admin IDs, LLM keys, Notion credentials, or observability secrets. The worker runs local ClamAV and requires `CLAMAV_DATABASE_DIRECTORY` plus `CLAMAV_SIGNATURE_MANIFEST_PATH` (defaulting to `manifest.json` in that directory). The manifest selects an immutable versioned database directory beneath the configured root, so a refresh cannot create a reader-visible gap. `CLAMAV_SCAN_TIMEOUT_MS` controls its bounded scan duration. The pure signature policy runs before the scan and again immediately before publication; it fails closed when the manifest is missing, malformed, changed during the scan, or from the future. A valid immutable set remains usable regardless of age. At 7 days, a completed worker result reports sanitized `signatureHealth: "warning"` rather than blocking publication; otherwise it reports `signatureHealth: "current"`. No file metadata, manifest path, or timestamp is included in that result.
+The always-on bot process has no TCP or HTTP scanner endpoint configuration. The finite attachment-scan worker uses a dedicated minimal configuration loader: profile name and LINE access token, PostgreSQL, Redis, Graph publication, bounded download limits, queue access, and ClamAV paths only. It does not require LINE channel secrets, Account authorization, LLM keys, Notion credentials, or observability secrets. The worker runs local ClamAV and requires `CLAMAV_DATABASE_DIRECTORY` plus `CLAMAV_SIGNATURE_MANIFEST_PATH` (defaulting to `manifest.json` in that directory). The manifest selects an immutable versioned database directory beneath the configured root, so a refresh cannot create a reader-visible gap. `CLAMAV_SCAN_TIMEOUT_MS` controls its bounded scan duration. The pure signature policy runs before the scan and again immediately before publication; it fails closed when the manifest is missing, malformed, changed during the scan, or from the future. A valid immutable set remains usable regardless of age. At 7 days, a completed worker result reports sanitized `signatureHealth: "warning"` rather than blocking publication; otherwise it reports `signatureHealth: "current"`. No file metadata, manifest path, or timestamp is included in that result.
 
 `aca.clamav-signature-refresh-job.yaml` runs every Monday at `10 19 * * 0` UTC, which is 03:10 Monday in Asia/Taipei. It mounts the same Azure Files share through a separate read/write environment storage definition, downloads into a private staging directory, requires `main`, `daily`, and `bytecode` databases, validates each with ClamAV tooling, moves the set into an immutable versioned directory, and atomically replaces the sanitized manifest last. Deployment also starts and waits for one refresh execution before enabling the queue scanner, so a newly provisioned share is never left empty until the first scheduled run. Any download, completeness, validation, or promotion failure exits non-zero and retains the prior active set. Signature age is warning-only: it is never an age-based publication block after 7 days.
 
@@ -464,7 +462,7 @@ The always-on bot process has no TCP or HTTP scanner endpoint configuration. The
 
 Do not commit real `.env` files. In Azure Container Apps, store only real credentials in ACA secrets:
 
-- `LINE_HELPER_CHANNEL_SECRET`, `LINE_HELPER_CHANNEL_ACCESS_TOKEN`, and `LINE_HELPER_ADMIN_USER_ID`
+- `LINE_HELPER_CHANNEL_SECRET` and `LINE_HELPER_CHANNEL_ACCESS_TOKEN`
 - `DEEPSEEK_API_KEY`
 - `AZURE_OPENAI_EMBEDDING_API_KEY`
 - `DATABASE_URL` and `REDIS_URL`

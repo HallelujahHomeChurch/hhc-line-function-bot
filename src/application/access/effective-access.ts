@@ -20,9 +20,7 @@ export async function resolveEffectiveAccessContext(input: {
   requesterIsAdmin?: boolean;
 }): Promise<EffectiveAccessContext> {
   const sourceType = effectiveSourceType(input.event);
-  const requesterIsAdmin =
-    input.requesterIsAdmin ??
-    (await isRequesterAdmin(input.profile, input.event.source.userId, input.accessStore));
+  const requesterIsAdmin = input.requesterIsAdmin === true;
   const authorized = await sourceIsAuthorized({ ...input, requesterIsAdmin, sourceType });
   const enabledFunctions = authorized
     ? await resolveEffectiveFunctions({ ...input, requesterIsAdmin, sourceType })
@@ -140,18 +138,6 @@ function capabilitiesToFunctionNames(
 
 function mergeFunctionNames(left: FunctionName[], right: FunctionName[]): FunctionName[] {
   return Array.from(new Set([...left, ...right]));
-}
-
-async function isRequesterAdmin(
-  profile: BotProfileConfig,
-  userId: string | undefined,
-  accessStore: AccessStore
-): Promise<boolean> {
-  return Boolean(
-    userId &&
-    (profile.adminUserId === userId ||
-      (await accessStore.hasActivePrincipal(profile.name, "admin", userId)))
-  );
 }
 
 function effectiveSourceType(event: LineEvent): EffectiveAccessContext["sourceType"] {

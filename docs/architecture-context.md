@@ -127,7 +127,7 @@ at startup so a deployment cannot silently return to the removed router.
 The main entrance behavior lives in `src/transport/line/*`; tests for it live
 mostly in `src/__tests__/entrance.test.ts`.
 
-For provider diagnostics, the bootstrap superadmin sends `/llm-use` or
+For provider diagnostics, an Account-authorized admin sends `/llm-use` or
 `/llm-status` in direct chat. Profile provider policy decides which providers
 may be used. Remote API providers such as `deepseek` are configured through
 secrets and profile allowlists.
@@ -167,7 +167,7 @@ Profiles are independent bot configurations served by one process. In practice:
   [`docs/rbac-capability-model.md`](rbac-capability-model.md), but v1 runtime
   behavior still uses explicit function grants as the operative override
   mechanism.
-- `adminUserId` is the single bootstrap superadmin.
+- LINE administrators are resolved by account-api from the linked HHC account.
 - `config/profiles.json` is the sole complete production profile definition.
   It contains env-variable names for LINE credentials but never their values.
   Add a profile only after its named ACA secret refs have been provisioned.
@@ -659,8 +659,8 @@ Use this map for common issues:
   `src/wikipedia/lookup.ts`.
 - Follow-up recall or aliases fail: `src/agent/agent-runtime.ts`,
   `src/agent/*memory-store.ts`, and `src/__tests__/agent-memory.test.ts`.
-- Admin command denied: `adminUserId`, DB admin principals, `adminDirectOnly`,
-  admin command parser, action policy tests.
+- Admin command denied: account-api LINE binding, Account `admin` role,
+  `adminDirectOnly`, admin command parser, action policy tests.
 - DeepSeek provider does not work: verify `DEEPSEEK_API_KEY`, profile provider
   allowlist, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, and `/llm-status`.
 - Need to know where a text request stopped: admin direct-chat

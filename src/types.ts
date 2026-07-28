@@ -276,6 +276,7 @@ export interface BotProfileConfig {
   wakeKeywords: string[];
   acceptMention: boolean;
   enabledFunctions: FunctionName[];
+  /** @deprecated Test fixtures only. Production profile parsing rejects this field. */
   adminUserId?: string;
   adminDirectOnly?: boolean;
   directAccessPolicy?: DirectAccessPolicy;
@@ -362,6 +363,12 @@ export interface AppConfig {
   rateLimit?: RateLimitConfig;
   lastErrors?: LastErrorsConfig;
   observability?: ObservabilityConfig;
+  account?: AccountServiceConfig;
+}
+
+export interface AccountServiceConfig {
+  baseUrl: string;
+  timeoutMs: number;
 }
 
 export interface ObservabilityConfig {

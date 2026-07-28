@@ -1,5 +1,4 @@
 import { getActionDefinition, type ActionSideEffect } from "./catalog.js";
-import type { AccessStore } from "../access/types.js";
 import {
   isFunctionName,
   type ActionName,
@@ -12,7 +11,7 @@ export interface ActionPolicyInput {
   action: ActionName;
   profile: BotProfileConfig;
   source: LineSource;
-  accessStore: AccessStore;
+  requesterIsAdmin?: boolean;
   effectiveFunctions?: FunctionName[];
   confirmed?: boolean;
 }
@@ -42,16 +41,9 @@ export async function evaluateActionPolicy(
     return { allowed: false, reason: "source_group_required" };
   }
 
-  if (definition.auth === "admin" && !(await isAdminUser(input))) {
+  if (definition.auth === "admin" && input.requesterIsAdmin !== true) {
     return { allowed: false, reason: "admin_required" };
   }
-  if (
-    definition.auth === "superadmin" &&
-    !isBootstrapSuperAdmin(input.profile, input.source.userId)
-  ) {
-    return { allowed: false, reason: "superadmin_required" };
-  }
-
   if (definition.kind === "user_function" && isFunctionName(input.action)) {
     const enabledFunctions = input.effectiveFunctions ?? input.profile.enabledFunctions;
     if (!enabledFunctions.includes(input.action)) {
@@ -67,22 +59,4 @@ export function actionRequiresConfirmation(
   confirmed = false
 ): boolean {
   return input.sideEffect === "destructive" && !confirmed;
-}
-
-async function isAdminUser(input: ActionPolicyInput): Promise<boolean> {
-  const userId = input.source.userId;
-  if (!userId) {
-    return false;
-  }
-  return (
-    isBootstrapSuperAdmin(input.profile, userId) ||
-    (await input.accessStore.hasActivePrincipal(input.profile.name, "admin", userId))
-  );
-}
-
-function isBootstrapSuperAdmin(profile: BotProfileConfig, userId: string | undefined): boolean {
-  if (!userId) {
-    return false;
-  }
-  return profile.adminUserId === userId;
 }

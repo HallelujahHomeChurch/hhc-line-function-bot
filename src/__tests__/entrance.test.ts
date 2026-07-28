@@ -1233,7 +1233,7 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
     expect(replyText.mock.calls[0]?.[1]).toContain("Admin commands");
-    expect(replyText.mock.calls[0]?.[1]).toContain("/access-list [user|group|admin]");
+    expect(replyText.mock.calls[0]?.[1]).toContain("/access-list [user|group]");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/access-requests");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/access-approve");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/access-deny");
@@ -1279,8 +1279,8 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("/confirm <code>");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/invite-code-list");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("/invite-code-disable");
-    expect(replyText.mock.calls[0]?.[1]).toContain("Superadmin");
-    expect(replyText.mock.calls[0]?.[1]).toContain("/admin-add <userId>");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("Superadmin");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("/admin-add");
     expect(replyText.mock.calls[0]?.[1]).toContain("診斷");
     expect(replyText.mock.calls[0]?.[1]).toContain("/route-test <text>");
     expect(replyText.mock.calls[0]?.[1]).toContain("功能模組");
@@ -1323,7 +1323,8 @@ describe("LINE entrance", () => {
     expect(adminActionRegistry.confirm).toHaveBeenCalledWith({
       code: "CONFIRM1",
       profile: expect.objectContaining({ name: "main" }),
-      event: expect.objectContaining({ replyToken: "reply-token" })
+      event: expect.objectContaining({ replyToken: "reply-token" }),
+      requesterIsAdmin: true
     });
     expect(replyText).toHaveBeenCalledWith("reply-token", "confirmed", undefined);
   });
@@ -1351,7 +1352,11 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText).toHaveBeenCalledWith("reply-token", "你沒有權限使用 admin 指令。", undefined);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.stringContaining("https://account.alive.org.tw/line/bind?token="),
+      undefined
+    );
   });
 
   it("does not keep the old help-admin command", async () => {
@@ -2692,7 +2697,11 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText).toHaveBeenCalledWith("reply-token", "你沒有權限使用 admin 指令。", undefined);
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.stringContaining("https://account.alive.org.tw/line/bind?token="),
+      undefined
+    );
   });
 
   it("prompts managed direct users to register before routing", async () => {
@@ -3332,7 +3341,8 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(adminRoute).not.toHaveBeenCalled();
-    expect(route).toHaveBeenCalledOnce();
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText.mock.calls[0]?.[1]).toContain("https://account.alive.org.tw/line/bind?token=");
   });
 
   it("rejects legacy registration and approval commands", async () => {
@@ -3635,7 +3645,7 @@ describe("LINE entrance", () => {
     expect(route).toHaveBeenCalledOnce();
   });
 
-  it("limits admin management to the single bootstrap superadmin", async () => {
+  it("ignores legacy local admin rows and trusts Account authorization", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const accessStore = new InMemoryAccessStore();
@@ -3648,40 +3658,58 @@ describe("LINE entrance", () => {
     const app = createApp(accessConfig(), {
       router: { route },
       accessStore,
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(async (lineUserId: string) => ({
+          bound: true,
+          allowed: lineUserId === "Uaccountadmin"
+        })),
+        createBinding: vi.fn()
+      },
       createLineReplyClient: () => ({ replyText })
     });
 
-    const deniedBody = lineBody({
-      type: "message",
-      replyToken: "reply-token-1",
-      source: { type: "user", userId: "Uadmin2" },
-      message: { type: "text", text: "/admin-add Unewadmin" }
-    });
-    await app.inject({
-      method: "POST",
-      url: "/api/line/webhook/helper",
-      headers: signedHeaders(deniedBody, "helper-secret"),
-      payload: deniedBody
-    });
+    for (const [index, userId] of ["Uadmin2", "Uaccountadmin"].entries()) {
+      const body = lineBody({
+        type: "message",
+        replyToken: `reply-token-${index}`,
+        source: { type: "user", userId },
+        message: { type: "text", text: "/status" }
+      });
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/helper",
+        headers: signedHeaders(body, "helper-secret"),
+        payload: body
+      });
+    }
 
-    const allowedBody = lineBody({
+    expect(replyText.mock.calls[0]?.[1]).toContain("你沒有權限");
+    expect(replyText.mock.calls[1]?.[1]).toContain("Admin status");
+  });
+
+  it("fails closed when Account authorization is unavailable", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn().mockRejectedValue(new Error("offline")),
+        createBinding: vi.fn()
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
       type: "message",
-      replyToken: "reply-token-2",
+      replyToken: "reply-token",
       source: { type: "user", userId: "Uroot" },
-      message: { type: "text", text: "/admin-add Unewadmin" }
+      message: { type: "text", text: "/status" }
     });
     await app.inject({
       method: "POST",
       url: "/api/line/webhook/helper",
-      headers: signedHeaders(allowedBody, "helper-secret"),
-      payload: allowedBody
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
     });
 
-    expect(replyText.mock.calls[0]?.[1]).toContain("只有 superadmin");
-    expect(replyText.mock.calls[1]?.[1]).toContain("已加入 admin");
-    await expect(accessStore.hasActivePrincipal("helper", "admin", "Unewadmin")).resolves.toBe(
-      true
-    );
+    expect(replyText.mock.calls[0]?.[1]).toContain("目前無法確認管理權限");
   });
 
   it("blocks non-text messages until the profile explicitly allows them", async () => {

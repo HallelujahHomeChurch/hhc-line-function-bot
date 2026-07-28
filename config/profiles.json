@@ -22,7 +22,6 @@
       "save_memory",
       "retrieve_memory"
     ],
-    "adminUserIdEnv": "LINE_HELPER_ADMIN_USER_ID",
     "adminDirectOnly": true,
     "directAccessPolicy": "managed",
     "groupAccessPolicy": "managed",
