@@ -188,7 +188,6 @@ import os
 required_bot_secrets = {
     "line-helper-channel-secret",
     "line-helper-channel-access-token",
-    "line-helper-admin-user-id",
     "deepseek-api-key",
     "azure-openai-embedding-key",
     "notion-token",
@@ -421,7 +420,6 @@ substitutions = {
     "PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF": (
         "line-helper-channel-access-token"
     ),
-    "PLACEHOLDER_LINE_HELPER_ADMIN_USER_ID_SECRET_REF": "line-helper-admin-user-id",
     "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF": (
         "azure-openai-embedding-key"
     ),

@@ -142,7 +142,8 @@ describe("effective access context", () => {
     const context = await resolveEffectiveAccessContext({
       profile: profile({ enabledFunctions: ["query_schedule", "save_memory"] }),
       event: directEvent("Uadmin"),
-      accessStore: new InMemoryAccessStore()
+      accessStore: new InMemoryAccessStore(),
+      requesterIsAdmin: true
     });
 
     expect(context).toMatchObject({
@@ -172,7 +173,8 @@ describe("effective access context", () => {
     const context = await resolveEffectiveAccessContext({
       profile: profile({ directAccessPolicy: "blocked" }),
       event: directEvent("Uadmin"),
-      accessStore: new InMemoryAccessStore()
+      accessStore: new InMemoryAccessStore(),
+      requesterIsAdmin: true
     });
 
     expect(context).toMatchObject({

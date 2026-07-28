@@ -2,6 +2,7 @@ import fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { AdminActionRegistry } from "../../actions/admin-registry.js";
+import { matchesNaturalLanguageAdminActionHint } from "../../actions/catalog.js";
 import type { ConfirmationStore } from "../../actions/confirmation-store.js";
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
 import type { AgentRuntime } from "../../agent/agent-runtime.js";
@@ -15,6 +16,7 @@ import {
 } from "../../agent/context-manager.js";
 import { formatAgentTurnTraces, type AgentTraceStore } from "../../agent/trace-store.js";
 import type { AccessPrincipalType, AccessStore } from "../../access/types.js";
+import type { AccountAdminClient } from "../../account/account-admin-client.js";
 import {
   isDefaultUserFunctionAvailable,
   resolveEffectiveAccessContext
@@ -105,6 +107,7 @@ export interface AppDependencies {
   textFallbackGenerator?: TextGenerationProvider;
   controlledAgentRouter?: ControlledAgentRouter;
   completionObserver: ControlledCompletionObserver;
+  accountAdminClient: AccountAdminClient;
 }
 
 interface AllowResult {
@@ -133,7 +136,7 @@ const builtInAdminCommandGroups: AdminCommandHelpGroup[] = [
     title: "成員與群組",
     common: true,
     entries: [
-      { usage: "/access-list [user|group|admin]", description: "列出已開通清單" },
+      { usage: "/access-list [user|group]", description: "列出已開通清單" },
       { usage: "/user-remove <userId>", description: "停用使用者" },
       { usage: "/group-remove [groupId]", description: "停用群組；在群組內可省略 groupId" },
       { usage: "/user-add <userId> [name]", description: "進階：開通指定使用者" },
@@ -166,12 +169,8 @@ const builtInAdminCommandGroups: AdminCommandHelpGroup[] = [
     entries: [{ usage: "/invite-code-create", description: "建立一次性註冊邀請碼" }]
   },
   {
-    title: "Superadmin",
-    entries: [
-      { usage: "/admin-add <userId>", description: "superadmin 新增 admin" },
-      { usage: "/admin-remove <userId>", description: "superadmin 停用 admin" },
-      { usage: "/llm-use <provider>", description: "show/change the active provider" }
-    ]
+    title: "系統",
+    entries: [{ usage: "/llm-use <provider>", description: "show/change the active provider" }]
   },
   {
     title: "診斷",
@@ -258,7 +257,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         conversationWindowStore,
         webhookEventStore,
         deps.sessionStore,
-        deps.completionObserver
+        deps.completionObserver,
+        deps.accountAdminClient
       );
     });
   }
@@ -295,7 +295,8 @@ async function handleWebhook(
   conversationWindowStore: ConversationWindowStore,
   webhookEventStore: WebhookEventStore,
   sessionStore: SessionStore | undefined,
-  completionObserver: ControlledCompletionObserver
+  completionObserver: ControlledCompletionObserver,
+  accountAdminClient: AccountAdminClient
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -312,20 +313,28 @@ async function handleWebhook(
     return reply.code(400).send({ ok: false, error: "invalid_line_payload" });
   }
 
-  const allowedEvents: LineEvent[] = [];
+  const allowedEvents: Array<{
+    event: LineEvent;
+    accountAuthorization: { available: boolean; bound: boolean; allowed: boolean };
+  }> = [];
   const ignoredCounts = new Map<string, number>();
 
   for (const event of payload.events) {
+    const accountAuthorization = await authorizeAdministrator(
+      accountAdminClient,
+      event.source.userId
+    );
     const allow = await allowEvent(
       profile,
       event,
       textMessageHandlers,
       accessStore,
       conversationWindowStore,
+      accountAuthorization.allowed,
       sessionStore
     );
     if (allow.allowed) {
-      allowedEvents.push(event);
+      allowedEvents.push({ event, accountAuthorization });
     } else {
       ignoredCounts.set(allow.reason, (ignoredCounts.get(allow.reason) ?? 0) + 1);
     }
@@ -341,7 +350,7 @@ async function handleWebhook(
 
   const line = createReplyClient(profile);
   const lineIdentity = createIdentityClient(profile);
-  for (const event of allowedEvents) {
+  for (const { event, accountAuthorization } of allowedEvents) {
     if (
       event.webhookEventId &&
       (await webhookEventStore.tryStart(
@@ -357,7 +366,7 @@ async function handleWebhook(
       continue;
     }
     const requestId = requestIdFactory();
-    const requesterIsAdmin = await isAdminUser(profile, event.source.userId, accessStore);
+    const requesterIsAdmin = accountAuthorization.allowed;
     const effectiveAccess = await resolveEffectiveAccessContext({
       profile,
       event,
@@ -503,13 +512,30 @@ async function handleWebhook(
 
     if (isAdminCommand(event.message.text)) {
       const parsedAdminCommand = parseAdminCommand(event.message.text);
+      if (
+        parsedAdminCommand &&
+        requiresAdminAuthorization(parsedAdminCommand, adminHandlers) &&
+        !requesterIsAdmin
+      ) {
+        await line.replyText(
+          event.replyToken,
+          await adminAuthorizationReply({
+            profile,
+            event,
+            authorization: accountAuthorization,
+            accountAdminClient
+          }),
+          undefined
+        );
+        continue;
+      }
       const agentCommandResult = await agentRuntime?.handleCommand({
         text: event.message.text,
         context: { profile: effectiveProfile, event, requestId, requesterDisplayName },
         isAdmin: await adminAllowed(
           effectiveProfile,
           event,
-          accessStore,
+          requesterIsAdmin,
           parsedAdminCommand?.command
         )
       });
@@ -536,14 +562,13 @@ async function handleWebhook(
           requestId,
           hmacKey: config.observability?.hmacKey
         },
+        requesterIsAdmin,
         policies: {
           parseCommand: parseAdminCommand,
           adminAllowed,
           formatAdminHelp: formatAdminCommandHelpByMode,
           directAccessPolicy,
           groupAccessPolicy,
-          isBootstrapSuperAdmin,
-          isAdminUser,
           isDirectUserAllowed,
           isGroupAllowed
         },
@@ -571,7 +596,8 @@ async function handleWebhook(
         command: parsedAdminCommand?.command ?? "unknown",
         lastErrorStore,
         routeObserver,
-        isAuthorized: () => adminAllowed(profile, event, accessStore, parsedAdminCommand?.command),
+        isAuthorized: () =>
+          adminAllowed(profile, event, requesterIsAdmin, parsedAdminCommand?.command),
         elapsedMs: () => elapsedMs(adminStartedAt),
         handler: () =>
           handleAdminCommand(
@@ -588,7 +614,9 @@ async function handleWebhook(
             adminActionRegistry,
             diagnostics,
             agentTraceStore,
-            requestId
+            requestId,
+            requesterIsAdmin,
+            accountAdminClient
           )
       });
       await line.replyText(
@@ -599,7 +627,21 @@ async function handleWebhook(
       continue;
     }
 
-    if (await shouldPromptManagedRegistration(profile, event, accessStore)) {
+    if (!requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
+      await line.replyText(
+        event.replyToken,
+        await adminAuthorizationReply({
+          profile,
+          event,
+          authorization: accountAuthorization,
+          accountAdminClient
+        }),
+        undefined
+      );
+      continue;
+    }
+
+    if (await shouldPromptManagedRegistration(profile, event, accessStore, requesterIsAdmin)) {
       await line.replyText(event.replyToken, registrationPrompt(profile, event), undefined);
       continue;
     }
@@ -755,6 +797,7 @@ async function allowEvent(
   textMessageHandlers: TextMessageHandlerRegistry,
   accessStore: AccessStore,
   conversationWindowStore: ConversationWindowStore,
+  requesterIsAdmin: boolean,
   sessionStore?: SessionStore
 ): Promise<AllowResult> {
   const eventType = event.type?.trim().toLowerCase();
@@ -820,7 +863,14 @@ async function allowEvent(
       if (
         await matchingTextMessageHandler(
           event,
-          (await resolveEffectiveAccessContext({ profile, event, accessStore })).profile,
+          (
+            await resolveEffectiveAccessContext({
+              profile,
+              event,
+              accessStore,
+              requesterIsAdmin
+            })
+          ).profile,
           textMessageHandlers
         )
       ) {
@@ -841,7 +891,7 @@ async function allowEvent(
       }
       if (
         directAccessPolicy(profile) === "managed" &&
-        !(await isDirectUserAllowed(profile, event.source.userId, accessStore))
+        !(await isDirectUserAllowed(profile, event.source.userId, accessStore, requesterIsAdmin))
       ) {
         if (profile.registration?.enabled && eventType === "message") {
           return { allowed: true, reason: "direct_registration_prompt_allowed" };
@@ -928,12 +978,13 @@ function conversationWindowTtlMs(profile: BotProfileConfig): number {
 async function shouldPromptManagedRegistration(
   profile: BotProfileConfig,
   event: LineEvent,
-  accessStore: AccessStore
+  accessStore: AccessStore,
+  requesterIsAdmin: boolean
 ): Promise<boolean> {
   if (
     event.source.type === "user" &&
     directAccessPolicy(profile) === "managed" &&
-    !(await isDirectUserAllowed(profile, event.source.userId, accessStore))
+    !(await isDirectUserAllowed(profile, event.source.userId, accessStore, requesterIsAdmin))
   ) {
     return true;
   }
@@ -961,7 +1012,9 @@ async function handleAdminCommand(
   adminActionRegistry: AdminActionRegistry,
   diagnostics: AppDiagnostics,
   agentTraceStore: AgentTraceStore,
-  requestId: string
+  requestId: string,
+  requesterIsAdmin: boolean,
+  accountAdminClient: AccountAdminClient
 ): Promise<FunctionExecutionResult> {
   const parsed = parseAdminCommand(text);
   if (!parsed) {
@@ -973,10 +1026,10 @@ async function handleAdminCommand(
   }
 
   if (parsed.command === "llm-use") {
-    return handleLlmUseCommand(config, profile, event, parsed.args[0]);
+    return handleLlmUseCommand(config, profile, event, parsed.args[0], requesterIsAdmin);
   }
 
-  if (!(await adminAllowed(profile, event, accessStore, parsed.command))) {
+  if (!(await adminAllowed(profile, event, requesterIsAdmin, parsed.command))) {
     return { ok: true, replyText: messages.adminUnauthorized };
   }
 
@@ -1021,7 +1074,8 @@ async function handleAdminCommand(
     return adminActionRegistry.confirm({
       code,
       profile,
-      event
+      event,
+      requesterIsAdmin
     });
   }
 
@@ -1058,7 +1112,9 @@ async function handleAdminCommand(
     configuredProfile,
     event,
     accessStore,
-    adminActionRegistry
+    adminActionRegistry,
+    requesterIsAdmin,
+    accountAdminClient
   );
   if (accessResult) {
     return accessResult;
@@ -1076,10 +1132,10 @@ async function handleLlmUseCommand(
   config: AppConfig,
   profile: BotProfileConfig,
   event: LineEvent,
-  providerArg: string | undefined
+  providerArg: string | undefined,
+  requesterIsAdmin: boolean
 ): Promise<FunctionExecutionResult> {
-  const actorUserId = event.source.userId;
-  if (!isBootstrapSuperAdmin(profile, actorUserId)) {
+  if (!requesterIsAdmin) {
     return { ok: true, replyText: "你沒有權限使用 LLM provider 指令。" };
   }
   if (event.source.type !== "user") {
@@ -1142,7 +1198,9 @@ async function handleAdminAccessCommand(
   configuredProfile: BotProfileConfig,
   event: LineEvent,
   accessStore: AccessStore,
-  adminActionRegistry: AdminActionRegistry
+  adminActionRegistry: AdminActionRegistry,
+  requesterIsAdmin: boolean,
+  accountAdminClient: AccountAdminClient
 ): Promise<FunctionExecutionResult | undefined> {
   const actorUserId = event.source.userId;
   if (!actorUserId) {
@@ -1150,11 +1208,12 @@ async function handleAdminAccessCommand(
   }
 
   if (command === "access-list") {
-    const filterType = parseAccessPrincipalType(args[0], ["user", "group", "admin"]);
+    const filterType = parseAccessPrincipalType(args[0], ["user", "group"]);
     const principals = (
       await accessStore.listPrincipals(profile.name, { includeDisabled: true })
     ).filter(
       (principal) =>
+        principal.type !== "admin" &&
         (!principal.disabledAt || principal.type === "group") &&
         (!filterType || principal.type === filterType)
     );
@@ -1324,7 +1383,10 @@ async function handleAdminAccessCommand(
     const userGrants = (
       await accessStore.listUserFunctionGrants(profile.name, targetUserId)
     ).filter((name) => isFunctionGrantableForPrincipal(name, "user"));
-    const isAdminTarget = await isAdminUser(profile, targetUserId, accessStore);
+    const isAdminTarget = await accountAdminClient
+      .authorizeAdministrator(targetUserId)
+      .then(({ allowed }) => allowed)
+      .catch(() => false);
     const profileDefaults = isAdminTarget
       ? profile.enabledFunctions
       : profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
@@ -1479,52 +1541,9 @@ async function handleAdminAccessCommand(
     return adminActionRegistry.execute({
       action: "invite_code_create",
       profile,
-      event
+      event,
+      requesterIsAdmin
     });
-  }
-  if (command === "admin-add" || command === "admin-remove") {
-    if (!isBootstrapSuperAdmin(profile, actorUserId)) {
-      return { ok: true, replyText: "只有 superadmin 可以管理 admin。" };
-    }
-    const targetUserId = args[0];
-    if (!targetUserId) {
-      return { ok: true, replyText: `Usage: /${command} <userId>` };
-    }
-    if (command === "admin-add") {
-      await accessStore.addPrincipal({
-        profileName: profile.name,
-        type: "admin",
-        principalId: targetUserId,
-        createdBy: actorUserId
-      });
-      await accessStore.recordAudit({
-        profileName: profile.name,
-        actorUserId,
-        action: "access.admin.add",
-        targetType: "admin",
-        targetId: targetUserId
-      });
-      return { ok: true, replyText: `已加入 admin ${targetUserId}` };
-    }
-    if (isBootstrapSuperAdmin(profile, targetUserId)) {
-      return { ok: true, replyText: "不能移除 bootstrap superadmin。" };
-    }
-    const removed = await accessStore.disablePrincipal({
-      profileName: profile.name,
-      type: "admin",
-      principalId: targetUserId,
-      disabledBy: actorUserId
-    });
-    if (removed) {
-      await accessStore.recordAudit({
-        profileName: profile.name,
-        actorUserId,
-        action: "access.admin.remove",
-        targetType: "admin",
-        targetId: targetUserId
-      });
-    }
-    return { ok: true, replyText: removed ? `已停用 admin ${targetUserId}` : "找不到 admin。" };
   }
 
   return undefined;
@@ -1687,10 +1706,10 @@ function parseAdminCommand(text: string | undefined): ParsedAdminCommand | undef
 async function adminAllowed(
   profile: BotProfileConfig,
   event: LineEvent,
-  accessStore: AccessStore,
+  requesterIsAdmin: boolean,
   command?: string
 ): Promise<boolean> {
-  if (!(await isAdminUser(profile, event.source.userId, accessStore))) {
+  if (!requesterIsAdmin) {
     return false;
   }
   if (command && groupScopedAdminCommands.has(command) && event.source.type === "group") {
@@ -1702,41 +1721,76 @@ async function adminAllowed(
   return true;
 }
 
-async function isAdminUser(
-  profile: BotProfileConfig,
-  userId: string | undefined,
-  accessStore: AccessStore
-): Promise<boolean> {
-  if (!userId) {
-    return false;
-  }
-  return (
-    isBootstrapSuperAdmin(profile, userId) ||
-    (await accessStore.hasActivePrincipal(profile.name, "admin", userId))
-  );
-}
-
-function isBootstrapSuperAdmin(profile: BotProfileConfig, userId: string | undefined): boolean {
-  if (!userId) {
-    return false;
-  }
-  return profile.adminUserId === userId;
-}
-
 async function isDirectUserAllowed(
   profile: BotProfileConfig,
   userId: string | undefined,
-  accessStore: AccessStore
+  accessStore: AccessStore,
+  requesterIsAdmin: boolean
 ): Promise<boolean> {
   if (!userId) {
     return false;
   }
   return (
     directAccessPolicy(profile) === "public" ||
-    isBootstrapSuperAdmin(profile, userId) ||
-    (await accessStore.hasActivePrincipal(profile.name, "admin", userId)) ||
+    requesterIsAdmin ||
     (await accessStore.hasActivePrincipal(profile.name, "user", userId))
   );
+}
+
+async function authorizeAdministrator(
+  accountAdminClient: AccountAdminClient,
+  lineUserId: string | undefined
+): Promise<{ available: boolean; bound: boolean; allowed: boolean }> {
+  if (!lineUserId) {
+    return { available: true, bound: false, allowed: false };
+  }
+  try {
+    return {
+      available: true,
+      ...(await accountAdminClient.authorizeAdministrator(lineUserId))
+    };
+  } catch {
+    return { available: false, bound: false, allowed: false };
+  }
+}
+
+function requiresAdminAuthorization(
+  command: ParsedAdminCommand,
+  adminHandlers: AdminHandlerRegistry
+): boolean {
+  if (!isKnownAdminCommand(command.command, adminHandlers)) {
+    return false;
+  }
+  if (command.command === "whoami" || command.command === "registry") {
+    return false;
+  }
+  return command.command !== "help" || command.args[0]?.toLowerCase() === "admin";
+}
+
+async function adminAuthorizationReply(input: {
+  profile: BotProfileConfig;
+  event: LineEvent;
+  authorization: { available: boolean; bound: boolean; allowed: boolean };
+  accountAdminClient: AccountAdminClient;
+}): Promise<string> {
+  if (!input.authorization.available) {
+    return "目前無法確認管理權限，請稍後再試。";
+  }
+  if (input.authorization.bound) {
+    return messages.adminUnauthorized;
+  }
+  if (input.event.source.type !== "user" || !input.event.source.userId) {
+    return "請先在 1 對 1 對話中綁定 HHC 帳戶。";
+  }
+  try {
+    const binding = await input.accountAdminClient.createBinding(
+      input.event.source.userId,
+      input.profile.name
+    );
+    return `請先綁定 HHC 帳戶，再重新執行管理操作：\n${binding.bindingUrl}`;
+  } catch {
+    return "目前無法建立帳戶綁定連結，請稍後再試。";
+  }
 }
 
 async function isGroupAllowed(

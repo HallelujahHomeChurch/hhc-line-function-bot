@@ -27,22 +27,17 @@ export interface PublicAccessCommandPolicies {
   adminAllowed(
     profile: BotProfileConfig,
     event: LineEvent,
-    accessStore: AccessStore,
+    requesterIsAdmin: boolean,
     command: string
   ): Promise<boolean>;
   formatAdminHelp(adminHandlers: AdminHandlerRegistry, includeAdvanced: boolean): string;
   directAccessPolicy(profile: BotProfileConfig): string;
   groupAccessPolicy(profile: BotProfileConfig): string;
-  isBootstrapSuperAdmin(profile: BotProfileConfig, userId: string | undefined): boolean;
-  isAdminUser(
-    profile: BotProfileConfig,
-    userId: string | undefined,
-    accessStore: AccessStore
-  ): Promise<boolean>;
   isDirectUserAllowed(
     profile: BotProfileConfig,
     userId: string | undefined,
-    accessStore: AccessStore
+    accessStore: AccessStore,
+    requesterIsAdmin: boolean
   ): Promise<boolean>;
   isGroupAllowed(
     profile: BotProfileConfig,
@@ -66,6 +61,7 @@ export async function handlePublicAccessCommand(input: {
   lineIdentity: LineIdentityClient;
   adminHandlers: AdminHandlerRegistry;
   productContext: ProductEventContext;
+  requesterIsAdmin: boolean;
   policies: PublicAccessCommandPolicies;
   resolveCurrentAccess(): Promise<EffectiveAccessContext>;
 }): Promise<FunctionExecutionResult | undefined> {
@@ -76,7 +72,12 @@ export async function handlePublicAccessCommand(input: {
   if (parsed.command === "help") {
     if (parsed.args[0]?.toLowerCase() === "admin") {
       if (
-        !(await input.policies.adminAllowed(input.profile, input.event, input.accessStore, "help"))
+        !(await input.policies.adminAllowed(
+          input.profile,
+          input.event,
+          input.requesterIsAdmin,
+          "help"
+        ))
       ) {
         return { ok: true, replyText: messages.adminUnauthorized };
       }
@@ -114,9 +115,8 @@ async function handleWhoamiCommand(
       `groupId: ${groupId}`,
       `directPolicy: ${input.policies.directAccessPolicy(input.profile)}`,
       `groupPolicy: ${input.policies.groupAccessPolicy(input.profile)}`,
-      `superadmin: ${input.policies.isBootstrapSuperAdmin(input.profile, input.event.source.userId)}`,
-      `admin: ${await input.policies.isAdminUser(input.profile, input.event.source.userId, input.accessStore)}`,
-      `userAllowed: ${await input.policies.isDirectUserAllowed(input.profile, input.event.source.userId, input.accessStore)}`,
+      `admin: ${input.requesterIsAdmin}`,
+      `userAllowed: ${await input.policies.isDirectUserAllowed(input.profile, input.event.source.userId, input.accessStore, input.requesterIsAdmin)}`,
       `groupAllowed: ${await input.policies.isGroupAllowed(input.profile, input.event.source.groupId, input.accessStore)}`
     ].join("\n")
   };
@@ -146,7 +146,8 @@ async function handleRegistryCommand(
     await input.policies.isDirectUserAllowed(
       input.profile,
       input.event.source.userId,
-      input.accessStore
+      input.accessStore,
+      input.requesterIsAdmin
     )
   ) {
     return { ok: true, replyText: "你已經可以使用小哈。" };

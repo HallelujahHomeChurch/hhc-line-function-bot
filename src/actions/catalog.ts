@@ -9,7 +9,7 @@ import {
 } from "../types.js";
 
 export type ActionKind = "user_function" | "admin_action" | "system_action";
-export type ActionAuth = "public" | "registered" | "admin" | "superadmin";
+export type ActionAuth = "public" | "registered" | "admin";
 export type ActionSourcePolicy = "direct" | "group" | "direct_or_group";
 export type ActionSideEffect = "read_only" | "state_change" | "security_change" | "destructive";
 

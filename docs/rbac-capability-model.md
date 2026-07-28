@@ -39,7 +39,6 @@ Principals are profile-scoped:
 
 - `profileName/userId`
 - `profileName/groupId`
-- `profileName/adminUserId`
 
 Capabilities are profile-scoped strings with these recommended namespaces:
 

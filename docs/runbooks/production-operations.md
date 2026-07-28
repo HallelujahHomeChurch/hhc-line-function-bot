@@ -24,7 +24,7 @@ Direct-message admin commands:
 
 `/diag` may show dependency status for DeepSeek, Azure OpenAI embeddings, Redis, Postgres, Graph, and Notion, but must not print tenant IDs, database IDs, folder IDs, LINE IDs, tokens, secrets, credential URLs, raw user messages, or invite codes.
 
-`/llm-use` and `/llm-status` are bootstrap superadmin direct-chat only. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes. `/llm-status` lists the current profile's DeepSeek-only lane policy. DeepSeek uses `DEEPSEEK_API_KEY` from ACA secrets or local `.env`.
+`/llm-use` and `/llm-status` are Account-admin direct-chat only. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes. `/llm-status` lists the current profile's DeepSeek-only lane policy. DeepSeek uses `DEEPSEEK_API_KEY` from ACA secrets or local `.env`.
 
 If upgrading from the removed direct OAuth provider, review `docs/sql/drop-legacy-llm-auth.sql` before manually dropping the old `llm_auth_profiles` table.
 
@@ -40,13 +40,13 @@ Model access is profile-scoped. Configure every LLM-enabled profile with `allowe
 ## Profile Config Safety
 
 - Production profiles live in `config/profiles.json` and are loaded through `PROFILE_CONFIG_PATH=/app/config/profiles.json`. Do not use `BOT_PROFILES_JSON`, `BOT_PROFILES_BASE64_JSON`, or `bot-profiles-base64-json` in ACA.
-- Store only referenced LINE values as separate ACA secrets/env vars: `LINE_HELPER_CHANNEL_SECRET`, `LINE_HELPER_CHANNEL_ACCESS_TOKEN`, and `LINE_HELPER_ADMIN_USER_ID`.
+- Store only referenced LINE values as separate ACA secrets/env vars: `LINE_HELPER_CHANNEL_SECRET` and `LINE_HELPER_CHANNEL_ACCESS_TOKEN`.
 - Keep persona, conversation, safety, and format rules in `smallTalk.prompting`. Production LLM profiles require all four layers; do not hard-code helper personality or safety fallback text.
 - Before deployment, run `corepack pnpm config:validate`. The deployment pipeline sets the profile path, removes legacy profile configuration, and waits for the new revision to become ready.
 
 ## Registration And Admin Safety
 
-- The bootstrap `adminUserId` is the single superadmin for each profile.
+- Admins bind LINE to an HHC account and are authorized by the Account `admin` role.
 - Admins create one-time registration codes with `/invite-code-create`.
 - The reply includes a copyable standalone `/registry <code>` line.
 - Destructive admin actions must require `/confirm <code>`.
@@ -128,7 +128,6 @@ Required job settings:
 - `DATABASE_SSL=true`
 - `LINE_HELPER_CHANNEL_SECRET`
 - `LINE_HELPER_CHANNEL_ACCESS_TOKEN`
-- `LINE_HELPER_ADMIN_USER_ID`
 - `GRAPH_TENANT_ID`
 - `GRAPH_CLIENT_ID`
 - `GRAPH_CLIENT_SECRET`

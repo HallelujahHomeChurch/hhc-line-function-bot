@@ -325,7 +325,8 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             routeObserver: options.routeObserver,
             lastRouteStore: options.lastRouteStore,
             requestId: input.requestId,
-            steps
+            steps,
+            requesterIsAdmin: input.requesterIsAdmin === true
           })
         );
         if (adminStage.kind === "handled") {
@@ -840,12 +841,13 @@ async function handleNaturalLanguageAdminAction(input: {
   lastRouteStore: LastRouteStore;
   requestId: string;
   steps: AgentTurnTraceStep[];
+  requesterIsAdmin: boolean;
 }): Promise<FunctionExecutionResult | undefined> {
   if (!matchesNaturalLanguageAdminActionHint(input.text) || !input.accessStore) {
     return undefined;
   }
 
-  if (!(await isAdminUser(input.profile, input.event.source.userId, input.accessStore))) {
+  if (!input.requesterIsAdmin) {
     return undefined;
   }
   if (
@@ -913,7 +915,8 @@ async function handleNaturalLanguageAdminAction(input: {
     action: route.action,
     profile: input.profile,
     event: input.event,
-    arguments: route.arguments
+    arguments: route.arguments,
+    requesterIsAdmin: input.requesterIsAdmin
   });
   const durationMs = elapsedMs(actionStartedAt);
   input.steps.push({
@@ -943,20 +946,6 @@ async function handleNaturalLanguageAdminAction(input: {
     durationMs
   });
   return result;
-}
-
-async function isAdminUser(
-  profile: BotProfileConfig,
-  userId: string | undefined,
-  accessStore: AccessStore
-): Promise<boolean> {
-  if (!userId) {
-    return false;
-  }
-  return (
-    profile.adminUserId === userId ||
-    (await accessStore.hasActivePrincipal(profile.name, "admin", userId))
-  );
 }
 
 function resultEnvelopeTraceStep(result: FunctionExecutionResult): AgentTurnTraceStep {

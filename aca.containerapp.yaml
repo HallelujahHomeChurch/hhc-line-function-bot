@@ -50,8 +50,6 @@ properties:
             secretRef: PLACEHOLDER_LINE_HELPER_CHANNEL_SECRET_REF
           - name: LINE_HELPER_CHANNEL_ACCESS_TOKEN
             secretRef: PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF
-          - name: LINE_HELPER_ADMIN_USER_ID
-            secretRef: PLACEHOLDER_LINE_HELPER_ADMIN_USER_ID_SECRET_REF
           - name: EMBEDDING_PROVIDER
             value: azure_openai
           - name: AZURE_OPENAI_EMBEDDING_API_KEY

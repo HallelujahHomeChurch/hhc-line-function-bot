@@ -24,7 +24,7 @@ export function validateProductionProfileConfig(path: string): ProductionProfile
       continue;
     }
     const record = profile as Record<string, unknown>;
-    for (const key of ["channelSecretEnv", "channelAccessTokenEnv", "adminUserIdEnv"]) {
+    for (const key of ["channelSecretEnv", "channelAccessTokenEnv"]) {
       const envName = record[key];
       if (typeof envName === "string" && envName.trim()) {
         env[envName] = "placeholder";

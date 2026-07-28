@@ -39,6 +39,7 @@ describe("knowledge source admin actions", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_add",
       profile,
       event,
@@ -133,6 +134,7 @@ describe("knowledge source admin actions", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_list",
       profile,
       event
@@ -166,6 +168,7 @@ describe("knowledge source admin actions", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_list",
       profile,
       event
@@ -219,6 +222,7 @@ describe("knowledge source admin actions", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_list",
       profile,
       event
@@ -261,6 +265,7 @@ describe("knowledge source admin actions", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_list",
       profile,
       event
@@ -290,13 +295,19 @@ describe("knowledge source admin actions", () => {
     });
 
     const preview = await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_remove",
       profile,
       event,
       arguments: { sourceKey: "sop-12345678" }
     });
     expect(preview.replyText).toContain("/confirm CONFIRM");
-    const committed = await registry.confirm({ code: "CONFIRM", profile, event });
+    const committed = await registry.confirm({
+      requesterIsAdmin: true,
+      code: "CONFIRM",
+      profile,
+      event
+    });
 
     expect(committed.replyText).toContain("已永久移除");
     await expect(
@@ -332,6 +343,7 @@ describe("knowledge source admin actions", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_sync",
       profile,
       event,
@@ -374,6 +386,7 @@ describe("knowledge source admin actions", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_add",
       profile,
       event,
@@ -427,6 +440,7 @@ describe("knowledge source admin actions", () => {
 
     await expect(
       registry.execute({
+        requesterIsAdmin: true,
         action: "knowledge_source_add",
         profile,
         event,
@@ -498,6 +512,7 @@ describe("knowledge source admin actions", () => {
 
     await expect(
       registry.execute({
+        requesterIsAdmin: true,
         action: "knowledge_source_sync",
         profile,
         event,
@@ -568,6 +583,7 @@ describe("knowledge source admin actions", () => {
     });
 
     await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_sync",
       profile,
       event,
@@ -619,6 +635,7 @@ describe("knowledge source admin actions", () => {
     });
 
     await registry.execute({
+      requesterIsAdmin: true,
       action: "knowledge_source_add",
       profile,
       event,

@@ -55,6 +55,18 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
   const functionRegistry = overrides.functionRegistry ?? {};
   const textMessageHandlers = overrides.textMessageHandlers ?? {};
   const firstSuccessStore = overrides.firstSuccessStore ?? new InMemoryFirstSuccessStore();
+  const accountAdminClient = overrides.accountAdminClient ?? {
+    async authorizeAdministrator(lineUserId: string) {
+      const allowed = config.profiles.some((profile) => profile.adminUserId === lineUserId);
+      return { bound: allowed, allowed };
+    },
+    async createBinding() {
+      return {
+        bindingUrl: "https://account.alive.org.tw/line/bind?token=test",
+        expiresAt: "2026-07-28T12:00:00Z"
+      };
+    }
+  };
   const completionObserver =
     overrides.completionObserver ??
     createControlledCompletionObserver({
@@ -127,7 +139,8 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     conversationWindowStore,
     textFallbackGenerator: overrides.textFallbackGenerator,
     controlledAgentRouter,
-    completionObserver
+    completionObserver,
+    accountAdminClient
   });
 }
 

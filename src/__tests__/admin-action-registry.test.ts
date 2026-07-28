@@ -40,6 +40,7 @@ describe("admin action registry", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "invite_code_create",
       profile: profile(),
       event: {
@@ -75,6 +76,7 @@ describe("admin action registry", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "invite_code_create",
       profile: profile(false),
       event: {
@@ -107,6 +109,7 @@ describe("admin action registry", () => {
     });
 
     const result = await registry.execute({
+      requesterIsAdmin: true,
       action: "invite_code_create",
       profile: profile(),
       event: {
@@ -131,17 +134,20 @@ describe("admin action registry", () => {
     };
 
     const grant = await registry.execute({
+      requesterIsAdmin: true,
       action: "function_scope_grant",
       profile: profile(),
       event: groupEvent,
       arguments: { functionName: "find_sheet_music" }
     });
     const list = await registry.execute({
+      requesterIsAdmin: true,
       action: "function_scope_list",
       profile: profile(),
       event: groupEvent
     });
     const revoke = await registry.execute({
+      requesterIsAdmin: true,
       action: "function_scope_revoke",
       profile: profile(),
       event: groupEvent,
@@ -181,6 +187,7 @@ describe("admin action registry", () => {
     };
 
     const grant = await registry.execute({
+      requesterIsAdmin: true,
       action: "function_scope_grant",
       profile: profile(),
       event: directEvent,
@@ -191,12 +198,14 @@ describe("admin action registry", () => {
       }
     });
     const list = await registry.execute({
+      requesterIsAdmin: true,
       action: "function_scope_list",
       profile: profile(),
       event: directEvent,
       arguments: { targetType: "user", userId: "Uwriter" }
     });
     const revoke = await registry.execute({
+      requesterIsAdmin: true,
       action: "function_scope_revoke",
       profile: profile(),
       event: directEvent,
@@ -241,6 +250,7 @@ describe("admin action registry", () => {
       });
 
       const result = await registry.execute({
+        requesterIsAdmin: true,
         action: "function_scope_grant",
         profile: profile(),
         event: {
@@ -279,6 +289,7 @@ describe("admin action registry", () => {
     });
 
     const first = await registry.confirm({
+      requesterIsAdmin: true,
       code: "CONFIRM1",
       profile: profile(),
       event: {
@@ -287,6 +298,7 @@ describe("admin action registry", () => {
       }
     });
     const second = await registry.confirm({
+      requesterIsAdmin: true,
       code: "CONFIRM1",
       profile: profile(),
       event: {

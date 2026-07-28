@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { actionRequiresConfirmation, evaluateActionPolicy } from "../actions/policy.js";
 import type { BotProfileConfig } from "../types.js";
 
@@ -26,24 +25,24 @@ function profile(): BotProfileConfig {
 }
 
 describe("action policy", () => {
-  it("allows bootstrap admins to run invite-code creation in direct chat", async () => {
+  it("allows Account-authorized admins to run invite-code creation in direct chat", async () => {
     await expect(
       evaluateActionPolicy({
         action: "invite_code_create",
         profile: profile(),
         source: { type: "user", userId: "Uroot" },
-        accessStore: new InMemoryAccessStore()
+        requesterIsAdmin: true
       })
     ).resolves.toEqual({ allowed: true, reason: "allowed" });
   });
 
-  it("denies admin actions for non-admin direct users", async () => {
+  it("does not trust legacy bootstrap admin configuration", async () => {
     await expect(
       evaluateActionPolicy({
         action: "invite_code_create",
         profile: profile(),
-        source: { type: "user", userId: "Uguest" },
-        accessStore: new InMemoryAccessStore()
+        source: { type: "user", userId: "Uroot" },
+        requesterIsAdmin: false
       })
     ).resolves.toEqual({ allowed: false, reason: "admin_required" });
   });
@@ -54,20 +53,17 @@ describe("action policy", () => {
         action: "invite_code_create",
         profile: profile(),
         source: { type: "group", groupId: "C1", userId: "Uroot" },
-        accessStore: new InMemoryAccessStore()
+        requesterIsAdmin: true
       })
     ).resolves.toEqual({ allowed: false, reason: "source_direct_required" });
   });
 
   it("checks profile-effective user function enablement without changing profile scope semantics", async () => {
-    const accessStore = new InMemoryAccessStore();
-
     await expect(
       evaluateActionPolicy({
         action: "find_ppt_slides",
         profile: profile(),
         source: { type: "group", groupId: "C1", userId: "U1" },
-        accessStore,
         effectiveFunctions: ["find_ppt_slides"]
       })
     ).resolves.toEqual({ allowed: true, reason: "allowed" });
@@ -77,7 +73,6 @@ describe("action policy", () => {
         action: "query_schedule",
         profile: profile(),
         source: { type: "group", groupId: "C1", userId: "U1" },
-        accessStore,
         effectiveFunctions: ["find_ppt_slides"]
       })
     ).resolves.toEqual({ allowed: false, reason: "function_disabled" });

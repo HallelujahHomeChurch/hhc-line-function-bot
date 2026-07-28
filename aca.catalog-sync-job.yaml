@@ -23,8 +23,6 @@ properties:
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: line-helper-channel-access-token
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
-      - name: line-helper-admin-user-id
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: graph-client-secret
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: notion-token
@@ -56,8 +54,6 @@ properties:
             secretRef: line-helper-channel-secret
           - name: LINE_HELPER_CHANNEL_ACCESS_TOKEN
             secretRef: line-helper-channel-access-token
-          - name: LINE_HELPER_ADMIN_USER_ID
-            secretRef: line-helper-admin-user-id
           - name: DATABASE_URL
             secretRef: database-url
           - name: DATABASE_SSL

@@ -40,6 +40,7 @@ export interface AdminActionExecutionInput {
   event: LineEvent;
   arguments?: JsonRecord;
   confirmed?: boolean;
+  requesterIsAdmin?: boolean;
 }
 
 export interface AdminActionRegistry {
@@ -48,6 +49,7 @@ export interface AdminActionRegistry {
     code: string;
     profile: BotProfileConfig;
     event: LineEvent;
+    requesterIsAdmin?: boolean;
   }): Promise<FunctionExecutionResult>;
 }
 
@@ -80,8 +82,8 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
       action: input.action,
       profile: input.profile,
       source: input.event.source,
-      accessStore: this.options.accessStore,
-      confirmed: input.confirmed
+      confirmed: input.confirmed,
+      requesterIsAdmin: input.requesterIsAdmin
     });
     if (!policy.allowed) {
       if (policy.requiresConfirmation) {
@@ -124,6 +126,7 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
     code: string;
     profile: BotProfileConfig;
     event: LineEvent;
+    requesterIsAdmin?: boolean;
   }): Promise<FunctionExecutionResult> {
     const actorUserId = input.event.source.userId;
     if (!actorUserId) {
@@ -142,7 +145,8 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
       profile: input.profile,
       event: input.event,
       arguments: request.args,
-      confirmed: true
+      confirmed: true,
+      requesterIsAdmin: input.requesterIsAdmin
     });
   }
 

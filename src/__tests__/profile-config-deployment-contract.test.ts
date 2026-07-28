@@ -73,7 +73,6 @@ describe("production profile configuration deployment contract", () => {
         "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
         "PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF"
       ],
-      ["LINE_HELPER_ADMIN_USER_ID", "PLACEHOLDER_LINE_HELPER_ADMIN_USER_ID_SECRET_REF"],
       ["AZURE_OPENAI_EMBEDDING_API_KEY", "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF"],
       ["DEEPSEEK_API_KEY", "PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF"],
       ["OBSERVABILITY_HMAC_KEY", "PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF"],
@@ -434,7 +433,7 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: DATABASE_URL");
     expect(job).toContain("name: LINE_HELPER_CHANNEL_SECRET");
     expect(job).toContain("name: LINE_HELPER_CHANNEL_ACCESS_TOKEN");
-    expect(job).toContain("name: LINE_HELPER_ADMIN_USER_ID");
+    expect(job).not.toContain("name: LINE_HELPER_ADMIN_USER_ID");
     expect(job).toContain("name: GRAPH_CLIENT_SECRET");
     expect(job).toContain("name: NOTION_TOKEN");
     expect(job).toContain("name: OBSERVABILITY_HMAC_KEY");
