@@ -775,7 +775,9 @@ mark_release_job_mutated "hhc-line-bot-periodic-assurance"
 RELEASE_TARGET_REVISION="bot--target"
 RELEASE_TARGET_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 RELEASE_TARGET_SCAN_IMAGE="registry.example/fixture-secret/scan@sha256:${"8".repeat(64)}"
+RELEASE_TARGET_ATTACHMENT_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="refresh-exec-current"
+RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="attachment-exec-current"
 if ! run_release_gates; then
   exit 42
 fi
@@ -858,7 +860,7 @@ const oldImages = {
 };
 const targetImages = {
   "hhc-line-bot-catalog-sync": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
-  "hhc-line-bot-attachment-scan": "registry.example/fixture-secret/scan@sha256:${"8".repeat(64)}",
+  "hhc-line-bot-attachment-scan": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
   "hhc-line-bot-clamav-refresh": "registry.example/fixture-secret/scan@sha256:${"8".repeat(64)}",
   "hhc-line-bot-release-probe": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
   "hhc-line-bot-periodic-assurance": "registry.example/fixture-secret/scan@sha256:${"8".repeat(64)}"
@@ -1122,27 +1124,21 @@ if (command("containerapp", "job", "show")) {
             {
               type: "azure-queue",
               metadata: { queueLength: "1" },
-              auth: [
-                {
-                  triggerParameter: "connection",
-                  secretRef: "attachment-scan-queue-connection-string"
-                }
-              ]
+              identity: "/subscriptions/fixture/resourceGroups/alive/providers/Microsoft.ManagedIdentity/userAssignedIdentities/hhc-line-bot-attachment"
             }
           ]
         }
       },
-      args: ["dist/tools/run-attachment-scan-job.js"],
-      env: [],
-      resources: { cpu: 2, memory: "4Gi" },
-      volumeMounts: [{ volumeName: "clamav-signatures", mountPath: "/var/lib/clamav" }],
-      volumes: [
-        {
-          name: "clamav-signatures",
-          storageType: "AzureFile",
-          storageName: "clamav-signatures-readonly"
-        }
-      ]
+      args: ["dist/tools/run-attachment-asset-job.js"],
+      env: [
+        { name: "ATTACHMENT_SCAN_QUEUE_URL", value: "https://queue.example/scan" },
+        { name: "ASSET_API_URL", value: "https://asset.internal.example" },
+        { name: "ASSET_API_AUDIENCE", value: "api://asset-api" },
+        { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" }
+      ],
+      resources: { cpu: 1, memory: "2Gi" },
+      volumeMounts: [],
+      volumes: []
     },
     "hhc-line-bot-clamav-refresh": {
       triggerType: "Schedule",
@@ -1240,8 +1236,8 @@ if (command("containerapp", "job", "show")) {
   if (scenario === "refresh_mount_mismatch" && name === "hhc-line-bot-clamav-refresh") definition.volumes[0].storageName = "clamav-signatures-readonly";
   if (scenario === "scan_definition_failure" && name === "hhc-line-bot-attachment-scan") definition.replicaTimeout = 1;
   if (scenario === "scan_scaler_mismatch" && name === "hhc-line-bot-attachment-scan") definition.event.scale.minExecutions = 1;
-  if (scenario === "scan_resources_mismatch" && name === "hhc-line-bot-attachment-scan") definition.resources.memory = "2Gi";
-  if (scenario === "scan_mount_mismatch" && name === "hhc-line-bot-attachment-scan") definition.volumes[0].storageName = "clamav-signatures-readwrite";
+  if (scenario === "scan_resources_mismatch" && name === "hhc-line-bot-attachment-scan") definition.resources.memory = "4Gi";
+  if (scenario === "scan_mount_mismatch" && name === "hhc-line-bot-attachment-scan") definition.volumes.push({ name: "unexpected", storageType: "AzureFile", storageName: "unexpected" });
   if (scenario === "release_probe_args_mismatch" && name === "hhc-line-bot-release-probe") definition.args = ["dist/tools/wrong.js"];
   if (scenario === "release_probe_env_mismatch" && name === "hhc-line-bot-release-probe") definition.env = definition.env.filter((entry) => entry.name !== "BOT_BASE_URL");
   if (scenario === "release_probe_resources_mismatch" && name === "hhc-line-bot-release-probe") definition.resources.cpu = 1;
@@ -1342,6 +1338,11 @@ if (command("containerapp", "job", "execution", "show")) {
         : "Succeeded"
     );
   } else if (name === "hhc-line-bot-clamav-refresh" && execution === "refresh-exec-current") {
+    output("Succeeded");
+  } else if (
+    name === "hhc-line-bot-attachment-scan" &&
+    execution === "attachment-exec-current"
+  ) {
     output("Succeeded");
   } else process.exit(97);
   process.exit(0);

@@ -731,8 +731,9 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).toContain("replicaCompletionCount: 1");
     expect(scanJob).toContain("type: azure-queue");
     expect(scanJob).toContain("queueLength: 1");
-    expect(scanJob).toContain("triggerParameter: connection");
-    expect(scanJob).toContain("secretRef: attachment-scan-queue-connection-string");
+    expect(scanJob).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
+    expect(scanJob).not.toContain("triggerParameter: connection");
+    expect(scanJob).not.toContain("secretRef: attachment-scan-queue-connection-string");
     expect(scanJob).toContain("name: LINE_HELPER_CHANNEL_ACCESS_TOKEN");
     expect(scanJob).toContain("name: DATABASE_URL");
     expect(scanJob).toContain("name: REDIS_URL");
@@ -743,13 +744,16 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).not.toContain("name: DEEPSEEK_API_KEY");
     expect(scanJob).not.toContain("name: NOTION_TOKEN");
     expect(scanJob).not.toContain("name: OBSERVABILITY_HMAC_KEY");
-    expect(scanJob).not.toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
-    expect(scanJob).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
-    expect(scanJob).toContain("cpu: 2.0");
-    expect(scanJob).toContain("memory: 4Gi");
-    expect(scanJob).toContain("mountPath: /var/lib/clamav");
-    expect(scanJob).toContain("storageName: clamav-signatures-readonly");
-    expect(scanJob).toContain('name: CLAMAV_SIGNATURE_WARNING_AGE_HOURS\n            value: "168"');
+    expect(scanJob).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
+    expect(scanJob).toContain("name: ASSET_API_URL");
+    expect(scanJob).toContain("name: ASSET_API_AUDIENCE");
+    expect(scanJob).toContain("name: AZURE_CLIENT_ID");
+    expect(scanJob).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot:latest");
+    expect(scanJob).toContain("dist/tools/run-attachment-asset-job.js");
+    expect(scanJob).toContain("cpu: 1.0");
+    expect(scanJob).toContain("memory: 2Gi");
+    expect(scanJob).not.toContain("mountPath: /var/lib/clamav");
+    expect(scanJob).not.toContain("name: CLAMAV_");
     expect(scanJob).not.toContain("ingress:");
 
     expect(refreshJob).toContain("type: Microsoft.App/jobs");
@@ -804,16 +808,23 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain("ATTACHMENT_SCAN_JOB_NAME");
     expect(deployment).toContain("CLAMAV_SIGNATURE_REFRESH_JOB_NAME");
     expect(deployment).toContain("CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs");
+    expect(deployment).toContain("ATTACHMENT_JOB_IDENTITY_NAME:=hhc-line-bot-attachment");
     expect(deployment).toContain("az identity show");
     expect(deployment).toContain("CONTAINER_APP_JOB_IDENTITY_ID");
+    expect(deployment).toContain("Storage Queue Data Reader");
+    expect(deployment).toContain('start_release_job \\\n  "${ATTACHMENT_SCAN_JOB_NAME}"');
+    expect(deployment).toContain(
+      'RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"'
+    );
 
-    for (const jobManifest of [catalogJob, scanJob, refreshJob]) {
+    for (const jobManifest of [catalogJob, refreshJob]) {
       expect(jobManifest).toContain("type: UserAssigned");
       expect(jobManifest).toContain("PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}");
       expect(jobManifest).toContain("registries:");
       expect(jobManifest).toContain("server: alive.azurecr.io");
       expect(jobManifest).toContain("identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
     }
+    expect(scanJob).toContain("PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}");
 
     for (const name of [
       "BOT_PROFILES_BASE64_JSON",

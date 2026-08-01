@@ -565,35 +565,27 @@ marked before the user sees a queued-success reply; ambiguous Redis/queue
 failures remain pending for bounded retry. An event-driven ACA Job leases one
 queue item, atomically claims the work with a token and expiry, and only then
 performs the bounded LINE Content API or authorized external-file download,
-actual-size, MIME/magic-byte, extension, safe-filename, hash, local ClamAV,
-conflict, upload, and catalog checks. Expired pre-publication claims are
-reclaimable after a worker crash, but immediately before invoking the publisher
-the live token must atomically enter `publishing`. Publishing work is never
-reclaimed for another upload. Its expiry is clamped to the execution's absolute
-900-second ACA replica deadline and may only terminal-fail an abandoned
-publication; stale workers cannot mutate the terminal work state or
-requester-scoped job. Completion and failure commit the Redis work CAS together
+actual-size, MIME/magic-byte, extension, safe-filename, and hash checks. It then
+creates an idempotent Asset upload, waits for Asset's durable ClamAV result,
+grants and downloads only a clean asset, and verifies the hash again before
+publication. Expired claims and `publishing` leases are reclaimable; stable
+Asset identities and deterministic Graph paths make retries converge. Stale
+workers cannot mutate the terminal work state or requester-scoped job.
+Completion and failure commit the Redis work CAS together
 with a bounded pending job update before the job-store write. Queue redelivery
 reconciles that idempotent update before acknowledging terminal work, closing
 the crash window between the two Redis records. Claim disposition distinguishes
 active work from terminal and missing/expired opaque work, so active deliveries
 remain for redelivery while terminal or expired-work deliveries are
 acknowledged. OneDrive upload and catalog upsert form one logical commit; catalog
-failure compensates by deleting the uploaded Graph item.
-Scanner results other than `clean`, or signatures without a valid immutable
-manifest, fail closed. A pure signature policy runs both pre-scan and
-pre-publication: missing, malformed, future-dated, or mid-scan-changed manifests
-block publication, while a valid last-known-good immutable set remains usable
-regardless of age. Signature age is warning-only: it is never an age-based
-publication block after 7 days. A weekly `10 19 * * 0` UTC scheduled ACA Job stages
-and validates an immutable versioned database set, then atomically replaces the
-manifest that selects it. Scans retain their selected set and must observe the
-same manifest version immediately before publication. Deployment bootstraps and
-waits for one refresh before it enables the queue scanner. The finite scanner
-has no ingress, one replica per execution, 2 CPU / 4 GiB, and a dedicated
-minimal config surface: LINE access tokens, PostgreSQL, Redis, Graph, bounded
-download settings, queue access, and ClamAV state. It does not load LINE channel
-secrets, admin IDs, LLM/Notion credentials, or observability secrets. The
+failure compensates by deleting the uploaded Graph item. Asset API is the sole owner
+of quarantine Blob state, ClamAV signatures and execution, scan lifecycle,
+grants, and clean download. Any status other than `clean` fails closed. The LINE
+Job has one replica per execution, uses a dedicated managed identity, and has no
+storage key, queue connection string, ClamAV state, channel secret, admin ID,
+LLM/Notion credential, or observability secret. The previous local scanner and
+weekly `10 19 * * 0` UTC signature refresh remain rollback-only until production
+smoke succeeds. The
 `xiaoha_database` manual source is skipped by catalog sync and receives a 90-day
 catalog `expiresAt`; formal synced sources do not. Successful publication
 records opaque drive/item metadata as a recent general resource, so a scoped
@@ -614,9 +606,9 @@ attachment-size controls and remain unchanged.
 Function dependencies are intentionally behind ports/clients:
 
 - LINE: `src/clients/line.ts`
-- Finite ClamAV scanner and refresh tools: `src/attachments/clamav-cli.ts`,
-  `src/tools/run-attachment-scan-job.ts`, and
-  `src/tools/refresh-clamav-signatures.ts`
+- Asset API attachment client and finite worker: `src/clients/asset-api.ts` and
+  `src/tools/run-attachment-asset-job.ts`
+- Legacy rollback scanner: `src/tools/run-attachment-scan-job.ts`
 - SearXNG web search: `src/clients/searxng.ts`
 - DeepSeek provider: `src/clients/deepseek.ts`
 - Azure OpenAI embeddings: `src/clients/azure-openai-embedding.ts`

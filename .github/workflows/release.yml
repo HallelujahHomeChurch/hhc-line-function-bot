@@ -43,7 +43,6 @@ jobs:
       ACR_LOGIN_SERVER: alive.azurecr.io
       IMAGE_REPOSITORY: alive/hhc-line-function-bot
       SCAN_IMAGE_REPOSITORY: alive/hhc-line-function-bot-scan
-      IMAGE_TAG: main-${{ github.run_id }}
       RESOURCE_GROUP: alive
       CONTAINER_APP_NAME: hhc-line-function-bot
       CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
@@ -53,6 +52,7 @@ jobs:
       PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
       ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME: ${{ vars.ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME }}
       ATTACHMENT_SCAN_QUEUE_NAME: ${{ vars.ATTACHMENT_SCAN_QUEUE_NAME }}
+      ASSET_API_AUDIENCE: ${{ vars.ASSET_API_AUDIENCE }}
       CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME: ${{ vars.CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME }}
       CLAMAV_SIGNATURE_FILE_SHARE_NAME: ${{ vars.CLAMAV_SIGNATURE_FILE_SHARE_NAME }}
       RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
@@ -66,6 +66,8 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --yes
+      - name: Set image tag
+        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - name: Build and push image to ACR
         run: |
           az acr build \
