@@ -108,3 +108,4 @@ properties:
         resources:
           cpu: 1.0
           memory: 2Gi
+    volumes: []
