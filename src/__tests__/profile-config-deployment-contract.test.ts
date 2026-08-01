@@ -754,6 +754,7 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).toContain("memory: 2Gi");
     expect(scanJob).not.toContain("mountPath: /var/lib/clamav");
     expect(scanJob).not.toContain("name: CLAMAV_");
+    expect(scanJob).toContain("  volumes: []");
     expect(scanJob).not.toContain("ingress:");
 
     expect(refreshJob).toContain("type: Microsoft.App/jobs");
