@@ -693,11 +693,20 @@ PY
 deploy_job() {
   local job_name="$1"
   local manifest_path="$2"
+  local user_assigned_identity="${3:-}"
   if az containerapp job show \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${job_name}" \
     --only-show-errors \
     --output none 2>/dev/null; then
+    if [[ -n "${user_assigned_identity}" ]]; then
+      az containerapp job identity assign \
+        --resource-group "${RESOURCE_GROUP}" \
+        --name "${job_name}" \
+        --user-assigned "${user_assigned_identity}" \
+        --only-show-errors \
+        --output none
+    fi
     az containerapp job update \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${job_name}" \
@@ -767,7 +776,7 @@ start_release_job \
   clamav_bootstrap_start_failed
 RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"
 mark_release_job_mutated "${ATTACHMENT_SCAN_JOB_NAME}"
-deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}"
+deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}" "${attachment_job_identity_id}"
 start_release_job \
   "${ATTACHMENT_SCAN_JOB_NAME}" \
   attachment_scan_job \

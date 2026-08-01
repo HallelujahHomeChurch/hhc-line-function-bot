@@ -812,6 +812,10 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain("az identity show");
     expect(deployment).toContain("CONTAINER_APP_JOB_IDENTITY_ID");
     expect(deployment).toContain("Storage Queue Data Reader");
+    expect(deployment).toContain("az containerapp job identity assign");
+    expect(deployment).toContain(
+      'deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}" "${attachment_job_identity_id}"'
+    );
     expect(deployment).toContain('start_release_job \\\n  "${ATTACHMENT_SCAN_JOB_NAME}"');
     expect(deployment).toContain(
       'RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"'
