@@ -557,10 +557,10 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain("required_release_environment=(");
     expect(deployment).toMatch(/required_release_environment=\([\s\S]*RELEASE_PROBE_JOB_NAME/);
     expect(deployment).toMatch(/required_release_environment=\([\s\S]*PERIODIC_ASSURANCE_JOB_NAME/);
-    expect(deployment).toContain("API_GATEWAY_CONTAINER_APP_NAME:=api-gateway");
+    expect(deployment).toContain("PUBLIC_WEB_ORIGIN:=https://www.alive.org.tw");
     expect(deployment).toContain('bot_base_url="https://${bot_fqdn}"');
     expect(deployment).toContain(
-      'gateway_webhook_url="https://${api_gateway_fqdn}/api/line/webhook/helper"'
+      'gateway_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/helper"'
     );
     expect(deployment).toContain('BOT_BASE_URL="${bot_base_url}"');
     expect(deployment).toContain('SEARXNG_BASE_URL="${searxng_base_url}"');

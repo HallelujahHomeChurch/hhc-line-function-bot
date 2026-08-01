@@ -34,7 +34,7 @@ for required_name in "${required_release_environment[@]}"; do
 done
 
 : "${SEARXNG_CONTAINER_APP_NAME:=hhc-searxng}"
-: "${API_GATEWAY_CONTAINER_APP_NAME:=api-gateway}"
+: "${PUBLIC_WEB_ORIGIN:=https://www.alive.org.tw}"
 : "${CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs}"
 : "${ATTACHMENT_JOB_IDENTITY_NAME:=hhc-line-bot-attachment}"
 : "${ASSET_API_CONTAINER_APP_NAME:=asset-api}"
@@ -539,18 +539,12 @@ bot_fqdn="$(az containerapp show \
   --query "properties.configuration.ingress.fqdn" \
   --output tsv \
   --only-show-errors)"
-api_gateway_fqdn="$(az containerapp show \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${API_GATEWAY_CONTAINER_APP_NAME}" \
-  --query "properties.configuration.ingress.fqdn" \
-  --output tsv \
-  --only-show-errors)"
-if [[ -z "${bot_fqdn}" || -z "${api_gateway_fqdn}" ]]; then
+if [[ -z "${bot_fqdn}" ]]; then
   echo "Could not resolve the release assurance endpoint contract" >&2
   exit 1
 fi
 bot_base_url="https://${bot_fqdn}"
-gateway_webhook_url="https://${api_gateway_fqdn}/api/line/webhook/helper"
+gateway_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/helper"
 
 retired_bot_secrets=(
   bot-profiles-base64-json
