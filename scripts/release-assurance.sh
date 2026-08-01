@@ -345,6 +345,7 @@ run_release_gates() {
   : "${RELEASE_TARGET_ATTACHMENT_IMAGE:?RELEASE_TARGET_ATTACHMENT_IMAGE is required}"
   : "${RELEASE_EXPECTED_SEARXNG_IMAGE:?RELEASE_EXPECTED_SEARXNG_IMAGE is required}"
   : "${RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME:?RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME is required}"
+  : "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME:?RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME is required}"
 
   release_wait_for_target || return
   release_check_searxng || return
@@ -353,7 +354,7 @@ run_release_gates() {
     "${RELEASE_TARGET_SCAN_IMAGE}" clamav_refresh_job refresh_definition_mismatch false || return
   release_check_job_definition \
     "${ATTACHMENT_SCAN_JOB_NAME}" Event 900 1 event \
-    "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_scan_job scan_definition_mismatch || return
+    "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_scan_job scan_definition_mismatch false || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
     "${RELEASE_TARGET_IMAGE}" catalog_job catalog_definition_mismatch false || return
@@ -368,6 +369,10 @@ run_release_gates() {
     "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
     "${RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME}" \
     clamav_refresh_job clamav_bootstrap_failed clamav_manifest_invalid || return
+  release_wait_for_job_execution \
+    "${ATTACHMENT_SCAN_JOB_NAME}" \
+    "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME}" \
+    attachment_scan_job attachment_bootstrap_failed attachment_queue_failed || return
   release_check_recent_catalog_success || return
   release_run_probe || return
 }
@@ -1412,6 +1417,9 @@ failure_map = {
     "clamav_bootstrap_failed": "clamav_manifest_invalid",
     "clamav_bootstrap_failed_timeout": "timeout",
     "clamav_bootstrap_start_failed": "network_failed",
+    "attachment_bootstrap_failed": "attachment_queue_failed",
+    "attachment_bootstrap_failed_timeout": "timeout",
+    "attachment_bootstrap_start_failed": "network_failed",
     "release_probe_start_failed": "network_failed",
     "release_probe_failed": "http_mismatch",
     "release_probe_failed_timeout": "timeout",

@@ -173,12 +173,18 @@ if [[ "$(az role assignment list \
   --output tsv \
   --only-show-errors)" != "1" \
   || "$(az role assignment list \
+    --scope "${attachment_queue_scope}" \
+    --assignee-object-id "${attachment_job_principal_id}" \
+    --query "[?roleDefinitionName=='Storage Queue Data Reader'] | length(@)" \
+    --output tsv \
+    --only-show-errors)" != "1" \
+  || "$(az role assignment list \
     --scope "${acr_id}" \
     --assignee-object-id "${attachment_job_principal_id}" \
     --query "[?roleDefinitionName=='AcrPull'] | length(@)" \
     --output tsv \
     --only-show-errors)" != "1" ]]; then
-  echo "Attachment Job identity is missing its queue processor or ACR pull role" >&2
+  echo "Attachment Job identity is missing its queue processor, queue reader, or ACR pull role" >&2
   exit 1
 fi
 
@@ -762,6 +768,11 @@ start_release_job \
 RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"
 mark_release_job_mutated "${ATTACHMENT_SCAN_JOB_NAME}"
 deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}"
+start_release_job \
+  "${ATTACHMENT_SCAN_JOB_NAME}" \
+  attachment_scan_job \
+  attachment_bootstrap_start_failed
+RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"
 mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
 mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"

@@ -777,6 +777,7 @@ RELEASE_TARGET_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64
 RELEASE_TARGET_SCAN_IMAGE="registry.example/fixture-secret/scan@sha256:${"8".repeat(64)}"
 RELEASE_TARGET_ATTACHMENT_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="refresh-exec-current"
+RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="attachment-exec-current"
 if ! run_release_gates; then
   exit 42
 fi
@@ -1337,6 +1338,11 @@ if (command("containerapp", "job", "execution", "show")) {
         : "Succeeded"
     );
   } else if (name === "hhc-line-bot-clamav-refresh" && execution === "refresh-exec-current") {
+    output("Succeeded");
+  } else if (
+    name === "hhc-line-bot-attachment-scan" &&
+    execution === "attachment-exec-current"
+  ) {
     output("Succeeded");
   } else process.exit(97);
   process.exit(0);

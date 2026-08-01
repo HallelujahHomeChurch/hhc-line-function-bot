@@ -278,7 +278,7 @@ Do not add `image` or `file` to a production profile's `allowedMessageTypes` unt
 - `save_resource` is granted only to the intended helper users/groups.
 - The target catalog sources have write capabilities and real OneDrive folder IDs.
 - Redis is configured so pending attachment sessions are not lost across restarts or replicas.
-- The dedicated attachment identity has queue processor, ACR pull, and `Asset.Invoke` access; Asset API and its scan Jobs are healthy.
+- The dedicated attachment identity has queue processor, queue reader, ACR pull, and `Asset.Invoke` access; Asset API and its scan Jobs are healthy.
 
 The webhook entrance still only creates a short-lived pending attachment session and asks for purpose. After final confirmation it queues opaque work; the finite worker validates the download, uploads it to Asset, waits for `clean`, downloads through a service grant, verifies the hash, and then publishes.
 

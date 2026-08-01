@@ -811,6 +811,11 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain("ATTACHMENT_JOB_IDENTITY_NAME:=hhc-line-bot-attachment");
     expect(deployment).toContain("az identity show");
     expect(deployment).toContain("CONTAINER_APP_JOB_IDENTITY_ID");
+    expect(deployment).toContain("Storage Queue Data Reader");
+    expect(deployment).toContain('start_release_job \\\n  "${ATTACHMENT_SCAN_JOB_NAME}"');
+    expect(deployment).toContain(
+      'RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"'
+    );
 
     for (const jobManifest of [catalogJob, refreshJob]) {
       expect(jobManifest).toContain("type: UserAssigned");
