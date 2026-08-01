@@ -342,6 +342,7 @@ run_release_gates() {
   : "${RELEASE_TARGET_REVISION:?RELEASE_TARGET_REVISION is required}"
   : "${RELEASE_TARGET_IMAGE:?RELEASE_TARGET_IMAGE is required}"
   : "${RELEASE_TARGET_SCAN_IMAGE:?RELEASE_TARGET_SCAN_IMAGE is required}"
+  : "${RELEASE_TARGET_ATTACHMENT_IMAGE:?RELEASE_TARGET_ATTACHMENT_IMAGE is required}"
   : "${RELEASE_EXPECTED_SEARXNG_IMAGE:?RELEASE_EXPECTED_SEARXNG_IMAGE is required}"
   : "${RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME:?RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME is required}"
 
@@ -352,7 +353,7 @@ run_release_gates() {
     "${RELEASE_TARGET_SCAN_IMAGE}" clamav_refresh_job refresh_definition_mismatch false || return
   release_check_job_definition \
     "${ATTACHMENT_SCAN_JOB_NAME}" Event 900 1 event \
-    "${RELEASE_TARGET_SCAN_IMAGE}" attachment_scan_job scan_definition_mismatch || return
+    "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_scan_job scan_definition_mismatch || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
     "${RELEASE_TARGET_IMAGE}" catalog_job catalog_definition_mismatch false || return
@@ -667,22 +668,31 @@ elif check_name == "attachment_scan_job":
     scale = trigger.get("scale") or {}
     rules = scale.get("rules")
     rule = rules[0] if isinstance(rules, list) and len(rules) == 1 else {}
+    env_names = {
+        entry.get("name")
+        for entry in (env if isinstance(env, list) else [])
+        if isinstance(entry, dict)
+    }
     valid = (
         valid
         and scale.get("minExecutions") == 0
         and scale.get("maxExecutions") == 1
         and rule.get("type") == "azure-queue"
         and rule.get("metadata", {}).get("queueLength") == "1"
-        and rule.get("auth")
-        == [
-            {
-                "triggerParameter": "connection",
-                "secretRef": "attachment-scan-queue-connection-string",
-            }
-        ]
-        and resources == {"cpu": 2, "memory": "4Gi"}
-        and mounts == expected_mounts
-        and volumes == readonly_volumes
+        and isinstance(rule.get("identity"), str)
+        and bool(rule.get("identity"))
+        and not rule.get("auth")
+        and args == ["dist/tools/run-attachment-asset-job.js"]
+        and {
+            "ATTACHMENT_SCAN_QUEUE_URL",
+            "ASSET_API_URL",
+            "ASSET_API_AUDIENCE",
+            "AZURE_CLIENT_ID",
+        }.issubset(env_names)
+        and not any(name and name.startswith("CLAMAV_") for name in env_names)
+        and resources == {"cpu": 1, "memory": "2Gi"}
+        and not mounts
+        and not volumes
     )
 elif check_name == "release_probe":
     valid = (

@@ -57,6 +57,40 @@ describe("attachment scan work store", () => {
     expect(client.evalCalls).toHaveLength(4);
   });
 
+  it("persists one asset id under the active work claim", async () => {
+    const client = new FakeRedisScanWorkClient();
+    const jobStore = new InMemoryAgentJobStore({ now: () => now });
+    const store = new RedisAttachmentScanWorkStore({
+      client,
+      keyPrefix: "test",
+      jobStore,
+      now: () => now,
+      idFactory: () => "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
+      claimIdFactory: () => "claim-1"
+    });
+    const job = await jobStore.createPending({ scope, label: "保存檔案", ttlMs: 600_000 });
+    const work = await store.create({
+      jobId: job.id,
+      lineMessageId: "line-message-opaque-id",
+      scope,
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck"
+      },
+      ttlMs: 600_000
+    });
+    await store.markEnqueued(work.id);
+    await store.claimForProcessing(work.id);
+
+    await expect(store.recordAsset(work.id, "claim-1", "asset-1")).resolves.toBe(true);
+    await expect(store.recordAsset(work.id, "claim-1", "asset-2")).resolves.toBe(false);
+    expect(JSON.parse(client.values.get(`test:attachment-scan-work:${work.id}`)!)).toMatchObject({
+      assetId: "asset-1"
+    });
+  });
+
   it("atomically cancels only work that has not already been claimed", async () => {
     const client = new FakeRedisScanWorkClient();
     const jobStore = new InMemoryAgentJobStore({ now: () => now });
@@ -400,7 +434,7 @@ describe("attachment scan work store", () => {
     }
   );
 
-  it("terminal-fails an abandoned publication without making it publishable again", async () => {
+  it("reclaims an expired publication so deterministic Graph publication can converge", async () => {
     let current = new Date("2026-07-24T04:00:00.000Z");
     const jobStore = new InMemoryAgentJobStore({ now: () => current });
     const job = await jobStore.createPending({ scope, label: "保存檔案", ttlMs: 600_000 });
@@ -429,15 +463,11 @@ describe("attachment scan work store", () => {
 
     current = new Date("2026-07-24T04:01:00.000Z");
 
-    await expect(store.claimForProcessing(work.id)).resolves.toEqual({
-      disposition: "terminal",
-      terminalStatus: "failed"
+    await expect(store.claimForProcessing(work.id)).resolves.toMatchObject({
+      disposition: "claimed",
+      work: { status: "claimed" }
     });
-    await expect(store.claim(work.id)).resolves.toBeUndefined();
-    await expect(jobStore.get(job.id, scope)).resolves.toMatchObject({
-      status: "failed",
-      error: "publication_abandoned"
-    });
+    await expect(jobStore.get(job.id, scope)).resolves.toMatchObject({ status: "pending" });
   });
 
   it("distinguishes missing or expired work from active and terminal work", async () => {
@@ -553,6 +583,7 @@ class FakeRedisScanWorkClient {
       claimedAt?: string;
       claimId?: string;
       claimExpiresAt?: string;
+      assetId?: string;
       publishingAt?: string;
       publishingExpiresAt?: string;
       pendingJobUpdate?: unknown;
@@ -561,7 +592,19 @@ class FakeRedisScanWorkClient {
       return null;
     }
     let transitioned: Record<string, unknown>;
-    if (script.includes("work.pendingJobUpdate = nil")) {
+    if (script.includes("work.assetId = ARGV[4]")) {
+      const [, claimId, now, assetId] = options.arguments;
+      if (
+        record.status !== "claimed" ||
+        record.claimId !== claimId ||
+        record.claimExpiresAt! <= now! ||
+        record.expiresAt <= now! ||
+        (record.assetId !== undefined && record.assetId !== assetId)
+      ) {
+        return null;
+      }
+      transitioned = { ...record, assetId };
+    } else if (script.includes("work.pendingJobUpdate = nil")) {
       if (
         (record.status !== "completed" && record.status !== "failed") ||
         record.pendingJobUpdate === undefined
@@ -623,20 +666,7 @@ class FakeRedisScanWorkClient {
         return `terminal:${JSON.stringify(record)}`;
       }
       if (record.status === "publishing") {
-        if (record.publishingExpiresAt! <= currentTime) {
-          transitioned = {
-            ...record,
-            status: "failed",
-            failureCode: "publication_abandoned",
-            claimId: undefined,
-            claimExpiresAt: undefined,
-            pendingJobUpdate: {
-              status: "failed",
-              error: "publication_abandoned"
-            },
-            completedAt: currentTime
-          };
-        } else {
+        if (record.publishingExpiresAt! > currentTime) {
           return "active";
         }
       } else if (!(
@@ -644,17 +674,16 @@ class FakeRedisScanWorkClient {
         (record.status === "claimed" && record.claimExpiresAt! <= currentTime)
       )) {
         return "active";
-      } else {
-        transitioned = {
-          ...record,
-          status: "claimed",
-          claimedAt: options.arguments[2],
-          claimId: options.arguments[3],
-          claimExpiresAt: options.arguments[4],
-          publishingAt: undefined,
-          publishingExpiresAt: undefined
-        };
       }
+      transitioned = {
+        ...record,
+        status: "claimed",
+        claimedAt: options.arguments[2],
+        claimId: options.arguments[3],
+        claimExpiresAt: options.arguments[4],
+        publishingAt: undefined,
+        publishingExpiresAt: undefined
+      };
     } else if (script.includes('work.status = "failed"')) {
       if (record.status !== "pending_enqueue" || record.expiresAt <= currentTime) return null;
       transitioned = {
@@ -670,12 +699,6 @@ class FakeRedisScanWorkClient {
     this.values.set(key, serialized);
     if (script.includes('redis.call("SREM"')) {
       await this.sRem(options.keys[1]!, expectedId!);
-    }
-    if (
-      script.includes("local claimable =") &&
-      (transitioned.status === "failed" || transitioned.status === "completed")
-    ) {
-      return `abandoned:${serialized}`;
     }
     return serialized;
   }

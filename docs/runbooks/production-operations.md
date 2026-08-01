@@ -267,9 +267,9 @@ The bot does not perform arbitrary web browsing or maintain an administrator web
 
 Sheet music has one controlled public-search fallback. If `SEARXNG_BASE_URL` points to an internal SearXNG service and local sheet music lookup finds nothing, the bot asks the requester whether to search public results. It calls SearXNG only after consent, uses only title/snippet/url fields, sends those fields to the `web_summarization` provider for summary/ranking, and does not fetch pages, download files, or save the results. Leave `SEARXNG_BASE_URL` unset to disable this fallback.
 
-Production deploys `hhc-searxng` with internal-only ingress, one replica, `0.25` CPU, and `0.5Gi` memory. The attachment scanner has no ingress, one replica per execution, and 2 CPU / 4 GiB. The ClamAV signature refresh job runs every Monday at `10 19 * * 0` UTC, which is 03:10 Monday in Asia/Taipei. The deployment still starts and waits for one refresh execution before enabling the queue scanner, independently of the weekly schedule.
+Production deploys `hhc-searxng` with internal-only ingress, one replica, `0.25` CPU, and `0.5Gi` memory. The active attachment Job has one replica per execution and uses a dedicated managed identity to call Asset API through authenticated internal ingress. Asset API owns the finite ClamAV scan and signature refresh Jobs. The LINE-owned weekly `10 19 * * 0` UTC refresh remains rollback-only until production smoke succeeds.
 
-The refresh publishes only a complete, validated `main`/`daily`/`bytecode` immutable set by atomically replacing its sanitized manifest last. The worker verifies that manifest before scanning and again before publication. Missing, malformed, future-dated, or changed-during-scan manifests block publication, as does every scan result other than `clean`. Signature age is warning-only: it is never an age-based publication block. A valid last-known-good immutable set remains usable indefinitely, with `signatureHealth: "warning"` after 7 days. When health is `warning`, investigate the scheduled refresh job, Azure Files availability, and its most recent failure without disabling a valid scanner; repair or rerun refresh so the next validated immutable set can be promoted.
+Asset returns a durable scan status. `pending` and `scanning` remain retryable; `infected`, `failed`, or any malformed response fails closed. The LINE Job downloads only after creating a service grant and verifies the original hash again before Graph publication.
 
 ## Attachment Save Gate
 
@@ -278,8 +278,8 @@ Do not add `image` or `file` to a production profile's `allowedMessageTypes` unt
 - `save_resource` is granted only to the intended helper users/groups.
 - The target catalog sources have write capabilities and real OneDrive folder IDs.
 - Redis is configured so pending attachment sessions are not lost across restarts or replicas.
-- The finite attachment-scan worker has a local ClamAV database, a current signature manifest, and the queue/job configuration required to process confirmed attachments.
+- The dedicated attachment identity has queue processor, ACR pull, and `Asset.Invoke` access; Asset API and its scan Jobs are healthy.
 
-The webhook entrance still only creates a short-lived pending attachment session and asks for purpose. After final confirmation it queues opaque work; the finite worker downloads the LINE content, validates size, MIME/magic bytes, extension, safe filename, and hash, then scans it locally. It publishes only after a `clean` result with a current signature manifest.
+The webhook entrance still only creates a short-lived pending attachment session and asks for purpose. After final confirmation it queues opaque work; the finite worker validates the download, uploads it to Asset, waits for `clean`, downloads through a service grant, verifies the hash, and then publishes.
 
 If the worker, scanner, manifest, or queue is unavailable, or the scan result is anything other than `clean`, publishing fails closed. The bot should not bypass this for production.

@@ -21,6 +21,7 @@ required_release_environment=(
   PERIODIC_ASSURANCE_JOB_NAME
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
   ATTACHMENT_SCAN_QUEUE_NAME
+  ASSET_API_AUDIENCE
   CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME
   CLAMAV_SIGNATURE_FILE_SHARE_NAME
 )
@@ -35,6 +36,8 @@ done
 : "${SEARXNG_CONTAINER_APP_NAME:=hhc-searxng}"
 : "${API_GATEWAY_CONTAINER_APP_NAME:=api-gateway}"
 : "${CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs}"
+: "${ATTACHMENT_JOB_IDENTITY_NAME:=hhc-line-bot-attachment}"
+: "${ASSET_API_CONTAINER_APP_NAME:=asset-api}"
 : "${AZURE_OPENAI_EMBEDDING_RESOURCE_NAME:=bible-text-embedding-resource}"
 : "${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:=text-embedding-3-small}"
 : "${AZURE_OPENAI_EMBEDDING_API_VERSION:=2024-10-21}"
@@ -114,6 +117,68 @@ container_app_job_identity_id="$(az identity show \
   --only-show-errors)"
 if [[ -z "${container_app_job_identity_id}" ]]; then
   echo "Could not resolve the Container Apps Job identity ${CONTAINER_APP_JOB_IDENTITY_NAME}"
+  exit 1
+fi
+attachment_job_identity_json="$(az identity show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${ATTACHMENT_JOB_IDENTITY_NAME}" \
+  --query '{id:id,clientId:clientId,principalId:principalId}' \
+  --output json \
+  --only-show-errors)"
+read -r attachment_job_identity_id attachment_job_client_id attachment_job_principal_id < <(
+  ATTACHMENT_JOB_IDENTITY_JSON="${attachment_job_identity_json}" python3 - <<'PY'
+import json
+import os
+
+identity = json.loads(os.environ["ATTACHMENT_JOB_IDENTITY_JSON"] or "null") or {}
+print(f"{identity.get('id') or ''}\t{identity.get('clientId') or ''}\t{identity.get('principalId') or ''}")
+PY
+)
+if [[ -z "${attachment_job_identity_id}" \
+  || -z "${attachment_job_client_id}" \
+  || -z "${attachment_job_principal_id}" ]]; then
+  echo "Could not resolve the attachment Job identity ${ATTACHMENT_JOB_IDENTITY_NAME}" >&2
+  exit 1
+fi
+
+asset_api_fqdn="$(az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${ASSET_API_CONTAINER_APP_NAME}" \
+  --query properties.configuration.ingress.fqdn \
+  --output tsv \
+  --only-show-errors)"
+if [[ -z "${asset_api_fqdn}" ]]; then
+  echo "Could not resolve internal ingress for ${ASSET_API_CONTAINER_APP_NAME}" >&2
+  exit 1
+fi
+asset_api_url="https://${asset_api_fqdn}"
+
+attachment_storage_id="$(az storage account show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
+  --query id \
+  --output tsv \
+  --only-show-errors)"
+attachment_queue_scope="${attachment_storage_id}/queueServices/default/queues/${ATTACHMENT_SCAN_QUEUE_NAME}"
+acr_id="$(az acr show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${ACR_NAME}" \
+  --query id \
+  --output tsv \
+  --only-show-errors)"
+if [[ "$(az role assignment list \
+  --scope "${attachment_queue_scope}" \
+  --assignee-object-id "${attachment_job_principal_id}" \
+  --query "[?roleDefinitionName=='Storage Queue Data Message Processor'] | length(@)" \
+  --output tsv \
+  --only-show-errors)" != "1" \
+  || "$(az role assignment list \
+    --scope "${acr_id}" \
+    --assignee-object-id "${attachment_job_principal_id}" \
+    --query "[?roleDefinitionName=='AcrPull'] | length(@)" \
+    --output tsv \
+    --only-show-errors)" != "1" ]]; then
+  echo "Attachment Job identity is missing its queue processor or ACR pull role" >&2
   exit 1
 fi
 
@@ -460,6 +525,7 @@ target_revision="$(az containerapp show \
 RELEASE_TARGET_REVISION="${target_revision}"
 RELEASE_TARGET_IMAGE="${image_ref}"
 RELEASE_TARGET_SCAN_IMAGE="${scan_image_ref}"
+RELEASE_TARGET_ATTACHMENT_IMAGE="${image_ref}"
 
 bot_fqdn="$(az containerapp show \
   --resource-group "${RESOURCE_GROUP}" \
@@ -526,8 +592,12 @@ render_job_manifest() {
   MANAGED_ENVIRONMENT_ID="${managed_environment_id}" \
   CONTAINER_APP_LOCATION="${container_app_location}" \
   CONTAINER_APP_JOB_IDENTITY_ID="${container_app_job_identity_id}" \
+  ATTACHMENT_JOB_IDENTITY_ID="${attachment_job_identity_id}" \
+  ATTACHMENT_JOB_CLIENT_ID="${attachment_job_client_id}" \
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME="${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
   ATTACHMENT_SCAN_QUEUE_NAME="${ATTACHMENT_SCAN_QUEUE_NAME}" \
+  ASSET_API_URL="${asset_api_url}" \
+  ASSET_API_AUDIENCE="${ASSET_API_AUDIENCE}" \
   BOT_SECRETS_JSON="${bot_secrets_json}" \
   BOT_ENV_JSON="${bot_env_json}" \
   ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING="${attachment_scan_queue_connection_string}" \
@@ -579,10 +649,18 @@ substitutions = {
     "PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID": os.environ[
         "CONTAINER_APP_JOB_IDENTITY_ID"
     ],
+    "PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID": os.environ[
+        "ATTACHMENT_JOB_IDENTITY_ID"
+    ],
+    "PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID": os.environ[
+        "ATTACHMENT_JOB_CLIENT_ID"
+    ],
     "PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME": os.environ[
         "ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME"
     ],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME": os.environ["ATTACHMENT_SCAN_QUEUE_NAME"],
+    "PLACEHOLDER_ASSET_API_URL": os.environ["ASSET_API_URL"],
+    "PLACEHOLDER_ASSET_API_AUDIENCE": os.environ["ASSET_API_AUDIENCE"],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": os.environ[
         "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING"
     ],
@@ -658,7 +736,7 @@ render_job_manifest \
   "${attachment_scan_job_manifest_template}" \
   "${attachment_scan_job_manifest}" \
   "${ATTACHMENT_SCAN_JOB_NAME}" \
-  "${scan_image_ref}"
+  "${image_ref}"
 render_job_manifest \
   "${catalog_job_manifest_template}" \
   "${catalog_job_manifest}" \

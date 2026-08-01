@@ -39,6 +39,7 @@ export interface AttachmentScanWork {
   jobId: string;
   lineMessageId?: string;
   externalUrl?: string;
+  assetId?: string;
   scope: AgentJobScope & { requesterUserId: string };
   target: AttachmentScanTarget;
   status: AttachmentScanWorkStatus;
@@ -73,6 +74,7 @@ export interface AttachmentScanWorkStore {
   claim(id: string): Promise<AttachmentScanWork | undefined>;
   claimForProcessing(id: string): Promise<AttachmentScanClaimDisposition>;
   beginPublishing(id: string, claimId: string, publicationDeadline?: Date): Promise<boolean>;
+  recordAsset(id: string, claimId: string, assetId: string): Promise<boolean>;
   cancelPendingEnqueue(id: string, code: AttachmentScanFailureCode): Promise<boolean>;
   terminalStatus(
     id: string
@@ -125,6 +127,7 @@ local valid =
     jobId = true,
     lineMessageId = true,
     externalUrl = true,
+    assetId = true,
     scope = true,
     target = true,
     status = true,
@@ -141,6 +144,7 @@ local valid =
   }) and
   isNonEmptyString(work.id) and
   isNonEmptyString(work.jobId) and
+  (work.assetId == nil or isNonEmptyString(work.assetId)) and
   (
     (isNonEmptyString(work.lineMessageId) and work.externalUrl == nil) or
     (isNonEmptyString(work.externalUrl) and work.lineMessageId == nil)
@@ -195,32 +199,13 @@ if work.status == "completed" or work.status == "failed" then
   return "terminal:" .. cjson.encode(work)
 end
 if work.status == "publishing" then
-  if
-    isCanonicalTimestamp(work.publishingExpiresAt) and
-    work.publishingExpiresAt <= ARGV[2]
-  then
-    local ttl = redis.call("PTTL", KEYS[1])
-    if ttl <= 0 then
-      return "missing"
-    end
-    work.status = "failed"
-    work.failureCode = "publication_abandoned"
-    work.completedAt = ARGV[2]
-    work.claimId = nil
-    work.claimExpiresAt = nil
-    work.pendingJobUpdate = {
-      status = "failed",
-      error = "publication_abandoned"
-    }
-    local abandoned = cjson.encode(work)
-    redis.call("PSETEX", KEYS[1], ttl, abandoned)
-    redis.call("SREM", KEYS[2], work.id)
-    return "abandoned:" .. abandoned
+  if not isCanonicalTimestamp(work.publishingExpiresAt) or work.publishingExpiresAt > ARGV[2] then
+    return "active"
   end
-  return "active"
 end
 local claimable =
   work.status == "queued" or
+  work.status == "publishing" or
   (
     work.status == "claimed" and
     isCanonicalTimestamp(work.claimExpiresAt) and
@@ -273,6 +258,30 @@ work.claimExpiresAt = nil
 local publishing = cjson.encode(work)
 redis.call("PSETEX", KEYS[1], ttl, publishing)
 return publishing
+`;
+
+const recordAssetScript = `
+local raw = redis.call("GET", KEYS[1])
+if not raw then return nil end
+local work = cjson.decode(raw)
+${workSchemaValidationScript}
+if
+  work.id ~= ARGV[1] or
+  work.status ~= "claimed" or
+  work.claimId ~= ARGV[2] or
+  not isCanonicalTimestamp(work.claimExpiresAt) or
+  work.claimExpiresAt <= ARGV[3] or
+  work.expiresAt <= ARGV[3] or
+  (work.assetId ~= nil and work.assetId ~= ARGV[4])
+then
+  return nil
+end
+local ttl = redis.call("PTTL", KEYS[1])
+if ttl <= 0 then return nil end
+work.assetId = ARGV[4]
+local updated = cjson.encode(work)
+redis.call("PSETEX", KEYS[1], ttl, updated)
+return updated
 `;
 
 const markEnqueuedScript = `
@@ -474,28 +483,15 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
       await this.reconcileTerminalJobUpdate(work);
       return { disposition: "terminal", terminalStatus: work.status };
     }
-    if (work.status === "publishing") {
-      if (work.publishingExpiresAt && work.publishingExpiresAt <= claimedAtIso) {
-        const failed: AttachmentScanWork = {
-          ...work,
-          status: "failed",
-          failureCode: "publication_abandoned",
-          claimId: undefined,
-          claimExpiresAt: undefined,
-          pendingJobUpdate: {
-            status: "failed",
-            error: "publication_abandoned"
-          },
-          completedAt: claimedAtIso
-        };
-        this.values.set(id, failed);
-        await this.reconcileTerminalJobUpdate(failed);
-        return { disposition: "terminal", terminalStatus: "failed" };
-      }
+    if (
+      work.status === "publishing" &&
+      (!work.publishingExpiresAt || work.publishingExpiresAt > claimedAtIso)
+    ) {
       return { disposition: "active" };
     }
     const claimable =
       work.status === "queued" ||
+      work.status === "publishing" ||
       (work.status === "claimed" &&
         Boolean(work.claimExpiresAt) &&
         work.claimExpiresAt! <= claimedAtIso);
@@ -543,6 +539,25 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
       publishingAt: publishingAtIso,
       publishingExpiresAt
     });
+    return true;
+  }
+
+  async recordAsset(id: string, claimId: string, assetId: string): Promise<boolean> {
+    const work = this.values.get(id);
+    const now = this.now().toISOString();
+    if (
+      !assetId.trim() ||
+      !work ||
+      work.status !== "claimed" ||
+      work.claimId !== claimId ||
+      !work.claimExpiresAt ||
+      work.claimExpiresAt <= now ||
+      work.expiresAt <= now ||
+      (work.assetId !== undefined && work.assetId !== assetId)
+    ) {
+      return false;
+    }
+    this.values.set(id, { ...work, assetId });
     return true;
   }
 
@@ -781,6 +796,15 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
     return typeof raw === "string" && parseWork(raw, id)?.status === "publishing";
   }
 
+  async recordAsset(id: string, claimId: string, assetId: string): Promise<boolean> {
+    if (!assetId.trim()) return false;
+    const raw = await this.options.client.eval(recordAssetScript, {
+      keys: [this.key(id)],
+      arguments: [id, claimId, this.now().toISOString(), assetId]
+    });
+    return typeof raw === "string" && parseWork(raw, id)?.assetId === assetId;
+  }
+
   async cancelPendingEnqueue(id: string, code: AttachmentScanFailureCode): Promise<boolean> {
     const cancelledAt = this.now().toISOString();
     const raw = await this.options.client.eval(cancelPendingEnqueueScript, {
@@ -930,6 +954,7 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       !isWorkStatus(work.status) ||
       !isTimestamp(work.createdAt) ||
       !isTimestamp(work.expiresAt) ||
+      (work.assetId !== undefined && !isNonEmptyString(work.assetId)) ||
       (work.failureCode !== undefined && !isFailureCode(work.failureCode)) ||
       (work.claimedAt !== undefined && !isTimestamp(work.claimedAt)) ||
       (work.claimId !== undefined && !isNonEmptyString(work.claimId)) ||
@@ -947,6 +972,7 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       jobId: work.jobId,
       ...(work.lineMessageId ? { lineMessageId: work.lineMessageId } : {}),
       ...(work.externalUrl ? { externalUrl: work.externalUrl } : {}),
+      ...(work.assetId ? { assetId: work.assetId } : {}),
       scope: {
         profileName: work.scope.profileName,
         sourceKey: work.scope.sourceKey,
