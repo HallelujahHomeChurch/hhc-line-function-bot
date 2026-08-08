@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -43,6 +45,33 @@ describe("attachment scan worker config", () => {
     );
   });
 
+  it("ignores profiles that do not declare save_resource", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "helper",
+          channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
+          enabledFunctions: ["save_resource"]
+        },
+        {
+          name: "main",
+          channelAccessTokenEnv: "LINE_MAIN_CHANNEL_ACCESS_TOKEN",
+          enabledFunctions: ["query_schedule"]
+        }
+      ],
+      (path) => {
+        const config = loadAttachmentScanWorkerConfigFromEnv({
+          ...workerEnv(),
+          PROFILE_CONFIG_PATH: path
+        });
+
+        expect(config.profiles).toEqual([
+          { name: "helper", channelAccessToken: "line-access-token" }
+        ]);
+      }
+    );
+  });
+
   it.each([
     ["LINE_HELPER_CHANNEL_ACCESS_TOKEN"],
     ["DATABASE_URL"],
@@ -55,3 +84,14 @@ describe("attachment scan worker config", () => {
     expect(() => loadAttachmentScanWorkerConfigFromEnv(env)).toThrow(name);
   });
 });
+
+async function withProfileFile(profiles: unknown, callback: (path: string) => void): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "hhc-line-function-bot-attachment-worker-"));
+  const path = join(directory, "profiles.json");
+  await writeFile(path, JSON.stringify(profiles), "utf8");
+  try {
+    callback(path);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}

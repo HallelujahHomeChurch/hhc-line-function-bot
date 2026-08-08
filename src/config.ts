@@ -17,9 +17,12 @@ import {
 } from "./clients/azure-openai-embedding.js";
 import type {
   AppConfig,
+  DatabaseConfig,
   FunctionName,
+  GraphConfig,
   KnowledgeConfig,
   ModelProviderName,
+  NotionConfig,
   ProviderPolicy,
   SmallTalkConfig,
   SmallTalkPromptingConfig
@@ -214,6 +217,87 @@ const profileSchema = z.object({
     })
     .default({ enabled: false, inlineReplyTimeoutMs: 4000, resultTtlMinutes: 30 })
 });
+
+export interface CatalogSyncConfig {
+  profiles: Array<{ name: string }>;
+  database: DatabaseConfig;
+  graph?: GraphConfig;
+  notion?: NotionConfig;
+  knowledge?: KnowledgeConfig;
+}
+
+export function loadCatalogSyncConfigFromEnv(env: NodeJS.ProcessEnv): CatalogSyncConfig {
+  const parsedProfiles = JSON.parse(readProfilesJson(env)) as unknown;
+  if (!Array.isArray(parsedProfiles)) {
+    throw new Error("PROFILE_CONFIG_PATH must contain a JSON array");
+  }
+  assertNoLegacyProfileFields(parsedProfiles);
+  const profiles = z.array(profileSchema).min(1).parse(parsedProfiles);
+  for (const profile of profiles) {
+    assertCanonicalWebhookPath(profile.name, profile.webhookPath);
+  }
+  assertUniqueValues(
+    profiles.map((profile) => profile.webhookPath),
+    "Duplicate profile webhookPath"
+  );
+  assertCompleteGroup(env, graphRequiredKeys, "Incomplete Graph configuration");
+  assertCompleteGroup(env, notionRequiredKeys, "Incomplete Notion configuration");
+  const databaseUrl = env.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is required for catalog sync");
+  }
+  const knowledgeEmbedding = readKnowledgeEmbeddingConfig(env);
+
+  return {
+    profiles: profiles.map(({ name }) => ({ name })),
+    database: { url: databaseUrl, ssl: readBool(env.DATABASE_SSL, false) },
+    graph:
+      env.GRAPH_TENANT_ID &&
+      env.GRAPH_CLIENT_ID &&
+      env.GRAPH_CLIENT_SECRET &&
+      env.GRAPH_DRIVE_ID &&
+      env.GRAPH_PPT_FOLDER_ITEM_ID
+        ? {
+            tenantId: env.GRAPH_TENANT_ID,
+            clientId: env.GRAPH_CLIENT_ID,
+            clientSecret: env.GRAPH_CLIENT_SECRET,
+            driveId: env.GRAPH_DRIVE_ID,
+            pptFolderItemId: env.GRAPH_PPT_FOLDER_ITEM_ID,
+            sheetMusicAllowedExtensions: readList(
+              env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg,png"
+            ).map((ext) => (ext.startsWith(".") ? ext : `.${ext}`)),
+            allowedExtensions: [".pptx", ".ppt", ".key", ".odp"],
+            defaultIncludePdf: false,
+            linkType: readGraphLinkType(env.GRAPH_LINK_TYPE),
+            linkScope: readGraphLinkScope(env.GRAPH_LINK_SCOPE)
+          }
+        : undefined,
+    notion:
+      env.NOTION_TOKEN &&
+      env.NOTION_SERVICE_DATABASE_ID &&
+      env.NOTION_DATE_PROPERTY &&
+      env.NOTION_MEETING_PROPERTY &&
+      env.NOTION_ROLE_PROPERTY &&
+      env.NOTION_PERSON_PROPERTY
+        ? {
+            token: env.NOTION_TOKEN,
+            databaseId: env.NOTION_SERVICE_DATABASE_ID,
+            properties: {
+              date: env.NOTION_DATE_PROPERTY,
+              meeting: env.NOTION_MEETING_PROPERTY,
+              role: env.NOTION_ROLE_PROPERTY,
+              person: env.NOTION_PERSON_PROPERTY
+            }
+          }
+        : undefined,
+    knowledge: env.NOTION_TOKEN
+      ? {
+          notionToken: env.NOTION_TOKEN,
+          embedding: knowledgeEmbedding!
+        }
+      : undefined
+  };
+}
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   assertNoRetiredLocalModelRuntimeSettings(env);

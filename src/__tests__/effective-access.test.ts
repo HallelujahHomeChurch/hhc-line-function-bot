@@ -138,6 +138,24 @@ describe("effective access context", () => {
     ]);
   });
 
+  it("does not make save_resource effective from a grant when the profile omits it", async () => {
+    const accessStore = await registeredStore(directEvent("U1"));
+    await accessStore.addUserFunctionGrant({
+      profileName: "helper",
+      userId: "U1",
+      functionName: "save_resource",
+      createdBy: "test"
+    });
+
+    const context = await resolveEffectiveAccessContext({
+      profile: profile({ enabledFunctions: ["query_schedule"] }),
+      event: directEvent("U1"),
+      accessStore
+    });
+
+    expect(context.profile.enabledFunctions).toEqual(["query_schedule"]);
+  });
+
   it("keeps configured write defaults for an admin", async () => {
     const context = await resolveEffectiveAccessContext({
       profile: profile({ enabledFunctions: ["query_schedule", "save_memory"] }),

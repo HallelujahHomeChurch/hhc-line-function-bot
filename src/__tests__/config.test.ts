@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { loadConfigFromEnv } from "../config.js";
+import { loadCatalogSyncConfigFromEnv, loadConfigFromEnv } from "../config.js";
 
 function baseEnv(): NodeJS.ProcessEnv {
   return {
@@ -88,6 +88,34 @@ async function withJsonFile<T>(
 }
 
 describe("config", () => {
+  it("loads catalog sync dependencies without unrelated profile LINE credentials", () => {
+    const config = loadCatalogSyncConfigFromEnv({
+      ...profilesEnv([
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "helper-secret",
+          channelAccessToken: "helper-token",
+          enabledFunctions: ["save_resource"]
+        },
+        {
+          name: "main",
+          webhookPath: "/api/line/webhook/main",
+          channelSecretEnv: "LINE_MAIN_CHANNEL_SECRET",
+          channelAccessTokenEnv: "LINE_MAIN_CHANNEL_ACCESS_TOKEN",
+          enabledFunctions: ["query_schedule"]
+        }
+      ]),
+      DATABASE_URL: "postgres://catalog",
+      DATABASE_SSL: "true"
+    });
+
+    expect(config).toMatchObject({
+      profiles: [{ name: "helper" }, { name: "main" }],
+      database: { url: "postgres://catalog", ssl: true }
+    });
+  });
+
   it("uses the Account API Dapr endpoint by default and accepts a local override", () => {
     expect(loadConfigFromEnv(baseEnv()).account).toEqual({
       baseUrl: "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
