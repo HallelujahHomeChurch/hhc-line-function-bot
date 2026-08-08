@@ -18,7 +18,8 @@ function context(): FunctionHandlerContext {
       groupRequireWakeWord: true,
       wakeKeywords: ["小哈"],
       acceptMention: true,
-      enabledFunctions: ["save_resource"]
+      enabledFunctions: ["save_resource"],
+      permissionRequiredFunctions: []
     } satisfies BotProfileConfig,
     event: {
       type: "message",

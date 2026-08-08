@@ -226,3 +226,53 @@ git diff --check
 
 Architecture validation again checked 399 TypeScript files. No push, PR, merge,
 deployment, credential read, or production mutation was performed.
+
+## Review Round 2 Fix
+
+### Status and scope
+
+Addressed the single Minor finding from the Task 4 fix-round re-review.
+
+- Added `permissionRequiredFunctions: []` to the exact
+  `satisfies BotProfileConfig` fixtures in `src/__tests__/save-resource.test.ts`
+  and `src/__tests__/query-schedule.test.ts`.
+- No runtime, deployment, config, application, or dependency change was made.
+
+### RED and GREEN evidence
+
+A direct test-source compiler command was run before edits:
+
+```text
+pnpm exec tsc --noEmit --target ES2022 --module NodeNext \
+  --moduleResolution NodeNext --strict --skipLibCheck --esModuleInterop \
+  --types node,vitest \
+  src/__tests__/save-resource.test.ts src/__tests__/query-schedule.test.ts
+```
+
+RED named `permissionRequiredFunctions` as missing from both exact profile
+fixtures. After the two additions, the same compiler command no longer lists
+that field as missing. The command remains nonzero because these test files have
+older out-of-scope typing gaps: four other long-required profile fields and
+pre-existing query-schedule active-task shape mismatches. Repository typecheck
+continues to exclude `src/__tests__/**`, as documented in the review.
+
+Focused behavior and requested repository gates passed:
+
+```text
+pnpm exec vitest run \
+  src/__tests__/save-resource.test.ts \
+  src/__tests__/query-schedule.test.ts
+
+Test Files  2 passed (2)
+Tests       28 passed (28)
+
+pnpm typecheck
+pnpm lint
+pnpm exec prettier --check \
+  src/__tests__/save-resource.test.ts \
+  src/__tests__/query-schedule.test.ts
+git diff --check
+```
+
+No push, PR, merge, deployment, credential read, or external mutation was
+performed.
