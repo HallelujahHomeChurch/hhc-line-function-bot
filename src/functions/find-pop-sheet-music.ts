@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { buildAgentJobQuickReply, buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
 import type { AgentMemoryStore, AgentResourceRecord } from "../agent/memory-store.js";
 import { dispatchAttachmentScanWork } from "../attachments/scan-outbox.js";
+import { ATTACHMENT_SCAN_TIMING } from "../attachments/scan-timing.js";
 import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import {
@@ -1043,7 +1044,10 @@ async function enqueueExternalSheetMusicImport(input: {
     return { ok: true, replyText: "目前沒有保存檔案的權限。" };
   }
 
-  const ttlMs = (input.context.profile.longRunningJobs?.resultTtlMinutes ?? 30) * 60_000;
+  const ttlMs = Math.max(
+    (input.context.profile.longRunningJobs?.resultTtlMinutes ?? 30) * 60_000,
+    ATTACHMENT_SCAN_TIMING.workTtlMs
+  );
   let jobId: string | undefined;
   try {
     const job = await agentJobStore.createPending({ scope, label: "匯入歌譜", ttlMs });

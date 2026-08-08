@@ -2,12 +2,12 @@ import { buildAgentJobQuickReply, buildAgentJobScope, type AgentJobStore } from 
 import { dispatchAttachmentScanWork } from "../attachments/scan-outbox.js";
 import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
+import { ATTACHMENT_SCAN_TIMING } from "../attachments/scan-timing.js";
 import type { CatalogSourceRecord, CatalogStore } from "../catalog/store.js";
 import type { PendingAttachmentSession, SessionStore } from "../state/session-store.js";
 import type { FunctionExecutionResult, TextMessageHandler } from "../types.js";
 
 const ATTACHMENT_SESSION_TTL_MS = 10 * 60 * 1000;
-const DEFAULT_SCAN_JOB_TTL_MS = 30 * 60 * 1000;
 
 type AttachmentTargetKind =
   "ppt_slide" | "pop_sheet" | "hymn_sheet" | "church_document" | "church_image" | "church_other";
@@ -185,11 +185,11 @@ async function enqueueAttachmentScan(input: {
     await input.options.sessionStore.delete(input.pending.id);
     return { ok: true, replyText: "保存流程已失效，請重新上傳檔案。" };
   }
+  const ttlMs = Math.max(input.resultTtlMs ?? 0, ATTACHMENT_SCAN_TIMING.workTtlMs);
 
   try {
     let jobId: string;
     try {
-      const ttlMs = input.resultTtlMs ?? DEFAULT_SCAN_JOB_TTL_MS;
       const job = await input.options.agentJobStore.createPending({
         scope,
         label: "保存檔案",
@@ -202,7 +202,6 @@ async function enqueueAttachmentScan(input: {
 
     let workId: string;
     try {
-      const ttlMs = input.resultTtlMs ?? DEFAULT_SCAN_JOB_TTL_MS;
       const work = await input.options.scanWorkStore.create({
         jobId,
         lineMessageId: input.pending.attachment.messageId,

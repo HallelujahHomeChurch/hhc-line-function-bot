@@ -566,18 +566,26 @@ failures remain pending for bounded retry. An event-driven ACA Job leases one
 queue item, atomically claims the work with a token and expiry, and only then
 performs the bounded LINE Content API or authorized external-file download,
 actual-size, MIME/magic-byte, extension, safe-filename, and hash checks. It then
-creates an idempotent Asset upload, waits for Asset's durable ClamAV result,
-grants and downloads only a clean asset, and verifies the hash again before
-publication. Expired claims and `publishing` leases are reclaimable; stable
-Asset identities and deterministic Graph paths make retries converge. Stale
-workers cannot mutate the terminal work state or requester-scoped job.
+persists a non-secret upload descriptor, creates an idempotent Asset upload,
+waits for Asset's durable ClamAV result, grants and downloads only a clean
+asset, and validates the persisted checksum, size, and detected MIME before
+publication. Work that already has an Asset identity resumes entirely through
+Asset; a lost Asset-ID record is recovered by replaying create with the same
+work ID and descriptor before another source download. Expired pre-publication
+claims are reclaimable, but expired `publishing` work becomes the observable
+terminal `publication_abandoned` state rather than being blindly republished.
+Stale workers cannot mutate the terminal work state or requester-scoped job.
 Completion and failure commit the Redis work CAS together
 with a bounded pending job update before the job-store write. Queue redelivery
 reconciles that idempotent update before acknowledging terminal work, closing
 the crash window between the two Redis records. Claim disposition distinguishes
-active work from terminal and missing/expired opaque work, so active deliveries
-remain for redelivery while terminal or expired-work deliveries are
-acknowledged. OneDrive upload and catalog upsert form one logical commit; catalog
+pending scan or legitimate claim/publication contention from terminal and
+missing/expired opaque work. Only durably completed, permanently failed, and
+missing work is acknowledged; transient dependency failures atomically release
+their claim and remain queued for redelivery. The 10-minute scan, 14-minute
+publication, 15-minute replica, 1-minute acknowledgement margin, 17-minute
+visibility, 20-minute claim, and 60-minute retention policy is tested as one
+ordered invariant. OneDrive upload and catalog upsert form one logical commit; catalog
 failure compensates by deleting the uploaded Graph item. Asset API is the sole owner
 of quarantine Blob state, ClamAV signatures and execution, scan lifecycle,
 grants, and clean download. Any status other than `clean` fails closed. The LINE

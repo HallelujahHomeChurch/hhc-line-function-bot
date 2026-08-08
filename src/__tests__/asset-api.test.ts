@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createAssetApiClient } from "../clients/asset-api.js";
+import { createAssetApiClient, isTransientAssetApiError } from "../clients/asset-api.js";
 
 describe("asset api client", () => {
   it("uses one workload token and deterministic idempotency keys for the asset lifecycle", async () => {
@@ -83,6 +83,74 @@ describe("asset api client", () => {
         "x-asset-subject-id": "hhc-line-function-bot"
       })
     });
+  });
+
+  it.each([429, 500, 503])("classifies Asset HTTP %s as transient", async (status) => {
+    const client = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      getAccessToken: vi.fn().mockResolvedValue("token"),
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status }))
+    });
+
+    const error = await client
+      .get("asset-1")
+      .then(() => undefined)
+      .catch((caught: unknown) => caught);
+
+    expect(isTransientAssetApiError(error)).toBe(true);
+  });
+
+  it("classifies timeouts as transient without leaking provider details", async () => {
+    const client = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      getAccessToken: vi.fn().mockResolvedValue("token"),
+      fetcher: vi
+        .fn<typeof fetch>()
+        .mockRejectedValue(new DOMException("timed out", "TimeoutError"))
+    });
+
+    const error = await client
+      .get("asset-1")
+      .then(() => undefined)
+      .catch((caught: unknown) => caught);
+
+    expect(isTransientAssetApiError(error)).toBe(true);
+    expect(String(error)).not.toContain("timed out");
+  });
+
+  it.each([400, 401, 403, 404])("classifies Asset HTTP %s as permanent", async (status) => {
+    const client = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      getAccessToken: vi.fn().mockResolvedValue("token"),
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status }))
+    });
+
+    const error = await client
+      .get("asset-1")
+      .then(() => undefined)
+      .catch((caught: unknown) => caught);
+
+    expect(isTransientAssetApiError(error)).toBe(false);
+  });
+
+  it("rejects an invalid Asset response as permanent", async () => {
+    const client = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      getAccessToken: vi.fn().mockResolvedValue("token"),
+      fetcher: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          jsonResponse({ id: "asset-1", uploadStatus: "completed", scanStatus: "unknown" })
+        )
+    });
+
+    const error = await client
+      .get("asset-1")
+      .then(() => undefined)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(isTransientAssetApiError(error)).toBe(false);
   });
 });
 
