@@ -15,6 +15,7 @@ import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
 import { createSaveMemoryHandler } from "../functions/agent-memory-functions.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
+import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import { signLineBody } from "../line-signature.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
@@ -1039,6 +1040,188 @@ describe("LINE entrance", () => {
       expect(authorizeAdministrator).not.toHaveBeenCalled();
     }
   );
+
+  it("keeps provider-free own-profile updates behind collection, preview, and confirmation", async () => {
+    const config = providerFreeMainConfig();
+    config.profiles[0]!.enabledFunctions.push("update_own_profile");
+    config.profiles[0]!.permissionRequiredFunctions.push("update_own_profile");
+    const sessionStore = new InMemorySessionStore();
+    const providerCompleteJson = vi.fn();
+    const planner = createAgentPlanner({
+      primary: { providerName: "deepseek", completeJson: providerCompleteJson },
+      providersEnabledForProfile: () => false
+    });
+    let displayName = "Old Name";
+    const updateOwnProfile = vi.fn(async ({ firstName, lastName }) => {
+      displayName = `${firstName} ${lastName}`;
+      return { firstName, lastName };
+    });
+    const handler = createUpdateOwnProfileHandler({
+      accountClient: { updateOwnProfile },
+      sessionStore,
+      requestIdFactory: () => "profile-confirmation"
+    });
+    const authorizeFunctions = vi.fn(async () => ({
+      bound: true,
+      active: true,
+      administrator: false,
+      allowedFunctions: ["update_own_profile" as const],
+      account: {
+        displayName,
+        maskedEmail: "r***@example.com",
+        roles: ["user" as const]
+      }
+    }));
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(config, {
+      sessionStore,
+      controlledAgentRouter: createControlledAgentRouter({ planner }),
+      functionRegistry: { update_own_profile: handler },
+      textMessageHandlers: {
+        pending_function_answer: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { update_own_profile: handler }
+        })
+      },
+      accountAdminClient: {
+        authorizeFunctions,
+        updateOwnProfile
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    let eventNumber = 0;
+    const send = async (text: string) => {
+      eventNumber += 1;
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `profile-${eventNumber}`,
+        replyToken: `reply-${eventNumber}`,
+        source: { type: "user", userId: "Ucaller" },
+        message: { type: "text", text }
+      });
+      return app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+    };
+
+    await send("/profile");
+    expect(replyText).toHaveBeenLastCalledWith(
+      "reply-1",
+      expect.stringContaining("名字"),
+      undefined
+    );
+
+    await send("Ray");
+    expect(replyText).toHaveBeenLastCalledWith(
+      "reply-2",
+      expect.stringContaining("姓氏"),
+      undefined
+    );
+
+    await send("Self");
+    expect(replyText).toHaveBeenLastCalledWith(
+      "reply-3",
+      expect.stringContaining("Ray Self"),
+      expect.anything()
+    );
+    expect(updateOwnProfile).not.toHaveBeenCalled();
+
+    await send("確認");
+    expect(updateOwnProfile).toHaveBeenCalledOnce();
+    expect(updateOwnProfile).toHaveBeenCalledWith({
+      lineUserId: "Ucaller",
+      profileName: "main",
+      firstName: "Ray",
+      lastName: "Self"
+    });
+    expect(replyText).toHaveBeenLastCalledWith(
+      "reply-4",
+      expect.stringContaining("姓名已更新"),
+      undefined
+    );
+    expect(authorizeFunctions).toHaveBeenCalledTimes(4);
+    expect(providerCompleteJson).not.toHaveBeenCalled();
+
+    await send("/whoami");
+    expect(replyText).toHaveBeenLastCalledWith(
+      "reply-5",
+      expect.stringContaining("Ray Self"),
+      undefined
+    );
+
+    await send("確認");
+    expect(updateOwnProfile).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      "unlinked",
+      {
+        bound: false,
+        active: false,
+        administrator: false,
+        allowedFunctions: []
+      }
+    ],
+    [
+      "denied",
+      {
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: [],
+        account: {
+          displayName: "Old Name",
+          maskedEmail: "r***@example.com",
+          roles: ["user"] as const
+        }
+      }
+    ]
+  ])("does not collect own-profile fields for an %s account", async (_case, authorization) => {
+    const config = providerFreeMainConfig();
+    config.profiles[0]!.enabledFunctions.push("update_own_profile");
+    config.profiles[0]!.permissionRequiredFunctions.push("update_own_profile");
+    const sessionStore = new InMemorySessionStore();
+    const providerCompleteJson = vi.fn();
+    const updateOwnProfile = vi.fn();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const planner = createAgentPlanner({
+      primary: { providerName: "deepseek", completeJson: providerCompleteJson },
+      providersEnabledForProfile: () => false
+    });
+    const app = createApp(config, {
+      sessionStore,
+      controlledAgentRouter: createControlledAgentRouter({ planner }),
+      functionRegistry: { update_own_profile: updateOwnProfile },
+      accountAdminClient: {
+        authorizeFunctions: vi.fn().mockResolvedValue(authorization),
+        updateOwnProfile
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: `profile-${_case}`,
+      replyToken: "reply-profile-denied",
+      source: { type: "user", userId: "Ucaller" },
+      message: { type: "text", text: "/profile" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(replyText.mock.lastCall?.[1]).not.toContain("名字");
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+    expect(updateOwnProfile).not.toHaveBeenCalled();
+    expect(providerCompleteJson).not.toHaveBeenCalled();
+  });
 
   it("preserves unaddressed small talk for an active helper group conversation", async () => {
     const config = testConfig();

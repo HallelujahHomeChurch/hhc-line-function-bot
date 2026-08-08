@@ -679,8 +679,15 @@ async function handleWebhook(
     const eventText = event.type === "message" ? event.message?.text : undefined;
     const introVariant = eventText ? introVariantForText(eventText) : undefined;
     const parsedAdminCommand = parseAdminCommand(eventText);
+    const functionOwnedCommand = isConfiguredExactFunctionCommand(
+      profile,
+      eventText,
+      event.source.type
+    );
     const needsAdminAuthorization = Boolean(
-      (parsedAdminCommand && requiresAdminAuthorization(parsedAdminCommand, adminHandlers)) ||
+      (!functionOwnedCommand &&
+        parsedAdminCommand &&
+        requiresAdminAuthorization(parsedAdminCommand, adminHandlers)) ||
       (eventText && matchesNaturalLanguageAdminActionHint(eventText))
     );
     const needsAttachmentAuthorization =
@@ -883,7 +890,7 @@ async function handleWebhook(
       continue;
     }
 
-    if (isAdminCommand(event.message.text)) {
+    if (isAdminCommand(event.message.text) && !functionOwnedCommand) {
       const parsedAdminCommand = parseAdminCommand(event.message.text);
       if (
         !profileUsesProviders(effectiveProfile) &&
@@ -1497,6 +1504,26 @@ function profileUsesProviders(profile: BotProfileConfig): boolean {
 
 function isAdminCommand(text: string | undefined): boolean {
   return Boolean(parseAdminCommand(text));
+}
+
+function isConfiguredExactFunctionCommand(
+  profile: BotProfileConfig,
+  text: string | undefined,
+  sourceType: LineEvent["source"]["type"]
+): boolean {
+  if (!text || (sourceType !== "user" && sourceType !== "group")) return false;
+  const normalizedText = text.normalize("NFKC").trim().toLowerCase();
+  return profile.enabledFunctions.some((name) => {
+    const definition = getFunctionDefinition(name);
+    return Boolean(
+      definition?.allowedSources.includes(sourceType) &&
+      definition.agentCapability?.exactIntents === true &&
+      definition.agentCapability.intents.some(
+        (intent) =>
+          intent.startsWith("/") && intent.normalize("NFKC").trim().toLowerCase() === normalizedText
+      )
+    );
+  });
 }
 
 async function hasActiveConversationWindow(

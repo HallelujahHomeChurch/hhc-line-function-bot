@@ -349,7 +349,7 @@ describe("production profile configuration deployment contract", () => {
     });
     expect(main).toMatchObject({
       allowedMessageTypes: ["text"],
-      enabledFunctions: ["download_weekly_paper"],
+      enabledFunctions: ["download_weekly_paper", "update_own_profile"],
       controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 }
     });
     expect(helper).toMatchObject({
@@ -361,13 +361,14 @@ describe("production profile configuration deployment contract", () => {
       }
     });
     expect(main).toMatchObject({
-      permissionRequiredFunctions: [],
+      permissionRequiredFunctions: ["update_own_profile"],
       accountLink: {
         displayName: "哈利路亞家教會官方 LINE",
         lineIdEnv: "LINE_MAIN_ACCOUNT_ID",
         providerIdEnv: "LINE_ACCOUNT_PROVIDER_ID"
       }
     });
+    expect(helper?.enabledFunctions).not.toContain("update_own_profile");
     expect(main?.providerPolicy).toEqual({});
     expect(readProjectFile("README.md")).toContain("sole complete");
     expect(readProjectFile("README.md")).not.toContain("Example shape:");

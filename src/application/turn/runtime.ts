@@ -390,6 +390,8 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
                 }
               };
               context.profile = input.profile;
+            } else {
+              plan = { disposition: "deny", reasonCode: "function_disabled" };
             }
           }
         } catch {

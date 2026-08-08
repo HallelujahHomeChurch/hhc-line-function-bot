@@ -31,12 +31,12 @@ Read these first when starting work:
 - Each profile has its own LINE credential references, access policy, wake-word behavior, enabled functions, and bootstrap `adminUserId`.
 - The intended split is:
   - `helper`: managed direct users, managed groups, registration enabled.
-  - future `main`: public direct users, groups blocked, registration disabled.
+  - `main`: public direct users, groups blocked, registration disabled, provider-free, with public Weekly Paper download and Account-authorized own-profile updates.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
 - `adminUserId` is the single bootstrap superadmin. Legacy `adminUserIds`, `allowedUserIds`, and `allowedGroupIds` should not be reintroduced.
 - Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv`, `channelAccessTokenEnv`, and `adminUserIdEnv`; do not put real LINE credentials or bootstrap user IDs in the file.
 - The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`; use API keys from ACA/local secrets for remote providers.
-- Remote API providers such as `deepseek` are profile-scoped; future `main` official profiles should define their own provider allowlist.
+- Remote API providers such as `deepseek` are profile-scoped; `main` intentionally keeps an empty provider allowlist.
 - Small-talk prompt behavior is profile config, not code personality. Production LLM profiles require `smallTalk.prompting.personaPrompt`, `conversationRulesPrompt`, `safetyRulesPrompt`, and `formatRulesPrompt`; do not add helper persona/safety fallback prompts in code. Keep house-church quote/golden-sentence behavior out of small talk; it should become a separate function if needed.
 
 ## Function Surface
@@ -53,6 +53,7 @@ The first-class functions are:
 - `save_resource`: controlled LINE image/file attachment intake with purpose, validation, ClamAV scanning, confirmation, OneDrive publication, catalog upsert, and audit. It is enabled on `helper`, but write-function policy keeps it Account-admin/permission only.
 - `save_memory`: explicit 30-day text memory with preview/confirmation. It is enabled on `helper`, but only Account-authorized requesters can write and explicitly create group-visible memory in a registered group.
 - `retrieve_memory`: query visible explicit text memories in the current LINE source. It is enabled as a profile-global read function on `helper`.
+- `update_own_profile`: direct-only first/last-name update for the linked caller, using exact intents, generic slot collection, preview, live Account permission recheck, and explicit confirmation. It is enabled only on provider-free `main` and never creates task or memory state.
 - Intro/help behavior is not a normal function execution path; keep it friendly and do not expose implementation details such as OneDrive or Notion to ordinary users.
 - User functions, admin actions, and system actions are separate action kinds. Do not add management behavior to `enabledFunctions`.
 - Admin natural language is direct-chat only. It may route to selected admin actions, currently invite-code creation, after admin identity and source policy checks.

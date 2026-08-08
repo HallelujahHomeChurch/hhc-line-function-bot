@@ -58,6 +58,72 @@ function input(overrides: Partial<ValidateAgentPlanInput> = {}): ValidateAgentPl
 }
 
 describe("deterministic agent plan validation", () => {
+  it("collects exact own-profile intent but never executes model-supplied names", () => {
+    const base = {
+      text: "/profile",
+      enabledFunctions: ["update_own_profile" as const],
+      candidates: [
+        {
+          capability: "update_own_profile" as const,
+          reason: "explicit_intent" as const,
+          score: 400
+        }
+      ],
+      minConfidence: 0.65,
+      sourceType: "user" as const
+    };
+
+    expect(
+      validateAgentPlan({
+        ...base,
+        proposal: { status: "no_plan", reasonCode: "providers_disabled" }
+      })
+    ).toEqual({
+      disposition: "collect",
+      capability: "update_own_profile",
+      arguments: {},
+      missingSlot: "firstName",
+      reasonCode: "missing_required_slot"
+    });
+
+    expect(
+      validateAgentPlan({
+        ...base,
+        proposal: {
+          disposition: "execute",
+          capability: "update_own_profile",
+          arguments: { firstName: "Invented", lastName: "Name" },
+          confidence: 1
+        }
+      })
+    ).not.toMatchObject({ disposition: "execute" });
+  });
+
+  it.each(["不要修改姓名", "請先修改姓名再下載週報", "修改姓名或更新帳戶"])(
+    "rejects a non-exact own-profile proposal: %s",
+    (text) => {
+      expect(
+        validateAgentPlan({
+          text,
+          enabledFunctions: ["update_own_profile"],
+          candidates: [{ capability: "update_own_profile", reason: "explicit_intent", score: 400 }],
+          proposal: {
+            disposition: "execute",
+            capability: "update_own_profile",
+            arguments: {},
+            confidence: 1
+          },
+          minConfidence: 0.65,
+          sourceType: "user"
+        })
+      ).toEqual({
+        disposition: "clarify",
+        capability: "update_own_profile",
+        reasonCode: "capability_evidence_unresolved"
+      });
+    }
+  );
+
   it("materializes exact resource references for a declared field follow-up", () => {
     expect(
       validateAgentPlan(

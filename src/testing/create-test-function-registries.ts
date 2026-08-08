@@ -18,6 +18,7 @@ export function createTestFunctionRegistries(
 ): FunctionRegistries {
   const runtime = createTestRuntime();
   return createFunctionRegistries(config, {
+    accountAdminClient: overrides.accountAdminClient,
     sessionStore: overrides.sessionStore ?? runtime.stores.session,
     cache: overrides.cache ?? runtime.stores.cache,
     memoryStore: overrides.memoryStore ?? runtime.stores.memory,

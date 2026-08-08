@@ -36,6 +36,7 @@ export type {
 
 export const FUNCTION_NAMES = [
   "download_weekly_paper",
+  "update_own_profile",
   "find_ppt_slides",
   "query_schedule",
   "query_knowledge",

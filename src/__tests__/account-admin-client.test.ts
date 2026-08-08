@@ -24,6 +24,75 @@ const finalizeInput = {
 };
 
 describe("account admin client", () => {
+  it("updates only the signed LINE caller's bounded profile names", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          first_name: "Ray",
+          last_name: "Self",
+          updated_at: "2026-08-09T12:00:00Z"
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(
+      client.updateOwnProfile({
+        lineUserId,
+        profileName: "main",
+        firstName: "Ray",
+        lastName: "Self"
+      })
+    ).resolves.toEqual({ firstName: "Ray", lastName: "Self" });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://account-api/priv/account/v1/line/profile",
+      expect.objectContaining({
+        body: JSON.stringify({
+          line_user_id: lineUserId,
+          profile_name: "main",
+          first_name: "Ray",
+          last_name: "Self"
+        })
+      })
+    );
+  });
+
+  it("rejects profile update responses containing identity or permission fields", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          first_name: "Ray",
+          last_name: "Self",
+          updated_at: "2026-08-09T12:00:00Z",
+          user_id: "internal-user-id"
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(
+      client.updateOwnProfile({
+        lineUserId,
+        profileName: "main",
+        firstName: "Ray",
+        lastName: "Self"
+      })
+    ).rejects.toMatchObject({
+      message: "account_api_invalid_profile_update",
+      retryable: false
+    });
+  });
+
   it("authorizes through Dapr without spoofing caller identity headers", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ bound: true, allowed: true }), {

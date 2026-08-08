@@ -16,6 +16,13 @@ export interface AuthorizeLineFunctionsInput {
   functionNames: FunctionName[];
 }
 
+export interface UpdateOwnProfileInput {
+  lineUserId: string;
+  profileName: string;
+  firstName: string;
+  lastName: string;
+}
+
 export interface LineFunctionAuthorization {
   bound: boolean;
   active: boolean;
@@ -40,6 +47,7 @@ export interface FinalizeLineBindingInput {
 export interface AccountAdminClient {
   authorizeAdministrator(lineUserId: string): Promise<{ bound: boolean; allowed: boolean }>;
   authorizeFunctions(input: AuthorizeLineFunctionsInput): Promise<LineFunctionAuthorization>;
+  updateOwnProfile(input: UpdateOwnProfileInput): Promise<{ firstName: string; lastName: string }>;
   createBinding(input: CreateLineBindingInput): Promise<{ bindingUrl: string; expiresAt: string }>;
   finalizeBinding(input: FinalizeLineBindingInput): Promise<{ status: LineBindingTerminalStatus }>;
 }
@@ -112,6 +120,19 @@ export function createAccountAdminClient(options: {
       }
       return authorization;
     },
+    async updateOwnProfile(input) {
+      const payload = await post("/priv/account/v1/line/profile", {
+        line_user_id: input.lineUserId,
+        profile_name: input.profileName,
+        first_name: input.firstName,
+        last_name: input.lastName
+      });
+      const profile = parseOwnProfileResult(payload);
+      if (!profile) {
+        throw new AccountApiError("account_api_invalid_profile_update", false);
+      }
+      return profile;
+    },
     async createBinding(input) {
       const payload = await post("/priv/account/v1/line/bindings", {
         expected_line_user_id: input.expectedLineUserId,
@@ -145,6 +166,29 @@ export function createAccountAdminClient(options: {
       return payload;
     }
   };
+}
+
+function parseOwnProfileResult(
+  value: unknown
+): { firstName: string; lastName: string } | undefined {
+  if (!isExactRecord(value, ["first_name", "last_name", "updated_at"])) return undefined;
+  const { first_name: firstName, last_name: lastName, updated_at: updatedAt } = value;
+  return validProfileName(firstName) &&
+    validProfileName(lastName) &&
+    typeof updatedAt === "string" &&
+    Number.isFinite(Date.parse(updatedAt))
+    ? { firstName, lastName }
+    : undefined;
+}
+
+function validProfileName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length > 0 &&
+    Array.from(value).length <= 255 &&
+    !/\p{Cc}|[\uD800-\uDFFF]/u.test(value)
+  );
 }
 
 function parseFunctionAuthorization(

@@ -36,6 +36,67 @@ function createRouter(planner: AgentPlanner, knowledgeMetadata?: DynamicKnowledg
 }
 
 describe("ControlledAgentRouter", () => {
+  it("collects an authorized exact own-profile intent provider-free", async () => {
+    const completeJson = vi.fn();
+    const authorizeCandidates = vi.fn().mockResolvedValue(["update_own_profile"]);
+    const planner = createAgentPlanner({
+      primary: { providerName: "deepseek", completeJson },
+      providersEnabledForProfile: () => false
+    });
+
+    await expect(
+      createRouter(planner).resolve({
+        profileName: "main",
+        text: "/profile",
+        enabledFunctions: ["download_weekly_paper"],
+        permissionRequiredFunctions: ["update_own_profile"],
+        authorizeCandidates,
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toEqual({
+      disposition: "collect",
+      capability: "update_own_profile",
+      arguments: {},
+      missingSlot: "firstName",
+      reasonCode: "missing_required_slot"
+    });
+    expect(authorizeCandidates).toHaveBeenCalledWith(["update_own_profile"]);
+    expect(completeJson).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["denied", "user" as const, vi.fn().mockResolvedValue([])],
+    ["group", "group" as const, vi.fn().mockResolvedValue(["update_own_profile"])]
+  ])(
+    "does not collect own-profile fields when %s",
+    async (_case, sourceType, authorizeCandidates) => {
+      const completeJson = vi.fn();
+      const planner = createAgentPlanner({
+        primary: { providerName: "deepseek", completeJson },
+        providersEnabledForProfile: () => false
+      });
+
+      const result = await createRouter(planner).resolve({
+        profileName: "main",
+        text: "/profile",
+        enabledFunctions: ["download_weekly_paper"],
+        permissionRequiredFunctions: ["update_own_profile"],
+        authorizeCandidates,
+        sourceType,
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      });
+
+      expect(result).not.toMatchObject({
+        disposition: "collect",
+        capability: "update_own_profile"
+      });
+      expect(completeJson).not.toHaveBeenCalled();
+    }
+  );
+
   it("removes denied permission-required candidates before planner input", async () => {
     const propose = vi.fn<AgentPlanner["propose"]>();
     const authorizeCandidates = vi.fn().mockResolvedValue([]);

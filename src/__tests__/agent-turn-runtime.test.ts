@@ -6,11 +6,12 @@ import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import type { ControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
-import type { AgentPlanner } from "../agent/planner.js";
+import { createAgentPlanner, type AgentPlanner } from "../agent/planner.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
 import { createFindResourceHandler } from "../functions/find-resource.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
+import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import type { FirstSuccessStore } from "../observability/first-success-store.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
@@ -61,6 +62,15 @@ function event(text: string, userId = "U1"): LineEvent {
     type: "message",
     replyToken: "reply-token",
     source: { type: "group", groupId: "C1", userId },
+    message: { type: "text", text }
+  };
+}
+
+function directEvent(text: string, userId = "U1"): LineEvent {
+  return {
+    type: "message",
+    replyToken: "reply-token",
+    source: { type: "user", userId },
     message: { type: "text", text }
   };
 }
@@ -772,6 +782,196 @@ describe("AgentTurnRuntime controlled path", () => {
       expect.objectContaining({ content: "七/17五世緯家園" }),
       expect.any(Object)
     );
+  });
+
+  it("reauthorizes own-profile confirmation and leaves no task state after one commit", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const conversationWindowStore = new InMemoryConversationWindowStore({ now });
+    const updateOwnProfile = vi.fn().mockResolvedValue({ firstName: "Ray", lastName: "Self" });
+    const handler = createUpdateOwnProfileHandler({
+      accountClient: { updateOwnProfile },
+      sessionStore,
+      now,
+      requestIdFactory: () => "profile-confirmation"
+    });
+    const completeJson = vi.fn();
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { update_own_profile: handler },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { update_own_profile: handler }
+        })
+      },
+      sessionStore,
+      conversationWindowStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: createControlledAgentRouter({
+        planner: createAgentPlanner({
+          primary: { providerName: "deepseek", completeJson },
+          providersEnabledForProfile: () => false
+        }),
+        now
+      }),
+      now
+    });
+    const restrictedProfile: BotProfileConfig = {
+      ...profile([]),
+      name: "main",
+      webhookPath: "/api/line/webhook/main",
+      groupRequireWakeWord: false,
+      wakeKeywords: [],
+      acceptMention: false,
+      permissionRequiredFunctions: ["update_own_profile"],
+      allowedProviders: []
+    };
+    const authorizeFunctions = vi.fn(async (requested: readonly string[]) => requested);
+    const turn = (text: string, requestId: string, userId = "U1") =>
+      runtime.handleTextTurn({
+        profile: restrictedProfile,
+        configuredFunctions: ["download_weekly_paper", "update_own_profile"],
+        event: directEvent(text, userId),
+        requestId,
+        authorizeFunctions
+      });
+
+    await expect(turn("/profile", "profile-1")).resolves.toMatchObject({
+      replyText: expect.stringContaining("名字")
+    });
+    await expect(turn("Ray", "profile-2")).resolves.toMatchObject({
+      replyText: expect.stringContaining("姓氏")
+    });
+    await expect(turn("Self", "profile-3")).resolves.toMatchObject({
+      writePhase: "preview",
+      replyText: expect.stringContaining("Ray Self")
+    });
+    expect(updateOwnProfile).not.toHaveBeenCalled();
+    await expect(turn("確認", "profile-4")).resolves.toMatchObject({
+      writePhase: "commit",
+      replyText: "姓名已更新：Ray Self"
+    });
+    expect(updateOwnProfile).toHaveBeenCalledOnce();
+    await expect(turn("確認", "profile-5")).resolves.not.toMatchObject({
+      writePhase: "commit"
+    });
+    expect(updateOwnProfile).toHaveBeenCalledOnce();
+    await expect(
+      conversationWindowStore.activeTask({
+        profileName: "main",
+        sourceKey: "user:U1",
+        requesterUserId: "U1"
+      })
+    ).resolves.toBeUndefined();
+    expect(completeJson).not.toHaveBeenCalled();
+  });
+
+  it("fails a revoked own-profile confirmation closed and isolates another direct requester", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const updateOwnProfile = vi.fn();
+    const completeJson = vi.fn();
+    const handler = createUpdateOwnProfileHandler({
+      accountClient: { updateOwnProfile },
+      sessionStore,
+      now,
+      requestIdFactory: () => "profile-revocation"
+    });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { update_own_profile: handler },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { update_own_profile: handler }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: createControlledAgentRouter({
+        planner: createAgentPlanner({
+          primary: { providerName: "deepseek", completeJson },
+          providersEnabledForProfile: () => false
+        }),
+        now
+      }),
+      now
+    });
+    const restrictedProfile: BotProfileConfig = {
+      ...profile([]),
+      name: "main",
+      webhookPath: "/api/line/webhook/main",
+      permissionRequiredFunctions: ["update_own_profile"],
+      allowedProviders: []
+    };
+    let allowed = true;
+    const authorizeFunctions = vi.fn(async (requested: readonly string[]) =>
+      allowed ? requested : []
+    );
+    const turn = (text: string, requestId: string, userId = "U1") =>
+      runtime.handleTextTurn({
+        profile: restrictedProfile,
+        configuredFunctions: ["update_own_profile"],
+        event: directEvent(text, userId),
+        requestId,
+        authorizeFunctions
+      });
+
+    await turn("/profile", "revoked-1");
+    await expect(turn("Ray", "other-user", "U2")).resolves.not.toMatchObject({
+      replyText: expect.stringContaining("姓氏")
+    });
+    await turn("Ray", "revoked-2");
+    await turn("Self", "revoked-3");
+    allowed = false;
+    await expect(turn("確認", "revoked-4")).resolves.not.toMatchObject({
+      writePhase: "commit"
+    });
+    expect(updateOwnProfile).not.toHaveBeenCalled();
+    expect(completeJson).not.toHaveBeenCalled();
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
+  it("does not collect own-profile fields when the authority recheck denies the plan", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: createControlledAgentRouter({
+        planner: createAgentPlanner({
+          primary: { providerName: "deepseek", completeJson: vi.fn() },
+          providersEnabledForProfile: () => false
+        }),
+        now
+      }),
+      now
+    });
+    const authorizeFunctions = vi
+      .fn()
+      .mockResolvedValueOnce(["update_own_profile"])
+      .mockResolvedValueOnce([]);
+
+    const result = await runtime.handleTextTurn({
+      profile: {
+        ...profile([]),
+        name: "main",
+        webhookPath: "/api/line/webhook/main",
+        permissionRequiredFunctions: ["update_own_profile"],
+        allowedProviders: []
+      },
+      configuredFunctions: ["update_own_profile"],
+      event: directEvent("/profile"),
+      requestId: "profile-denied-recheck",
+      authorizeFunctions
+    });
+
+    expect(result?.replyText).not.toContain("名字");
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
   });
 
   it("stores and resumes a cross-capability choice through the controlled router", async () => {

@@ -32,11 +32,13 @@ import {
 } from "./query-knowledge.js";
 import { createSaveScheduleHandler } from "./schedule-memory.js";
 import { downloadWeeklyPaperModule } from "../capabilities/download-weekly-paper.js";
+import { updateOwnProfileModule } from "../capabilities/update-own-profile/module.js";
 
 export type { FunctionModule, FunctionModuleContext, FunctionModuleRegistrations, RouterEvalCase };
 
 export const FUNCTION_MODULES: FunctionModule[] = [
   downloadWeeklyPaperModule,
+  updateOwnProfileModule,
   {
     name: "find_ppt_slides",
     definition: requiredDefinition("find_ppt_slides"),

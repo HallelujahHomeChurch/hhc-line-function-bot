@@ -297,6 +297,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const registries = createFunctionRegistries(
     config,
     {
+      accountAdminClient,
       graph,
       notion,
       wikipedia,
