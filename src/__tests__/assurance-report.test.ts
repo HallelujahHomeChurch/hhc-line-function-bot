@@ -243,10 +243,39 @@ describe("buildAssuranceReport", () => {
     report.status = "failed";
     report.failureCode = "network_failed";
     report.target.status = "failed";
+    report.checks = [
+      { name: "release_probe", status: "failed", observedAt: timestamp, code: "network_failed" }
+    ];
     delete report.providerRequests;
 
     expect(buildAssuranceReport(report)).not.toHaveProperty("providerRequests");
   });
+
+  it.each([
+    ["helper", "gateway_helper_signed_empty_webhook"],
+    ["main", "gateway_main_signed_empty_webhook"]
+  ] as const)("rejects a passed release missing the %s signed webhook check", (_label, name) => {
+    const report = validReleaseReport();
+    report.checks = report.checks.filter((check) => check.name !== name);
+
+    expect(() => buildAssuranceReport(report)).toThrow("assurance_report_invalid");
+  });
+
+  it.each(["passed", "failed"] as const)(
+    "rejects duplicate check names in a %s release report",
+    (status) => {
+      const report = validReleaseReport();
+      report.checks.push({ ...report.checks[0]! });
+      if (status === "failed") {
+        report.status = "failed";
+        report.failureCode = "network_failed";
+        report.target.status = "failed";
+        delete report.providerRequests;
+      }
+
+      expect(() => buildAssuranceReport(report)).toThrow("assurance_report_invalid");
+    }
+  );
 
   it("rejects a failed check whose code says none", () => {
     const report = validReleaseReport();
@@ -379,7 +408,21 @@ function validReleaseReport(): AssuranceReportInput {
       revision: "bot--r4",
       image: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     },
-    checks: [{ name: "release_probe", status: "passed", observedAt: timestamp, code: "none" }],
+    checks: [
+      { name: "release_probe", status: "passed", observedAt: timestamp, code: "none" },
+      {
+        name: "gateway_helper_signed_empty_webhook",
+        status: "passed",
+        observedAt: timestamp,
+        code: "none"
+      },
+      {
+        name: "gateway_main_signed_empty_webhook",
+        status: "passed",
+        observedAt: timestamp,
+        code: "none"
+      }
+    ],
     rollback: { status: "not_required" },
     providerRequests: { deepseek: 0, embedding: 0 }
   };

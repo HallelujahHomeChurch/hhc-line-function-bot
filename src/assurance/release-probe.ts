@@ -148,6 +148,7 @@ async function checkWebhook(
         "x-line-signature": signature
       },
       body: EMPTY_EVENT_BODY,
+      redirect: "error",
       signal: AbortSignal.timeout(timeoutMs)
     });
     if (response.status !== 200) return failed(name, "http_mismatch");

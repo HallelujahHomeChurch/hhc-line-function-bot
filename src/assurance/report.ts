@@ -199,6 +199,7 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
   const startedAt = isoTimestamp(source.startedAt);
   const completedAt = isoTimestamp(source.completedAt);
   const reportChecks = checks(source.checks, kind);
+  const reportCheckNames = new Set(reportChecks.map((check) => check.name));
   const providerRequestReport =
     source.providerRequests === undefined ? undefined : providerRequests(source.providerRequests);
   const report: AssuranceReport = {
@@ -218,6 +219,16 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
   };
   if ((kind === "periodic" || status === "passed") && providerRequestReport === undefined)
     invalid();
+  if (reportCheckNames.size !== reportChecks.length) invalid();
+  if (
+    kind === "release" &&
+    status === "passed" &&
+    (["gateway_helper_signed_empty_webhook", "gateway_main_signed_empty_webhook"] as const).some(
+      (name) => !reportCheckNames.has(name)
+    )
+  ) {
+    invalid();
+  }
   if ((status === "passed") !== (failureCode === "none")) invalid();
   if (status === "passed" && reportChecks.some((check) => check.status === "failed")) invalid();
   if (Date.parse(completedAt) < Date.parse(startedAt)) invalid();

@@ -55,6 +55,38 @@ describe("release assurance shell transaction", () => {
     expect(report.rollback).toEqual({ status: "not_required" });
   });
 
+  it.each([
+    ["missing helper", ["release_probe", "gateway_main_signed_empty_webhook"], true],
+    ["missing main", ["release_probe", "gateway_helper_signed_empty_webhook"], true],
+    [
+      "duplicate passed check",
+      [
+        "release_probe",
+        "gateway_helper_signed_empty_webhook",
+        "gateway_main_signed_empty_webhook",
+        "release_probe"
+      ],
+      true
+    ],
+    ["duplicate failed check", ["release_probe", "release_probe"], false]
+  ])("rejects a shell-written %s report", async (_case, checkNames, passed) => {
+    const fixture = await createReportWriterFixture(checkNames, passed);
+    const result = fixture.run();
+
+    expect(result.status).not.toBe(0);
+    await expect(readFile(fixture.reportPath, "utf8")).rejects.toThrow();
+  });
+
+  it("allows a shell-written early failed report with partial checks", async () => {
+    const fixture = await createReportWriterFixture(["release_probe"], false);
+    const result = fixture.run();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status).toBe(0);
+    expect(() => buildAssuranceReport(report)).not.toThrow();
+    expect(report.checks.map((check) => check.name)).toEqual(["release_probe"]);
+  });
+
   it("captures known-good state, runs live gates, and writes an allowlisted digest-only report", async () => {
     const fixture = await createFixture("success");
     const result = fixture.run();
@@ -638,6 +670,39 @@ exec bash "${toBashPath(path.join(scriptsDirectory, "deploy-aca.sh"))}"
         .filter(Boolean)
         .map((line) => line.split(" "));
     }
+  };
+}
+
+async function createReportWriterFixture(checkNames: string[], passed: boolean) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "release-report-writer-"));
+  temporaryDirectories.push(directory);
+  const reportPath = path.join(directory, "report.json");
+  const driverPath = path.join(directory, "driver.sh");
+  const records = checkNames
+    .map((name) => `${name}|passed|2026-07-27T00:00:00.000Z|none`)
+    .join("\\n");
+  await writeFile(
+    driverPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+source "${toBashPath(path.join(ROOT, "scripts/release-assurance.sh"))}"
+export RELEASE_REPORT_PATH="${toBashPath(reportPath)}"
+export RELEASE_ID="fixture-release-writer"
+export RELEASE_COMMIT_SHA="${"a".repeat(40)}"
+export RELEASE_KNOWN_GOOD_REVISION="bot--known-good"
+export RELEASE_KNOWN_GOOD_IMAGE="${GOOD_BOT_DIGEST}"
+export RELEASE_TARGET_REVISION="bot--target"
+export RELEASE_TARGET_IMAGE="${GOOD_BOT_DIGEST}"
+export RELEASE_CHECK_RECORDS=$'${records}\\n'
+export RELEASE_FAILURE_REASON="${passed ? "none" : "preflight_failed"}"
+export RELEASE_PROVIDER_CONTRACT_VERIFIED="${passed ? "true" : "false"}"
+write_release_report
+`,
+    { mode: 0o700 }
+  );
+  return {
+    reportPath,
+    run: () => spawnSync("bash", [toBashPath(driverPath)], { cwd: ROOT, encoding: "utf8" })
   };
 }
 

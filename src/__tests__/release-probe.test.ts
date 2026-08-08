@@ -128,6 +128,63 @@ describe("runReleaseProbe", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "helper",
+      input.gatewayWebhookUrl,
+      "gateway_helper_signed_empty_webhook" as const,
+      307,
+      createHmac("sha256", input.lineHelperChannelSecret).update('{"events":[]}').digest("base64")
+    ],
+    [
+      "main",
+      input.gatewayMainWebhookUrl,
+      "gateway_main_signed_empty_webhook" as const,
+      308,
+      mainEmptyWebhookSignature
+    ]
+  ])(
+    "rejects a redirected %s webhook without forwarding its signature",
+    async (_profile, webhookUrl, checkName, status, signature) => {
+      const redirectUrl = "https://redirect.invalid/collect";
+      const requests: Array<{ url: string; init?: RequestInit }> = [];
+      const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const requestUrl = String(url);
+        requests.push({ url: requestUrl, init });
+        if (requestUrl.endsWith("/healthz")) {
+          return Response.json({ ok: true, service: "hhc-line-function-bot" });
+        }
+        if (requestUrl.endsWith("/readyz")) {
+          return Response.json({
+            status: "ok",
+            database: { postgres: { status: "ok" }, redis: { status: "ok" } }
+          });
+        }
+        if (requestUrl === "http://searxng.internal/") {
+          return new Response(null, { status: 200 });
+        }
+        if (requestUrl === webhookUrl) {
+          return new Response(null, { status, headers: { location: redirectUrl } });
+        }
+        return Response.json({ ok: true, ignored: true });
+      }) as unknown as typeof globalThis.fetch;
+
+      const result = await runReleaseProbe(input, dependencies(fetch));
+
+      expect(result.checks).toContainEqual({
+        name: checkName,
+        status: "failed",
+        code: "http_mismatch"
+      });
+      expect(requests.filter((request) => request.url === webhookUrl)).toHaveLength(1);
+      expect(requests.some((request) => request.url === redirectUrl)).toBe(false);
+      expect(requests.find((request) => request.url === webhookUrl)?.init).toMatchObject({
+        redirect: "error",
+        headers: { "x-line-signature": signature }
+      });
+    }
+  );
+
   it("keeps a usable old ClamAV signature manifest as a warning rather than failing", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) => {
       if (String(url).endsWith("/healthz")) {

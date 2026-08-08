@@ -1571,10 +1571,13 @@ def image_identity(value):
     return "sha256:" + sha256(value.encode("utf-8")).hexdigest()
 
 checks = []
+observed_check_names = set()
 for row in os.environ.get("RELEASE_CHECK_RECORDS", "").splitlines():
     name, status, observed_at, code = row.split("|")
     if name not in check_names or status not in {"passed", "failed", "warning"} or code not in check_codes:
         raise SystemExit("invalid release check")
+    if name in observed_check_names:
+        raise SystemExit("duplicate release check")
     if (status == "warning") != (code == "signature_warning"):
         raise SystemExit("invalid release warning")
     if status == "passed" and code != "none":
@@ -1584,6 +1587,13 @@ for row in os.environ.get("RELEASE_CHECK_RECORDS", "").splitlines():
     checks.append(
         {"name": name, "status": status, "observedAt": observed_at, "code": code}
     )
+    observed_check_names.add(name)
+
+if os.environ["RELEASE_REPORT_STATUS"] == "passed" and not {
+    "gateway_helper_signed_empty_webhook",
+    "gateway_main_signed_empty_webhook",
+} <= observed_check_names:
+    raise SystemExit("passed release missing signed webhook check")
 
 reason = os.environ["RELEASE_FAILURE_REASON"]
 if reason not in failure_map:
