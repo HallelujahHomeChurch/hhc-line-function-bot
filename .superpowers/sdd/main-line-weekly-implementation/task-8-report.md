@@ -3,7 +3,8 @@
 ## Status
 
 - Implementation is complete on `codex/main-profile-prerequisites`.
-- Commit subject: `feat: add provider-free main weekly paper` (hash is reported in the final handoff because a commit cannot contain its own hash).
+- Implementation commit: `ed9a34b` (`feat: add provider-free main weekly paper`).
+- Verification correction: the disposable integration gate is blocked by the local Docker daemon; it did not pass.
 - No push, pull request, merge, deployment, production credential read, or live LINE, Azure, provider, HHC web API, Dapr, Account, Graph, catalog, or Asset call was performed.
 
 ## Implemented contract
@@ -12,7 +13,7 @@
 - The existing profile-aware provider wrapper and agent planner fail locally with `providers_disabled` before provider resolution or invocation. Deterministic validation remains authoritative and can execute one explicit read candidate.
 - `download_weekly_paper` is a stateless, user/direct read capability with no resource, memory, refinement, operation, or task-frame payload. Central normalization supports `第1733期週報`, `1733期週報`, and `週報第1733期`; numeric-only input does not produce a weekly candidate. Explicit invalid or out-of-int32 issue numbers remain present for schema rejection and cannot degrade to latest.
 - The handler uses the fixed Dapr invocation routes for latest or by-number, `locale=zh-Hant`, injected `fetchImpl`, and a three-second abort deadline. It maps only 404 to `not_found`; all other dependency, envelope, metadata, issue mismatch, and URL failures are `unavailable`.
-- The public URL boundary accepts only root-relative `/assets/<32 lowercase hex>` with no fragment, userinfo, escape, extra segment, or extra query fields. Query is absent or one nonblank `filename`; the resolved URI must keep the exact `https://www.alive.org.tw` origin and fit LINE's 1000-character URI limit.
+- The public URL boundary accepts root-relative `/assets/<32 lowercase hex>` or the exact-origin absolute form produced by hhc-web-api, `https://www.alive.org.tw/assets/<32 lowercase hex>`, with no fragment, userinfo, escape, extra segment, wrong origin/port/protocol, or extra query fields. Query is absent or one nonblank `filename`; the resolved URI must keep the exact `https://www.alive.org.tw` origin and fit LINE's 1000-character URI limit.
 - The resolved URL appears only in the SDK-native LINE URI quick reply. Reply text, result envelope, traces, task state, memory, and resource metadata contain no URL.
 - Production `main` is canonical `/api/line/webhook/main`, public direct, group/room blocked, registration disabled, text-only, template-small-talk, general-agent disabled, provider-free, and enables only `download_weekly_paper`.
 - Profile identity copy is explicit. Direct help/introduction projects effective capabilities plus public `account_login`; main shows Weekly Paper and login only. Helper keeps its current identity and command help; group help never presents direct-only login.
@@ -30,6 +31,12 @@
 7. Helper entrance regression RED: registered non-wake group chatter reached dedupe/rate. GREEN added provider-capable group pre-admission and retained group postback/command behavior.
 8. Deployment RED: two failures proved bot main secret refs and placeholders were absent. GREEN added exactly two bot-only refs plus source placeholders and job-exclusion checks.
 9. Branch-wide RED: the new read lacked a response field and fixed Kernel case lists expected seven cases. GREEN added a safe issue-number projection and the versioned provider-free Kernel case/count.
+
+## Fix round 1
+
+- RED: the exact hhc-web-api production shape `https://www.alive.org.tw/assets/<32hex>?filename=...` returned `unavailable`, proving the root-relative-only precheck rejected the cross-repo contract.
+- GREEN: URL parsing now accepts either the canonical root-relative form or the exact-origin absolute form, then applies the same final URL origin/path/query checks. Focused handler tests cover the accepted absolute form and reject scheme-relative, wrong origin, port, protocol, userinfo, hash, encoded path, legacy path, and invalid query forms.
+- Verification evidence was corrected in the same round: controller reproduction shows the disposable integration gate is Docker-blocked, not passed.
 
 ## Changed files
 
@@ -52,7 +59,10 @@ Passed:
 - `pnpm architecture:check` (399 TypeScript files)
 - `pnpm eval:agent` (candidates 20/20; validated 20/20)
 - `pnpm eval:kernel` (115 cases; all metrics passed)
-- `pnpm eval:kernel:integration` (single disposable attempt, exit 0)
+
+Blocked:
+
+- `pnpm eval:kernel:integration`: controller fresh reproduction exited `2` with `kernel_integration_compose_start_failed`, `kernel_integration_compose_cleanup_failed`, and `ELIFECYCLE`. This is a Docker daemon/Compose availability blocker, not a passing gate. Docker was not restarted and the command was not retried after the controller reproduction.
 
 Full `pnpm test` has seven environment-only failures in `kernel-local-live-runner.test.ts`: this macOS host has no `/dev/shm`, so its Linux memory-storage prerequisite fails before fake Docker logging. The file was not modified.
 
@@ -62,4 +72,5 @@ Full `pnpm test` has seven environment-only failures in `kernel-local-live-runne
 - No response URL can enter a persisted or diagnostic field; the URI exists only in transport quick replies.
 - Provider-free main cannot reach Account administrator authorization or provider-backed admin routing; `account_login` remains the intentional public direct Account operation.
 - Deployment requires the pre-existing ACA secrets `line-main-channel-secret` and `line-main-channel-access-token`; no secret values were read or written here.
+- The real Redis/PostgreSQL disposable integration gate remains required once the Docker daemon can start and clean its owned Compose project.
 - Production webhook provisioning, LINE Console configuration, real-device delivery, and live Dapr/HHC web API acceptance remain external rollout obligations.

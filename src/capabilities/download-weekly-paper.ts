@@ -195,10 +195,11 @@ function parsePublicBulletin(
 
 function canonicalDownloadUri(value: unknown): string | undefined {
   if (typeof value !== "string" || value.includes("#")) return undefined;
+  const rootRelative = value.startsWith("/") && !value.startsWith("//");
+  const exactOriginAbsolute = value.startsWith(`${PUBLIC_ORIGIN}/`);
+  if (!rootRelative && !exactOriginAbsolute) return undefined;
   const question = value.indexOf("?");
   if (question !== -1 && question !== value.lastIndexOf("?")) return undefined;
-  const pathname = question === -1 ? value : value.slice(0, question);
-  if (!ASSET_PATH_PATTERN.test(pathname)) return undefined;
   try {
     const url = new URL(value, PUBLIC_ORIGIN);
     if (
@@ -207,7 +208,7 @@ function canonicalDownloadUri(value: unknown): string | undefined {
       url.username ||
       url.password ||
       url.hash ||
-      url.pathname !== pathname
+      !ASSET_PATH_PATTERN.test(url.pathname)
     ) {
       return undefined;
     }

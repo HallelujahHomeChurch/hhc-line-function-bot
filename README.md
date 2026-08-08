@@ -168,7 +168,7 @@ Function toggles are profile-scoped:
 
 The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
 
-`main` sets `allowedProviders: []`, which is the sole provider-free authority. Its planner returns a local `providers_disabled` result before any provider lookup, while deterministic validation can still execute one explicit `download_weekly_paper` read candidate. Weekly download uses Dapr to call `hhc-web-api`, validates the public response and canonical root-relative asset path, and places the resolved `https://www.alive.org.tw` URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
+`main` sets `allowedProviders: []`, which is the sole provider-free authority. Its planner returns a local `providers_disabled` result before any provider lookup, while deterministic validation can still execute one explicit `download_weekly_paper` read candidate. Weekly download uses Dapr to call `hhc-web-api`, accepts only the canonical root-relative asset path or its exact `https://www.alive.org.tw` absolute form, and places the validated URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
 
 ## Routing
 

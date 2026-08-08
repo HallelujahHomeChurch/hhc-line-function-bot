@@ -68,6 +68,21 @@ describe("download_weekly_paper", () => {
     expect(JSON.stringify(persistableFields)).not.toContain("alive.org.tw");
   });
 
+  it("accepts the exact-origin absolute URL returned by hhc-web-api", async () => {
+    const downloadUrl =
+      `https://www.alive.org.tw/assets/${ASSET_ID}` + "?filename=1733-%E9%80%B1%E5%A0%B1.pdf";
+    const result = await downloadWeeklyPaper(
+      {},
+      vi.fn<typeof fetch>().mockResolvedValue(response(envelope({ downloadUrl })))
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      agentResult: { status: "success" },
+      quickReplies: [{ action: { type: "uri", uri: downloadUrl } }]
+    });
+  });
+
   it("uses the exact by-number route and rejects a mismatched issue", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
@@ -163,8 +178,12 @@ describe("download_weekly_paper", () => {
 
   it.each([
     ["external", `https://evil.example/assets/${ASSET_ID}`],
+    ["wrong port", `https://www.alive.org.tw:444/assets/${ASSET_ID}`],
+    ["wrong protocol", `http://www.alive.org.tw/assets/${ASSET_ID}`],
+    ["userinfo", `https://user@www.alive.org.tw/assets/${ASSET_ID}`],
     ["scheme relative", `//evil.example/assets/${ASSET_ID}`],
     ["legacy", `/api/assets/public/${ASSET_ID}`],
+    ["encoded path", `/assets/%30${ASSET_ID.slice(1)}`],
     ["traversal", `/assets/${ASSET_ID}/../evil`],
     ["extra segment", `/assets/${ASSET_ID}/large`],
     ["uppercase id", `/assets/${ASSET_ID.toUpperCase()}`],
