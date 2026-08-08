@@ -94,14 +94,17 @@ describe("Asset lifecycle assurance", () => {
 
   it("aborts a blocked Asset operation at the hard deadline", async () => {
     const fixture = assetClient();
-    vi.mocked(fixture.client.createUpload).mockImplementation(
-      (_input, options) =>
-        new Promise((_resolve, reject) => {
-          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
-            once: true
-          });
-        })
-    );
+    let attempts = 0;
+    vi.mocked(fixture.client.createUpload).mockImplementation((input, options) => {
+      fixture.setOwnerId(input.ownerId);
+      attempts += 1;
+      if (attempts > 1) return Promise.resolve(createdAsset(input.ownerId));
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+          once: true
+        });
+      });
+    });
 
     const result = await runAssetLifecycleAssurance(
       { ...INPUT, operationTimeoutMs: 20 },
@@ -110,11 +113,77 @@ describe("Asset lifecycle assurance", () => {
 
     expect(result).toEqual({ status: "failed", code: "timeout" });
     expect(fixture.client.grantServiceRead).not.toHaveBeenCalled();
-    expect(fixture.client.softDelete).not.toHaveBeenCalled();
+    expect(fixture.client.softDelete).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a committed create after its response is lost and deletes the exact asset", async () => {
+    const fixture = assetClient();
+    let attempts = 0;
+    vi.mocked(fixture.client.createUpload).mockImplementation(async (input) => {
+      fixture.setOwnerId(input.ownerId);
+      attempts += 1;
+      if (attempts === 1) throw new Error("lost create response");
+      return createdAsset(input.ownerId);
+    });
+
+    const result = await runAssetLifecycleAssurance(INPUT, fixture.client);
+
+    expect(result).toEqual({ status: "failed", code: "asset_lifecycle_failed" });
+    expect(fixture.client.createUpload).toHaveBeenCalledTimes(2);
+    const [initialInput, initialOptions] = vi.mocked(fixture.client.createUpload).mock.calls[0]!;
+    const [recoveryInput, recoveryOptions] = vi.mocked(fixture.client.createUpload).mock.calls[1]!;
+    expect(recoveryInput).toBe(initialInput);
+    expect(recoveryOptions?.signal).not.toBe(initialOptions?.signal);
+    expect(fixture.client.softDelete).toHaveBeenCalledWith("asset-opaque-1", {
+      signal: recoveryOptions?.signal
+    });
+    expect(fixture.client.grantServiceRead).not.toHaveBeenCalled();
+  });
+
+  it("recovers and revokes a committed grant after its response is lost", async () => {
+    const fixture = assetClient();
+    vi.mocked(fixture.client.grantServiceRead)
+      .mockRejectedValueOnce(new Error("lost grant response"))
+      .mockResolvedValueOnce({ id: "grant-opaque-1" });
+
+    const result = await runAssetLifecycleAssurance(INPUT, fixture.client);
+
+    expect(result).toEqual({ status: "failed", code: "asset_lifecycle_failed" });
+    expect(fixture.client.grantServiceRead).toHaveBeenCalledTimes(2);
+    const [initialAssetId, initialKey, initialOptions] = vi.mocked(fixture.client.grantServiceRead)
+      .mock.calls[0]!;
+    const [recoveryAssetId, recoveryKey, recoveryOptions] = vi.mocked(
+      fixture.client.grantServiceRead
+    ).mock.calls[1]!;
+    expect([recoveryAssetId, recoveryKey]).toEqual([initialAssetId, initialKey]);
+    expect(recoveryOptions?.signal).not.toBe(initialOptions?.signal);
+    expect(fixture.client.revokeGrant).toHaveBeenCalledWith("asset-opaque-1", "grant-opaque-1", {
+      signal: recoveryOptions?.signal
+    });
+    expect(fixture.client.softDelete).toHaveBeenCalledOnce();
+  });
+
+  it("makes cleanup failure authoritative after recovering an unknown grant", async () => {
+    const fixture = assetClient();
+    vi.mocked(fixture.client.grantServiceRead)
+      .mockRejectedValueOnce(new Error("lost grant response"))
+      .mockResolvedValueOnce({ id: "grant-opaque-1" });
+    vi.mocked(fixture.client.revokeGrant).mockRejectedValue(new Error("revoke unavailable"));
+
+    const result = await runAssetLifecycleAssurance(INPUT, fixture.client);
+
+    expect(result).toEqual({ status: "failed", code: "asset_cleanup_failed" });
+    expect(fixture.client.grantServiceRead).toHaveBeenCalledTimes(2);
+    expect(fixture.client.revokeGrant).toHaveBeenCalledOnce();
+    expect(fixture.client.softDelete).toHaveBeenCalledOnce();
   });
 });
 
-function assetClient(): { client: AssetApiClient; ownerId: string } {
+function assetClient(): {
+  client: AssetApiClient;
+  ownerId: string;
+  setOwnerId(value: string): void;
+} {
   let ownerId = "";
   let deleted = false;
   const client: AssetApiClient = {
@@ -154,6 +223,28 @@ function assetClient(): { client: AssetApiClient; ownerId: string } {
     client,
     get ownerId() {
       return ownerId;
+    },
+    setOwnerId(value: string) {
+      ownerId = value;
+    }
+  };
+}
+
+function createdAsset(ownerId: string) {
+  return {
+    asset: {
+      id: "asset-opaque-1",
+      ownerService: "hhc-line-function-bot",
+      ownerType: "assurance_probe",
+      ownerId,
+      visibility: "restricted" as const,
+      uploadStatus: "created" as const,
+      scanStatus: "pending" as const
+    },
+    uploadTarget: {
+      url: "https://blob.invalid/private-sas",
+      method: "PUT",
+      headers: { "x-secret": "upload-secret" }
     }
   };
 }

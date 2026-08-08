@@ -30,27 +30,29 @@ export async function runAssetLifecycleAssurance(
   assets: AssetApiClient
 ): Promise<AssetLifecycleAssuranceResult> {
   const ownerId = `asset-assurance:${randomUUID()}`;
+  const createInput = {
+    idempotencyKey: ownerId,
+    ownerType: OWNER_TYPE,
+    ownerId,
+    purpose: "assurance",
+    fileName: FILE_NAME,
+    mimeType: MIME_TYPE,
+    maxSizeBytes: PAYLOAD.byteLength
+  };
+  const grantIdempotencyKey = ownerId.replace("asset-assurance:", "asset-assurance-read:");
   const operationSignal = AbortSignal.timeout(input.operationTimeoutMs);
   let assetId: string | undefined;
   let grantId: string | undefined;
+  let createAttempted = false;
+  let grantAttempted = false;
   let result: AssetLifecycleAssuranceResult = {
     status: "failed",
     code: "asset_lifecycle_failed"
   };
 
   try {
-    const created = await assets.createUpload(
-      {
-        idempotencyKey: ownerId,
-        ownerType: OWNER_TYPE,
-        ownerId,
-        purpose: "assurance",
-        fileName: FILE_NAME,
-        mimeType: MIME_TYPE,
-        maxSizeBytes: PAYLOAD.byteLength
-      },
-      { signal: operationSignal }
-    );
+    createAttempted = true;
+    const created = await assets.createUpload(createInput, { signal: operationSignal });
     assetId = created.asset.id;
     if (!isExactOwner(created.asset, ownerId) || !created.uploadTarget) throw new Error();
 
@@ -70,12 +72,11 @@ export async function runAssetLifecycleAssurance(
     }
     if (!isCleanAsset(asset, ownerId)) throw new Error();
 
+    grantAttempted = true;
     grantId = (
-      await assets.grantServiceRead(
-        assetId,
-        ownerId.replace("asset-assurance:", "asset-assurance-read:"),
-        { signal: operationSignal }
-      )
+      await assets.grantServiceRead(assetId, grantIdempotencyKey, {
+        signal: operationSignal
+      })
     ).id;
     const downloaded = await assets.download(assetId, { signal: operationSignal });
     if (
@@ -95,7 +96,15 @@ export async function runAssetLifecycleAssurance(
     if (
       await cleanupAsset(
         assets,
-        { assetId, grantId, ownerId },
+        {
+          assetId,
+          grantId,
+          ownerId,
+          createAttempted,
+          createInput,
+          grantAttempted,
+          grantIdempotencyKey
+        },
         AbortSignal.timeout(input.cleanupTimeoutMs)
       )
     ) {
@@ -107,30 +116,60 @@ export async function runAssetLifecycleAssurance(
 
 async function cleanupAsset(
   assets: AssetApiClient,
-  identity: { assetId?: string; grantId?: string; ownerId: string },
+  identity: {
+    assetId?: string;
+    grantId?: string;
+    ownerId: string;
+    createAttempted: boolean;
+    createInput: Parameters<AssetApiClient["createUpload"]>[0];
+    grantAttempted: boolean;
+    grantIdempotencyKey: string;
+  },
   signal: AbortSignal
 ): Promise<boolean> {
-  if (!identity.assetId) return false;
   let failed = false;
-  if (identity.grantId) {
+  let assetId = identity.assetId;
+  let grantId = identity.grantId;
+  if (!assetId && identity.createAttempted) {
     try {
-      await assets.revokeGrant(identity.assetId, identity.grantId, { signal });
+      const recovered = await assets.createUpload(identity.createInput, { signal });
+      if (isExactOwner(recovered.asset, identity.ownerId)) {
+        assetId = recovered.asset.id;
+      } else {
+        failed = true;
+      }
+    } catch {
+      failed = true;
+    }
+  }
+  if (!assetId) return failed;
+  if (!grantId && identity.grantAttempted) {
+    try {
+      grantId = (await assets.grantServiceRead(assetId, identity.grantIdempotencyKey, { signal }))
+        .id;
+    } catch {
+      failed = true;
+    }
+  }
+  if (grantId) {
+    try {
+      await assets.revokeGrant(assetId, grantId, { signal });
     } catch {
       failed = true;
     }
   }
   try {
-    const asset = await assets.get(identity.assetId, { signal });
+    const asset = await assets.get(assetId, { signal });
     if (!isExactOwner(asset, identity.ownerId)) {
       failed = true;
     } else {
-      await assets.softDelete(identity.assetId, { signal });
+      await assets.softDelete(assetId, { signal });
     }
   } catch {
     failed = true;
   }
   try {
-    await assets.download(identity.assetId, { signal });
+    await assets.download(assetId, { signal });
     failed = true;
   } catch (error) {
     if (!isAssetAccessDeniedError(error)) failed = true;
