@@ -36,6 +36,7 @@
 
 - RED: the exact hhc-web-api production shape `https://www.alive.org.tw/assets/<32hex>?filename=...` returned `unavailable`, proving the root-relative-only precheck rejected the cross-repo contract.
 - GREEN: URL parsing now accepts either the canonical root-relative form or the exact-origin absolute form, then applies the same final URL origin/path/query checks. Focused handler tests cover the accepted absolute form and reject scheme-relative, wrong origin, port, protocol, userinfo, hash, encoded path, legacy path, and invalid query forms.
+- Canonicality follow-up RED: absolute plain and encoded dot-segment paths normalized by `URL` to `/assets/<id>` and were incorrectly accepted. GREEN derives the raw path/query from the accepted input shape, requires the raw pathname itself to match the asset path contract, and requires the parsed pathname to equal it before accepting the URI.
 - Verification evidence was corrected in the same round: controller reproduction shows the disposable integration gate is Docker-blocked, not passed.
 
 ## Changed files

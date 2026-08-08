@@ -181,6 +181,8 @@ describe("download_weekly_paper", () => {
     ["wrong port", `https://www.alive.org.tw:444/assets/${ASSET_ID}`],
     ["wrong protocol", `http://www.alive.org.tw/assets/${ASSET_ID}`],
     ["userinfo", `https://user@www.alive.org.tw/assets/${ASSET_ID}`],
+    ["absolute traversal", `https://www.alive.org.tw/junk/../assets/${ASSET_ID}`],
+    ["absolute encoded traversal", `https://www.alive.org.tw/junk/%2e%2e/assets/${ASSET_ID}`],
     ["scheme relative", `//evil.example/assets/${ASSET_ID}`],
     ["legacy", `/api/assets/public/${ASSET_ID}`],
     ["encoded path", `/assets/%30${ASSET_ID.slice(1)}`],

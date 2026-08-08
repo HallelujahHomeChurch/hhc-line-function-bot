@@ -198,8 +198,11 @@ function canonicalDownloadUri(value: unknown): string | undefined {
   const rootRelative = value.startsWith("/") && !value.startsWith("//");
   const exactOriginAbsolute = value.startsWith(`${PUBLIC_ORIGIN}/`);
   if (!rootRelative && !exactOriginAbsolute) return undefined;
-  const question = value.indexOf("?");
-  if (question !== -1 && question !== value.lastIndexOf("?")) return undefined;
+  const rawPathAndQuery = rootRelative ? value : value.slice(PUBLIC_ORIGIN.length);
+  const question = rawPathAndQuery.indexOf("?");
+  if (question !== -1 && question !== rawPathAndQuery.lastIndexOf("?")) return undefined;
+  const rawPathname = question === -1 ? rawPathAndQuery : rawPathAndQuery.slice(0, question);
+  if (!ASSET_PATH_PATTERN.test(rawPathname)) return undefined;
   try {
     const url = new URL(value, PUBLIC_ORIGIN);
     if (
@@ -208,7 +211,7 @@ function canonicalDownloadUri(value: unknown): string | undefined {
       url.username ||
       url.password ||
       url.hash ||
-      !ASSET_PATH_PATTERN.test(url.pathname)
+      url.pathname !== rawPathname
     ) {
       return undefined;
     }
