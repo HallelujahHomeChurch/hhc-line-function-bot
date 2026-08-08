@@ -536,10 +536,14 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             );
           }
           if (route.action === "small_talk") {
+            const category = smallTalkCategoryFromText(text);
+            if (!category && input.profile.allowedProviders.length === 0) {
+              return finish(input, steps, { ok: true, replyText: messages.providerFreeUnknown });
+            }
             const result = await createControlledSmallTalkReply({
               profile: input.profile,
               text,
-              category: smallTalkCategoryFromArguments(route.arguments),
+              category: category ?? smallTalkCategoryFromArguments(route.arguments),
               generator: options.textGenerator,
               fallbackGenerator: options.textFallbackGenerator
             });

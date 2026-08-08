@@ -424,6 +424,30 @@ describe("AgentTurnRuntime controlled path", () => {
     expect(result?.quickReplies).toBeUndefined();
   });
 
+  it("keeps helper no-match chat on its existing reassurance reply", async () => {
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({ disposition: "chat" })
+      },
+      now
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile([]),
+      event: event("我想知道這是什麼"),
+      requestId: "helper-no-match-chat"
+    });
+
+    expect(result?.replyText).toBe(
+      "不會啦，我比較適合安靜地幫忙查資料。有明確歌名或聚會範圍時，我會比較快幫上忙。"
+    );
+  });
+
   it("fails closed with a clarification when the controlled planner is unavailable", async () => {
     const runtime = createAgentTurnRuntime({
       functionRegistry: {},

@@ -2,6 +2,7 @@ import { createSupportId } from "./observability/opaque-identifiers.js";
 
 export const messages = {
   unsupported: "目前不支援這個請求。",
+  providerFreeUnknown: "輸入「幫助」查看我可以協助的項目。",
   functionNotConfigured: "這個功能尚未設定完成。",
   requestFailed: "處理請求時發生錯誤，請稍後再試。",
   permissionDenied: "目前這個對話或你的權限不能使用這項功能。輸入 /help 可查看目前可用功能。",

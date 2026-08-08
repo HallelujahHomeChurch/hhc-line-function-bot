@@ -4231,12 +4231,13 @@ describe("LINE entrance", () => {
     ["not found", "第9999期週報", "user", "not_found"],
     ["help", "/help", "user", "help"],
     ["account login", "登入 HHC 帳戶", "user", "login"],
-    ["unknown", "我想知道這是什麼", "user", "local"],
+    ["unknown", "我想知道這是什麼", "user", "fallback"],
     ["blocked group", "下載最新週報", "group", "blocked"],
     ["admin-looking", "幫我建立邀請碼", "user", "local"],
     ["route test", "/route-test 查服事表", "user", "local"],
-    ["typo", "下戴最新週包", "user", "local"],
-    ["cross function", "查下一場服事表", "user", "local"],
+    ["typo", "下戴最新週包", "user", "fallback"],
+    ["cross function", "查下一場服事表", "user", "permission_denied"],
+    ["negated", "不要下載週報", "user", "clarify"],
     ["write intent", "幫我保存這份週報", "user", "local"],
     ["numeric only", "1733", "user", "local"]
   ] as const)(
@@ -4384,6 +4385,15 @@ describe("LINE entrance", () => {
         expect(reply).not.toMatch(/registry|memories|route-test/iu);
       }
       if (expected === "local") expect(reply).not.toContain("管理權限");
+      if (expected === "fallback") expect(reply).toBe("輸入「幫助」查看我可以協助的項目。");
+      if (expected === "permission_denied") {
+        expect(reply).toBe(
+          "目前這個對話或你的權限不能使用這項功能。輸入 /help 可查看目前可用功能。"
+        );
+      }
+      if (expected === "clarify") {
+        expect(reply).toBe("請再告訴我想查哪個功能，以及要找的名稱、日期或主題。");
+      }
     }
   );
 

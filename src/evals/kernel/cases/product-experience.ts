@@ -108,11 +108,17 @@ function providerFreeWeeklyCase(): KernelAcceptanceCase {
           providersEnabledForProfile: () => false
         })
       });
-      const [result] = await harness.runTurns([
+      const [result, fallback] = await harness.runTurns([
         {
           text: "第1733期週報",
           requesterUserId: REQUESTER,
           requestId: `${id}-turn`,
+          source: { type: "user", userId: REQUESTER }
+        },
+        {
+          text: "我想知道這是什麼",
+          requesterUserId: REQUESTER,
+          requestId: `${id}-fallback`,
           source: { type: "user", userId: REQUESTER }
         }
       ]);
@@ -120,7 +126,8 @@ function providerFreeWeeklyCase(): KernelAcceptanceCase {
         providerCalls === 0 &&
         executions === 1 &&
         result?.resultStatus === "success" &&
-        result.replyText === "第 1733 期週報已準備好。";
+        result.replyText === "第 1733 期週報已準備好。" &&
+        fallback.replyText === "輸入「幫助」查看我可以協助的項目。";
       return observation({
         id,
         boundary: "deterministic_validation",

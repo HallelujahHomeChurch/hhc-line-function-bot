@@ -102,7 +102,7 @@ export function smallTalkCategoryFromArguments(args: JsonRecord): SmallTalkCateg
   return isSmallTalkCategory(raw) ? raw : "reassurance";
 }
 
-export function smallTalkCategoryFromText(text: string): SmallTalkCategory {
+export function smallTalkCategoryFromText(text: string): SmallTalkCategory | undefined {
   const normalized = text.normalize("NFKC").trim();
   if (/^(?:哈囉|嗨|你好|早安|午安|晚安|hello|hi)[！!。,.，\s]*$/iu.test(normalized)) {
     return "greeting";
@@ -112,7 +112,7 @@ export function smallTalkCategoryFromText(text: string): SmallTalkCategory {
   if (/(?:辛苦了|加油)/u.test(normalized)) return "encouragement";
   if (/(?:你是誰|你叫什麼|介紹自己)/u.test(normalized)) return "persona";
   if (/(?:笑話|講個笑話|開玩笑)/u.test(normalized)) return "light_joke";
-  return "reassurance";
+  return undefined;
 }
 
 export function isSmallTalkCategory(value: string): value is SmallTalkCategory {

@@ -39,6 +39,20 @@ describe("small talk replies", () => {
     expect(createSmallTalkReply("greeting").replyText).toBeTruthy();
   });
 
+  it.each([
+    ["謝謝", "thanks"],
+    ["你還好嗎", "wellbeing"],
+    ["辛苦了", "encouragement"],
+    ["你是誰", "persona"],
+    ["講個笑話", "light_joke"]
+  ] as const)("keeps %s in its explicit deterministic category", (text, category) => {
+    expect(smallTalkCategoryFromText(text)).toBe(category);
+  });
+
+  it("leaves arbitrary text without a deterministic small-talk category", () => {
+    expect(smallTalkCategoryFromText("我想知道這是什麼")).toBeUndefined();
+  });
+
   it("recognizes wellbeing as a first-class category", () => {
     expect(smallTalkCategoryFromArguments({ category: "wellbeing" })).toBe("wellbeing");
     expect(createSmallTalkReply("wellbeing").replyText).toBeTruthy();
