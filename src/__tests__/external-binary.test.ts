@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { promises as dns } from "node:dns";
 
-import { validateExternalBinaryUrl } from "../clients/external-binary.js";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  createExternalBinaryClient,
+  validateExternalBinaryUrl
+} from "../clients/external-binary.js";
 
 describe("external binary URL policy", () => {
   it.each([
@@ -34,5 +39,26 @@ describe("external binary URL policy", () => {
         { address: "93.184.216.34", family: 4 }
       ])
     ).resolves.toMatchObject({ hostname: "example.org", address: "93.184.216.34", family: 4 });
+  });
+
+  it("converts a raw external network failure to a transient unavailable contract", async () => {
+    const lookup = vi.spyOn(dns, "lookup").mockRejectedValueOnce(new Error("network detail"));
+    const client = createExternalBinaryClient();
+
+    try {
+      await expect(
+        client.download({
+          url: "https://example.org/file.pdf",
+          maxBytes: 1024,
+          timeoutMs: 100,
+          maxRedirects: 1
+        })
+      ).rejects.toMatchObject({
+        code: "external_binary_unavailable",
+        transient: true
+      });
+    } finally {
+      lookup.mockRestore();
+    }
   });
 });

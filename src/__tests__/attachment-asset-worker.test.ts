@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { HTTPError } from "@line/bot-sdk";
+import { HTTPError, ReadError, RequestError } from "@line/bot-sdk";
 
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { runAttachmentAssetWorker } from "../attachments/asset-worker.js";
@@ -181,7 +181,8 @@ describe("attachment asset worker", () => {
   it.each([
     [404, "permanent_failure"],
     [429, "transient_retry"],
-    [503, "transient_retry"]
+    [503, "transient_retry"],
+    [600, "permanent_failure"]
   ] as const)("classifies LINE content HTTP %s as %s", async (statusCode, status) => {
     const fixture = await setup();
     vi.mocked(fixture.options.lineContent.getMessageContent).mockRejectedValueOnce(
@@ -202,12 +203,46 @@ describe("attachment asset worker", () => {
   });
 
   it.each([
+    [
+      "request",
+      () =>
+        new RequestError("LINE content network failure", {
+          code: "ECONNRESET",
+          originalError: new Error("provider detail")
+        })
+    ],
+    [
+      "read",
+      () =>
+        new ReadError("LINE content read failure", {
+          originalError: new Error("provider detail")
+        })
+    ]
+  ])("releases a LINE SDK %s error for retry", async (_label, errorFactory) => {
+    const fixture = await setup();
+    vi.mocked(fixture.options.lineContent.getMessageContent).mockRejectedValueOnce(errorFactory());
+
+    await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
+      status: "transient_retry",
+      failureCode: "download_failed"
+    });
+    await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBeUndefined();
+  });
+
+  it.each([
     ["unsafe URL", () => new ExternalBinaryReadError("external_binary_unsafe_address")],
     [
       "HTTP 404",
       () =>
         new ExternalBinaryReadError("external_binary_http_error", {
           statusCode: 404
+        })
+    ],
+    [
+      "invalid HTTP 600",
+      () =>
+        new ExternalBinaryReadError("external_binary_http_error", {
+          statusCode: 600
         })
     ]
   ])("makes deterministic external source failure %s durable", async (_label, errorFactory) => {

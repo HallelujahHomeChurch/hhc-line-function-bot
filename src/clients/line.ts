@@ -120,7 +120,9 @@ export function lineContentFailureDisposition(
     return error.code === "line_content_timeout" ? "transient" : "permanent";
   }
   if (error instanceof HTTPError) {
-    return error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500
+    return error.statusCode === 408 ||
+      error.statusCode === 429 ||
+      (error.statusCode >= 500 && error.statusCode <= 599)
       ? "transient"
       : "permanent";
   }

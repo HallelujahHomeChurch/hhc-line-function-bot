@@ -197,7 +197,12 @@ function fileNameFromUrl(url: URL): string {
 }
 
 function isTransientHttpStatus(statusCode: number | undefined): boolean {
-  return statusCode === undefined || statusCode === 408 || statusCode === 429 || statusCode >= 500;
+  return (
+    statusCode === undefined ||
+    statusCode === 408 ||
+    statusCode === 429 ||
+    (statusCode >= 500 && statusCode <= 599)
+  );
 }
 
 function isAllowedContentType(value: string): boolean {
