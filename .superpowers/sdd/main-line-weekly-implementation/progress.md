@@ -2,7 +2,7 @@
 
 Branch root: /Users/rayselfs/Projects/hhc/hhc-line-function-bot/.worktrees/main-profile-prerequisites
 Merge base: f1b259c94008939ca1186bcd0daaedf9fc2115ab
-Status: Task 9 implementation complete
+Status: Task 9 complete; verified draft-PR handoff pending
 Baseline: `pnpm vitest run --exclude src/__tests__/kernel-local-live-runner.test.ts` passed 135 files / 1359 tests.
 Baseline exception: `kernel-local-live-runner.test.ts` fails identically on untouched main because macOS lacks `/dev/shm`; Linux PR CI remains authoritative for that file.
 Task 1: fix round 1/5 (1 addressed, 0 open — shared catalog dependency parsing; commits ccc239a..57ef020)
@@ -32,8 +32,9 @@ Task 4 deployment boundary: gateway must keep `/priv/account/v1/*` unreachable f
 Task 5 worktree: `/Users/rayselfs/Projects/hhc/.worktrees/main-line-weekly/account-fe`, branch `codex/native-line-account-link-ui`, base `6f28e45`.
 Task 5 baseline: `pnpm test:run` passed 23 files / 127 tests; `pnpm build` and `pnpm lint` passed. Existing build emits only the pre-existing >500 kB chunk warning.
 Task 5: feature commit `48d7e98`; fix round 1/5 (4 addressed, 0 open — raw bearer ref retention, late async prepare fencing, failed-stage retry, auth-unavailable recovery; commit `d94ed36`).
-Task 5: complete (commits 6f28e45..d94ed36, scoped re-review approved).
-Task 5 verification: implementer full 23 files / 153 tests, build, lint, diff-check passed; controller fresh 6 files / 78 tests and lint passed after review.
+Task 5: complete (commits 6f28e45..551d007, scoped re-review approved).
+Task 5 verification: final full 23 files / 157 tests, build, lint, diff-check passed; controller fresh marker-focused 2 files / 38 tests and lint passed after review.
+Task 5 final fix: `551d007` consumes the social-return continuation marker once at `/line/bind` entry, so failed or abandoned intents cannot redirect later navigation or auto-prepare a new intent.
 Task 5 accepted behavior: a one-tab boolean marker bridges provider callbacks that return through `/profile`; it stores no URL/token and a lost marker safely degrades to explicit Continue.
 Task 6: complete (commit `71b5e8a`, independent review approved with no findings).
 Task 6 verification: implementer focused 5 files / 155 tests, Kernel 114/114, format/type/architecture/build passed; controller fresh focused 5 files / 155 tests and typecheck passed. After Task3 assertion sync, exact full exclusion passed 138 files / 1464 tests and full lint passed.
@@ -62,7 +63,10 @@ Task 9: implementation complete (fixed-empty-body derived-HMAC release probe for
 Task 9 verification: focused release probe 12/12, report 21/21, deployment contract 17/17, release assurance shell 68/68, exact entrance 1/1, shell syntax, focused format/lint, typecheck, build, and diff-check passed.
 Task 9 authority boundary: release job receives only the derived `LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE`, never main channel credentials; other jobs receive neither credentials nor derived signature.
 Task 9 proof boundary: checks attest Gateway to Dapr to selected-profile routing, configured signature acceptance, and empty early return only; they do not attest LINE delivery, Console secret correctness, replies, account linking, or provider runtime.
-Task 9 production boundary: no broad/full repository test, push, merge, deployment, credential mutation, or live LINE, Azure, Account, Dapr, provider, or HHC API call was performed.
+Task 9 production boundary: no push, merge, deployment, credential mutation, or live LINE, Azure, Account, Dapr, provider, or HHC API call was performed.
 Task 9 fix round 1: restored the exact release-assurance documentation contract with a singular probe limitation sentence while preserving both explicit check names and the LINE Console/provider-runtime exclusions; focused docs 4/4, format, and diff-check passed.
 Task 9 fix round 2: signed helper/main webhook fetches fail closed on redirects; report builder and shell writer reject duplicate check names and require both signed checks for passed releases while retaining partial early-failure reports.
 Task 9 fix round 2 verification: core/report 39/39, complete release-assurance shell 73/73, typecheck, focused lint/format, shell syntax, and diff-check passed; no broad/live/deploy action.
+Final bot verification: full suite recorded only the seven known macOS `/dev/shm` runner failures; exact exclusion passed 139 files / 1554 tests. Format, typecheck, lint, build, architecture (399 files), agent eval (20/20 candidates and validation), and Kernel 115-case gate passed. Compose integration remained blocked with start/cleanup failure because Docker Desktop did not answer.
+Final cross-repository verification: account-api full race/vet/migration gates passed; account-fe full tests/build/lint passed; hhc-web-api full race/vet/policy gates passed with 12 PostgreSQL integration tests skipped because `HHW_TEST_DATABASE_URL` is unset; gateway Go/routing/release/method/safe-logging gates passed, while container `nginx -t` remained blocked by the Docker daemon timeout.
+Final whole-diff reviews: bot, account-api/account-fe, and hhc-web-api/api-gateway ranges were independently approved with no remaining actionable findings.
