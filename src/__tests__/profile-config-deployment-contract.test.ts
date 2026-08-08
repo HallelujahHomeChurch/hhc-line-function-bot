@@ -516,9 +516,9 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("parallelism: 1");
     expect(job).toContain("replicaCompletionCount: 1");
     expect(job).toContain("type: UserAssigned");
-    expect(job).toContain("PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}");
+    expect(job).toContain("PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}");
     expect(job).toContain("server: alive.azurecr.io");
-    expect(job).toContain("identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
+    expect(job).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
     expect(job).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
     expect(job).toContain("args:\n          - dist/tools/run-periodic-assurance.js");
     expect(job).not.toContain("command:");
@@ -583,7 +583,7 @@ describe("production profile configuration deployment contract", () => {
       'deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"'
     );
     expect(deployment).toContain(
-      'deploy_job "${PERIODIC_ASSURANCE_JOB_NAME}" "${periodic_assurance_job_manifest}"'
+      'deploy_job \\\n  "${PERIODIC_ASSURANCE_JOB_NAME}" \\\n  "${periodic_assurance_job_manifest}" \\\n  "${attachment_job_identity_id}"'
     );
     expect(deployment).not.toMatch(/cat "\$\{(?:release_probe|periodic_assurance)_job_manifest\}"/);
 
@@ -703,9 +703,13 @@ describe("production profile configuration deployment contract", () => {
       "RELEASE_PROBE_JOB_NAME",
       "PERIODIC_ASSURANCE_JOB_NAME"
     ]) {
-      expect(deployment.indexOf(`mark_release_job_mutated "\${${jobName}}"`)).toBeLessThan(
-        deployment.indexOf(`deploy_job "\${${jobName}}"`)
+      const mutation = deployment.indexOf(`mark_release_job_mutated "\${${jobName}}"`);
+      const deploy = deployment.search(
+        new RegExp(`deploy_job(?:\\\\|\\s)+"\\$\\{${jobName}\\}"`, "u")
       );
+      expect(mutation).toBeGreaterThanOrEqual(0);
+      expect(deploy).toBeGreaterThanOrEqual(0);
+      expect(mutation).toBeLessThan(deploy);
     }
     expect(deployment).not.toContain("trap 'rm -f");
     expect(helper).toContain("RELEASE_POLL_ATTEMPTS:=30");

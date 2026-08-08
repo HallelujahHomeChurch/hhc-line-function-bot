@@ -21,7 +21,7 @@ describe("Asset deployment access contract", () => {
 
     expect(deploy).toContain("verify_asset_access_contract");
     expect(deploy).toMatch(
-      /deploy_job \\\n+  "\$\{PERIODIC_ASSURANCE_JOB_NAME\}" \\\n+  "\$\{periodic_assurance_job_manifest\}" \\\n+  "\$\{attachment_job_identity_id\}"/u
+      /deploy_job \\\n+ {2}"\$\{PERIODIC_ASSURANCE_JOB_NAME\}" \\\n+ {2}"\$\{periodic_assurance_job_manifest\}" \\\n+ {2}"\$\{attachment_job_identity_id\}"/u
     );
     expect(manifest).toContain("PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
     expect(manifest).not.toContain("PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
