@@ -152,4 +152,40 @@ describe("provider runtime", () => {
     ).rejects.toThrow("provider_not_configured:deepseek");
     expect(resolvePrimaryProviderName(appConfig, appConfig.profiles[0])).toBe("deepseek");
   });
+
+  it("fails locally for a provider-free profile without calling an underlying provider", async () => {
+    const main = profile({
+      name: "main",
+      webhookPath: "/api/line/webhook/main",
+      allowedProviders: [],
+      providerPolicy: {}
+    });
+    const deepseek = provider("must-not-run");
+    const runtime = createProfileAwareProvider({
+      config: config([main]),
+      providers: { deepseek },
+      role: "primary",
+      lane: "function_routing"
+    });
+
+    await expect(
+      runtime.completeJson({
+        profileName: "main",
+        prompt: "route",
+        text: "download weekly paper",
+        enabledFunctions: []
+      })
+    ).rejects.toThrow("providers_disabled");
+    await expect(
+      runtime.completeText({
+        profileName: "main",
+        prompt: "talk",
+        text: "hello",
+        category: "greeting",
+        maxChars: 80
+      })
+    ).rejects.toThrow("providers_disabled");
+    expect(deepseek.completeJson).not.toHaveBeenCalled();
+    expect(deepseek.completeText).not.toHaveBeenCalled();
+  });
 });

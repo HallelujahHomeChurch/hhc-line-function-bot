@@ -88,7 +88,7 @@ export async function handlePublicAccessCommand(input: {
     }
     const context = await input.resolveCurrentAccess();
     return context.authorized
-      ? renderCapabilityHelp(projectEffectiveCapabilities({ context }), "help")
+      ? renderCapabilityHelp(projectEffectiveCapabilities({ context }), "help", input.profile)
       : { ok: true, replyText: registrationPrompt(input.profile, input.event) };
   }
   if (parsed.command === "whoami") {

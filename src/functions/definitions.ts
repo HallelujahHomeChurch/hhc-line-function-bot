@@ -11,6 +11,7 @@ import {
   saveResourceArgumentsSchema,
   saveScheduleArgumentsSchema
 } from "../function-arguments.js";
+import { downloadWeeklyPaperDefinition } from "../capabilities/download-weekly-paper.js";
 import { queryScheduleDefinition } from "../capabilities/query-schedule/definition.js";
 import type { AgentResourceType, FunctionName } from "../types.js";
 
@@ -116,7 +117,9 @@ export interface FunctionDefinition {
   displayName: string;
   shortDescription: string;
   examples: string[];
-  requires: Array<"graph" | "notion" | "session" | "cache" | "memory" | "wikipedia" | "knowledge">;
+  requires: Array<
+    "graph" | "notion" | "session" | "cache" | "memory" | "wikipedia" | "knowledge" | "hhc_web_api"
+  >;
   scope: "profile" | "group_capable";
   sideEffectLevel: FunctionSideEffectLevel;
   agentCapability?: AgentCapabilityContract;
@@ -136,6 +139,7 @@ export interface FunctionDefinition {
 }
 
 export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
+  downloadWeeklyPaperDefinition,
   {
     name: "find_ppt_slides",
     displayName: "查投影片",

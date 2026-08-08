@@ -13,7 +13,7 @@ functions, and admin gates.
 
 The service is lane-based and authority-first for controlled routing:
 
-- Every semantic lane uses DeepSeek as its sole provider.
+- Every enabled semantic lane uses DeepSeek as its sole provider. The public `main` profile declares `allowedProviders: []` and makes no semantic-provider request.
 - `deepseek` uses `DEEPSEEK_API_KEY`.
 - The repository has no workstation auxiliary-service runtime. External search
   is an internal ACA app, and attachment scanning/signature refresh are finite
@@ -27,6 +27,7 @@ The service is lane-based and authority-first for controlled routing:
 - The helper controlled planner is enabled with three deterministic candidates
   and a `0.65` minimum confidence. Provider output is advisory; deterministic
   validation owns function/source policy, evidence, arguments, and execution.
+- The provider-free main planner returns local `providers_disabled`; deterministic validation may still execute its one explicit Weekly Paper read candidate.
 - Unresolved provider failure, low confidence, or ambiguous evidence fails
   closed to clarification. One unambiguous explicit request may use the
   definition-owned deterministic recovery path.
@@ -57,7 +58,8 @@ The service remains one deployed modular monolith. The source boundaries are:
   controlled planning, and function execution in that order.
 - `src/capabilities/*`: vertical product slices. `query-schedule` is the
   reference slice and owns its definition, eval cases, ports, handler, and
-  module factory.
+  module factory. `download-weekly-paper.ts` is intentionally a single narrow
+  capability module with injected `fetchImpl`, not a generic Dapr client layer.
 - `src/infrastructure/*`: future concrete port implementations. Existing
   concrete adapters migrate here only when touched; bootstrap remains their
   only construction owner.
@@ -82,43 +84,45 @@ For normal LINE webhook messages, read the flow in this order:
 2. `src/transport/line/webhook-routes.ts` receives the Fastify webhook route;
    `src/server.ts` is only a compatibility re-export.
 3. LINE signature and profile path select the `BotProfileConfig`.
-4. Access policy checks direct user, group, registration, and admin identity.
-5. Group engagement decides whether the bot was actually addressed.
-6. A short requester-scoped group conversation window may allow the same user to
+4. Native `accountLink` events finalize through Account API before admin lookup, access policy, rate limits, ordinary webhook dedupe, or routing. Exact direct-chat account-login actions use ordinary dedupe and rate limits, then issue a native LINE link token without entering the LLM router.
+5. Ordinary events pass the structural source/message gate, webhook dedupe, and rate limit before optional dependency lookups. Provider-capable helper turns authorize Account only after those gates; provider-free main turns skip administrator authorization.
+6. Access policy checks direct user, group, and registration; optional LINE display-name lookup follows admission.
+7. Group engagement decides whether the bot was actually addressed.
+8. A short requester-scoped group conversation window may allow the same user to
    continue without repeating the wake word.
-7. Slash commands are adapted under `src/transport/line/*`; normal text turns
+9. Slash commands are adapted under `src/transport/line/*`; normal text turns
    enter `src/application/turn/runtime.ts` through the compatibility export in
    `src/agent/turn-runtime.ts`.
-8. Text continuation handlers declare a controlled workflow stage. The kernel
-   orders pending confirmation/cancellation and slot collection first, then
-   capability/entity selection and attachment workflow. Registration or object
-   iteration order is never authority. There is no pre-route resource-recall
-   bypass; replay and field follow-ups use the normal task-frame candidate,
-   planner, validator, and exact-reference path. A bare
-   confirmation stays with its current pending write.
-9. Intro and small-talk system actions can respond without function execution.
-10. In controlled mode, the runtime reads the independently expiring,
+10. Text continuation handlers declare a controlled workflow stage. The kernel
+    orders pending confirmation/cancellation and slot collection first, then
+    capability/entity selection and attachment workflow. Registration or object
+    iteration order is never authority. There is no pre-route resource-recall
+    bypass; replay and field follow-ups use the normal task-frame candidate,
+    planner, validator, and exact-reference path. A bare
+    confirmation stays with its current pending write.
+11. Intro, small-talk, and account-login system actions can respond without function execution.
+12. In controlled mode, the runtime reads the independently expiring,
     requester-scoped version-2 task frame and generates at most the configured number of
     candidates from declarative function contracts.
-11. `src/agent/planner.ts` asks the `function_routing` provider for a bounded
-    semantic proposal. DeepSeek is the only semantic provider.
-12. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
+13. `src/agent/planner.ts` asks the `function_routing` provider for a bounded
+    semantic proposal when the profile enables providers. DeepSeek is the only semantic provider.
+14. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
     rechecks current-message evidence, task-frame authority, effective function
     policy, side effects, source, confidence, schema, and required slots.
-13. Definition-driven validation separates `collect` from `execute`. Missing
+15. Definition-driven validation separates `collect` from `execute`. Missing
     slots create requester-scoped collection state regardless of whether the
     model proposed execute, clarify, chat, low confidence, or no plan.
     Ambiguity remains clarification. The model cannot invent a function, make a
     write authoritative, or carry an undeclared value from old context.
-14. After a validated file-search plan, agent memory can resolve explicit aliases
+16. After a validated file-search plan, agent memory can resolve explicit aliases
     before an expensive provider search.
-15. The turn runtime applies in-flight locks, calls only the registered handler,
+17. The turn runtime applies in-flight locks, calls only the registered handler,
     records a sanitized result envelope, and transitions task-frame state only
     from a successful structured read result.
-16. Slow turns can be stored as long-running jobs and returned through a
+18. Slow turns can be stored as long-running jobs and returned through a
     requester-scoped LINE postback.
-17. Successful file handlers can record resource metadata for later recall.
-18. Handler output is replied through the LINE client.
+19. Successful file handlers can record resource metadata for later recall.
+20. Handler output is replied through the LINE client.
 
 Controlled routing is the only production text-routing path. Deprecated
 `controlledAgent.enabled` and `controlledAgent.shadow` configuration is rejected
@@ -139,7 +143,7 @@ distinguish cheap local classification from remote smart-talk generation.
 There are three action categories. Keep them separate.
 
 - User functions are in `FUNCTION_NAMES` and `enabledFunctions`.
-- System actions are `introduce_bot` and `small_talk`; they are not function
+- System actions are `introduce_bot`, `small_talk`, and `account_login`; they are not function
   handlers and should not expose implementation details.
 - Admin actions are management operations behind admin identity, source policy,
   action catalog metadata, audit, and sanitized observability.
@@ -152,7 +156,7 @@ through group function scopes.
 Profiles are independent bot configurations served by one process. In practice:
 
 - `helper` is invite-based for direct users and groups.
-- future `main` is expected to allow public direct chat but block groups.
+- `main` allows public direct chat, blocks groups, and enables only provider-free Weekly Paper download.
 - `enabledFunctions` is profile-global for that profile only.
 - profile-global write functions are admin-only by default; non-admin users need
   an explicit user or group function grant.
@@ -566,18 +570,26 @@ failures remain pending for bounded retry. An event-driven ACA Job leases one
 queue item, atomically claims the work with a token and expiry, and only then
 performs the bounded LINE Content API or authorized external-file download,
 actual-size, MIME/magic-byte, extension, safe-filename, and hash checks. It then
-creates an idempotent Asset upload, waits for Asset's durable ClamAV result,
-grants and downloads only a clean asset, and verifies the hash again before
-publication. Expired claims and `publishing` leases are reclaimable; stable
-Asset identities and deterministic Graph paths make retries converge. Stale
-workers cannot mutate the terminal work state or requester-scoped job.
+persists a non-secret upload descriptor, creates an idempotent Asset upload,
+waits for Asset's durable ClamAV result, grants and downloads only a clean
+asset, and validates the persisted checksum, size, and detected MIME before
+publication. Work that already has an Asset identity resumes entirely through
+Asset; a lost Asset-ID record is recovered by replaying create with the same
+work ID and descriptor before another source download. Expired pre-publication
+claims are reclaimable, but expired `publishing` work becomes the observable
+terminal `publication_abandoned` state rather than being blindly republished.
+Stale workers cannot mutate the terminal work state or requester-scoped job.
 Completion and failure commit the Redis work CAS together
 with a bounded pending job update before the job-store write. Queue redelivery
 reconciles that idempotent update before acknowledging terminal work, closing
 the crash window between the two Redis records. Claim disposition distinguishes
-active work from terminal and missing/expired opaque work, so active deliveries
-remain for redelivery while terminal or expired-work deliveries are
-acknowledged. OneDrive upload and catalog upsert form one logical commit; catalog
+pending scan or legitimate claim/publication contention from terminal and
+missing/expired opaque work. Only durably completed, permanently failed, and
+missing work is acknowledged; transient dependency failures atomically release
+their claim and remain queued for redelivery. The 10-minute scan, 14-minute
+publication, 15-minute replica, 1-minute acknowledgement margin, 17-minute
+visibility, 20-minute claim, and 60-minute retention policy is tested as one
+ordered invariant. OneDrive upload and catalog upsert form one logical commit; catalog
 failure compensates by deleting the uploaded Graph item. Asset API is the sole owner
 of quarantine Blob state, ClamAV signatures and execution, scan lifecycle,
 grants, and clean download. Any status other than `clean` fails closed. The LINE
@@ -710,13 +722,22 @@ R4.1 production verification is complete. R5.0 production acceptance is complete
 
 The deploy transaction snapshots a known-good revision and image, deploys the
 target, and writes `artifacts/release-assurance/report.json`. Its release probe
-uses a signed empty `events: []` webhook and records zero provider calls. That
-is gateway/Dapr/bot contract evidence only: it does not prove LINE delivery or
-reply-token behavior. Failed release gates copy the known-good revision into a
+uses separately signed empty `events: []` webhooks for `helper` and `main` and
+records zero provider calls. The two explicit checks prove the
+Gateway→Dapr→selected-profile route, configured signature acceptance, and
+empty-batch early return only. They do not prove LINE platform delivery, LINE
+Console secret correctness, reply-token behavior, or provider availability in
+normal turns; the zero-provider count describes this release path, not runtime
+telemetry. Failed release gates copy the known-good revision into a
 new rollback revision and restore changed job images; a manual image update is
 only the bounded emergency fallback. Weekly dependency evidence is separate:
 `hhc-line-bot-periodic-assurance` writes
-`artifacts/release-assurance/periodic-report.json` after its own run.
+`artifacts/release-assurance/periodic-report.json` after its own run. Its bounded
+Asset lifecycle check uploads only fixed tiny clean text under a unique
+assurance owner with restricted visibility, grants service-read access, verifies
+the clean scan and downloaded bytes, then revokes and owner-verifies the exact
+soft-delete in cleanup. Cleanup failure fails the assurance; the check exposes
+no public URL and does not call LINE, Graph, or the catalog.
 
 The accepted baseline is production release
 [30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171),

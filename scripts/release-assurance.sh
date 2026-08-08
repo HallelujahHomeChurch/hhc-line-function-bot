@@ -48,6 +48,94 @@ fail_release_check() {
   return 1
 }
 
+verify_asset_access_contract() {
+  local resource_group="$1"
+  local asset_app_name="$2"
+  local asset_audience="$3"
+  local workload_client_id="$4"
+  local workload_principal_id="$5"
+  local asset_service_json
+  local role_assignments_json
+  local auth_json
+
+  if ! asset_service_json="$(
+    az ad sp show \
+      --id "${asset_audience}" \
+      --query '{id:id,appRoles:appRoles}' \
+      --output json \
+      --only-show-errors 2>/dev/null
+  )" || [[ -z "${asset_service_json}" ]]; then
+    return 1
+  fi
+  if ! role_assignments_json="$(
+    az rest \
+      --method get \
+      --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${workload_principal_id}/appRoleAssignments" \
+      --output json \
+      --only-show-errors 2>/dev/null
+  )" || [[ -z "${role_assignments_json}" ]]; then
+    return 1
+  fi
+  if ! auth_json="$(
+    az containerapp auth show \
+      --resource-group "${resource_group}" \
+      --name "${asset_app_name}" \
+      --output json \
+      --only-show-errors 2>/dev/null
+  )" || [[ -z "${auth_json}" ]]; then
+    return 1
+  fi
+
+  ASSET_SERVICE_JSON="${asset_service_json}" \
+  ASSET_ROLE_ASSIGNMENTS_JSON="${role_assignments_json}" \
+  ASSET_AUTH_JSON="${auth_json}" \
+  ASSET_WORKLOAD_CLIENT_ID="${workload_client_id}" \
+  ASSET_WORKLOAD_PRINCIPAL_ID="${workload_principal_id}" \
+  python3 - <<'PY'
+import json
+import os
+
+try:
+    service = json.loads(os.environ["ASSET_SERVICE_JSON"])
+    assignments = json.loads(os.environ["ASSET_ROLE_ASSIGNMENTS_JSON"])
+    auth = json.loads(os.environ["ASSET_AUTH_JSON"])
+except (KeyError, TypeError, ValueError):
+    raise SystemExit(1)
+
+roles = service.get("appRoles") if isinstance(service, dict) else None
+role = next(
+    (
+        item
+        for item in (roles if isinstance(roles, list) else [])
+        if isinstance(item, dict)
+        and item.get("value") == "Asset.Invoke"
+        and item.get("isEnabled") is True
+        and "Application" in (item.get("allowedMemberTypes") or [])
+    ),
+    None,
+)
+assigned = any(
+    isinstance(item, dict)
+    and item.get("appRoleId") == (role or {}).get("id")
+    and item.get("resourceId") == service.get("id")
+    for item in (assignments.get("value") if isinstance(assignments, dict) else []) or []
+)
+aad = ((auth.get("identityProviders") or {}).get("azureActiveDirectory") or {})
+policy = ((aad.get("validation") or {}).get("defaultAuthorizationPolicy") or {})
+applications = policy.get("allowedApplications") or []
+principals = (policy.get("allowedPrincipals") or {}).get("identities") or []
+valid = (
+    role is not None
+    and assigned
+    and (auth.get("platform") or {}).get("enabled") is True
+    and (auth.get("globalValidation") or {}).get("unauthenticatedClientAction") == "Return401"
+    and os.environ["ASSET_WORKLOAD_CLIENT_ID"] in applications
+    and os.environ["ASSET_WORKLOAD_PRINCIPAL_ID"] in principals
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
 capture_known_good_state() {
   : "${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
   : "${CONTAINER_APP_NAME:?CONTAINER_APP_NAME is required}"
@@ -709,9 +797,11 @@ elif check_name == "release_probe":
                 "BOT_BASE_URL": {"value": None},
                 "SEARXNG_BASE_URL": {"value": None},
                 "GATEWAY_WEBHOOK_URL": {"value": None},
+                "GATEWAY_MAIN_WEBHOOK_URL": {"value": None},
                 "LINE_HELPER_CHANNEL_SECRET": {
                     "secretRef": "line-helper-channel-secret"
                 },
+                "LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE": {"value": None},
                 "CLAMAV_SIGNATURE_MANIFEST_PATH": {
                     "value": "/var/lib/clamav/current/manifest.json"
                 },
@@ -736,6 +826,9 @@ elif check_name == "periodic_assurance_job":
                 "GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID": {"value": None},
                 "NOTION_SERVICE_DATABASE_ID": {"value": None},
                 "ATTACHMENT_SCAN_QUEUE_NAME": {"value": None},
+                "ASSET_API_URL": {"value": None},
+                "ASSET_API_AUDIENCE": {"value": None},
+                "AZURE_CLIENT_ID": {"value": None},
                 "GRAPH_CLIENT_SECRET": {"secretRef": "graph-client-secret"},
                 "NOTION_TOKEN": {"secretRef": "notion-token"},
                 "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": {
@@ -961,7 +1054,11 @@ check_codes = {
         "contract_mismatch",
     },
     "searxng_root": {"none", "timeout", "http_mismatch", "network_failed"},
-    "gateway_empty_webhook": {
+    "gateway_helper_signed_empty_webhook": {
+        "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
+        "contract_mismatch",
+    },
+    "gateway_main_signed_empty_webhook": {
         "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
         "contract_mismatch",
     },
@@ -1429,7 +1526,8 @@ failure_map = {
     "bot_health_failed": "bot_health_failed",
     "bot_readiness_failed": "bot_readiness_failed",
     "searxng_root_failed": "searxng_root_failed",
-    "gateway_empty_webhook_failed": "gateway_webhook_failed",
+    "gateway_helper_signed_empty_webhook_failed": "gateway_webhook_failed",
+    "gateway_main_signed_empty_webhook_failed": "gateway_webhook_failed",
     "clamav_signature_failed": "clamav_manifest_invalid",
     "report_write_failed": "network_failed",
     "transaction_incomplete": "network_failed",
@@ -1450,7 +1548,8 @@ check_names = {
     "bot_health",
     "bot_readiness",
     "searxng_root",
-    "gateway_empty_webhook",
+    "gateway_helper_signed_empty_webhook",
+    "gateway_main_signed_empty_webhook",
     "clamav_signature",
 }
 check_codes = {
@@ -1472,10 +1571,13 @@ def image_identity(value):
     return "sha256:" + sha256(value.encode("utf-8")).hexdigest()
 
 checks = []
+observed_check_names = set()
 for row in os.environ.get("RELEASE_CHECK_RECORDS", "").splitlines():
     name, status, observed_at, code = row.split("|")
     if name not in check_names or status not in {"passed", "failed", "warning"} or code not in check_codes:
         raise SystemExit("invalid release check")
+    if name in observed_check_names:
+        raise SystemExit("duplicate release check")
     if (status == "warning") != (code == "signature_warning"):
         raise SystemExit("invalid release warning")
     if status == "passed" and code != "none":
@@ -1485,6 +1587,13 @@ for row in os.environ.get("RELEASE_CHECK_RECORDS", "").splitlines():
     checks.append(
         {"name": name, "status": status, "observedAt": observed_at, "code": code}
     )
+    observed_check_names.add(name)
+
+if os.environ["RELEASE_REPORT_STATUS"] == "passed" and not {
+    "gateway_helper_signed_empty_webhook",
+    "gateway_main_signed_empty_webhook",
+} <= observed_check_names:
+    raise SystemExit("passed release missing signed webhook check")
 
 reason = os.environ["RELEASE_FAILURE_REASON"]
 if reason not in failure_map:

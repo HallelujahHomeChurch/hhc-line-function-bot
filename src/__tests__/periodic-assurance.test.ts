@@ -7,6 +7,7 @@ import {
   type PeriodicAssuranceInput
 } from "../assurance/periodic-probe.js";
 import { buildAssuranceReport } from "../assurance/report.js";
+import type { AssetApiClient } from "../clients/asset-api.js";
 import {
   createPeriodicAssuranceDependencies,
   readOneNotionResult,
@@ -36,7 +37,9 @@ const PERIODIC_FAILURE_CODES = [
   "clamav_eicar_failed",
   "diagnostic_folder_failed",
   "diagnostic_upload_failed",
-  "diagnostic_delete_failed"
+  "diagnostic_delete_failed",
+  "asset_lifecycle_failed",
+  "asset_cleanup_failed"
 ] as const;
 
 function dependencies(): PeriodicAssuranceDependencies {
@@ -65,6 +68,7 @@ function dependencies(): PeriodicAssuranceDependencies {
       name: "periodic-assurance.txt"
     }),
     deleteDiagnostic: vi.fn().mockResolvedValue(undefined),
+    runAssetLifecycle: vi.fn().mockResolvedValue({ status: "passed", code: "none" }),
     now: () => new Date(NOW)
   };
 }
@@ -84,7 +88,8 @@ describe("periodic assurance", () => {
         { name: "clamav_signature", status: "passed", code: "none" },
         { name: "clamav_clean", status: "passed", code: "none" },
         { name: "clamav_eicar", status: "passed", code: "none" },
-        { name: "diagnostic_write_delete", status: "passed", code: "none" }
+        { name: "diagnostic_write_delete", status: "passed", code: "none" },
+        { name: "asset_lifecycle", status: "passed", code: "none" }
       ],
       queue: { depth: 3, oldestAgeSeconds: 90 },
       providerRequests: { deepseek: 0, embedding: 0 }
@@ -113,6 +118,25 @@ describe("periodic assurance", () => {
     );
     expect(deps.deleteDiagnostic).toHaveBeenCalledOnce();
     expect(deps.deleteDiagnostic).toHaveBeenCalledWith("drive-1", "diagnostic-item");
+    expect(deps.runAssetLifecycle).toHaveBeenCalledOnce();
+  });
+
+  it("makes sanitized Asset cleanup failure fail the periodic report", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.runAssetLifecycle).mockResolvedValue({
+      status: "failed",
+      code: "asset_cleanup_failed"
+    });
+
+    const result = await runPeriodicAssurance(INPUT, deps);
+
+    expect(result.status).toBe("failed");
+    expect(result.checks.find((check) => check.name === "asset_lifecycle")).toEqual({
+      name: "asset_lifecycle",
+      status: "failed",
+      code: "asset_cleanup_failed"
+    });
+    expect(JSON.stringify(result)).not.toMatch(/token|sas|https:/iu);
   });
 
   it("accepts the clean sample and requires the EICAR sample to be rejected", async () => {
@@ -146,7 +170,7 @@ describe("periodic assurance", () => {
 
     expect(deps.deleteDiagnostic).toHaveBeenCalledOnce();
     expect(result.status).toBe("failed");
-    expect(result.checks.at(-1)).toEqual({
+    expect(result.checks.find((check) => check.name === "diagnostic_write_delete")).toEqual({
       name: "diagnostic_write_delete",
       status: "failed",
       code: "diagnostic_delete_failed"
@@ -327,7 +351,9 @@ describe("periodic assurance", () => {
     });
 
     expect(report.failureCode).toBe("diagnostic_delete_failed");
-    expect(report.checks.at(-1)?.code).toBe("diagnostic_delete_failed");
+    expect(report.checks.find((check) => check.name === "diagnostic_write_delete")?.code).toBe(
+      "diagnostic_delete_failed"
+    );
   });
 
   it.each(PERIODIC_FAILURE_CODES)(
@@ -374,7 +400,7 @@ describe("periodic assurance", () => {
 });
 
 describe("periodic assurance CLI", () => {
-  it("configures every real SDK adapter with retries disabled", () => {
+  it("configures every real SDK adapter with retries disabled", async () => {
     const createGraph = vi.fn().mockReturnValue({
       getItemById: vi.fn(),
       ensureFolder: vi.fn(),
@@ -389,8 +415,11 @@ describe("periodic assurance CLI", () => {
       getProperties: vi.fn(),
       peekMessages: vi.fn()
     });
+    const getToken = vi.fn().mockResolvedValue({ token: "workload-token" });
+    const createCredential = vi.fn().mockReturnValue({ getToken });
+    const createAsset = vi.fn().mockReturnValue({} as AssetApiClient);
 
-    createPeriodicAssuranceDependencies(
+    const deps = createPeriodicAssuranceDependencies(
       {
         GRAPH_TENANT_ID: "tenant",
         GRAPH_CLIENT_ID: "client",
@@ -399,12 +428,17 @@ describe("periodic assurance CLI", () => {
         GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID: "other-folder",
         NOTION_TOKEN: "notion-token",
         ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING: "queue-connection",
-        ATTACHMENT_SCAN_QUEUE_NAME: "attachment-scan"
+        ATTACHMENT_SCAN_QUEUE_NAME: "attachment-scan",
+        ASSET_API_URL: "https://asset.internal",
+        ASSET_API_AUDIENCE: "api://asset-api",
+        AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
       },
       {
         createGraph,
         createNotion,
-        createQueue
+        createQueue,
+        createCredential,
+        createAsset
       }
     );
 
@@ -417,6 +451,18 @@ describe("periodic assurance CLI", () => {
     expect(createQueue).toHaveBeenCalledWith("queue-connection", "attachment-scan", {
       retryOptions: { maxTries: 1 }
     });
+    expect(createCredential).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(createAsset).toHaveBeenCalledWith({
+      baseUrl: "https://asset.internal",
+      getAccessToken: expect.any(Function)
+    });
+    const getAssetAccessToken = createAsset.mock.calls[0]?.[0].getAccessToken;
+    const signal = AbortSignal.timeout(1_000);
+    await expect(getAssetAccessToken(signal)).resolves.toBe("workload-token");
+    expect(getToken).toHaveBeenCalledWith("api://asset-api/.default", {
+      abortSignal: signal
+    });
+    expect(deps.runAssetLifecycle).toEqual(expect.any(Function));
   });
 
   it("resolves an existing Notion database to one bounded data-source result", async () => {

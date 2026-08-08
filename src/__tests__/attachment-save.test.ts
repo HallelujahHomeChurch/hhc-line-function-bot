@@ -374,7 +374,8 @@ describe("attachment save pipeline", () => {
         sourceKey: "ppt_slides",
         itemKind: "ppt_slide",
         title: "SundayDeck"
-      }
+      },
+      expiresAt: "2026-07-11T11:00:00.000Z"
     });
     await expect(
       agentJobStore.get(agentJobStore.lastCreated!.id, {
@@ -382,7 +383,10 @@ describe("attachment save pipeline", () => {
         sourceKey: "group:C1",
         requesterUserId: "U1"
       })
-    ).resolves.toMatchObject({ status: "pending" });
+    ).resolves.toMatchObject({
+      status: "pending",
+      expiresAt: "2026-07-11T11:00:00.000Z"
+    });
     await expect(
       agentJobStore.get(agentJobStore.lastCreated!.id, {
         profileName: "helper",

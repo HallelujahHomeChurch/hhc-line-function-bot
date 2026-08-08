@@ -5,11 +5,12 @@ import { QueueClient } from "@azure/storage-queue";
 
 import { RedisAgentJobStore } from "../agent/jobs.js";
 import { runAttachmentAssetWorker } from "../attachments/asset-worker.js";
+import { ATTACHMENT_SCAN_TIMING } from "../attachments/scan-timing.js";
 import { loadAttachmentScanWorkerConfigFromEnv } from "../attachments/scan-worker-config.js";
 import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
-import { createAssetApiClient } from "../clients/asset-api.js";
+import { assetAccessTokenScope, createAssetApiClient } from "../clients/asset-api.js";
 import { createExternalBinaryClient } from "../clients/external-binary.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createLineSdkContentClient } from "../clients/line.js";
@@ -17,14 +18,12 @@ import { createPostgresRuntime } from "../db/postgres.js";
 import { createResourceBinaryPublisher } from "../functions/resource-binary-publisher.js";
 import { createRedisRuntime } from "../redis.js";
 import {
-  attachmentScanPublicationDeadline,
   formatAttachmentScanJobStatus,
   receiveAttachmentScanWork,
   shouldAcknowledgeAttachmentScanResult
 } from "./run-attachment-scan-job.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const SCAN_WAIT_MS = 12 * 60 * 1000;
 
 export interface AttachmentAssetJobEnvironment {
   queueUrl: string;
@@ -49,8 +48,18 @@ export function readAttachmentAssetJobEnvironment(
   return { queueUrl, assetApiUrl, assetApiAudience, managedIdentityClientId };
 }
 
-export function assetAccessTokenScope(audience: string): string {
-  return `${audience.replace(/\/$/u, "")}/.default`;
+export { assetAccessTokenScope } from "../clients/asset-api.js";
+
+export function attachmentAssetDeadlines(startedAt: Date): {
+  scanDeadline: Date;
+  publicationDeadline: Date;
+} {
+  return {
+    scanDeadline: new Date(startedAt.getTime() + ATTACHMENT_SCAN_TIMING.scanDeadlineMs),
+    publicationDeadline: new Date(
+      startedAt.getTime() + ATTACHMENT_SCAN_TIMING.publicationDeadlineMs
+    )
+  };
 }
 
 export async function runAttachmentAssetJob(
@@ -80,6 +89,7 @@ export async function runAttachmentAssetJob(
       catalog,
       sources: buildCatalogSourceSeedsForProfiles(env, config.profiles)
     });
+    const deadlines = attachmentAssetDeadlines(startedAt);
     const result = await runAttachmentAssetWorker(queueLease.workId, {
       workStore,
       assets: createAssetApiClient({
@@ -101,18 +111,14 @@ export async function runAttachmentAssetJob(
       lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
       externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
       externalMaxRedirects: config.externalResources.maxRedirects,
-      scanDeadline: new Date(startedAt.getTime() + SCAN_WAIT_MS),
-      publicationDeadline: attachmentScanPublicationDeadline(startedAt)
+      scanDeadline: deadlines.scanDeadline,
+      publicationDeadline: deadlines.publicationDeadline
     });
 
-    if (shouldAcknowledgeAttachmentScanResult(result)) await queueLease.complete();
+    const acknowledge = shouldAcknowledgeAttachmentScanResult(result);
+    if (acknowledge) await queueLease.complete();
     return {
-      exitCode:
-        result.status === "failed" && !result.infrastructureFailure
-          ? 0
-          : result.status === "completed" || shouldAcknowledgeAttachmentScanResult(result)
-            ? 0
-            : 1,
+      exitCode: acknowledge ? 0 : 1,
       status: formatAttachmentScanJobStatus(result)
     };
   } catch {

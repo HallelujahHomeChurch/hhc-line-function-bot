@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { AgentJobScope, AgentJobStore } from "../agent/jobs.js";
 import type { FunctionExecutionResult } from "../types.js";
+import { ATTACHMENT_SCAN_TIMING } from "./scan-timing.js";
 
 export type AttachmentScanWorkStatus =
   "pending_enqueue" | "queued" | "claimed" | "publishing" | "completed" | "failed";
@@ -33,6 +34,13 @@ export interface AttachmentScanWorkInput {
   ttlMs: number;
 }
 
+export interface AttachmentAssetUploadDescriptor {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksumSha256: string;
+}
+
 export interface AttachmentScanWork {
   version: 1;
   id: string;
@@ -40,6 +48,7 @@ export interface AttachmentScanWork {
   lineMessageId?: string;
   externalUrl?: string;
   assetId?: string;
+  uploadDescriptor?: AttachmentAssetUploadDescriptor;
   scope: AgentJobScope & { requesterUserId: string };
   target: AttachmentScanTarget;
   status: AttachmentScanWorkStatus;
@@ -63,6 +72,7 @@ export type AttachmentScanClaimDisposition =
   | {
       disposition: "terminal";
       terminalStatus: Extract<AttachmentScanWorkStatus, "completed" | "failed">;
+      failureCode?: AttachmentScanFailureCode;
     }
   | { disposition: "missing" };
 
@@ -74,7 +84,13 @@ export interface AttachmentScanWorkStore {
   claim(id: string): Promise<AttachmentScanWork | undefined>;
   claimForProcessing(id: string): Promise<AttachmentScanClaimDisposition>;
   beginPublishing(id: string, claimId: string, publicationDeadline?: Date): Promise<boolean>;
+  recordUploadDescriptor(
+    id: string,
+    claimId: string,
+    descriptor: AttachmentAssetUploadDescriptor
+  ): Promise<boolean>;
   recordAsset(id: string, claimId: string, assetId: string): Promise<boolean>;
+  releaseForRetry(id: string, claimId: string): Promise<boolean>;
   cancelPendingEnqueue(id: string, code: AttachmentScanFailureCode): Promise<boolean>;
   terminalStatus(
     id: string
@@ -128,6 +144,7 @@ local valid =
     lineMessageId = true,
     externalUrl = true,
     assetId = true,
+    uploadDescriptor = true,
     scope = true,
     target = true,
     status = true,
@@ -145,6 +162,26 @@ local valid =
   isNonEmptyString(work.id) and
   isNonEmptyString(work.jobId) and
   (work.assetId == nil or isNonEmptyString(work.assetId)) and
+  (
+    work.uploadDescriptor == nil or
+    (
+      type(work.uploadDescriptor) == "table" and
+      hasOnlyKeys(work.uploadDescriptor, {
+        fileName = true,
+        mimeType = true,
+        sizeBytes = true,
+        checksumSha256 = true
+      }) and
+      isNonEmptyString(work.uploadDescriptor.fileName) and
+      isNonEmptyString(work.uploadDescriptor.mimeType) and
+      type(work.uploadDescriptor.sizeBytes) == "number" and
+      work.uploadDescriptor.sizeBytes > 0 and
+      work.uploadDescriptor.sizeBytes == math.floor(work.uploadDescriptor.sizeBytes) and
+      type(work.uploadDescriptor.checksumSha256) == "string" and
+      string.match(work.uploadDescriptor.checksumSha256, "^[0-9a-f]+$") ~= nil and
+      string.len(work.uploadDescriptor.checksumSha256) == 64
+    )
+  ) and
   (
     (isNonEmptyString(work.lineMessageId) and work.externalUrl == nil) or
     (isNonEmptyString(work.externalUrl) and work.lineMessageId == nil)
@@ -202,10 +239,23 @@ if work.status == "publishing" then
   if not isCanonicalTimestamp(work.publishingExpiresAt) or work.publishingExpiresAt > ARGV[2] then
     return "active"
   end
+  local ttl = redis.call("PTTL", KEYS[1])
+  if ttl <= 0 then
+    return "missing"
+  end
+  work.status = "failed"
+  work.failureCode = "publication_abandoned"
+  work.completedAt = ARGV[2]
+  work.claimId = nil
+  work.claimExpiresAt = nil
+  work.pendingJobUpdate = { status = "failed", error = "publication_abandoned" }
+  local abandoned = cjson.encode(work)
+  redis.call("PSETEX", KEYS[1], ttl, abandoned)
+  redis.call("SREM", KEYS[2], work.id)
+  return "abandoned:" .. abandoned
 end
 local claimable =
   work.status == "queued" or
-  work.status == "publishing" or
   (
     work.status == "claimed" and
     isCanonicalTimestamp(work.claimExpiresAt) and
@@ -282,6 +332,65 @@ work.assetId = ARGV[4]
 local updated = cjson.encode(work)
 redis.call("PSETEX", KEYS[1], ttl, updated)
 return updated
+`;
+
+const recordUploadDescriptorScript = `
+local raw = redis.call("GET", KEYS[1])
+if not raw then return nil end
+local work = cjson.decode(raw)
+${workSchemaValidationScript}
+local descriptor = cjson.decode(ARGV[4])
+if
+  work.id ~= ARGV[1] or
+  work.status ~= "claimed" or
+  work.claimId ~= ARGV[2] or
+  not isCanonicalTimestamp(work.claimExpiresAt) or
+  work.claimExpiresAt <= ARGV[3] or
+  work.expiresAt <= ARGV[3] or
+  (
+    work.uploadDescriptor ~= nil and
+    (
+      work.uploadDescriptor.fileName ~= descriptor.fileName or
+      work.uploadDescriptor.mimeType ~= descriptor.mimeType or
+      work.uploadDescriptor.sizeBytes ~= descriptor.sizeBytes or
+      work.uploadDescriptor.checksumSha256 ~= descriptor.checksumSha256
+    )
+  )
+then
+  return nil
+end
+local ttl = redis.call("PTTL", KEYS[1])
+if ttl <= 0 then return nil end
+work.uploadDescriptor = descriptor
+local updated = cjson.encode(work)
+redis.call("PSETEX", KEYS[1], ttl, updated)
+return updated
+`;
+
+const releaseForRetryScript = `
+local raw = redis.call("GET", KEYS[1])
+if not raw then return nil end
+local work = cjson.decode(raw)
+${workSchemaValidationScript}
+if
+  work.id ~= ARGV[1] or
+  work.status ~= "claimed" or
+  work.claimId ~= ARGV[2] or
+  not isCanonicalTimestamp(work.claimExpiresAt) or
+  work.claimExpiresAt <= ARGV[3] or
+  work.expiresAt <= ARGV[3]
+then
+  return nil
+end
+local ttl = redis.call("PTTL", KEYS[1])
+if ttl <= 0 then return nil end
+work.status = "queued"
+work.claimedAt = nil
+work.claimId = nil
+work.claimExpiresAt = nil
+local released = cjson.encode(work)
+redis.call("PSETEX", KEYS[1], ttl, released)
+return released
 `;
 
 const markEnqueuedScript = `
@@ -428,8 +537,9 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
     this.claimIdFactory = options.claimIdFactory ?? randomUUID;
-    this.claimLeaseMs = options.claimLeaseMs ?? 15 * 60 * 1000;
-    this.publishingLeaseMs = options.publishingLeaseMs ?? 15 * 60 * 1000;
+    this.claimLeaseMs = options.claimLeaseMs ?? ATTACHMENT_SCAN_TIMING.claimLeaseMs;
+    this.publishingLeaseMs =
+      options.publishingLeaseMs ?? ATTACHMENT_SCAN_TIMING.publicationDeadlineMs;
   }
 
   async create(input: AttachmentScanWorkInput): Promise<AttachmentScanWork> {
@@ -481,17 +591,35 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
     }
     if (work.status === "completed" || work.status === "failed") {
       await this.reconcileTerminalJobUpdate(work);
-      return { disposition: "terminal", terminalStatus: work.status };
+      return {
+        disposition: "terminal",
+        terminalStatus: work.status,
+        ...(work.failureCode ? { failureCode: work.failureCode } : {})
+      };
     }
-    if (
-      work.status === "publishing" &&
-      (!work.publishingExpiresAt || work.publishingExpiresAt > claimedAtIso)
-    ) {
-      return { disposition: "active" };
+    if (work.status === "publishing") {
+      if (!work.publishingExpiresAt || work.publishingExpiresAt > claimedAtIso) {
+        return { disposition: "active" };
+      }
+      const abandoned: AttachmentScanWork = {
+        ...work,
+        status: "failed",
+        failureCode: "publication_abandoned",
+        completedAt: claimedAtIso,
+        claimId: undefined,
+        claimExpiresAt: undefined,
+        pendingJobUpdate: { status: "failed", error: "publication_abandoned" }
+      };
+      this.values.set(id, abandoned);
+      await this.reconcileTerminalJobUpdate(abandoned);
+      return {
+        disposition: "terminal",
+        terminalStatus: "failed",
+        failureCode: "publication_abandoned"
+      };
     }
     const claimable =
       work.status === "queued" ||
-      work.status === "publishing" ||
       (work.status === "claimed" &&
         Boolean(work.claimExpiresAt) &&
         work.claimExpiresAt! <= claimedAtIso);
@@ -558,6 +686,53 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
       return false;
     }
     this.values.set(id, { ...work, assetId });
+    return true;
+  }
+
+  async recordUploadDescriptor(
+    id: string,
+    claimId: string,
+    descriptor: AttachmentAssetUploadDescriptor
+  ): Promise<boolean> {
+    if (!isUploadDescriptor(descriptor)) return false;
+    const work = this.values.get(id);
+    const current = this.now().toISOString();
+    if (
+      !work ||
+      work.status !== "claimed" ||
+      work.claimId !== claimId ||
+      !work.claimExpiresAt ||
+      work.claimExpiresAt <= current ||
+      work.expiresAt <= current ||
+      (work.uploadDescriptor !== undefined &&
+        !sameUploadDescriptor(work.uploadDescriptor, descriptor))
+    ) {
+      return false;
+    }
+    this.values.set(id, { ...work, uploadDescriptor: { ...descriptor } });
+    return true;
+  }
+
+  async releaseForRetry(id: string, claimId: string): Promise<boolean> {
+    const work = this.values.get(id);
+    const current = this.now().toISOString();
+    if (
+      !work ||
+      work.status !== "claimed" ||
+      work.claimId !== claimId ||
+      !work.claimExpiresAt ||
+      work.claimExpiresAt <= current ||
+      work.expiresAt <= current
+    ) {
+      return false;
+    }
+    this.values.set(id, {
+      ...work,
+      status: "queued",
+      claimedAt: undefined,
+      claimId: undefined,
+      claimExpiresAt: undefined
+    });
     return true;
   }
 
@@ -689,8 +864,9 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
     this.claimIdFactory = options.claimIdFactory ?? randomUUID;
-    this.claimLeaseMs = options.claimLeaseMs ?? 15 * 60 * 1000;
-    this.publishingLeaseMs = options.publishingLeaseMs ?? 15 * 60 * 1000;
+    this.claimLeaseMs = options.claimLeaseMs ?? ATTACHMENT_SCAN_TIMING.claimLeaseMs;
+    this.publishingLeaseMs =
+      options.publishingLeaseMs ?? ATTACHMENT_SCAN_TIMING.publicationDeadlineMs;
   }
 
   async create(input: AttachmentScanWorkInput): Promise<AttachmentScanWork> {
@@ -763,7 +939,8 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
       await this.reconcileTerminalJobUpdate(terminal);
       return {
         disposition: "terminal",
-        terminalStatus: terminal.status
+        terminalStatus: terminal.status,
+        ...(terminal.failureCode ? { failureCode: terminal.failureCode } : {})
       };
     }
     if (raw.startsWith("abandoned:")) {
@@ -772,7 +949,11 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
         return { disposition: "missing" };
       }
       await this.reconcileTerminalJobUpdate(abandoned);
-      return { disposition: "terminal", terminalStatus: "failed" };
+      return {
+        disposition: "terminal",
+        terminalStatus: "failed",
+        failureCode: abandoned.failureCode ?? "publication_abandoned"
+      };
     }
     const work = parseWork(raw, id);
     return work?.status === "claimed"
@@ -803,6 +984,30 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
       arguments: [id, claimId, this.now().toISOString(), assetId]
     });
     return typeof raw === "string" && parseWork(raw, id)?.assetId === assetId;
+  }
+
+  async recordUploadDescriptor(
+    id: string,
+    claimId: string,
+    descriptor: AttachmentAssetUploadDescriptor
+  ): Promise<boolean> {
+    if (!isUploadDescriptor(descriptor)) return false;
+    const raw = await this.options.client.eval(recordUploadDescriptorScript, {
+      keys: [this.key(id)],
+      arguments: [id, claimId, this.now().toISOString(), JSON.stringify(descriptor)]
+    });
+    const updated = typeof raw === "string" ? parseWork(raw, id) : undefined;
+    return Boolean(
+      updated?.uploadDescriptor && sameUploadDescriptor(updated.uploadDescriptor, descriptor)
+    );
+  }
+
+  async releaseForRetry(id: string, claimId: string): Promise<boolean> {
+    const raw = await this.options.client.eval(releaseForRetryScript, {
+      keys: [this.key(id)],
+      arguments: [id, claimId, this.now().toISOString()]
+    });
+    return typeof raw === "string" && parseWork(raw, id)?.status === "queued";
   }
 
   async cancelPendingEnqueue(id: string, code: AttachmentScanFailureCode): Promise<boolean> {
@@ -955,6 +1160,7 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       !isTimestamp(work.createdAt) ||
       !isTimestamp(work.expiresAt) ||
       (work.assetId !== undefined && !isNonEmptyString(work.assetId)) ||
+      (work.uploadDescriptor !== undefined && !isUploadDescriptor(work.uploadDescriptor)) ||
       (work.failureCode !== undefined && !isFailureCode(work.failureCode)) ||
       (work.claimedAt !== undefined && !isTimestamp(work.claimedAt)) ||
       (work.claimId !== undefined && !isNonEmptyString(work.claimId)) ||
@@ -973,6 +1179,7 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       ...(work.lineMessageId ? { lineMessageId: work.lineMessageId } : {}),
       ...(work.externalUrl ? { externalUrl: work.externalUrl } : {}),
       ...(work.assetId ? { assetId: work.assetId } : {}),
+      ...(work.uploadDescriptor ? { uploadDescriptor: { ...work.uploadDescriptor } } : {}),
       scope: {
         profileName: work.scope.profileName,
         sourceKey: work.scope.sourceKey,
@@ -1069,10 +1276,44 @@ function cloneWork(work: AttachmentScanWork): AttachmentScanWork {
     ...work,
     scope: { ...work.scope },
     target: { ...work.target },
+    ...(work.uploadDescriptor ? { uploadDescriptor: { ...work.uploadDescriptor } } : {}),
     ...(work.pendingJobUpdate
       ? { pendingJobUpdate: clonePendingJobUpdate(work.pendingJobUpdate) }
       : {})
   };
+}
+
+function isUploadDescriptor(value: unknown): value is AttachmentAssetUploadDescriptor {
+  if (!value || typeof value !== "object") return false;
+  if (
+    Object.keys(value).length !== 4 ||
+    Object.keys(value).some(
+      (key) => !["fileName", "mimeType", "sizeBytes", "checksumSha256"].includes(key)
+    )
+  ) {
+    return false;
+  }
+  const descriptor = value as Partial<AttachmentAssetUploadDescriptor>;
+  return (
+    isNonEmptyString(descriptor.fileName) &&
+    isNonEmptyString(descriptor.mimeType) &&
+    Number.isSafeInteger(descriptor.sizeBytes) &&
+    descriptor.sizeBytes! > 0 &&
+    typeof descriptor.checksumSha256 === "string" &&
+    /^[0-9a-f]{64}$/u.test(descriptor.checksumSha256)
+  );
+}
+
+function sameUploadDescriptor(
+  left: AttachmentAssetUploadDescriptor,
+  right: AttachmentAssetUploadDescriptor
+): boolean {
+  return (
+    left.fileName === right.fileName &&
+    left.mimeType === right.mimeType &&
+    left.sizeBytes === right.sizeBytes &&
+    left.checksumSha256 === right.checksumSha256
+  );
 }
 
 function boundedExpiry(

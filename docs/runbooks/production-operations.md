@@ -191,11 +191,17 @@ revision/image identities, check name/status/time/code, `failureCode`, and
 rollback status/revision/image. The normal success attestation includes
 `providerRequests: { deepseek: 0, embedding: 0 }`.
 
-The release probe sends a signed empty `events: []` request through the public
-gateway. It verifies the gateway/Dapr/bot route and signature handling, but
-does not prove LINE delivery or reply-token behavior. Do not infer a human LINE
-reply from this probe; inspect sanitized naturally occurring success telemetry
-in a separately declared acceptance window for that evidence.
+The release probe sends separately signed empty `events: []` requests through
+the public gateway and records `gateway_helper_signed_empty_webhook` and
+`gateway_main_signed_empty_webhook`. Together, they verify the Gateway→Dapr→
+selected-profile route, configured signature acceptance, and empty-batch early
+return. This probe does not prove LINE delivery or reply-token behavior. It
+also does not prove LINE Console secret correctness or provider availability
+during normal turns. The
+`providerRequests: { deepseek: 0, embedding: 0 }` field attests only this
+provider-free release path; it is not provider runtime telemetry. Do not infer
+a human LINE reply from this probe; inspect sanitized naturally occurring
+success telemetry in a separately declared acceptance window for that evidence.
 
 Release check failures use bounded codes such as `network_failed`, `timeout`,
 `http_mismatch`, `malformed_json`, or `clamav_manifest_invalid`. Treat any

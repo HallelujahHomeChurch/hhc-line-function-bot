@@ -1,5 +1,13 @@
-import type { AssetApiClient, AssetRecord } from "../clients/asset-api.js";
-import type { ExternalBinaryClient } from "../clients/external-binary.js";
+import {
+  isPermanentAssetApiError,
+  type AssetApiClient,
+  type AssetRecord
+} from "../clients/asset-api.js";
+import {
+  isExternalBinaryReadError,
+  type ExternalBinaryClient
+} from "../clients/external-binary.js";
+import { lineContentFailureDisposition } from "../clients/line.js";
 import {
   prepareResourceBinary,
   type PreparedResourceBinary,
@@ -10,10 +18,18 @@ import type { LineContentClient } from "../types.js";
 import type { AttachmentScanWorkerProfile } from "./scan-worker-config.js";
 import type {
   AttachmentScanFailureCode,
+  AttachmentAssetUploadDescriptor,
   AttachmentScanWork,
   AttachmentScanWorkStore
 } from "./scan-work-store.js";
-import type { AttachmentScanWorkerResult } from "./scan-worker.js";
+
+export type AttachmentAssetWorkerResult =
+  | { status: "completed"; signatureHealth: "current" }
+  | { status: "permanent_failure"; failureCode: AttachmentScanFailureCode }
+  | { status: "transient_retry"; failureCode: AttachmentScanFailureCode }
+  | { status: "scan_pending" }
+  | { status: "contention" }
+  | { status: "missing" };
 
 export async function runAttachmentAssetWorker(
   workId: string,
@@ -33,71 +49,120 @@ export async function runAttachmentAssetWorker(
     now?: () => Date;
     sleep?: (milliseconds: number) => Promise<void>;
   }
-): Promise<AttachmentScanWorkerResult> {
-  const claim = await options.workStore.claimForProcessing(workId);
-  if (claim.disposition !== "claimed") return { status: "ignored", reason: claim.disposition };
+): Promise<AttachmentAssetWorkerResult> {
+  let claim: Awaited<ReturnType<AttachmentScanWorkStore["claimForProcessing"]>>;
+  try {
+    claim = await options.workStore.claimForProcessing(workId);
+  } catch {
+    return { status: "transient_retry", failureCode: "worker_failed" };
+  }
+  if (claim.disposition === "missing") return { status: "missing" };
+  if (claim.disposition === "active") return { status: "contention" };
+  if (claim.disposition === "terminal") {
+    return claim.terminalStatus === "completed"
+      ? { status: "completed", signatureHealth: "current" }
+      : {
+          status: "permanent_failure",
+          failureCode: claim.failureCode ?? "worker_failed"
+        };
+  }
   const work = claim.work;
   const now = options.now ?? (() => new Date());
   const sleep =
     options.sleep ??
     ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
 
+  let publishing = false;
   try {
-    const resource = await prepareWorkResource(work, options);
-    if (!resource) return failWork(options.workStore, work, "validation_failed", false);
+    if (!validWorkTarget(work, options.profiles)) {
+      return permanentFailure(options.workStore, work, "validation_failed");
+    }
 
+    let descriptor = work.uploadDescriptor;
+    let resource: PreparedResourceBinary | undefined;
     let asset: AssetRecord;
     if (work.assetId) {
+      if (!descriptor) {
+        return permanentFailure(options.workStore, work, "validation_failed");
+      }
       asset = await options.assets.get(work.assetId);
     } else {
+      if (!descriptor) {
+        resource = await prepareWorkResource(work, options);
+        if (!resource) {
+          return permanentFailure(options.workStore, work, "validation_failed");
+        }
+        descriptor = uploadDescriptor(resource);
+        if (!(await options.workStore.recordUploadDescriptor(work.id, work.claimId!, descriptor))) {
+          return { status: "contention" };
+        }
+      }
+
       const created = await options.assets.createUpload({
-        workId: work.id,
-        lineMessageId: work.lineMessageId ?? work.id,
-        fileName: resource.fileName,
-        mimeType: resource.mimeType,
-        maxSizeBytes: resource.sizeBytes
+        idempotencyKey: `line-attachment:${work.id}`,
+        ownerType: "line_message",
+        ownerId: work.lineMessageId ?? work.id,
+        purpose: "resource",
+        fileName: descriptor.fileName,
+        mimeType: descriptor.mimeType,
+        maxSizeBytes: descriptor.sizeBytes
       });
       asset = created.asset;
       if (asset.uploadStatus !== "completed") {
-        if (!created.uploadTarget)
-          return failWork(options.workStore, work, "validation_failed", false);
+        if (asset.uploadStatus !== "created" || !created.uploadTarget) {
+          return permanentFailure(options.workStore, work, "validation_failed");
+        }
+        resource ??= await prepareWorkResource(work, options);
+        if (!resource || !matchesDescriptor(resource, descriptor)) {
+          return permanentFailure(options.workStore, work, "validation_failed");
+        }
         await options.assets.upload(created.uploadTarget, resource.data);
         asset = await options.assets.complete(asset.id, {
-          sizeBytes: resource.sizeBytes,
-          checksumSha256: resource.sha256,
-          mimeType: resource.mimeType
+          sizeBytes: descriptor.sizeBytes,
+          checksumSha256: descriptor.checksumSha256,
+          mimeType: descriptor.mimeType
         });
       }
-      if (!(await options.workStore.recordAsset(work.id, work.claimId!, asset.id))) {
-        return { status: "ignored", reason: "active" };
+      if (!matchesAssetRecord(asset, descriptor)) {
+        return permanentFailure(options.workStore, work, "validation_failed");
       }
+      if (!(await options.workStore.recordAsset(work.id, work.claimId!, asset.id))) {
+        return { status: "contention" };
+      }
+    }
+
+    if (!matchesAssetRecord(asset, descriptor)) {
+      return permanentFailure(options.workStore, work, "validation_failed");
     }
 
     asset = await waitForScan(asset, options.assets, options.scanDeadline, now, sleep);
+    if (!matchesAssetRecord(asset, descriptor)) {
+      return permanentFailure(options.workStore, work, "validation_failed");
+    }
     if (asset.scanStatus === "pending" || asset.scanStatus === "scanning") {
-      return { status: "ignored", reason: "active" };
+      return scanPending(options.workStore, work);
     }
     if (asset.scanStatus === "infected") {
-      return failWork(options.workStore, work, "scan_infected", false);
+      return permanentFailure(options.workStore, work, "scan_infected");
     }
     if (asset.scanStatus !== "clean" || !asset.scanSignatureVersion) {
-      return failWork(options.workStore, work, "scan_unavailable", false);
+      return permanentFailure(options.workStore, work, "scan_unavailable");
     }
 
-    await options.assets.grantServiceRead(asset.id, work.id);
+    await options.assets.grantServiceRead(asset.id, `line-attachment-read:${work.id}`);
     const clean = await options.assets.download(asset.id);
     const verified = prepareResourceBinary({
       binary: {
         data: clean.data,
-        declaredFileName: resource.fileName,
-        declaredContentType: clean.contentType,
+        declaredFileName: descriptor.fileName,
+        declaredContentType: asset.detectedMimeType ?? clean.contentType,
         sourceKind: "external"
       },
-      target: resource.target,
+      target: workTarget(work),
       maxBytes: options.maxBytes
     });
-    if (!verified.ok || verified.resource.sha256 !== resource.sha256) {
-      return failWork(options.workStore, work, "validation_failed", false);
+    if (!verified.ok || !matchesDescriptor(verified.resource, descriptor)) {
+      return permanentFailure(options.workStore, work, "validation_failed");
     }
     if (
       !(await options.workStore.beginPublishing(
@@ -106,23 +171,45 @@ export async function runAttachmentAssetWorker(
         options.publicationDeadline
       ))
     ) {
-      return { status: "ignored", reason: "active" };
+      return { status: "contention" };
     }
+    publishing = true;
     const publication = await options.publisher.publishVerifiedResource({
       resource: verified.resource,
       scan: { status: "clean", signatureVersion: asset.scanSignatureVersion },
       now: now()
     });
     if (publication.status === "failed") {
-      return failWork(options.workStore, work, "publish_failed", true);
+      return permanentFailure(options.workStore, work, "publish_failed");
     }
     if (!(await options.workStore.complete(work.id, work.claimId!, publication.result))) {
-      return { status: "ignored", reason: "active" };
+      return { status: "contention" };
     }
     return { status: "completed", signatureHealth: "current" };
-  } catch {
-    return { status: "ignored", reason: "active" };
+  } catch (error) {
+    if (publishing) return { status: "contention" };
+    if (isPermanentAssetApiError(error)) {
+      return permanentFailure(options.workStore, work, "scan_unavailable");
+    }
+    const sourceDisposition = sourceFailureDisposition(error);
+    if (sourceDisposition === "permanent") {
+      return permanentFailure(options.workStore, work, "download_failed");
+    }
+    return transientRetry(
+      options.workStore,
+      work,
+      sourceDisposition === "transient" ? "download_failed" : "scan_unavailable"
+    );
   }
+}
+
+function sourceFailureDisposition(error: unknown): "permanent" | "transient" | undefined {
+  const lineDisposition = lineContentFailureDisposition(error);
+  if (lineDisposition) return lineDisposition;
+  if (isExternalBinaryReadError(error)) {
+    return error.transient ? "transient" : "permanent";
+  }
+  return undefined;
 }
 
 async function prepareWorkResource(
@@ -197,15 +284,102 @@ async function waitForScan(
   return asset;
 }
 
-async function failWork(
+async function permanentFailure(
   store: AttachmentScanWorkStore,
   work: AttachmentScanWork,
-  failureCode: AttachmentScanFailureCode,
-  infrastructureFailure: boolean
-): Promise<AttachmentScanWorkerResult> {
-  return (await store.fail(work.id, work.claimId!, failureCode))
-    ? { status: "failed", failureCode, infrastructureFailure }
-    : { status: "ignored", reason: "active" };
+  failureCode: AttachmentScanFailureCode
+): Promise<AttachmentAssetWorkerResult> {
+  try {
+    return (await store.fail(work.id, work.claimId!, failureCode))
+      ? { status: "permanent_failure", failureCode }
+      : { status: "contention" };
+  } catch {
+    return { status: "transient_retry", failureCode: "worker_failed" };
+  }
+}
+
+async function transientRetry(
+  store: AttachmentScanWorkStore,
+  work: AttachmentScanWork,
+  failureCode: AttachmentScanFailureCode
+): Promise<AttachmentAssetWorkerResult> {
+  try {
+    return (await store.releaseForRetry(work.id, work.claimId!))
+      ? { status: "transient_retry", failureCode }
+      : { status: "contention" };
+  } catch {
+    return { status: "transient_retry", failureCode };
+  }
+}
+
+async function scanPending(
+  store: AttachmentScanWorkStore,
+  work: AttachmentScanWork
+): Promise<AttachmentAssetWorkerResult> {
+  try {
+    return (await store.releaseForRetry(work.id, work.claimId!))
+      ? { status: "scan_pending" }
+      : { status: "contention" };
+  } catch {
+    return { status: "scan_pending" };
+  }
+}
+
+function validWorkTarget(
+  work: AttachmentScanWork,
+  profiles: AttachmentScanWorkerProfile[]
+): boolean {
+  return (
+    profiles.some((candidate) => candidate.name === work.scope.profileName) &&
+    isResourcePublishItemKind(work.target.itemKind)
+  );
+}
+
+function workTarget(work: AttachmentScanWork) {
+  return {
+    profileName: work.scope.profileName,
+    sourceKey: work.target.sourceKey,
+    itemKind: work.target.itemKind as ResourcePublishItemKind,
+    domain: work.target.domain,
+    title: work.target.title
+  };
+}
+
+function uploadDescriptor(resource: PreparedResourceBinary): AttachmentAssetUploadDescriptor {
+  return {
+    fileName: resource.fileName,
+    mimeType: resource.mimeType,
+    sizeBytes: resource.sizeBytes,
+    checksumSha256: resource.sha256
+  };
+}
+
+function matchesDescriptor(
+  resource: PreparedResourceBinary,
+  descriptor: AttachmentAssetUploadDescriptor
+): boolean {
+  return (
+    resource.fileName === descriptor.fileName &&
+    resource.mimeType === descriptor.mimeType &&
+    resource.sizeBytes === descriptor.sizeBytes &&
+    resource.sha256 === descriptor.checksumSha256
+  );
+}
+
+function matchesAssetRecord(
+  asset: AssetRecord,
+  descriptor: AttachmentAssetUploadDescriptor
+): boolean {
+  return (
+    asset.uploadStatus === "completed" &&
+    asset.sizeBytes === descriptor.sizeBytes &&
+    asset.checksumSha256?.toLowerCase() === descriptor.checksumSha256 &&
+    normalizedMime(asset.detectedMimeType) === normalizedMime(descriptor.mimeType)
+  );
+}
+
+function normalizedMime(value: string | undefined): string | undefined {
+  return value?.split(";", 1)[0]?.trim().toLowerCase();
 }
 
 function isResourcePublishItemKind(value: string): value is ResourcePublishItemKind {

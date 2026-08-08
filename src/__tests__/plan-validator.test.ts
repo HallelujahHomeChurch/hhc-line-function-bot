@@ -986,6 +986,42 @@ describe("deterministic agent plan validation", () => {
     ).toEqual({ disposition: "clarify", reasonCode: "planner_unavailable" });
   });
 
+  it("does not degrade an out-of-range Weekly Paper issue to latest", () => {
+    const result = validateAgentPlan(
+      input({
+        text: "下載第 2147483648 期週報",
+        enabledFunctions: ["download_weekly_paper"],
+        candidates: [
+          { capability: "download_weekly_paper", reason: "explicit_intent", score: 400 }
+        ],
+        proposal: { status: "no_plan", reasonCode: "providers_disabled" }
+      })
+    );
+
+    expect(result.disposition).not.toBe("execute");
+  });
+
+  it.each(["不要下載週報", "不要下載第1733期週報", "取消下載週報", "不用幫我下載週報"])(
+    "does not revalidate a negated read intent for deterministic recovery: %s",
+    (text) => {
+      const result = validateAgentPlan(
+        input({
+          text,
+          enabledFunctions: ["download_weekly_paper"],
+          candidates: [
+            { capability: "download_weekly_paper", reason: "explicit_intent", score: 400 }
+          ],
+          proposal: { status: "no_plan", reasonCode: "providers_disabled" }
+        })
+      );
+
+      expect(result).not.toMatchObject({
+        disposition: "execute",
+        capability: "download_weekly_paper"
+      });
+    }
+  );
+
   it("does not ground ordinal 1 from the numeric substring in 第10個", () => {
     expect(
       validateAgentPlan({

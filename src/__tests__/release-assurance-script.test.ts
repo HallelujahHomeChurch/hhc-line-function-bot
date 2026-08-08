@@ -15,6 +15,7 @@ const GOOD_SCAN_DIGEST = `sha256:${"3".repeat(64)}`;
 const GOOD_REFRESH_DIGEST = `sha256:${"4".repeat(64)}`;
 const GOOD_RELEASE_PROBE_DIGEST = `sha256:${"5".repeat(64)}`;
 const GOOD_PERIODIC_DIGEST = `sha256:${"6".repeat(64)}`;
+const MAIN_EMPTY_WEBHOOK_SIGNATURE = Buffer.alloc(32, 1).toString("base64");
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((entry) => rm(entry, { recursive: true })));
@@ -52,6 +53,38 @@ describe("release assurance shell transaction", () => {
     expect(report.status).toBe("failed");
     expect(report.failureCode).toBe("network_failed");
     expect(report.rollback).toEqual({ status: "not_required" });
+  });
+
+  it.each([
+    ["missing helper", ["release_probe", "gateway_main_signed_empty_webhook"], true],
+    ["missing main", ["release_probe", "gateway_helper_signed_empty_webhook"], true],
+    [
+      "duplicate passed check",
+      [
+        "release_probe",
+        "gateway_helper_signed_empty_webhook",
+        "gateway_main_signed_empty_webhook",
+        "release_probe"
+      ],
+      true
+    ],
+    ["duplicate failed check", ["release_probe", "release_probe"], false]
+  ])("rejects a shell-written %s report", async (_case, checkNames, passed) => {
+    const fixture = await createReportWriterFixture(checkNames, passed);
+    const result = fixture.run();
+
+    expect(result.status).not.toBe(0);
+    await expect(readFile(fixture.reportPath, "utf8")).rejects.toThrow();
+  });
+
+  it("allows a shell-written early failed report with partial checks", async () => {
+    const fixture = await createReportWriterFixture(["release_probe"], false);
+    const result = fixture.run();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status).toBe(0);
+    expect(() => buildAssuranceReport(report)).not.toThrow();
+    expect(report.checks.map((check) => check.name)).toEqual(["release_probe"]);
   });
 
   it("captures known-good state, runs live gates, and writes an allowlisted digest-only report", async () => {
@@ -101,6 +134,7 @@ describe("release assurance shell transaction", () => {
     expect(reportText).not.toContain("internal.example");
     expect(reportText).not.toContain("missing_line_signature");
     expect(reportText).not.toContain("registry.example");
+    expect(reportText).not.toContain(MAIN_EMPTY_WEBHOOK_SIGNATURE);
     expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
     expect(calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")).toBe(
       false
@@ -639,6 +673,39 @@ exec bash "${toBashPath(path.join(scriptsDirectory, "deploy-aca.sh"))}"
   };
 }
 
+async function createReportWriterFixture(checkNames: string[], passed: boolean) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "release-report-writer-"));
+  temporaryDirectories.push(directory);
+  const reportPath = path.join(directory, "report.json");
+  const driverPath = path.join(directory, "driver.sh");
+  const records = checkNames
+    .map((name) => `${name}|passed|2026-07-27T00:00:00.000Z|none`)
+    .join("\\n");
+  await writeFile(
+    driverPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+source "${toBashPath(path.join(ROOT, "scripts/release-assurance.sh"))}"
+export RELEASE_REPORT_PATH="${toBashPath(reportPath)}"
+export RELEASE_ID="fixture-release-writer"
+export RELEASE_COMMIT_SHA="${"a".repeat(40)}"
+export RELEASE_KNOWN_GOOD_REVISION="bot--known-good"
+export RELEASE_KNOWN_GOOD_IMAGE="${GOOD_BOT_DIGEST}"
+export RELEASE_TARGET_REVISION="bot--target"
+export RELEASE_TARGET_IMAGE="${GOOD_BOT_DIGEST}"
+export RELEASE_CHECK_RECORDS=$'${records}\\n'
+export RELEASE_FAILURE_REASON="${passed ? "none" : "preflight_failed"}"
+export RELEASE_PROVIDER_CONTRACT_VERIFIED="${passed ? "true" : "false"}"
+write_release_report
+`,
+    { mode: 0o700 }
+  );
+  return {
+    reportPath,
+    run: () => spawnSync("bash", [toBashPath(driverPath)], { cwd: ROOT, encoding: "utf8" })
+  };
+}
+
 async function createFixture(scenario: string) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "release-assurance-"));
   temporaryDirectories.push(directory);
@@ -1174,7 +1241,12 @@ if (command("containerapp", "job", "show")) {
           name: "GATEWAY_WEBHOOK_URL",
           value: "https://gateway.example/api/line/webhook/helper"
         },
+        {
+          name: "GATEWAY_MAIN_WEBHOOK_URL",
+          value: "https://gateway.example/api/line/webhook/main"
+        },
         { name: "LINE_HELPER_CHANNEL_SECRET", secretRef: "line-helper-channel-secret" },
+        { name: "LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE", value: "${MAIN_EMPTY_WEBHOOK_SIGNATURE}" },
         {
           name: "CLAMAV_SIGNATURE_MANIFEST_PATH",
           value: "/var/lib/clamav/current/manifest.json"
@@ -1209,6 +1281,9 @@ if (command("containerapp", "job", "show")) {
           secretRef: "attachment-scan-queue-connection-string"
         },
         { name: "ATTACHMENT_SCAN_QUEUE_NAME", value: "queue-fixture" },
+        { name: "ASSET_API_URL", value: "https://asset.internal.example" },
+        { name: "ASSET_API_AUDIENCE", value: "api://asset-api" },
+        { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" },
         {
           name: "CLAMAV_SIGNATURE_MANIFEST_PATH",
           value: "/var/lib/clamav/current/manifest.json"
@@ -1244,7 +1319,7 @@ if (command("containerapp", "job", "show")) {
   if (scenario === "release_probe_mount_mismatch" && name === "hhc-line-bot-release-probe") definition.volumes[0].storageName = "clamav-signatures-readwrite";
   if (scenario === "release_probe_provider_env" && name === "hhc-line-bot-release-probe") definition.env.push({ name: "DEEPSEEK_API_KEY", secretRef: "forbidden" });
   if (scenario === "periodic_args_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.args = ["dist/tools/wrong.js"];
-  if (scenario === "periodic_env_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.env = definition.env.filter((entry) => entry.name !== "GRAPH_DRIVE_ID");
+  if (scenario === "periodic_env_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.env = definition.env.filter((entry) => entry.name !== "ASSET_API_URL");
   if (scenario === "periodic_resources_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.resources.memory = "1Gi";
   if (scenario === "periodic_mount_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.volumes[0].storageName = "clamav-signatures-readwrite";
   if (scenario === "periodic_provider_env" && name === "hhc-line-bot-periodic-assurance") definition.env.push({ name: "AZURE_OPENAI_EMBEDDING_API_KEY", secretRef: "forbidden" });
@@ -1265,7 +1340,8 @@ if (command("containerapp", "job", "logs", "show")) {
     { name: "bot_health", status: scenario === "release_probe_child_failure" ? "failed" : "passed", code: scenario === "release_probe_child_failure" ? "http_mismatch" : "none" },
     { name: "bot_readiness", status: "passed", code: "none" },
     { name: "searxng_root", status: "passed", code: "none" },
-    { name: "gateway_empty_webhook", status: "passed", code: "none" },
+    { name: "gateway_helper_signed_empty_webhook", status: "passed", code: "none" },
+    { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" },
     { name: "clamav_signature", status: scenario === "release_probe_warning" ? "warning" : "passed", code: scenario === "release_probe_warning" ? "signature_warning" : "none", ...(scenario === "release_probe_warning" ? { signatureHealth: "warning" } : { signatureHealth: "current" }) }
   ];
   const payload = {
@@ -1301,7 +1377,8 @@ if (command("monitor", "log-analytics", "query")) {
     },
     { name: "bot_readiness", status: "passed", code: "none" },
     { name: "searxng_root", status: "passed", code: "none" },
-    { name: "gateway_empty_webhook", status: "passed", code: "none" },
+    { name: "gateway_helper_signed_empty_webhook", status: "passed", code: "none" },
+    { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" },
     {
       name: "clamav_signature",
       status: scenario === "release_probe_warning" ? "warning" : "passed",

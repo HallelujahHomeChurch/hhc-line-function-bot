@@ -84,11 +84,98 @@ describe("attachment scan work store", () => {
     await store.markEnqueued(work.id);
     await store.claimForProcessing(work.id);
 
+    const descriptor = {
+      fileName: "SundayDeck.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 14,
+      checksumSha256: "9b6b2e2ccae2d0350af6f0e709e375be9d78383e3e98ed854deb5007926a70c4"
+    };
+    await expect(store.recordUploadDescriptor(work.id, "claim-1", descriptor)).resolves.toBe(true);
     await expect(store.recordAsset(work.id, "claim-1", "asset-1")).resolves.toBe(true);
     await expect(store.recordAsset(work.id, "claim-1", "asset-2")).resolves.toBe(false);
     expect(JSON.parse(client.values.get(`test:attachment-scan-work:${work.id}`)!)).toMatchObject({
-      assetId: "asset-1"
+      assetId: "asset-1",
+      uploadDescriptor: descriptor
     });
+  });
+
+  it("persists the upload descriptor before upload and fences stale claim tokens", async () => {
+    let current = new Date("2026-07-24T04:00:00.000Z");
+    let claimSequence = 0;
+    const jobStore = new InMemoryAgentJobStore({ now: () => current });
+    const store = new InMemoryAttachmentScanWorkStore({
+      jobStore,
+      now: () => current,
+      claimLeaseMs: 60_000,
+      claimIdFactory: () => `claim-${++claimSequence}`
+    });
+    const job = await jobStore.createPending({ scope, label: "保存檔案", ttlMs: 600_000 });
+    const work = await store.create({
+      jobId: job.id,
+      lineMessageId: "line-message-opaque-id",
+      scope,
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck"
+      },
+      ttlMs: 600_000
+    });
+    await store.markEnqueued(work.id);
+    const stale = await store.claim(work.id);
+    current = new Date("2026-07-24T04:01:00.000Z");
+    const replacement = await store.claim(work.id);
+    const descriptor = {
+      fileName: "SundayDeck.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 14,
+      checksumSha256: "9b6b2e2ccae2d0350af6f0e709e375be9d78383e3e98ed854deb5007926a70c4"
+    };
+
+    await expect(store.recordUploadDescriptor(work.id, stale!.claimId!, descriptor)).resolves.toBe(
+      false
+    );
+    await expect(
+      store.recordUploadDescriptor(work.id, replacement!.claimId!, descriptor)
+    ).resolves.toBe(true);
+
+    current = new Date("2026-07-24T04:02:00.000Z");
+    const resumed = await store.claim(work.id);
+    expect(resumed).toMatchObject({ uploadDescriptor: descriptor });
+  });
+
+  it("atomically releases transient work for retry without completing its requester job", async () => {
+    const client = new FakeRedisScanWorkClient();
+    const jobStore = new InMemoryAgentJobStore({ now: () => now });
+    const store = new RedisAttachmentScanWorkStore({
+      client,
+      keyPrefix: "test",
+      jobStore,
+      now: () => now,
+      idFactory: () => "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
+      claimIdFactory: () => "claim-1"
+    });
+    const job = await jobStore.createPending({ scope, label: "保存檔案", ttlMs: 600_000 });
+    const work = await store.create({
+      jobId: job.id,
+      lineMessageId: "line-message-opaque-id",
+      scope,
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck"
+      },
+      ttlMs: 600_000
+    });
+    await store.markEnqueued(work.id);
+    await store.claim(work.id);
+
+    await expect(store.releaseForRetry(work.id, "foreign-claim")).resolves.toBe(false);
+    await expect(store.releaseForRetry(work.id, "claim-1")).resolves.toBe(true);
+    await expect(store.claim(work.id)).resolves.toMatchObject({ status: "claimed" });
+    await expect(jobStore.get(job.id, scope)).resolves.toMatchObject({ status: "pending" });
   });
 
   it("atomically cancels only work that has not already been claimed", async () => {
@@ -221,6 +308,29 @@ describe("attachment scan work store", () => {
     await expect(store.terminalStatus(work.id)).resolves.toBeUndefined();
     await expect(store.fail(work.id, reclaimed!.claimId!, "worker_failed")).resolves.toBe(true);
     await expect(store.terminalStatus(work.id)).resolves.toBe("failed");
+  });
+
+  it("keeps the default claim lease beyond queue visibility", async () => {
+    const jobStore = new InMemoryAgentJobStore({ now: () => now });
+    const job = await jobStore.createPending({ scope, label: "保存檔案", ttlMs: 3_600_000 });
+    const store = new InMemoryAttachmentScanWorkStore({ jobStore, now: () => now });
+    const work = await store.create({
+      jobId: job.id,
+      lineMessageId: "line-message-opaque-id",
+      scope,
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck"
+      },
+      ttlMs: 3_600_000
+    });
+    await store.markEnqueued(work.id);
+
+    await expect(store.claim(work.id)).resolves.toMatchObject({
+      claimExpiresAt: "2026-07-24T04:20:00.000Z"
+    });
   });
 
   it("fences publication and never reclaims a worker after publishing starts", async () => {
@@ -425,7 +535,8 @@ describe("attachment scan work store", () => {
 
       await expect(store.claimForProcessing(work.id)).resolves.toEqual({
         disposition: "terminal",
-        terminalStatus: transition === "complete" ? "completed" : "failed"
+        terminalStatus: transition === "complete" ? "completed" : "failed",
+        ...(transition === "fail" ? { failureCode: "scan_infected" } : {})
       });
       await expect(backingJobs.get(job.id, scope)).resolves.toMatchObject({
         status: transition === "complete" ? "completed" : "failed"
@@ -434,7 +545,7 @@ describe("attachment scan work store", () => {
     }
   );
 
-  it("reclaims an expired publication so deterministic Graph publication can converge", async () => {
+  it("durably abandons an expired publication instead of blindly republishing", async () => {
     let current = new Date("2026-07-24T04:00:00.000Z");
     const jobStore = new InMemoryAgentJobStore({ now: () => current });
     const job = await jobStore.createPending({ scope, label: "保存檔案", ttlMs: 600_000 });
@@ -463,11 +574,15 @@ describe("attachment scan work store", () => {
 
     current = new Date("2026-07-24T04:01:00.000Z");
 
-    await expect(store.claimForProcessing(work.id)).resolves.toMatchObject({
-      disposition: "claimed",
-      work: { status: "claimed" }
+    await expect(store.claimForProcessing(work.id)).resolves.toEqual({
+      disposition: "terminal",
+      terminalStatus: "failed",
+      failureCode: "publication_abandoned"
     });
-    await expect(jobStore.get(job.id, scope)).resolves.toMatchObject({ status: "pending" });
+    await expect(jobStore.get(job.id, scope)).resolves.toMatchObject({
+      status: "failed",
+      error: "publication_abandoned"
+    });
   });
 
   it("distinguishes missing or expired work from active and terminal work", async () => {
@@ -584,6 +699,12 @@ class FakeRedisScanWorkClient {
       claimId?: string;
       claimExpiresAt?: string;
       assetId?: string;
+      uploadDescriptor?: {
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+        checksumSha256: string;
+      };
       publishingAt?: string;
       publishingExpiresAt?: string;
       pendingJobUpdate?: unknown;
@@ -592,7 +713,21 @@ class FakeRedisScanWorkClient {
       return null;
     }
     let transitioned: Record<string, unknown>;
-    if (script.includes("work.assetId = ARGV[4]")) {
+    if (script.includes("work.uploadDescriptor = descriptor")) {
+      const [, claimId, current, serializedDescriptor] = options.arguments;
+      const descriptor = JSON.parse(serializedDescriptor!);
+      if (
+        record.status !== "claimed" ||
+        record.claimId !== claimId ||
+        record.claimExpiresAt! <= current! ||
+        record.expiresAt <= current! ||
+        (record.uploadDescriptor !== undefined &&
+          JSON.stringify(record.uploadDescriptor) !== JSON.stringify(descriptor))
+      ) {
+        return null;
+      }
+      transitioned = { ...record, uploadDescriptor: descriptor };
+    } else if (script.includes("work.assetId = ARGV[4]")) {
       const [, claimId, now, assetId] = options.arguments;
       if (
         record.status !== "claimed" ||
@@ -657,6 +792,23 @@ class FakeRedisScanWorkClient {
         publishingAt,
         publishingExpiresAt
       };
+    } else if (script.includes("work.claimedAt = nil")) {
+      const [, claimId, current] = options.arguments;
+      if (
+        record.status !== "claimed" ||
+        record.claimId !== claimId ||
+        record.claimExpiresAt! <= current! ||
+        record.expiresAt <= current!
+      ) {
+        return null;
+      }
+      transitioned = {
+        ...record,
+        status: "queued",
+        claimedAt: undefined,
+        claimId: undefined,
+        claimExpiresAt: undefined
+      };
     } else if (script.includes('work.status = "queued"')) {
       if (record.status !== "pending_enqueue" || record.expiresAt <= currentTime) return null;
       transitioned = { ...record, status: "queued" };
@@ -669,6 +821,19 @@ class FakeRedisScanWorkClient {
         if (record.publishingExpiresAt! > currentTime) {
           return "active";
         }
+        transitioned = {
+          ...record,
+          status: "failed",
+          failureCode: "publication_abandoned",
+          completedAt: currentTime,
+          claimId: undefined,
+          claimExpiresAt: undefined,
+          pendingJobUpdate: { status: "failed", error: "publication_abandoned" }
+        };
+        const serialized = JSON.stringify(transitioned);
+        this.values.set(key!, serialized);
+        await this.sRem(options.keys[1]!, expectedId!);
+        return `abandoned:${serialized}`;
       } else if (!(
         record.status === "queued" ||
         (record.status === "claimed" && record.claimExpiresAt! <= currentTime)

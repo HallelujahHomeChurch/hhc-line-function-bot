@@ -73,6 +73,8 @@ describe("production profile configuration deployment contract", () => {
         "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
         "PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF"
       ],
+      ["LINE_MAIN_CHANNEL_SECRET", "PLACEHOLDER_LINE_MAIN_CHANNEL_SECRET_REF"],
+      ["LINE_MAIN_CHANNEL_ACCESS_TOKEN", "PLACEHOLDER_LINE_MAIN_CHANNEL_ACCESS_TOKEN_SECRET_REF"],
       ["AZURE_OPENAI_EMBEDDING_API_KEY", "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF"],
       ["DEEPSEEK_API_KEY", "PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF"],
       ["OBSERVABILITY_HMAC_KEY", "PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF"],
@@ -270,6 +272,7 @@ describe("production profile configuration deployment contract", () => {
       };
     }>;
     const helper = profiles.find((profile) => profile.name === "helper");
+    const main = profiles.find((profile) => profile.name === "main");
 
     expect(dockerfile).toContain("COPY config ./config");
     expect(manifest).toContain("name: PROFILE_CONFIG_PATH");
@@ -338,6 +341,12 @@ describe("production profile configuration deployment contract", () => {
     expect(helper?.providerPolicy?.function_routing).toEqual({
       primary: "deepseek"
     });
+    expect(main).toMatchObject({
+      allowedMessageTypes: ["text"],
+      enabledFunctions: ["download_weekly_paper"],
+      controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 }
+    });
+    expect(main?.providerPolicy).toEqual({});
     expect(readProjectFile("README.md")).toContain("sole complete");
     expect(readProjectFile("README.md")).not.toContain("Example shape:");
     expect(readProjectFile("README.md")).not.toContain('"personaPrompt"');
@@ -345,6 +354,36 @@ describe("production profile configuration deployment contract", () => {
     expect(readProjectFile(".env.example")).not.toContain("BOT_PROFILES_JSON=");
     expect(readProjectFile(".env.example")).not.toContain("BOT_PROFILES_BASE64_JSON=");
     expect(readProjectFile(".env.example")).not.toContain("CATALOG_SOURCES_PATH");
+  });
+
+  it("injects main LINE credentials into the bot container only", () => {
+    const bot = readProjectFile("aca.containerapp.yaml");
+    expect(bot).toContain("name: LINE_MAIN_CHANNEL_SECRET");
+    expect(bot).toContain("secretRef: PLACEHOLDER_LINE_MAIN_CHANNEL_SECRET_REF");
+    expect(bot).toContain("name: LINE_MAIN_CHANNEL_ACCESS_TOKEN");
+    expect(bot).toContain("secretRef: PLACEHOLDER_LINE_MAIN_CHANNEL_ACCESS_TOKEN_SECRET_REF");
+    expect(readProjectFile(".env.example")).toContain(
+      "LINE_MAIN_CHANNEL_SECRET=PLACEHOLDER_LINE_MAIN_CHANNEL_SECRET"
+    );
+    expect(readProjectFile(".env.example")).toContain(
+      "LINE_MAIN_CHANNEL_ACCESS_TOKEN=PLACEHOLDER_LINE_MAIN_CHANNEL_ACCESS_TOKEN"
+    );
+
+    const jobPaths = [
+      "aca.attachment-scan-job.yaml",
+      "aca.catalog-sync-job.yaml",
+      "aca.clamav-signature-refresh-job.yaml",
+      "aca.periodic-assurance-job.yaml",
+      "aca.release-probe-job.yaml"
+    ];
+    for (const path of jobPaths) {
+      const job = readProjectFile(path);
+      expect(job).not.toContain("LINE_MAIN_CHANNEL_SECRET");
+      expect(job).not.toContain("LINE_MAIN_CHANNEL_ACCESS_TOKEN");
+    }
+    for (const path of jobPaths.filter((path) => path !== "aca.release-probe-job.yaml")) {
+      expect(readProjectFile(path)).not.toContain("LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE");
+    }
   });
 
   it("validates pull requests before a separate main-only production release", () => {
@@ -487,12 +526,18 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: LINE_HELPER_CHANNEL_SECRET");
     expect(job).toContain("secretRef: line-helper-channel-secret");
     expect(job.match(/secretRef:/g)).toHaveLength(1);
+    expect(job).toContain("name: LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE");
+    expect(job).toContain("value: PLACEHOLDER_LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE");
+    expect(job).not.toContain("LINE_MAIN_CHANNEL_SECRET");
+    expect(job).not.toContain("LINE_MAIN_CHANNEL_ACCESS_TOKEN");
     expect(job).toContain("name: BOT_BASE_URL");
     expect(job).toContain("value: PLACEHOLDER_BOT_BASE_URL");
     expect(job).toContain("name: SEARXNG_BASE_URL");
     expect(job).toContain("value: PLACEHOLDER_SEARXNG_BASE_URL");
     expect(job).toContain("name: GATEWAY_WEBHOOK_URL");
     expect(job).toContain("value: PLACEHOLDER_GATEWAY_WEBHOOK_URL");
+    expect(job).toContain("name: GATEWAY_MAIN_WEBHOOK_URL");
+    expect(job).toContain("value: PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL");
     expect(job).toContain("name: CLAMAV_SIGNATURE_MANIFEST_PATH");
     expect(job).toContain("value: /var/lib/clamav/current/manifest.json");
     expect(job).toContain("mountPath: /var/lib/clamav");
@@ -516,9 +561,9 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("parallelism: 1");
     expect(job).toContain("replicaCompletionCount: 1");
     expect(job).toContain("type: UserAssigned");
-    expect(job).toContain("PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}");
+    expect(job).toContain("PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}");
     expect(job).toContain("server: alive.azurecr.io");
-    expect(job).toContain("identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
+    expect(job).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
     expect(job).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
     expect(job).toContain("args:\n          - dist/tools/run-periodic-assurance.js");
     expect(job).not.toContain("command:");
@@ -562,14 +607,25 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain(
       'gateway_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/helper"'
     );
+    expect(deployment).toContain(
+      'gateway_main_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/main"'
+    );
     expect(deployment).toContain('BOT_BASE_URL="${bot_base_url}"');
     expect(deployment).toContain('SEARXNG_BASE_URL="${searxng_base_url}"');
     expect(deployment).toContain('GATEWAY_WEBHOOK_URL="${gateway_webhook_url}"');
+    expect(deployment).toContain('GATEWAY_MAIN_WEBHOOK_URL="${gateway_main_webhook_url}"');
     expect(deployment).toContain('"PLACEHOLDER_BOT_BASE_URL": os.environ["BOT_BASE_URL"]');
     expect(deployment).toContain('"PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"]');
     expect(deployment).toContain(
       '"PLACEHOLDER_GATEWAY_WEBHOOK_URL": os.environ["GATEWAY_WEBHOOK_URL"]'
     );
+    expect(deployment).toContain(
+      '"PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL": os.environ["GATEWAY_MAIN_WEBHOOK_URL"]'
+    );
+    expect(deployment).toContain('secret_values.get("line-main-channel-secret")');
+    expect(deployment).toContain("b'{\"events\":[]}'");
+    expect(deployment).toContain("hashlib.sha256");
+    expect(deployment).toContain("base64.b64encode");
     expect(deployment).toContain("if text.count(placeholder) != 1:");
     expect(deployment).toContain(
       'render_job_manifest \\\n  "${release_probe_job_manifest_template}"'
@@ -583,7 +639,7 @@ describe("production profile configuration deployment contract", () => {
       'deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"'
     );
     expect(deployment).toContain(
-      'deploy_job "${PERIODIC_ASSURANCE_JOB_NAME}" "${periodic_assurance_job_manifest}"'
+      'deploy_job \\\n  "${PERIODIC_ASSURANCE_JOB_NAME}" \\\n  "${periodic_assurance_job_manifest}" \\\n  "${attachment_job_identity_id}"'
     );
     expect(deployment).not.toMatch(/cat "\$\{(?:release_probe|periodic_assurance)_job_manifest\}"/);
 
@@ -703,9 +759,13 @@ describe("production profile configuration deployment contract", () => {
       "RELEASE_PROBE_JOB_NAME",
       "PERIODIC_ASSURANCE_JOB_NAME"
     ]) {
-      expect(deployment.indexOf(`mark_release_job_mutated "\${${jobName}}"`)).toBeLessThan(
-        deployment.indexOf(`deploy_job "\${${jobName}}"`)
+      const mutation = deployment.indexOf(`mark_release_job_mutated "\${${jobName}}"`);
+      const deploy = deployment.search(
+        new RegExp(`deploy_job(?:\\\\|\\s)+"\\$\\{${jobName}\\}"`, "u")
       );
+      expect(mutation).toBeGreaterThanOrEqual(0);
+      expect(deploy).toBeGreaterThanOrEqual(0);
+      expect(mutation).toBeLessThan(deploy);
     }
     expect(deployment).not.toContain("trap 'rm -f");
     expect(helper).toContain("RELEASE_POLL_ATTEMPTS:=30");

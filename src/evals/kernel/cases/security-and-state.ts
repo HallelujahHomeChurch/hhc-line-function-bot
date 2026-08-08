@@ -2,6 +2,8 @@ import type { ActiveTaskContext } from "../../../agent/active-task.js";
 import { InMemoryConversationWindowStore } from "../../../agent/context-manager.js";
 import { InMemoryAgentJobStore } from "../../../agent/jobs.js";
 import type { AgentPlanner } from "../../../agent/planner.js";
+import { matchNaturalLanguageSystemActionHint } from "../../../actions/catalog.js";
+import { evaluateActionPolicy } from "../../../actions/policy.js";
 import { InMemoryAttachmentScanWorkStore } from "../../../attachments/scan-work-store.js";
 import { runAttachmentScanWorker } from "../../../attachments/scan-worker.js";
 import { InMemoryCatalogStore } from "../../../catalog/store.js";
@@ -71,11 +73,36 @@ export const SECURITY_AND_STATE_KERNEL_CASES: KernelAcceptanceCase[] = [
     async () => !isSupportedAttachment({ type: "audio", id: "synthetic-audio" })
   ),
   safetyCase(
+    "kernel-v1/write/account-login-direct-policy@1",
+    "write_safety_bypass",
+    accountLoginDirectPolicy
+  ),
+  safetyCase(
     "kernel-v1/state/replica-scope-key-stable@1",
     "replica_state_divergence",
     stableRequesterScope
   )
 ];
+
+async function accountLoginDirectPolicy(): Promise<boolean> {
+  const profile = kernelProfile([]);
+  const direct = await evaluateActionPolicy({
+    action: "account_login",
+    profile,
+    source: { type: "user", userId: "U_SYNTHETIC" }
+  });
+  const group = await evaluateActionPolicy({
+    action: "account_login",
+    profile,
+    source: { type: "group", groupId: "G_SYNTHETIC", userId: "U_SYNTHETIC" }
+  });
+  return (
+    direct.allowed &&
+    !group.allowed &&
+    matchNaturalLanguageSystemActionHint("登入 HHC 帳戶") === "account_login" &&
+    matchNaturalLanguageSystemActionHint("我想登入帳戶看看") === undefined
+  );
+}
 
 function safetyCase(
   id: string,

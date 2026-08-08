@@ -83,6 +83,7 @@ export interface FunctionModuleContext {
     attachmentScanWorkStore?: AttachmentScanWorkStore;
     now?: () => Date;
     requestIdFactory?: () => string;
+    fetchImpl?: typeof fetch;
   };
 }
 

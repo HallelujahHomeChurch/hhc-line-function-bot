@@ -230,6 +230,12 @@ check_codes = {
         "diagnostic_upload_failed",
         "diagnostic_delete_failed",
     },
+    "asset_lifecycle": {
+        "none",
+        "asset_lifecycle_failed",
+        "asset_cleanup_failed",
+        "timeout",
+    },
 }
 expected_checks = set(check_codes)
 runner_codes = {"none", "network_failed", "timeout", "http_mismatch", "malformed_json"}

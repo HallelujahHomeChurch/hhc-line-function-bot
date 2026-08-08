@@ -1,8 +1,98 @@
 import { Readable } from "node:stream";
 
-import { describe, expect, it } from "vitest";
+import { messagingApi } from "@line/bot-sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { contentTypeFromLineStream, readableToUint8Array } from "../clients/line.js";
+import {
+  contentTypeFromLineStream,
+  createLineSdkAccountLinkClient,
+  createLineSdkReplyClient,
+  readableToUint8Array
+} from "../clients/line.js";
+import type { BotProfileConfig } from "../types.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("LINE account link tokens", () => {
+  const profile = { channelAccessToken: "profile-token" } as BotProfileConfig;
+
+  it("returns the nonblank native link token issued for the exact LINE user", async () => {
+    const issueLinkToken = vi
+      .spyOn(messagingApi.MessagingApiClient.prototype, "issueLinkToken")
+      .mockResolvedValue({ linkToken: " native-link-token " });
+
+    await expect(createLineSdkAccountLinkClient(profile).issueLinkToken("Uuser")).resolves.toBe(
+      "native-link-token"
+    );
+    expect(issueLinkToken).toHaveBeenCalledWith("Uuser");
+  });
+
+  it("rejects a blank SDK response", async () => {
+    vi.spyOn(messagingApi.MessagingApiClient.prototype, "issueLinkToken").mockResolvedValue({
+      linkToken: " "
+    });
+
+    await expect(createLineSdkAccountLinkClient(profile).issueLinkToken("Uuser")).rejects.toThrow(
+      "line_link_token_invalid"
+    );
+  });
+
+  it("does not hide SDK issuance failures", async () => {
+    vi.spyOn(messagingApi.MessagingApiClient.prototype, "issueLinkToken").mockRejectedValue(
+      new Error("sdk unavailable")
+    );
+
+    await expect(createLineSdkAccountLinkClient(profile).issueLinkToken("Uuser")).rejects.toThrow(
+      "sdk unavailable"
+    );
+  });
+});
+
+describe("LINE URI quick replies", () => {
+  it("serializes the SDK-native URI action without copying the URL into message text", async () => {
+    const replyMessage = vi
+      .spyOn(messagingApi.MessagingApiClient.prototype, "replyMessage")
+      .mockResolvedValue({ sentMessages: [] });
+    const profile = {
+      channelAccessToken: "profile-token"
+    } as BotProfileConfig;
+
+    await createLineSdkReplyClient(profile).replyText("reply-token", "週報已準備好。", {
+      quickReplies: [
+        {
+          label: "下載週報",
+          action: {
+            type: "uri",
+            label: "下載週報",
+            uri: "https://www.alive.org.tw/assets/0123456789abcdef0123456789abcdef"
+          }
+        }
+      ]
+    });
+
+    expect(replyMessage).toHaveBeenCalledWith({
+      replyToken: "reply-token",
+      messages: [
+        {
+          type: "text",
+          text: "週報已準備好。",
+          quickReply: {
+            items: [
+              {
+                type: "action",
+                action: {
+                  type: "uri",
+                  label: "下載週報",
+                  uri: "https://www.alive.org.tw/assets/0123456789abcdef0123456789abcdef"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    });
+  });
+});
 
 describe("LINE content streaming", () => {
   it("retains a safe response content type for worker-side extension validation", () => {

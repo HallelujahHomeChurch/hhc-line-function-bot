@@ -97,7 +97,8 @@ export function createFunctionRegistries(
       attachmentScanQueue: clients.attachmentScanQueue,
       attachmentScanWorkStore: clients.attachmentScanWorkStore,
       now: clients.now,
-      requestIdFactory: clients.requestIdFactory
+      requestIdFactory: clients.requestIdFactory,
+      fetchImpl: clients.fetchImpl
     }
   };
 

@@ -1,15 +1,38 @@
 import type { Readable } from "node:stream";
 
-import { Client as LineClient, messagingApi } from "@line/bot-sdk";
+import {
+  Client as LineClient,
+  HTTPError,
+  messagingApi,
+  ReadError,
+  RequestError
+} from "@line/bot-sdk";
 
 import type {
   BotProfileConfig,
   BinaryReadLimits,
+  LineAccountLinkClient,
   LineContentClient,
   LineIdentityClient,
   LineReplyClient,
   LineReplyOptions
 } from "../types.js";
+
+export function createLineSdkAccountLinkClient(
+  profile: Pick<BotProfileConfig, "channelAccessToken">
+): LineAccountLinkClient {
+  const client = new messagingApi.MessagingApiClient({
+    channelAccessToken: profile.channelAccessToken
+  });
+
+  return {
+    async issueLinkToken(userId: string): Promise<string> {
+      const token = (await client.issueLinkToken(userId)).linkToken.trim();
+      if (!token) throw new Error("line_link_token_invalid");
+      return token;
+    }
+  };
+}
 
 export function createLineSdkReplyClient(profile: BotProfileConfig): LineReplyClient {
   const client = new messagingApi.MessagingApiClient({
@@ -105,6 +128,25 @@ export class LineContentReadError extends Error {
     super(code);
     this.name = "LineContentReadError";
   }
+}
+
+export function lineContentFailureDisposition(
+  error: unknown
+): "permanent" | "transient" | undefined {
+  if (error instanceof LineContentReadError) {
+    return error.code === "line_content_timeout" ? "transient" : "permanent";
+  }
+  if (error instanceof HTTPError) {
+    return error.statusCode === 408 ||
+      error.statusCode === 429 ||
+      (error.statusCode >= 500 && error.statusCode <= 599)
+      ? "transient"
+      : "permanent";
+  }
+  if (error instanceof RequestError || error instanceof ReadError) {
+    return "transient";
+  }
+  return undefined;
 }
 
 export async function readableToUint8Array(

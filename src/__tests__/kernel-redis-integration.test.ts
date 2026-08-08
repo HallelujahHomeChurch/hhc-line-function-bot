@@ -6,6 +6,8 @@ import {
   type KernelRedisEnvironment
 } from "../evals/kernel/integration/environment.js";
 import { runRedisIntegrationMatrix } from "../evals/kernel/integration/redis-matrix.js";
+import { RedisAgentJobStore } from "../agent/jobs.js";
+import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { RedisFirstSuccessStore } from "../observability/first-success-store.js";
 import { RedisSessionStore } from "../state/redis-session-store.js";
 
@@ -91,6 +93,93 @@ describe("kernel Redis integration environment", () => {
     const remainingTtlMs = await environment.clients[0].pTTL(keys[0]!);
     expect(remainingTtlMs).toBeGreaterThan(ttlMs - 5_000);
     expect(remainingTtlMs).toBeLessThanOrEqual(ttlMs);
+  });
+
+  it("executes fenced attachment resume and publication abandonment in real Redis", async () => {
+    environment ??= await createKernelRedisEnvironment();
+    let current = new Date("2026-08-01T08:00:00.000Z");
+    const jobStores = environment.clients.map(
+      (client, index) =>
+        new RedisAgentJobStore({
+          client,
+          keyPrefix: environment!.keyPrefix,
+          now: () => current,
+          idFactory: () => `asset-job-${index}`
+        })
+    );
+    const stores = environment.clients.map(
+      (client, index) =>
+        new RedisAttachmentScanWorkStore({
+          client,
+          keyPrefix: environment!.keyPrefix,
+          jobStore: jobStores[index]!,
+          now: () => current,
+          idFactory: () => "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
+          claimIdFactory: () => `asset-claim-${index}`,
+          claimLeaseMs: 60_000,
+          publishingLeaseMs: 60_000
+        })
+    );
+    const scope = {
+      profileName: "helper",
+      sourceKey: "group:asset-resume",
+      requesterUserId: "requester-a"
+    };
+    const job = await jobStores[0]!.createPending({
+      scope,
+      label: "asset-resume",
+      ttlMs: 600_000
+    });
+    const work = await stores[0]!.create({
+      jobId: job.id,
+      lineMessageId: "line-message-opaque-id",
+      scope,
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck"
+      },
+      ttlMs: 600_000
+    });
+    await stores[0]!.markEnqueued(work.id);
+    const first = await stores[0]!.claim(work.id);
+    const descriptor = {
+      fileName: "SundayDeck.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 14,
+      checksumSha256: "9b6b2e2ccae2d0350af6f0e709e375be9d78383e3e98ed854deb5007926a70c4"
+    };
+
+    await expect(
+      stores[0]!.recordUploadDescriptor(work.id, first!.claimId!, descriptor)
+    ).resolves.toBe(true);
+    await expect(stores[0]!.releaseForRetry(work.id, first!.claimId!)).resolves.toBe(true);
+    const replacement = await stores[1]!.claim(work.id);
+    await expect(stores[0]!.recordAsset(work.id, first!.claimId!, "asset-stale")).resolves.toBe(
+      false
+    );
+    await expect(
+      stores[1]!.recordAsset(work.id, replacement!.claimId!, "asset-current")
+    ).resolves.toBe(true);
+    await expect(
+      stores[1]!.beginPublishing(
+        work.id,
+        replacement!.claimId!,
+        new Date("2026-08-01T08:01:00.000Z")
+      )
+    ).resolves.toBe(true);
+
+    current = new Date("2026-08-01T08:01:00.000Z");
+    await expect(stores[0]!.claimForProcessing(work.id)).resolves.toEqual({
+      disposition: "terminal",
+      terminalStatus: "failed",
+      failureCode: "publication_abandoned"
+    });
+    await expect(jobStores[0]!.get(job.id, scope)).resolves.toMatchObject({
+      status: "failed",
+      error: "publication_abandoned"
+    });
   });
 
   it("clears the interactive index when handlers delete or take by id", async () => {

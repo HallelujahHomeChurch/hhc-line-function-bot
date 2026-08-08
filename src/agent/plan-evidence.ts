@@ -41,6 +41,9 @@ const EXPLICIT_NEGATIVE_PATTERN =
 const AFFIRMATIVE_NEGATION_PREFIX = /(?:不要|不用|不必|先不要|先別|別|不)$/u;
 const ACTIVE_TASK_REPLAY_PATTERN =
   /(?:再給我一次|再給一次|再傳一次|再貼一次|剛剛那份|剛才那份|剛剛那個|上一份)/u;
+const INTENT_CLAUSE_SEPARATOR = /[,，、:：。.!！?？;；\n]+/u;
+const NEGATED_READ_ACTION_PREFIX =
+  /(?:不要|不用|不必|先不要|先別|別|取消)(?:(?:請)?(?:你|您)?(?:幫我|替我))?(?:再)?(?:查詢|查|尋找|找|搜尋|下載|取得|獲取|列出|顯示|讀取|給我)/u;
 
 export function groundPlanRecord(input: GroundPlanRecordInput): GroundedPlanRecord {
   const output: JsonRecord = {};
@@ -82,6 +85,25 @@ export function hasCurrentTextEvidence(text: string, value: unknown): boolean {
     );
   }
   return containsNormalizedPhrase(text, normalizedValue);
+}
+
+export function hasUnnegatedIntentEvidence(text: string, intents: readonly string[]): boolean {
+  return unnegatedIntentClauses(text).some((clause) =>
+    intents.some((intent) => {
+      const normalizedIntent = normalizeComparable(intent);
+      return normalizedIntent.length > 0 && normalizeComparable(clause).includes(normalizedIntent);
+    })
+  );
+}
+
+export function unnegatedIntentClauses(text: string): string[] {
+  return text
+    .normalize("NFKC")
+    .split(INTENT_CLAUSE_SEPARATOR)
+    .map((clause) => clause.trim())
+    .filter(
+      (clause) => clause.length > 0 && !NEGATED_READ_ACTION_PREFIX.test(normalizeComparable(clause))
+    );
 }
 
 export function hasActiveEntityTextEvidence(

@@ -79,7 +79,7 @@ describe("Kernel v1 evaluator", () => {
     expect(JSON.stringify(report)).not.toContain("private provider payload");
   });
 
-  it("passes all seven deterministic R4.1 product-experience boundaries offline", async () => {
+  it("passes all eight deterministic product-experience boundaries offline", async () => {
     const report = await evaluateKernelGate({
       cases: KERNEL_ACCEPTANCE_CASES,
       now: () => new Date("2026-07-26T08:00:00.000Z")
@@ -88,6 +88,6 @@ describe("Kernel v1 evaluator", () => {
     expect(report.passed).toBe(true);
     expect(report.totalCases).toBe(KERNEL_ACCEPTANCE_CASES.length);
     expect(report.failedCaseIds).toEqual([]);
-    expect(PRODUCT_EXPERIENCE_KERNEL_CASES).toHaveLength(7);
+    expect(PRODUCT_EXPERIENCE_KERNEL_CASES).toHaveLength(8);
   });
 });

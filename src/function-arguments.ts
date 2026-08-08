@@ -11,6 +11,11 @@ const numericLimitSchema = z.preprocess((value) => {
 
 const dateKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const monthKeySchema = z.string().regex(/^\d{4}-\d{2}$/);
+export const downloadWeeklyPaperArgumentsSchema = z
+  .object({
+    issueNumber: z.number().int().min(1).max(2_147_483_647).optional()
+  })
+  .strip();
 export const scheduleTypeSchema = z
   .string()
   .trim()
@@ -245,6 +250,7 @@ export const queryScheduleMemoryArgumentsSchema = z
   .strip();
 
 export type FindPptSlidesArguments = z.infer<typeof findPptSlidesArgumentsSchema>;
+export type DownloadWeeklyPaperArguments = z.infer<typeof downloadWeeklyPaperArgumentsSchema>;
 export type QueryServiceScheduleArguments = z.infer<typeof queryServiceScheduleArgumentsSchema>;
 export type QueryScheduleArguments = z.infer<typeof queryScheduleArgumentsSchema>;
 export type FindPopSheetMusicArguments = z.infer<typeof findPopSheetMusicArgumentsSchema>;
@@ -263,6 +269,7 @@ export function parseFunctionArguments(
   rawArguments: unknown
 ): JsonRecord | undefined {
   const schema = {
+    download_weekly_paper: downloadWeeklyPaperArgumentsSchema,
     find_ppt_slides: findPptSlidesArgumentsSchema,
     query_schedule: queryScheduleArgumentsSchema,
     query_knowledge: queryKnowledgeArgumentsSchema,

@@ -5,13 +5,13 @@ import { createGraphDriveClient } from "../clients/graph.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
-import { loadConfigFromEnv } from "../config.js";
+import { loadCatalogSyncConfigFromEnv } from "../config.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createScheduleStore } from "../schedules/create-schedule-store.js";
 import { createKnowledgeStore } from "../knowledge/create-store.js";
 import { syncScheduledKnowledgeSources } from "../knowledge/scheduled-sync.js";
 
-const config = loadConfigFromEnv(process.env);
+const config = loadCatalogSyncConfigFromEnv(process.env);
 const postgres = await createPostgresRuntime(config.database);
 const catalog = await createCatalogStore({ db: postgres?.pool });
 await seedCatalogSources({

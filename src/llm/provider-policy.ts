@@ -13,7 +13,10 @@ export function normalizeProviderPolicy(input: {
   allowedProviders: ModelProviderName[];
   explicitPolicy?: PartialProviderPolicy;
 }): ProviderPolicy {
-  const normalized = {} as ProviderPolicy;
+  const normalized: ProviderPolicy = {};
+  if (input.allowedProviders.length === 0) {
+    return normalized;
+  }
   for (const lane of MODEL_PROVIDER_LANE_NAMES) {
     const defaultPolicy = defaultPolicyForLane(lane, input.allowedProviders);
     const explicit = input.explicitPolicy?.[lane];

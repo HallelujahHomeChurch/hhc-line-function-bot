@@ -94,7 +94,12 @@ describe("effective capability projection", () => {
       definitions: [definition("query_schedule", { allowedSources: ["group"] })]
     });
 
-    expect(projection).toEqual({ reads: [], writes: [], onboarding: [] });
+    expect(projection).toEqual({
+      reads: [],
+      writes: [],
+      onboarding: [],
+      accountLoginAvailable: true
+    });
   });
 
   it("never presents capabilities to an unauthorized requester", () => {
@@ -105,7 +110,12 @@ describe("effective capability projection", () => {
       })
     });
 
-    expect(projection).toEqual({ reads: [], writes: [], onboarding: [] });
+    expect(projection).toEqual({
+      reads: [],
+      writes: [],
+      onboarding: [],
+      accountLoginAvailable: true
+    });
   });
 
   it("keeps administrator actions out of ordinary output", () => {
@@ -122,7 +132,7 @@ describe("effective capability projection", () => {
 
     expect(help.replyText).not.toContain("查服事表");
     expect(help.replyText).toContain("記住資訊");
-    expect(help.quickReplies).toEqual([]);
+    expect(help.quickReplies).toEqual([expect.objectContaining({ label: "登入 HHC 帳戶" })]);
   });
 
   it("caps onboarding and every ordinary presenter at three quick replies", () => {
@@ -144,6 +154,16 @@ describe("effective capability projection", () => {
     expect(renderCapabilityHelp(projection, "help").quickReplies).toHaveLength(3);
     expect(renderCapabilityHelp(projection, "introduction").quickReplies).toHaveLength(3);
     expect(renderRegistrationCompletion(projection).quickReplies).toHaveLength(3);
+  });
+
+  it("keeps direct-only account login out of group presentation", () => {
+    const projection = projectEffectiveCapabilities({
+      context: context({ sourceType: "group", enabledFunctions: ["query_schedule"] })
+    });
+    const help = renderCapabilityHelp(projection, "help");
+
+    expect(help.replyText).not.toContain("登入 HHC 帳戶");
+    expect(help.quickReplies?.map(({ label }) => label)).toEqual(["查服事表"]);
   });
 
   it("uses bounded labels and the first definition example for message quick replies", () => {
@@ -200,6 +220,37 @@ describe("effective capability projection", () => {
     expectOrdinaryCopyToExcludeInternalTerms(help);
     expectOrdinaryCopyToExcludeInternalTerms(introduction);
     expectOrdinaryCopyToExcludeInternalTerms(registration);
+  });
+
+  it("renders provider-free main help from its profile identity, Weekly Paper, and public login only", () => {
+    const mainProfile = {
+      ...context({ enabledFunctions: ["download_weekly_paper"] }).profile,
+      name: "main",
+      identityLine: "我是 HHC 家教會小幫手。",
+      allowedProviders: []
+    } as BotProfileConfig;
+    const projection = projectEffectiveCapabilities({
+      context: {
+        ...context({ enabledFunctions: ["download_weekly_paper"] }),
+        profile: mainProfile
+      }
+    });
+
+    const help = renderCapabilityHelp(projection, "help", mainProfile);
+    const introduction = renderCapabilityHelp(projection, "introduction", mainProfile);
+
+    expect(introduction.replyText).toMatch(/^我是 HHC 家教會小幫手。/u);
+    expect(help.replyText).toContain("- 下載週報：");
+    expect(help.replyText).toContain("- 登入 HHC 帳戶：");
+    expect(help.replyText).not.toMatch(/registry|whoami|memories|forget-memory/iu);
+    expect(help.replyText).not.toMatch(/查服事表|記住資訊|admin/iu);
+    expect(help.quickReplies).toEqual([
+      expect.objectContaining({ label: "下載週報" }),
+      {
+        label: "登入 HHC 帳戶",
+        action: { type: "message", label: "登入 HHC 帳戶", text: "登入 HHC 帳戶" }
+      }
+    ]);
   });
 
   it("uses only onboarding items for registration completion without identifiers", () => {

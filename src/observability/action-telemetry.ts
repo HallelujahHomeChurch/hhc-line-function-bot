@@ -197,7 +197,9 @@ const PRODUCT_EVENT_NAMES = new Set([
   "write_previewed",
   "write_committed",
   "retry_observed",
-  "first_success"
+  "first_success",
+  "account_link_started",
+  "account_link_finalized"
 ]);
 const SOURCE_TYPES = new Set(["user", "group", "room"]);
 const PHASES = new Set([

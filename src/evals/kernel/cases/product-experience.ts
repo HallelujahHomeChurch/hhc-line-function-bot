@@ -2,6 +2,7 @@ import { InMemoryAccessStore } from "../../../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../../../access/registration-invite-code-store.js";
 import { InMemoryAgentJobStore } from "../../../agent/jobs.js";
 import { InMemoryConversationWindowStore } from "../../../agent/context-manager.js";
+import { createAgentPlanner } from "../../../agent/planner.js";
 import { InMemoryAgentMemoryStore } from "../../../agent/memory-store.js";
 import { resolveEffectiveAccessContext } from "../../../application/access/effective-access.js";
 import { renderCapabilityHelp } from "../../../application/capabilities/capability-presenters.js";
@@ -61,9 +62,76 @@ export const PRODUCT_EXPERIENCE_KERNEL_CASES: KernelAcceptanceCase[] = [
   discoveryCase("effective-discovery-granted-user", "granted_user"),
   discoveryCase("effective-discovery-admin", "admin"),
   registrationFirstReadCase(),
+  providerFreeWeeklyCase(),
   resultGuidanceClassesCase(),
   branchGroupIsolationCase()
 ];
+
+function providerFreeWeeklyCase(): KernelAcceptanceCase {
+  const id = `${PRODUCT_PREFIX}/provider-free-weekly-read@1`;
+  return acceptanceCase(
+    id,
+    "resource",
+    "write_safety_bypass",
+    "deterministic_validation",
+    async (context) => {
+      let providerCalls = 0;
+      let executions = 0;
+      const providerFreeProfile: BotProfileConfig = {
+        ...profile(["download_weekly_paper"]),
+        name: "main",
+        webhookPath: "/api/line/webhook/main",
+        directAccessPolicy: "public",
+        groupAccessPolicy: "blocked",
+        registration: { enabled: false },
+        allowedProviders: [],
+        providerPolicy: {},
+        generalAgent: { enabled: false, conversationWindowSeconds: 60 }
+      };
+      const harness = createKernelRuntimeHarness({
+        now: context.now,
+        profile: providerFreeProfile,
+        functionRegistry: {
+          download_weekly_paper: async () => {
+            executions += 1;
+            return controlledResult("success", "第 1733 期週報已準備好。");
+          }
+        },
+        planner: createAgentPlanner({
+          primary: {
+            providerName: "deepseek",
+            completeJson: async () => {
+              providerCalls += 1;
+              return "{}";
+            }
+          },
+          providersEnabledForProfile: () => false
+        })
+      });
+      const [result] = await harness.runTurns([
+        {
+          text: "第1733期週報",
+          requesterUserId: REQUESTER,
+          requestId: `${id}-turn`,
+          source: { type: "user", userId: REQUESTER }
+        }
+      ]);
+      const passed =
+        providerCalls === 0 &&
+        executions === 1 &&
+        result?.resultStatus === "success" &&
+        result.replyText === "第 1733 期週報已準備好。";
+      return observation({
+        id,
+        boundary: "deterministic_validation",
+        recurrenceFamily: "write_safety_bypass",
+        passed,
+        elapsedMs: result?.elapsedMs ?? 1,
+        failureCode: passed ? undefined : "provider_free_weekly_contract"
+      });
+    }
+  );
+}
 
 type DiscoveryKind = "direct" | "group" | "granted_user" | "admin";
 

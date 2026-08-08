@@ -7,7 +7,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Fastify webhook server with LINE signature validation.
 - Multiple bot profiles in one service, each on its own webhook path.
 - Per-profile access policy, wake words, message type filtering, and function toggles.
-- Controlled semantic planner that uses DeepSeek as the sole LLM provider.
+- Controlled semantic planner that uses DeepSeek as the sole LLM provider for profiles that enable providers; the public `main` profile is provider-free.
 - Action catalog that separates user functions, admin actions, and system actions.
 - Policy gate and admin action registry for natural-language admin operations.
 - Deterministic candidate generation and validation when model providers fail, without a second legacy router.
@@ -25,11 +25,13 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Per-profile access policy with PostgreSQL-backed user/group registration.
 - Public `/help`, `/registry <code>`, and `/whoami` commands.
 - Direct-chat admin commands authorized by the linked HHC account and Account roles.
+- Native LINE account linking from the exact direct-chat phrases `登入帳戶`, `登入 HHC 帳戶`, `連結帳戶`, `綁定帳戶`, or `login`; linking uses LINE's accountLink event and does not enter the LLM router.
 - Admin natural language for selected management actions: invite-code creation and group function scope management.
 - Minimal `/healthz`, data-layer `/readyz`, and admin-only `/diag` diagnostics.
 - Destructive admin-action confirmation infrastructure through `/confirm <code>`.
 - Function handlers:
   - `find_ppt_slides`: searches a configured presentation folder, fuzzy-matches `.pptx`, `.ppt`, `.key`, and `.odp` names, and returns 24 hour sharing links.
+  - `download_weekly_paper`: returns a LINE download action for the latest or an explicitly numbered public Weekly Paper through the fixed HHC web API boundary.
   - `query_schedule`: one user-facing service-schedule query that selects configured sources without exposing them.
   - `query_knowledge`: searches admin-registered, profile-shared Notion knowledge with grounded hybrid retrieval.
   - `find_sheet_music`: canonical sheet-music lookup for configured pop and hymn sheet sources.
@@ -68,6 +70,7 @@ pnpm dev
 Set the LINE webhook URL per bot profile, for example:
 
 - `/api/line/webhook/helper`
+- `/api/line/webhook/main`
 - `/api/line/webhook/slides`
 
 Provider auth callbacks are not exposed by this service. LINE webhook traffic should only use the canonical profile paths above.
@@ -106,10 +109,10 @@ Each profile controls:
 - HHC account binding for administrator authorization.
 
 The checked-in [`config/profiles.json`](config/profiles.json) is the sole complete
-production example and source of truth. It deliberately contains only the currently
-provisioned `helper` profile. Add another profile only after its separate LINE
-credential secret references have been provisioned in ACA and `pnpm config:validate`
-passes.
+production example and source of truth. It contains the managed `helper` and public
+direct-only `main` profiles; each has separate LINE credential secret references.
+Provision both credential pairs in ACA before deployment and require
+`pnpm config:validate` to pass.
 Profile names must use lowercase letters, numbers, dash, or underscore. The `webhookPath` must match the profile name exactly; for example, profile `helper` must use `/api/line/webhook/helper`.
 
 `channelSecretEnv` and `channelAccessTokenEnv` resolve LINE credentials from ACA secrets at startup. Admin authorization is not profile configuration: the bot calls account-api through Dapr and trusts the linked account's `admin` role. LLM small-talk profiles must configure all four `smallTalk.prompting` layers in `config/profiles.json`; the runtime does not supply a helper-specific persona or safety fallback. Legacy LINE admin settings and static allowlists are rejected.
@@ -119,7 +122,7 @@ Profile names must use lowercase letters, numbers, dash, or underscore. The `web
 Profiles can choose separate policies for direct chat and groups:
 
 - `directAccessPolicy: "managed"`: registered DB users and Account-authorized admins can use functions. If `registration.enabled=true`, unknown direct users receive a registration prompt.
-- `directAccessPolicy: "public"`: any direct user can use the profile. This is suitable for a future official one-to-one bot.
+- `directAccessPolicy: "public"`: any direct user can use the profile. The official `main` profile uses this direct-only policy.
 - `directAccessPolicy: "blocked"`: direct users are blocked except slash diagnostics such as `/whoami` and admin authorization checks.
 - `groupAccessPolicy: "managed"`: groups must be added through DB access management.
 - `groupAccessPolicy: "blocked"`: group events are ignored.
@@ -127,7 +130,7 @@ Profiles can choose separate policies for direct chat and groups:
 Registration is profile-scoped. The current intended split is:
 
 - `helper`: managed direct users, managed groups, invite-code registration enabled.
-- `main`: public direct users, groups blocked, registration disabled.
+- `main`: public direct users, groups blocked, registration disabled, provider-free, with only Weekly Paper download and public account login presented.
 
 Users and groups register with the same command:
 
@@ -163,17 +166,19 @@ Function toggles are profile-scoped:
 - `save_schedule` and `save_memory` are user-grant-only writes. Use `/function-user-grant`; group grants and group role capabilities cannot open them for every member.
 - Admin actions are not `enabledFunctions` and cannot be granted to groups. They are gated separately by admin identity, source policy, and audit rules.
 
-The application resolves this authority once and projects the exact effective capability set into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction remains `我是小哈，家教會的小幫手。`
+The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
+
+`main` sets `allowedProviders: []`, which is the sole provider-free authority. Its planner returns a local `providers_disabled` result before any provider lookup, while deterministic validation can still execute one explicit `download_weekly_paper` read candidate. Weekly download uses Dapr to call `hhc-web-api`, accepts only the canonical root-relative asset path or its exact `https://www.alive.org.tw` absolute form, and places the validated URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
 
 ## Routing
 
-Provider selection is lane-based. Every semantic lane uses DeepSeek as its sole provider, including function routing, admin routing, memory routing, smart talk, general-agent generation, context compression, and web summarization.
+Provider selection is lane-based. Every enabled semantic lane uses DeepSeek as its sole provider, including function routing, admin routing, memory routing, smart talk, general-agent generation, context compression, and web summarization. A profile with `allowedProviders: []` has no enabled semantic lane.
 
 The DeepSeek provider calls the OpenAI-compatible `/chat/completions` API with `DEEPSEEK_API_KEY`; it does not require provider login routes, mounted auth state, or PostgreSQL token storage.
 
 Provider access is profile-scoped. Every LLM-enabled profile must list `deepseek` in `allowedProviders`.
 
-Each profile declares lane policy with `providerPolicy`. Every lane has `primary: "deepseek"` and semantic fallbacks are rejected during configuration validation.
+Provider-enabled profiles declare lane policy with `providerPolicy`. Their lanes use `primary: "deepseek"`, and semantic fallbacks are rejected during configuration validation. Provider-free main uses an empty policy.
 
 The helper profile enables the controlled agent with at most three candidates and a minimum planner confidence of `0.65`. Candidate generation is deterministic and considers only effective, enabled functions with a declarative `agentCapability` contract. Each contract declares semantic scope, required slots, allowed operations, safe evidence providers, output fields, ambiguity behavior, and successful write-to-read handoffs. Evidence can come from explicit current-message intent, declared argument patterns, a live requester-scoped task frame, promoted dynamic-knowledge metadata, or a bounded read-only retrieval probe. No provider may invent a capability or expand the effective function set.
 
@@ -183,7 +188,7 @@ DeepSeek is the sole `function_routing` planner. The model proposes only semanti
 
 Read capabilities may declaratively opt into a bounded retrieval-evidence provider. Before probing, the contract removes only declared wake words, request wrappers, and capability nouns while preserving the user's identity, date, and topic conditions. The knowledge provider probes at most 20 promoted sources in the current profile and returns only a candidate reason to the planner—never source IDs/names, titles, URLs, or content. Provider failure is distinct from no-match and returns a temporary-unavailable reply instead of pretending the request was unclear. Every non-explicit knowledge-evidence path—task-frame entities, routing metadata, knowledge capability hints, and retrieval evidence—uses the same conservative small-talk and write-intent guard. Explicit knowledge queries remain eligible. DeepSeek proposals remain advisory: they never bypass deterministic profile policy, function toggles, argument validation, clarification, access control, or registered handler execution.
 
-Controlled routing is always authoritative. The removed `controlledAgent.enabled` and `controlledAgent.shadow` fields are rejected during configuration validation so production cannot silently return to a second routing flow. Keep every semantic lane on DeepSeek-only policy.
+Controlled routing is always authoritative. The removed `controlledAgent.enabled` and `controlledAgent.shadow` fields are rejected during configuration validation so production cannot silently return to a second routing flow. Keep every enabled semantic lane on DeepSeek-only policy; do not add a fallback lane for provider-free main.
 
 If DeepSeek returns invalid JSON, times out, or is unavailable, the runtime does not invoke a second semantic model. Only one unambiguous, revalidated high-confidence capability may be recovered from the same declarative contract; unresolved evidence fails closed. Small talk generation is bounded by `LLM_GENERAL_MAX_OUTPUT_TOKENS`.
 
@@ -341,7 +346,7 @@ Set `DATABASE_URL` to persist access state and agent memory. If PostgreSQL is co
 
 Sheet music search reads a fresh PostgreSQL catalog snapshot when available. A proven fresh miss can proceed to the existing consent-based web fallback; a never-published or unavailable snapshot may perform a current provider lookup instead of treating stale state as a definitive miss. The old unversioned 30-minute provider index cache is removed, so a later query can see newly added files.
 
-Admin commands use slash syntax and are gated by account-api. An unbound direct user receives a short-lived HHC account binding URL; Account API failures deny admin access. Ordinary `/help` lists public commands plus only the current requester's effective capabilities. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
+Admin commands use slash syntax and are gated by account-api. An unbound direct user is asked to send `登入 HHC 帳戶`; the resulting native LINE flow creates the short-lived HHC binding URL. Account API failures deny admin access. Ordinary `/help` lists public commands plus only the current requester's effective capabilities. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
 
 Admins can also use natural language for selected admin actions: invite-code creation and function-scope management. Invite-code creation is direct-chat only. Function scope grant/revoke/list is the only group natural-language exception, and only when an admin clearly asks to manage the current group.
 
@@ -441,9 +446,9 @@ Requester-scoped task-frame state records the last successful capability plus ca
 
 Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. Direct chat stores a requester/source-scoped pending attachment session and asks `要我幫忙保存這個檔案嗎？` with `是` and `否` quick replies. Groups first require the requester-scoped two-minute upload activation described above; without it the attachment is ignored without a reply or session.
 
-After opt-in, the bot offers exactly four purposes: `投影片`, `流行歌譜`, `詩歌歌譜`, and `小哈資料庫`. It checks the selected target's write capability, asks the requester to enter a title, and then creates a metadata-only preview with `保存` and `取消`. It does not download or scan the binary during these stages. Only after the requester replies `保存` does the bot atomically claim the pending attachment and persist one opaque work ID in a Redis-backed enqueue outbox. A successful queue send advances that record to `queued`; an ambiguous queue/Redis failure is reported as a scheduled retry, never as a successful queue handoff. The event-driven `aca.attachment-scan-job.yaml` execution leases one queue message and claims the work with a bounded token lease. Crashed claims and expired `publishing` leases are reclaimable; deterministic Asset idempotency and Graph paths make redelivery converge without creating another catalog item.
+After opt-in, the bot offers exactly four purposes: `投影片`, `流行歌譜`, `詩歌歌譜`, and `小哈資料庫`. It checks the selected target's write capability, asks the requester to enter a title, and then creates a metadata-only preview with `保存` and `取消`. It does not download or scan the binary during these stages. Only after the requester replies `保存` does the bot atomically claim the pending attachment and persist one opaque work ID in a Redis-backed enqueue outbox. A successful queue send advances that record to `queued`; an ambiguous queue/Redis failure is reported as a scheduled retry, never as a successful queue handoff. The event-driven `aca.attachment-scan-job.yaml` execution leases one queue message and claims the work with a bounded token lease. Expired pre-publication claims are reclaimable and stale claim tokens cannot mutate newer work. A `publishing` lease is not reclaimed: once it expires, the work becomes an observable `publication_abandoned` terminal failure because publication may already have committed externally.
 
-The worker downloads the LINE content once with `MAX_ATTACHMENT_BYTES` (default 25 MiB) and `LINE_CONTENT_DOWNLOAD_TIMEOUT_MS` (default 30 seconds), checks actual size, MIME/magic bytes, extension, safe filename, and hash, then submits it to Asset API. Asset owns Blob quarantine, ClamAV scanning, signatures, grants, and stable clean download. The worker verifies the clean download hash again before Graph publication. Concurrent duplicate confirmations cannot publish the same session twice. Work completion/failure first wins the fenced terminal state transition and atomically records the bounded requester-job update to apply. Queue claims distinguish active, terminal, and missing/expired work: active deliveries remain for redelivery, while terminal or retained-work-expired opaque deliveries are acknowledged. OneDrive upload and catalog upsert remain one logical commit.
+The worker downloads the LINE or authorized external source only until it has durably recorded a non-secret upload descriptor and Asset identity. Redelivery with an Asset identity uses Asset get/wait/grant/download only and validates the persisted checksum, size, and detected MIME before Graph publication. If Asset completion won but recording the identity did not, the worker first replays Asset create with the same work ID and descriptor so Asset idempotency can recover the existing object without another source download. Concurrent duplicate confirmations cannot publish the same session twice. Work completion/failure first wins the fenced terminal state transition and atomically records the bounded requester-job update to apply. Queue deliveries acknowledge only durable completed, permanent-failure, and missing outcomes; transient dependencies, pending scans, and legitimate claim/publication contention remain unacknowledged. The concrete policy is a 10-minute scan deadline, 14-minute publication deadline, 15-minute replica timeout, 1-minute acknowledgement margin, 17-minute queue visibility, 20-minute claim lease, and 60-minute work/job retention. OneDrive upload and catalog upsert remain one logical commit.
 
 The attachment binary is fetched outbound from the finite scan worker through the LINE Content API; it is not part of the inbound webhook JSON. API Gateway, Dapr, and Fastify webhook body limits therefore remain unchanged.
 
@@ -454,7 +459,7 @@ Supported attachment targets in this flow:
 - `詩歌歌譜`: writes to the `hymn_sheet_music` OneDrive root and indexes `hymn_sheet`.
 - `小哈資料庫` / `教會資料`: writes to `xiaoha_database` subfolders and indexes `church_document`, `church_image`, or `church_other` with 90-day retention.
 
-The finite attachment Job uses a dedicated managed identity to consume the queue and call Asset API through internal ingress. It downloads the source once, creates an idempotent `line.group.file` asset, waits for Asset's durable scan result, downloads only a clean granted asset, verifies its hash again, then publishes through the existing Graph and catalog path. Pending scans leave the queue delivery unacknowledged for retry; infected or invalid assets fail terminally. The Job does not receive storage keys, queue connection strings, ClamAV configuration, LINE channel secrets, Account authorization, LLM keys, Notion credentials, or observability secrets. The previous local ClamAV worker and signature refresh resources remain available only as the deployment rollback path until the cloud flow passes production smoke.
+The finite attachment Job uses a dedicated managed identity to consume the queue and call Asset API through internal ingress. It creates an idempotent `line.group.file` asset, waits for Asset's durable scan result, downloads only a clean granted asset, verifies its persisted descriptor again, then publishes through the existing Graph and catalog path. Pending scans and transient Asset failures leave the queue delivery unacknowledged for retry; infected, invalid, or permanent Asset failures transition durably before acknowledgement. The Job does not receive storage keys, queue connection strings, ClamAV configuration, LINE channel secrets, Account authorization, LLM keys, Notion credentials, or observability secrets. The previous local ClamAV worker and signature refresh resources remain available only as the deployment rollback path until the cloud flow passes production smoke.
 
 `aca.clamav-signature-refresh-job.yaml` runs every Monday at `10 19 * * 0` UTC, which is 03:10 Monday in Asia/Taipei. It mounts the same Azure Files share through a separate read/write environment storage definition, downloads into a private staging directory, requires `main`, `daily`, and `bytecode` databases, validates each with ClamAV tooling, moves the set into an immutable versioned directory, and atomically replaces the sanitized manifest last. Deployment also starts and waits for one refresh execution before enabling the queue scanner, so a newly provisioned share is never left empty until the first scheduled run. Any download, completeness, validation, or promotion failure exits non-zero and retains the prior active set. Signature age is warning-only: it is never an age-based publication block after 7 days.
 
@@ -521,7 +526,7 @@ Agents should create a `codex/*` branch, push it, open a PR, and request auto-me
 
 R4.1 production verification is complete. R5.0 production acceptance is complete. The project is now in Stable Maintenance; this roadmap does not create R5.1/R5.2, SaaS, or local-model follow-up work.
 
-`Production Release` records its provider-free deployment transaction in `artifacts/release-assurance/report.json`. The `hhc-line-bot-release-probe` sends a signed empty `events: []` webhook through the public gateway, while the report attests `providerRequests: { deepseek: 0, embedding: 0 }`. That proves the bounded release route and checks, not real LINE delivery or reply-token behavior. The weekly `hhc-line-bot-periodic-assurance` job writes `artifacts/release-assurance/periodic-report.json` with dependency evidence independent of release acceptance.
+`Production Release` records its provider-free deployment transaction in `artifacts/release-assurance/report.json`. The `hhc-line-bot-release-probe` sends separately signed empty `events: []` webhooks through the public gateway to `helper` and `main`. It records the explicit `gateway_helper_signed_empty_webhook` and `gateway_main_signed_empty_webhook` checks, while the report attests `providerRequests: { deepseek: 0, embedding: 0 }`. These checks prove the Gateway→Dapr→selected-profile route, configured signature acceptance, and empty-batch early return. They do not prove LINE platform delivery, LINE Console secret correctness, reply-token behavior, or provider availability during normal turns; the provider count is an attestation for this provider-free release path, not runtime telemetry. The weekly `hhc-line-bot-periodic-assurance` job writes `artifacts/release-assurance/periodic-report.json` with dependency evidence independent of release acceptance. Its Asset check uses a fixed tiny clean-text payload with a unique assurance owner and restricted visibility, grants only service read, verifies downloaded bytes, and always revokes and owner-verifies the exact soft-delete. Cleanup failure fails the assurance. It does not publish a public URL or touch LINE, Graph, or the catalog.
 
 The accepted baseline is production release [30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171), which deployed revision `hhc-line-function-bot--0000149` with all 15 release checks passing, and weekly assurance [30237568728](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237568728), whose seven dependency checks passed. Both reports attest zero DeepSeek and zero embedding requests.
 

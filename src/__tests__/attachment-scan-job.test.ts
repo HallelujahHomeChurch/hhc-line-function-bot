@@ -9,10 +9,10 @@ import {
 } from "../tools/run-attachment-scan-job.js";
 
 describe("attachment scan job environment", () => {
-  it("bounds publication authority by the 900-second replica deadline", () => {
+  it("ends publication authority before the 900-second replica deadline", () => {
     expect(
       attachmentScanPublicationDeadline(new Date("2026-07-24T04:00:00.000Z")).toISOString()
-    ).toBe("2026-07-24T04:15:00.000Z");
+    ).toBe("2026-07-24T04:14:00.000Z");
   });
 
   it("accepts one opaque work id and bounded local scanner settings", () => {
@@ -126,7 +126,7 @@ describe("attachment scan job environment", () => {
     expect(lease?.workId).toBe("4c03465b-8a87-45a2-9d0d-54f904f4e6ab");
     expect(client.receiveMessages).toHaveBeenCalledWith({
       numberOfMessages: 1,
-      visibilityTimeout: 900
+      visibilityTimeout: 1020
     });
     await lease?.complete();
     expect(client.deleteMessage).toHaveBeenCalledWith("opaque-message", "opaque-receipt");
@@ -160,6 +160,45 @@ describe("attachment scan job environment", () => {
     expect(shouldAcknowledgeAttachmentScanResult({ status: "ignored", reason: "missing" })).toBe(
       true
     );
+  });
+
+  it("acknowledges only durable Asset outcomes", () => {
+    expect(
+      shouldAcknowledgeAttachmentScanResult({
+        status: "permanent_failure",
+        failureCode: "validation_failed"
+      })
+    ).toBe(true);
+    expect(
+      shouldAcknowledgeAttachmentScanResult({
+        status: "completed",
+        signatureHealth: "current"
+      })
+    ).toBe(true);
+    expect(shouldAcknowledgeAttachmentScanResult({ status: "missing" })).toBe(true);
+    expect(
+      shouldAcknowledgeAttachmentScanResult({
+        status: "transient_retry",
+        failureCode: "scan_unavailable"
+      })
+    ).toBe(false);
+    expect(shouldAcknowledgeAttachmentScanResult({ status: "scan_pending" })).toBe(false);
+    expect(shouldAcknowledgeAttachmentScanResult({ status: "contention" })).toBe(false);
+  });
+
+  it("formats explicit Asset retry and contention outcomes without private details", () => {
+    expect(
+      formatAttachmentScanJobStatus({
+        status: "transient_retry",
+        failureCode: "scan_unavailable"
+      })
+    ).toEqual({ status: "transient_retry", failureCode: "scan_unavailable" });
+    expect(formatAttachmentScanJobStatus({ status: "scan_pending" })).toEqual({
+      status: "scan_pending"
+    });
+    expect(formatAttachmentScanJobStatus({ status: "contention" })).toEqual({
+      status: "contention"
+    });
   });
 
   it("deletes an opaque queue delivery after an outage outlives work retention", async () => {

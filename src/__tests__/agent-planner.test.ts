@@ -423,6 +423,27 @@ describe("constrained semantic planner", () => {
     expect(primary.completeJson).not.toHaveBeenCalled();
   });
 
+  it("returns providers_disabled before resolving or calling a provider", async () => {
+    const primary = provider("deepseek", async () => response());
+    const planner = createAgentPlanner({
+      primary,
+      providersEnabledForProfile: (profileName) => profileName !== "main"
+    });
+
+    await expect(
+      planner.propose({
+        profileName: "main",
+        text: "download weekly paper",
+        candidates: [scheduleCandidate]
+      })
+    ).resolves.toEqual({
+      status: "no_plan",
+      reasonCode: "providers_disabled",
+      attempts: []
+    });
+    expect(primary.completeJson).not.toHaveBeenCalled();
+  });
+
   it("returns one sanitized diagnostic when DeepSeek is unavailable", async () => {
     const primary = provider("deepseek", async () => {
       throw new Error("secret query and raw provider body");

@@ -1,6 +1,7 @@
 [
   {
     "name": "helper",
+    "identityLine": "我是小哈，家教會的小幫手。",
     "webhookPath": "/api/line/webhook/helper",
     "channelSecretEnv": "LINE_HELPER_CHANNEL_SECRET",
     "channelAccessTokenEnv": "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
@@ -113,6 +114,44 @@
         "primary": "deepseek"
       }
     },
+    "allowSubscriptionProviders": false
+  },
+  {
+    "name": "main",
+    "identityLine": "我是 HHC 家教會小幫手。",
+    "webhookPath": "/api/line/webhook/main",
+    "channelSecretEnv": "LINE_MAIN_CHANNEL_SECRET",
+    "channelAccessTokenEnv": "LINE_MAIN_CHANNEL_ACCESS_TOKEN",
+    "allowDirectUser": true,
+    "allowRooms": false,
+    "allowedMessageTypes": ["text"],
+    "groupRequireWakeWord": false,
+    "wakeKeywords": [],
+    "acceptMention": false,
+    "enabledFunctions": ["download_weekly_paper"],
+    "adminDirectOnly": true,
+    "directAccessPolicy": "public",
+    "groupAccessPolicy": "blocked",
+    "registration": {
+      "enabled": false
+    },
+    "smallTalk": {
+      "mode": "template",
+      "maxChars": 80
+    },
+    "generalAgent": {
+      "enabled": false,
+      "conversationWindowSeconds": 60
+    },
+    "controlledAgent": {
+      "maxCandidates": 3,
+      "minPlannerConfidence": 0.65
+    },
+    "agentRuntime": {
+      "taskFrameSeconds": 600
+    },
+    "allowedProviders": [],
+    "providerPolicy": {},
     "allowSubscriptionProviders": false
   }
 ]

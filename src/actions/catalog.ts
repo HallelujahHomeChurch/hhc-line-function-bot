@@ -1,7 +1,6 @@
 import { getFunctionDefinitions } from "../functions/definitions.js";
 import {
   FUNCTION_NAMES,
-  SYSTEM_ACTION_NAMES,
   type ActionName,
   type AdminActionName,
   type FunctionName,
@@ -51,17 +50,36 @@ function actionSideEffectForFunction(sideEffectLevel: string): ActionSideEffect 
   }
 }
 
-const systemActions: ActionDefinition<SystemActionName>[] = [...SYSTEM_ACTION_NAMES].map(
-  (name) => ({
-    name,
+const systemActions: ActionDefinition<SystemActionName>[] = [
+  {
+    name: "introduce_bot",
     kind: "system_action",
     auth: "public",
     sourcePolicy: "direct_or_group",
     sideEffect: "read_only",
     naturalLanguage: true,
     description: "Controlled system response."
-  })
-);
+  },
+  {
+    name: "small_talk",
+    kind: "system_action",
+    auth: "public",
+    sourcePolicy: "direct_or_group",
+    sideEffect: "read_only",
+    naturalLanguage: true,
+    description: "Controlled system response."
+  },
+  {
+    name: "account_login",
+    kind: "system_action",
+    auth: "public",
+    sourcePolicy: "direct",
+    sideEffect: "security_change",
+    naturalLanguage: true,
+    description: "Start native LINE account linking for the current direct user.",
+    naturalLanguageHints: ["登入帳戶", "登入 hhc 帳戶", "連結帳戶", "綁定帳戶", "login"]
+  }
+];
 
 const adminActions: ActionDefinition<AdminActionName>[] = [
   {
@@ -224,6 +242,13 @@ export const ACTION_DEFINITIONS: ActionDefinition[] = [
 
 export function getActionDefinition(name: ActionName): ActionDefinition | undefined {
   return ACTION_DEFINITIONS.find((definition) => definition.name === name);
+}
+
+export function matchNaturalLanguageSystemActionHint(text: string): SystemActionName | undefined {
+  const normalized = text.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+  return systemActions.find((definition) =>
+    definition.naturalLanguageHints?.some((hint) => normalized === hint)
+  )?.name;
 }
 
 export function getNaturalLanguageAdminActions(): ActionDefinition<AdminActionName>[] {

@@ -7,10 +7,12 @@ import { QueueServiceClient } from "@azure/storage-queue";
 import { RedisAgentJobStore } from "../agent/jobs.js";
 import { scanWithClamAvCli } from "../attachments/clamav-cli.js";
 import type { ClamAvSignaturePolicy } from "../attachments/clamav-signature-policy.js";
+import type { AttachmentAssetWorkerResult } from "../attachments/asset-worker.js";
 import { runAttachmentScanWorker } from "../attachments/scan-worker.js";
 import type { AttachmentScanWorkerResult } from "../attachments/scan-worker.js";
 import { loadAttachmentScanWorkerConfigFromEnv } from "../attachments/scan-worker-config.js";
 import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
+import { ATTACHMENT_SCAN_TIMING } from "../attachments/scan-timing.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
@@ -21,7 +23,6 @@ import { createResourceBinaryPublisher } from "../functions/resource-binary-publ
 import { createRedisRuntime } from "../redis.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const ATTACHMENT_SCAN_REPLICA_TIMEOUT_MS = 900_000;
 const DEFAULT_SIGNATURE_WARNING_AGE_HOURS = 168;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -98,7 +99,7 @@ export async function receiveAttachmentScanWork(
 ): Promise<AttachmentScanWorkLease | undefined> {
   const response = await client.receiveMessages({
     numberOfMessages: 1,
-    visibilityTimeout: 900
+    visibilityTimeout: ATTACHMENT_SCAN_TIMING.queueVisibilityMs / 1000
   });
   const message = response.receivedMessageItems[0];
   if (!message) return undefined;
@@ -225,22 +226,34 @@ export async function runAttachmentScanJob(
 }
 
 export function attachmentScanPublicationDeadline(startedAt: Date): Date {
-  return new Date(startedAt.getTime() + ATTACHMENT_SCAN_REPLICA_TIMEOUT_MS);
+  return new Date(startedAt.getTime() + ATTACHMENT_SCAN_TIMING.publicationDeadlineMs);
 }
 
-export function shouldAcknowledgeAttachmentScanResult(result: AttachmentScanWorkerResult): boolean {
+type AttachmentJobResult = AttachmentScanWorkerResult | AttachmentAssetWorkerResult;
+
+export function shouldAcknowledgeAttachmentScanResult(result: AttachmentJobResult): boolean {
   return (
     result.status === "completed" ||
+    result.status === "permanent_failure" ||
+    result.status === "missing" ||
     (result.status === "failed" && !result.infrastructureFailure) ||
     (result.status === "ignored" && (result.reason === "terminal" || result.reason === "missing"))
   );
 }
 
-export function formatAttachmentScanJobStatus(
-  result: AttachmentScanWorkerResult
-): Record<string, string> {
+export function formatAttachmentScanJobStatus(result: AttachmentJobResult): Record<string, string> {
   if (result.status === "completed") {
     return { status: "completed", signatureHealth: result.signatureHealth };
+  }
+  if (
+    result.status === "scan_pending" ||
+    result.status === "contention" ||
+    result.status === "missing"
+  ) {
+    return { status: result.status };
+  }
+  if (result.status === "transient_retry" || result.status === "permanent_failure") {
+    return { status: result.status, failureCode: result.failureCode };
   }
   if (result.status === "ignored") {
     return { status: "ignored", reason: result.reason };

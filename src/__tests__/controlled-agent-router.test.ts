@@ -5,7 +5,7 @@ import {
   createControlledAgentRouter,
   type DynamicKnowledgeMetadataProvider
 } from "../agent/controlled-agent-router.js";
-import type { AgentPlanner } from "../agent/planner.js";
+import { createAgentPlanner, type AgentPlanner } from "../agent/planner.js";
 
 const now = new Date("2026-07-13T00:00:30.000Z");
 
@@ -201,6 +201,109 @@ describe("ControlledAgentRouter", () => {
       capability: "query_schedule",
       reasonCode: "deterministic_explicit_intent"
     });
+  });
+
+  it("executes one explicit Weekly Paper read when providers are disabled", async () => {
+    const planner: AgentPlanner = {
+      propose: vi.fn().mockResolvedValue({
+        status: "no_plan",
+        reasonCode: "providers_disabled",
+        attempts: []
+      })
+    };
+
+    await expect(
+      createRouter(planner).resolve({
+        profileName: "main",
+        text: "下載第 1733 期週報",
+        enabledFunctions: ["download_weekly_paper"],
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toMatchObject({
+      disposition: "execute",
+      capability: "download_weekly_paper",
+      arguments: { issueNumber: 1733 },
+      reasonCode: "deterministic_explicit_intent"
+    });
+  });
+
+  it.each(["1733", "週報", "下戴最新週包", "幫我保存週報到資料庫", "查下一場服事表"])(
+    "does not execute Weekly Paper without one explicit read intent: %s",
+    async (text) => {
+      const planner: AgentPlanner = {
+        propose: vi.fn().mockResolvedValue({
+          status: "no_plan",
+          reasonCode: "providers_disabled",
+          attempts: []
+        })
+      };
+
+      const result = await createRouter(planner).resolve({
+        profileName: "main",
+        text,
+        enabledFunctions: ["download_weekly_paper"],
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      });
+
+      expect(result).not.toMatchObject({
+        disposition: "execute",
+        capability: "download_weekly_paper"
+      });
+    }
+  );
+
+  it.each(["不要下載週報", "不要下載第1733期週報", "取消下載週報", "不用幫我下載週報"])(
+    "keeps a negated provider-free read local without deterministic execution: %s",
+    async (text) => {
+      const completeJson = vi.fn();
+      const planner = createAgentPlanner({
+        primary: { providerName: "deepseek", completeJson },
+        providersEnabledForProfile: () => false
+      });
+
+      const result = await createRouter(planner).resolve({
+        profileName: "main",
+        text,
+        enabledFunctions: ["download_weekly_paper"],
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      });
+
+      expect(result).not.toMatchObject({
+        disposition: "execute",
+        capability: "download_weekly_paper"
+      });
+      expect(completeJson).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps a Weekly Paper reminder affirmative without calling a provider", async () => {
+    const completeJson = vi.fn();
+    const planner = createAgentPlanner({
+      primary: { providerName: "deepseek", completeJson },
+      providersEnabledForProfile: () => false
+    });
+
+    await expect(
+      createRouter(planner).resolve({
+        profileName: "main",
+        text: "不要忘記下載週報",
+        enabledFunctions: ["download_weekly_paper"],
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toMatchObject({
+      disposition: "execute",
+      capability: "download_weekly_paper",
+      reasonCode: "deterministic_explicit_intent"
+    });
+    expect(completeJson).not.toHaveBeenCalled();
   });
 
   it("keeps an explicit memory write controlled when the planner succeeds", async () => {

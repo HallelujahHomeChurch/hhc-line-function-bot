@@ -119,7 +119,9 @@ async function functionsForPrincipal(
     await accessStore.listPrincipalCapabilities(profile.name, principal, principalId),
     principal
   );
-  return mergeFunctionNames(grantFunctions, roleFunctions);
+  return mergeFunctionNames(grantFunctions, roleFunctions).filter(
+    (name) => name !== "save_resource" || profile.enabledFunctions.includes(name)
+  );
 }
 
 function capabilitiesToFunctionNames(

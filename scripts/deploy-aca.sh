@@ -187,6 +187,15 @@ if [[ "$(az role assignment list \
   echo "Attachment Job identity is missing its queue processor, queue reader, or ACR pull role" >&2
   exit 1
 fi
+if ! verify_asset_access_contract \
+  "${RESOURCE_GROUP}" \
+  "${ASSET_API_CONTAINER_APP_NAME}" \
+  "${ASSET_API_AUDIENCE}" \
+  "${attachment_job_client_id}" \
+  "${attachment_job_principal_id}"; then
+  echo "Asset API workload access contract is unavailable" >&2
+  exit 1
+fi
 
 azure_openai_embedding_endpoint="$(az cognitiveservices account show \
   --resource-group "${RESOURCE_GROUP}" \
@@ -259,6 +268,8 @@ import os
 required_bot_secrets = {
     "line-helper-channel-secret",
     "line-helper-channel-access-token",
+    "line-main-channel-secret",
+    "line-main-channel-access-token",
     "deepseek-api-key",
     "azure-openai-embedding-key",
     "notion-token",
@@ -491,6 +502,10 @@ substitutions = {
     "PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF": (
         "line-helper-channel-access-token"
     ),
+    "PLACEHOLDER_LINE_MAIN_CHANNEL_SECRET_REF": "line-main-channel-secret",
+    "PLACEHOLDER_LINE_MAIN_CHANNEL_ACCESS_TOKEN_SECRET_REF": (
+        "line-main-channel-access-token"
+    ),
     "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF": (
         "azure-openai-embedding-key"
     ),
@@ -545,6 +560,7 @@ if [[ -z "${bot_fqdn}" ]]; then
 fi
 bot_base_url="https://${bot_fqdn}"
 gateway_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/helper"
+gateway_main_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/main"
 
 retired_bot_secrets=(
   bot-profiles-base64-json
@@ -604,8 +620,12 @@ render_job_manifest() {
   BOT_BASE_URL="${bot_base_url}" \
   SEARXNG_BASE_URL="${searxng_base_url}" \
   GATEWAY_WEBHOOK_URL="${gateway_webhook_url}" \
+  GATEWAY_MAIN_WEBHOOK_URL="${gateway_main_webhook_url}" \
   python3 - <<'PY'
 from pathlib import Path
+import base64
+import hashlib
+import hmac
 import json
 import os
 
@@ -643,6 +663,19 @@ for line in lines:
     rendered.append(line)
 
 text = "\n".join(rendered) + "\n"
+main_signature_placeholder = "PLACEHOLDER_LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE"
+if main_signature_placeholder in text:
+    if text.count(main_signature_placeholder) != 1:
+        raise SystemExit(
+            f"Expected one assurance job placeholder: {main_signature_placeholder}"
+        )
+    main_secret = secret_values.get("line-main-channel-secret")
+    if not main_secret:
+        raise SystemExit("Required ACA secret is unavailable: line-main-channel-secret")
+    main_signature = base64.b64encode(
+        hmac.new(main_secret.encode("utf-8"), b'{"events":[]}', hashlib.sha256).digest()
+    ).decode("ascii")
+    text = text.replace(main_signature_placeholder, main_signature)
 substitutions = {
     "PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID": os.environ["MANAGED_ENVIRONMENT_ID"],
     "PLACEHOLDER_AZURE_REGION": os.environ["CONTAINER_APP_LOCATION"],
@@ -667,11 +700,13 @@ substitutions = {
     "PLACEHOLDER_BOT_BASE_URL": os.environ["BOT_BASE_URL"],
     "PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"],
     "PLACEHOLDER_GATEWAY_WEBHOOK_URL": os.environ["GATEWAY_WEBHOOK_URL"],
+    "PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL": os.environ["GATEWAY_MAIN_WEBHOOK_URL"],
 }
 strict_assurance_placeholders = {
     "PLACEHOLDER_BOT_BASE_URL",
     "PLACEHOLDER_SEARXNG_BASE_URL",
     "PLACEHOLDER_GATEWAY_WEBHOOK_URL",
+    "PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL",
 }
 for placeholder, value in substitutions.items():
     if placeholder in strict_assurance_placeholders and placeholder in text:
@@ -781,7 +816,10 @@ deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
 mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"
 deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"
 mark_release_job_mutated "${PERIODIC_ASSURANCE_JOB_NAME}"
-deploy_job "${PERIODIC_ASSURANCE_JOB_NAME}" "${periodic_assurance_job_manifest}"
+deploy_job \
+  "${PERIODIC_ASSURANCE_JOB_NAME}" \
+  "${periodic_assurance_job_manifest}" \
+  "${attachment_job_identity_id}"
 
 run_release_gates
 write_release_report

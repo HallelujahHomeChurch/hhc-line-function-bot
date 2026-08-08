@@ -14,10 +14,15 @@ import type { AgentPlanDisposition, FunctionName, JsonRecord } from "../types.js
 import { isFunctionName } from "../types.js";
 import type { ActiveTaskContext } from "./active-task.js";
 import {
-  hasDeclarativeArgumentEvidence,
+  hasUnnegatedDeclarativeArgumentEvidence,
   type CapabilityCandidateReason
 } from "./capability-candidates.js";
-import { groundPlanRecord, hasActiveEntityTextEvidence, liveActiveTask } from "./plan-evidence.js";
+import {
+  groundPlanRecord,
+  hasActiveEntityTextEvidence,
+  hasUnnegatedIntentEvidence,
+  liveActiveTask
+} from "./plan-evidence.js";
 import { findMissingRequiredSlot } from "./slot-clarification.js";
 import { hasWriteIntent, isTaskShapedText } from "./knowledge-evidence-guard.js";
 
@@ -39,7 +44,8 @@ export type AgentPlanProposalInput =
     }
   | {
       status: "no_plan";
-      reasonCode?: "no_candidates" | "providers_unavailable" | "invalid_output";
+      reasonCode?:
+        "no_candidates" | "providers_disabled" | "providers_unavailable" | "invalid_output";
     };
 
 export interface ValidateAgentPlanInput {
@@ -531,8 +537,8 @@ function revalidatedExplicitCandidates(input: ValidateAgentPlanInput): FunctionN
       definition.agentCapability &&
       sourceAllowed(definition, input.sourceType) &&
       (definition.sideEffectLevel === "read"
-        ? definition.agentCapability.intents.some((intent) => textContains(input.text, intent)) ||
-          hasDeclarativeArgumentEvidence(definition, input.text)
+        ? hasUnnegatedIntentEvidence(input.text, definition.agentCapability.intents) ||
+          hasUnnegatedDeclarativeArgumentEvidence(definition, input.text)
         : hasWriteIntent(input.text) &&
           definition.agentCapability.intents.some((intent) => textContains(input.text, intent)))
     );
@@ -547,8 +553,8 @@ function revalidatedDisabledExplicitCandidates(input: ValidateAgentPlanInput): F
       Boolean(definition.agentCapability) &&
       sourceAllowed(definition, input.sourceType) &&
       (definition.sideEffectLevel === "read"
-        ? definition.agentCapability?.intents.some((intent) => textContains(input.text, intent)) ||
-          hasDeclarativeArgumentEvidence(definition, input.text)
+        ? hasUnnegatedIntentEvidence(input.text, definition.agentCapability?.intents ?? []) ||
+          hasUnnegatedDeclarativeArgumentEvidence(definition, input.text)
         : hasWriteIntent(input.text) &&
           Boolean(
             definition.agentCapability?.intents.some((intent) => textContains(input.text, intent))

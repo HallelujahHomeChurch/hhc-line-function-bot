@@ -3,6 +3,7 @@ import { posix } from "node:path";
 import { assessClamAvSignatureManifest } from "../attachments/clamav-signature-policy.js";
 import type { ClamAvCliScanResult } from "../attachments/clamav-cli.js";
 import type { AssuranceCheck, AssuranceFailureCode } from "./report.js";
+import type { AssetLifecycleAssuranceResult } from "./asset-lifecycle-probe.js";
 import type { DriveItem } from "../types.js";
 
 export type PeriodicAssuranceCheckName =
@@ -12,7 +13,8 @@ export type PeriodicAssuranceCheckName =
   | "clamav_signature"
   | "clamav_clean"
   | "clamav_eicar"
-  | "diagnostic_write_delete";
+  | "diagnostic_write_delete"
+  | "asset_lifecycle";
 
 export type PeriodicAssuranceFailureCode =
   | "none"
@@ -25,6 +27,9 @@ export type PeriodicAssuranceFailureCode =
   | "diagnostic_folder_failed"
   | "diagnostic_upload_failed"
   | "diagnostic_delete_failed"
+  | "asset_lifecycle_failed"
+  | "asset_cleanup_failed"
+  | "timeout"
   | "signature_warning";
 
 export interface PeriodicAssuranceInput {
@@ -56,6 +61,7 @@ export interface PeriodicAssuranceDependencies {
     contentType: string
   ): Promise<DriveItem>;
   deleteDiagnostic(driveId: string, itemId: string): Promise<void>;
+  runAssetLifecycle(): Promise<AssetLifecycleAssuranceResult>;
   now(): Date;
 }
 
@@ -102,6 +108,7 @@ export async function runPeriodicAssurance(
   const clamav = await clamAvChecks(input, dependencies);
   checks.push(...clamav);
   checks.push(await diagnosticWriteDeleteCheck(input, dependencies));
+  checks.push(await assetLifecycleCheck(dependencies));
 
   return {
     status: checks.some((check) => check.status === "failed") ? "failed" : "passed",
@@ -109,6 +116,19 @@ export async function runPeriodicAssurance(
     queue: queue.observation,
     providerRequests: { deepseek: 0, embedding: 0 }
   };
+}
+
+async function assetLifecycleCheck(
+  dependencies: PeriodicAssuranceDependencies
+): Promise<PeriodicAssuranceCheckResult> {
+  try {
+    const result = await dependencies.runAssetLifecycle();
+    return result.status === "passed"
+      ? passed("asset_lifecycle")
+      : { name: "asset_lifecycle", status: "failed", code: result.code };
+  } catch {
+    return failed("asset_lifecycle", "asset_lifecycle_failed");
+  }
 }
 
 async function graphMetadataCheck(

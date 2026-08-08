@@ -4,13 +4,13 @@ location: PLACEHOLDER_AZURE_REGION
 identity:
   type: UserAssigned
   userAssignedIdentities:
-    PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}
+    PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}
 properties:
   environmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
   configuration:
     registries:
       - server: alive.azurecr.io
-        identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID
+        identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
     triggerType: Manual
     replicaTimeout: 600
     replicaRetryLimit: 0
@@ -49,6 +49,12 @@ properties:
             secretRef: attachment-scan-queue-connection-string
           - name: ATTACHMENT_SCAN_QUEUE_NAME
             value: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
+          - name: ASSET_API_URL
+            value: PLACEHOLDER_ASSET_API_URL
+          - name: ASSET_API_AUDIENCE
+            value: PLACEHOLDER_ASSET_API_AUDIENCE
+          - name: AZURE_CLIENT_ID
+            value: PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID
           - name: CLAMAV_SIGNATURE_MANIFEST_PATH
             value: /var/lib/clamav/current/manifest.json
           - name: CLAMAV_SCAN_TIMEOUT_MS

@@ -1,14 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { AccountApiError } from "../account/account-admin-client.js";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
+import { createControlledAgentRouter } from "../agent/controlled-agent-router.js";
+import { createAgentPlanner } from "../agent/planner.js";
 import type { ControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
+import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
 import { signLineBody } from "../line-signature.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
@@ -18,6 +22,7 @@ import type {
   FunctionRouterPort,
   GraphDriveClient,
   LineIdentityClient,
+  LineAccountLinkClient,
   LineReplyClient,
   TextMessageHandlerRegistry,
   PostbackHandlerRegistry,
@@ -232,6 +237,38 @@ function accessConfig(): AppConfig {
     },
     access: { registrationInviteCodeTtlMinutes: 60 }
   };
+}
+
+function providerFreeMainConfig(): AppConfig {
+  const config = accessConfig();
+  config.profiles = [
+    {
+      name: "main",
+      identityLine: "我是 HHC 家教會小幫手。",
+      webhookPath: "/api/line/webhook/main",
+      channelSecret: "main-secret",
+      channelAccessToken: "main-token",
+      allowDirectUser: true,
+      allowRooms: false,
+      allowedMessageTypes: ["text"],
+      groupRequireWakeWord: false,
+      wakeKeywords: [],
+      acceptMention: false,
+      enabledFunctions: ["download_weekly_paper"],
+      adminDirectOnly: true,
+      directAccessPolicy: "public",
+      groupAccessPolicy: "blocked",
+      registration: { enabled: false },
+      smallTalk: { mode: "template", maxChars: 80 },
+      allowedProviders: [],
+      allowSubscriptionProviders: false,
+      providerPolicy: {},
+      controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
+      schedulePolicy: { meetingWindows: [], domains: [] },
+      generalAgent: { enabled: false, conversationWindowSeconds: 60 }
+    }
+  ];
+  return config;
 }
 
 describe("LINE entrance", () => {
@@ -863,6 +900,161 @@ describe("LINE entrance", () => {
     expect(router.route).not.toHaveBeenCalled();
   });
 
+  it("rejects unrelated managed helper group chatter after common dedupe and rate gates", async () => {
+    const rateCheck = vi.fn().mockResolvedValue({
+      allowed: true,
+      remaining: 19,
+      resetAt: "2026-08-08T12:00:00Z"
+    });
+    const authorizeAdministrator = vi.fn();
+    const getUserDisplayName = vi.fn();
+    const getGroupDisplayName = vi.fn();
+    const createLineIdentityClient = vi.fn(() => ({ getUserDisplayName, getGroupDisplayName }));
+    const dedupe = vi.fn().mockResolvedValue("started");
+    const app = createTestApp(testConfig(), {
+      rateLimiter: { check: rateCheck },
+      webhookEventStore: { tryStart: dedupe },
+      accountAdminClient: {
+        authorizeAdministrator,
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
+      createLineIdentityClient,
+      createLineReplyClient: () => ({ replyText: vi.fn() })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "unrelated-managed-group",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "晚安" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.json()).toMatchObject({
+      ok: true,
+      ignored: true,
+      reason: "wake_word_missing"
+    });
+    expect(dedupe).toHaveBeenCalledOnce();
+    expect(rateCheck).toHaveBeenCalledOnce();
+    expect(authorizeAdministrator).toHaveBeenCalledOnce();
+    expect(createLineIdentityClient).toHaveBeenCalledOnce();
+    expect(getUserDisplayName).not.toHaveBeenCalled();
+    expect(getGroupDisplayName).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["duplicate", "duplicate", true],
+    ["rate limited", "started", false]
+  ] as const)(
+    "gates a %s helper group continuation before stateful admission",
+    async (_label, dedupeResult, rateAllowed) => {
+      const config = testConfig();
+      config.profiles[0] = {
+        ...config.profiles[0]!,
+        generalAgent: { enabled: true, conversationWindowSeconds: 60 }
+      };
+      const accessStore = defaultAccessStore();
+      const accessRead = vi.spyOn(accessStore, "hasActivePrincipal");
+      const sessionStore = new InMemorySessionStore();
+      const sessionRead = vi.spyOn(sessionStore, "findPendingCapabilityResolution");
+      const conversationWindowStore = new InMemoryConversationWindowStore();
+      const conversationRead = vi.spyOn(conversationWindowStore, "isActive");
+      const dedupe = vi.fn().mockResolvedValue(dedupeResult);
+      const rateCheck = vi.fn().mockResolvedValue({
+        allowed: rateAllowed,
+        remaining: rateAllowed ? 19 : 0,
+        resetAt: "2026-08-08T12:00:00Z"
+      });
+      const authorizeAdministrator = vi.fn();
+      const app = createTestApp(config, {
+        accessStore,
+        sessionStore,
+        conversationWindowStore,
+        webhookEventStore: { tryStart: dedupe },
+        rateLimiter: { check: rateCheck },
+        accountAdminClient: {
+          authorizeAdministrator,
+          createBinding: vi.fn(),
+          finalizeBinding: vi.fn()
+        },
+        createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
+      });
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `helper-${_label}`,
+        replyToken: "reply-token",
+        source: { type: "group", groupId: "Cmain", userId: "U1" },
+        message: { type: "text", text: "奇異恩典" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(dedupe).toHaveBeenCalledOnce();
+      expect(rateCheck).toHaveBeenCalledTimes(dedupeResult === "duplicate" ? 0 : 1);
+      expect(accessRead).not.toHaveBeenCalled();
+      expect(sessionRead).not.toHaveBeenCalled();
+      expect(conversationRead).not.toHaveBeenCalled();
+      expect(authorizeAdministrator).not.toHaveBeenCalled();
+    }
+  );
+
+  it("preserves unaddressed small talk for an active helper group conversation", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      wakeKeywords: ["bot"],
+      generalAgent: { enabled: true, conversationWindowSeconds: 90 }
+    };
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "deepseek"
+    });
+    const conversationWindowStore = new InMemoryConversationWindowStore();
+    await conversationWindowStore.recordTurn({
+      scope: { profileName: "main", sourceKey: "group:Cmain", requesterUserId: "U1" },
+      role: "assistant",
+      text: "active",
+      ttlMs: 90_000
+    });
+    const app = createTestApp(config, {
+      router: { route },
+      conversationWindowStore,
+      createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "active-group-small-talk",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "晚安" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(route).toHaveBeenCalledWith(expect.objectContaining({ text: "晚安" }));
+  });
+
   it("ignores third-person group mentions of the bot before calling the router", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
       type: "deny",
@@ -1354,7 +1546,7 @@ describe("LINE entrance", () => {
     expect(route).not.toHaveBeenCalled();
     expect(replyText).toHaveBeenCalledWith(
       "reply-token",
-      expect.stringContaining("https://account.alive.org.tw/line/bind?token="),
+      expect.stringContaining("登入 HHC 帳戶"),
       undefined
     );
   });
@@ -2033,7 +2225,7 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("我目前可以協助：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
-    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(3);
   });
 
   it("uses controlled LLM small talk for direct greetings when enabled by profile", async () => {
@@ -2158,7 +2350,7 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("我目前可以協助：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
-    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(3);
   });
 
   it("does not disclose profile write functions in a regular user's capability reply", async () => {
@@ -2237,7 +2429,7 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[1]?.[2]?.quickReplies).toEqual(
       replyText.mock.calls[0]?.[2]?.quickReplies
     );
-    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(3);
   });
 
   it("introduces sheet music lookup without exposing storage details", async () => {
@@ -2677,8 +2869,14 @@ describe("LINE entrance", () => {
   it("denies slash admin commands from non-admin direct users without routing", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const createBinding = vi.fn();
     const app = createTestApp(testConfig(), {
       router: { route },
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn().mockResolvedValue({ bound: false, allowed: false }),
+        createBinding,
+        finalizeBinding: vi.fn()
+      },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -2699,9 +2897,10 @@ describe("LINE entrance", () => {
     expect(route).not.toHaveBeenCalled();
     expect(replyText).toHaveBeenCalledWith(
       "reply-token",
-      expect.stringContaining("https://account.alive.org.tw/line/bind?token="),
+      expect.stringContaining("登入 HHC 帳戶"),
       undefined
     );
+    expect(createBinding).not.toHaveBeenCalled();
   });
 
   it("prompts managed direct users to register before routing", async () => {
@@ -3342,7 +3541,7 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(adminRoute).not.toHaveBeenCalled();
     expect(route).not.toHaveBeenCalled();
-    expect(replyText.mock.calls[0]?.[1]).toContain("https://account.alive.org.tw/line/bind?token=");
+    expect(replyText.mock.calls[0]?.[1]).toContain("登入 HHC 帳戶");
   });
 
   it("rejects legacy registration and approval commands", async () => {
@@ -3645,6 +3844,162 @@ describe("LINE entrance", () => {
     expect(route).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["latest", "下載最新週報", "user", "success"],
+    ["specified", "第1733期週報", "user", "success"],
+    ["not found", "第9999期週報", "user", "not_found"],
+    ["help", "/help", "user", "help"],
+    ["account login", "登入 HHC 帳戶", "user", "login"],
+    ["unknown", "我想知道這是什麼", "user", "local"],
+    ["blocked group", "下載最新週報", "group", "blocked"],
+    ["admin-looking", "幫我建立邀請碼", "user", "local"],
+    ["route test", "/route-test 查服事表", "user", "local"],
+    ["typo", "下戴最新週包", "user", "local"],
+    ["cross function", "查下一場服事表", "user", "local"],
+    ["write intent", "幫我保存這份週報", "user", "local"],
+    ["numeric only", "1733", "user", "local"]
+  ] as const)(
+    "keeps provider-free main entrance local and gate-ordered: %s",
+    async (_label, text, sourceType, expected) => {
+      const order: string[] = [];
+      const authorizeAdministrator = vi.fn();
+      const providerCompleteJson = vi.fn();
+      const providerCompleteText = vi.fn<TextGenerationProvider["completeText"]>();
+      const embeddingRequest = vi.fn();
+      const planner = createAgentPlanner({
+        primary: { providerName: "deepseek", completeJson: providerCompleteJson },
+        providersEnabledForProfile: () => false
+      });
+      const controlledAgentRouter = createControlledAgentRouter({ planner });
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("/by-number/9999")) {
+          return new Response("{}", { status: 404 });
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              issueNumber: 1733,
+              issueDate: "2026-08-09",
+              locale: "zh-Hant",
+              title: "第 1733 期週報",
+              subtitle: "HHC Weekly Paper",
+              downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
+              downloadFileName: "1733-weekly.pdf",
+              publishedAt: "2026-08-09T02:00:00.000Z",
+              version: 1
+            },
+            meta: {},
+            error: null
+          }),
+          { status: 200 }
+        );
+      });
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const createBinding = vi.fn().mockResolvedValue({
+        bindingUrl: "https://account.alive.org.tw/line/bind#token=opaque",
+        expiresAt: "2026-08-08T12:00:00Z"
+      });
+      const app = createApp(providerFreeMainConfig(), {
+        controlledAgentRouter,
+        functionRegistry: {
+          download_weekly_paper: (args) => downloadWeeklyPaper(args, fetchImpl),
+          query_knowledge: async () => {
+            embeddingRequest();
+            return { ok: true, replyText: "unexpected embedding path" };
+          }
+        },
+        textGenerator: { completeText: providerCompleteText },
+        textFallbackGenerator: { completeText: providerCompleteText },
+        accountAdminClient: {
+          authorizeAdministrator,
+          createBinding,
+          finalizeBinding: vi.fn()
+        },
+        createLineAccountLinkClient: () => ({
+          issueLinkToken: vi.fn().mockResolvedValue("native-link-token")
+        }),
+        createLineReplyClient: () => ({ replyText }),
+        createLineIdentityClient: () => ({
+          getUserDisplayName: vi.fn(async () => {
+            order.push("display");
+            return "Ray";
+          }),
+          getGroupDisplayName: vi.fn(async () => {
+            order.push("display");
+            return "Group";
+          })
+        }),
+        webhookEventStore: {
+          tryStart: vi.fn(async () => {
+            order.push("dedupe");
+            return "started" as const;
+          })
+        },
+        rateLimiter: {
+          check: vi.fn(async () => {
+            order.push("rate");
+            return { allowed: true, remaining: 19, resetAt: "2026-08-08T12:00:00Z" };
+          })
+        }
+      });
+      const source =
+        sourceType === "group"
+          ? { type: "group", groupId: "Cblocked", userId: "U1" }
+          : { type: "user", userId: "U1" };
+      const body = JSON.stringify({
+        destination: "channel-destination",
+        events: [
+          {
+            type: "message",
+            webhookEventId: `main-${_label}`,
+            replyToken: "reply-token",
+            source,
+            message: { type: "text", text }
+          }
+        ]
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(authorizeAdministrator).not.toHaveBeenCalled();
+      expect(providerCompleteJson).not.toHaveBeenCalled();
+      expect(providerCompleteText).not.toHaveBeenCalled();
+      expect(embeddingRequest).not.toHaveBeenCalled();
+      if (expected === "blocked") {
+        expect(response.json()).toMatchObject({ ignored: true, reason: "group_blocked" });
+        expect(order).toEqual([]);
+        expect(replyText).not.toHaveBeenCalled();
+        return;
+      }
+      expect(order.slice(0, 2)).toEqual(["dedupe", "rate"]);
+      if (expected === "login") {
+        expect(order).toEqual(["dedupe", "rate"]);
+        expect(createBinding).toHaveBeenCalledOnce();
+      } else {
+        const displayIndex = order.indexOf("display");
+        if (displayIndex !== -1) {
+          expect(displayIndex).toBeGreaterThan(order.indexOf("rate"));
+        }
+      }
+      const reply = String(replyText.mock.calls[0]?.[1]);
+      if (expected === "success") expect(reply).toContain("第 1733 期週報");
+      if (expected === "not_found") expect(reply).toContain("沒有找到");
+      if (expected === "help") {
+        expect(reply).toContain("下載週報");
+        expect(reply).toContain("登入 HHC 帳戶");
+        expect(reply).not.toMatch(/registry|memories|route-test/iu);
+      }
+      if (expected === "local") expect(reply).not.toContain("管理權限");
+    }
+  );
+
   it("ignores legacy local admin rows and trusts Account authorization", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -3710,6 +4065,570 @@ describe("LINE entrance", () => {
     });
 
     expect(replyText.mock.calls[0]?.[1]).toContain("目前無法確認管理權限");
+  });
+
+  it("starts native account linking for an unmanaged direct user without authorization or routing", async () => {
+    const issueLinkToken = vi
+      .fn<LineAccountLinkClient["issueLinkToken"]>()
+      .mockResolvedValue("native-link-token");
+    const authorizeAdministrator = vi.fn();
+    const createBinding = vi.fn().mockResolvedValue({
+      bindingUrl: "https://account.alive.org.tw/line/bind#token=opaque",
+      expiresAt: "2026-08-08T12:00:00Z"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const createLineIdentityClient = vi.fn();
+    const routeObserver = vi.fn();
+    const app = createApp(accessConfig(), {
+      router: { route },
+      routeObserver,
+      accountAdminClient: {
+        authorizeAdministrator,
+        createBinding,
+        finalizeBinding: vi.fn()
+      },
+      createLineAccountLinkClient: () => ({ issueLinkToken }),
+      createLineIdentityClient,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = JSON.stringify({
+      destination: "channel-destination",
+      events: [
+        {
+          type: "message",
+          webhookEventId: "login-event",
+          replyToken: "reply-token",
+          source: { type: "user", userId: "Uunmanaged" },
+          message: { type: "text", text: "登入 HHC 帳戶" }
+        }
+      ]
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(issueLinkToken).toHaveBeenCalledWith("Uunmanaged");
+    expect(createBinding).toHaveBeenCalledWith({
+      expectedLineUserId: "Uunmanaged",
+      profileName: "helper",
+      channelId: "channel-destination",
+      lineLinkToken: "native-link-token"
+    });
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.stringContaining("https://account.alive.org.tw/line/bind#token=opaque"),
+      undefined
+    );
+    expect(authorizeAdministrator).not.toHaveBeenCalled();
+    expect(createLineIdentityClient).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(routeObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "product_event",
+        eventName: "account_link_started",
+        action: "account_login",
+        resultClass: "success"
+      })
+    );
+    expect(JSON.stringify(routeObserver.mock.calls)).not.toMatch(
+      /Uunmanaged|native-link-token|channel-destination|#token=opaque/u
+    );
+  });
+
+  it.each([
+    ["loose text", { type: "user", userId: "U1" }, "我想登入帳戶看看", "reply", "dest"],
+    ["group", { type: "group", groupId: "C1", userId: "U1" }, "登入帳戶", "reply", "dest"],
+    ["room", { type: "room", roomId: "R1", userId: "U1" }, "登入帳戶", "reply", "dest"],
+    ["missing uid", { type: "user" }, "登入帳戶", "reply", "dest"],
+    ["missing reply", { type: "user", userId: "U1" }, "登入帳戶", undefined, "dest"],
+    ["missing destination", { type: "user", userId: "U1" }, "登入帳戶", "reply", undefined]
+  ])(
+    "does not issue a native token for %s",
+    async (_label, source, text, replyToken, destination) => {
+      const issueLinkToken = vi.fn();
+      const app = createApp(accessConfig(), {
+        createLineAccountLinkClient: () => ({ issueLinkToken }),
+        createLineReplyClient: () => ({ replyText: vi.fn() })
+      });
+      const body = JSON.stringify({
+        ...(destination ? { destination } : {}),
+        events: [
+          {
+            type: "message",
+            webhookEventId: "login-invalid",
+            ...(replyToken ? { replyToken } : {}),
+            source,
+            message: { type: "text", text }
+          }
+        ]
+      });
+
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/helper",
+        headers: signedHeaders(body, "helper-secret"),
+        payload: body
+      });
+
+      expect(issueLinkToken).not.toHaveBeenCalled();
+    }
+  );
+
+  it("deduplicates and rate-limits explicit login before issuing a token", async () => {
+    const issueLinkToken = vi.fn();
+    const duplicateApp = createApp(accessConfig(), {
+      webhookEventStore: { tryStart: vi.fn().mockResolvedValue("duplicate") },
+      createLineAccountLinkClient: () => ({ issueLinkToken }),
+      createLineReplyClient: () => ({ replyText: vi.fn() })
+    });
+    const body = JSON.stringify({
+      destination: "dest",
+      events: [
+        {
+          type: "message",
+          webhookEventId: "login-duplicate",
+          replyToken: "reply",
+          source: { type: "user", userId: "U1" },
+          message: { type: "text", text: "login" }
+        }
+      ]
+    });
+    await duplicateApp.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    const rateLimitedApp = createApp(accessConfig(), {
+      rateLimiter: {
+        check: vi.fn().mockResolvedValue({
+          allowed: false,
+          remaining: 0,
+          resetAt: "2026-08-08T12:00:00Z"
+        })
+      },
+      createLineAccountLinkClient: () => ({ issueLinkToken }),
+      createLineReplyClient: () => ({ replyText: vi.fn() })
+    });
+    await rateLimitedApp.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(issueLinkToken).not.toHaveBeenCalled();
+  });
+
+  it("finalizes a completed accountLink before every ordinary entrance dependency", async () => {
+    const finalizeBinding = vi.fn().mockResolvedValue({ status: "completed" });
+    const authorizeAdministrator = vi.fn();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const identity = vi.fn();
+    const rateCheck = vi.fn();
+    const dedupe = vi.fn();
+    const route = vi.fn();
+    const routeObserver = vi.fn();
+    const app = createApp(accessConfig(), {
+      router: { route },
+      routeObserver,
+      accountAdminClient: {
+        authorizeAdministrator,
+        createBinding: vi.fn(),
+        finalizeBinding
+      },
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: identity,
+      rateLimiter: { check: rateCheck },
+      webhookEventStore: { tryStart: dedupe }
+    });
+    const body = accountLinkBody({
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uactual" },
+      link: { result: "ok", nonce: "native-nonce" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(finalizeBinding).toHaveBeenCalledWith({
+      nonce: "native-nonce",
+      result: "ok",
+      actualLineUserId: "Uactual",
+      profileName: "helper",
+      channelId: "channel-destination",
+      webhookEventId: "account-link-event"
+    });
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token",
+      expect.stringContaining("已完成"),
+      undefined
+    );
+    expect(authorizeAdministrator).not.toHaveBeenCalled();
+    expect(identity).not.toHaveBeenCalled();
+    expect(rateCheck).not.toHaveBeenCalled();
+    expect(dedupe).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(routeObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "product_event",
+        eventName: "account_link_finalized",
+        action: "account_login",
+        resultClass: "success"
+      })
+    );
+    expect(JSON.stringify(routeObserver.mock.calls)).not.toMatch(
+      /Uactual|native-nonce|channel-destination/u
+    );
+  });
+
+  it.each(["conflict", "expired"])(
+    "acknowledges terminal accountLink %s with a generic failure reply",
+    async (status) => {
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const app = createApp(accessConfig(), {
+        accountAdminClient: {
+          authorizeAdministrator: vi.fn(),
+          createBinding: vi.fn(),
+          finalizeBinding: vi.fn().mockResolvedValue({ status })
+        },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = accountLinkBody({
+        replyToken: "reply-token",
+        source: { type: "user", userId: "Uactual" },
+        link: { result: "ok", nonce: "native-nonce" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/helper",
+        headers: signedHeaders(body, "helper-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(replyText).toHaveBeenCalledWith(
+        "reply-token",
+        expect.stringContaining("無法完成"),
+        undefined
+      );
+    }
+  );
+
+  it("finalizes failed accountLink events without a source, actual UID, or reply", async () => {
+    const finalizeBinding = vi.fn().mockResolvedValue({ status: "failed" });
+    const replyText = vi.fn();
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        createBinding: vi.fn(),
+        finalizeBinding
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = accountLinkBody({ link: { result: "failed", nonce: "native-nonce" } });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(finalizeBinding).toHaveBeenCalledWith({
+      nonce: "native-nonce",
+      result: "failed",
+      profileName: "helper",
+      channelId: "channel-destination",
+      webhookEventId: "account-link-event"
+    });
+    expect(replyText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing nonce", { link: { result: "ok" }, source: { type: "user", userId: "U1" } }],
+    ["bad result", { link: { result: "pending", nonce: "nonce" } }],
+    ["ok without direct source", { link: { result: "ok", nonce: "nonce" } }],
+    [
+      "ok with group source",
+      { link: { result: "ok", nonce: "nonce" }, source: { type: "group", groupId: "C1" } }
+    ]
+  ])("ignores malformed signed accountLink: %s", async (_label, event) => {
+    const finalizeBinding = vi.fn();
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        createBinding: vi.fn(),
+        finalizeBinding
+      },
+      createLineReplyClient: () => ({ replyText: vi.fn() })
+    });
+    const body = accountLinkBody(event);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(finalizeBinding).not.toHaveBeenCalled();
+  });
+
+  it("returns retryable non-2xx and retries transient finalize redelivery without ordinary dedupe", async () => {
+    const finalizeBinding = vi
+      .fn()
+      .mockRejectedValue(new AccountApiError("account_api_http_503", true));
+    const dedupe = vi.fn();
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        createBinding: vi.fn(),
+        finalizeBinding
+      },
+      webhookEventStore: { tryStart: dedupe },
+      createLineReplyClient: () => ({ replyText: vi.fn() })
+    });
+    const body = accountLinkBody({
+      source: { type: "user", userId: "Uactual" },
+      link: { result: "ok", nonce: "native-nonce" }
+    });
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/helper",
+        headers: signedHeaders(body, "helper-secret"),
+        payload: body
+      });
+      expect(response.statusCode).toBe(503);
+    }
+    expect(finalizeBinding).toHaveBeenCalledTimes(2);
+    expect(dedupe).not.toHaveBeenCalled();
+  });
+
+  it("stops a mixed payload before ordinary events when accountLink finalize is transient", async () => {
+    const finalizeBinding = vi
+      .fn()
+      .mockRejectedValue(new AccountApiError("account_api_http_503", true));
+    const authorizeAdministrator = vi.fn();
+    const route = vi.fn();
+    const app = createApp(accessConfig(), {
+      router: { route },
+      accountAdminClient: {
+        authorizeAdministrator,
+        createBinding: vi.fn(),
+        finalizeBinding
+      }
+    });
+    const body = JSON.stringify({
+      destination: "channel-destination",
+      events: [
+        {
+          type: "message",
+          webhookEventId: "ordinary-event",
+          replyToken: "ordinary-reply",
+          source: { type: "user", userId: "Uunmanaged" },
+          message: { type: "text", text: "查服事表" }
+        },
+        {
+          type: "accountLink",
+          webhookEventId: "account-link-event",
+          source: { type: "user", userId: "Uactual" },
+          link: { result: "ok", nonce: "native-nonce" }
+        }
+      ]
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(finalizeBinding).toHaveBeenCalledOnce();
+    expect(authorizeAdministrator).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+  });
+
+  it("emits one terminal outcome for a permanent finalize protocol error", async () => {
+    const routeObserver = vi.fn();
+    const app = createApp(accessConfig(), {
+      routeObserver,
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        createBinding: vi.fn(),
+        finalizeBinding: vi
+          .fn()
+          .mockRejectedValue(new AccountApiError("account_api_invalid_finalize", false))
+      },
+      createLineReplyClient: () => ({ replyText: vi.fn() })
+    });
+    const body = accountLinkBody({
+      source: { type: "user", userId: "Uactual" },
+      link: { result: "ok", nonce: "native-nonce" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    const observed = routeObserver.mock.calls.map(([event]) => event);
+    expect(observed.filter((event) => event.kind === "route")).toHaveLength(1);
+    expect(observed.filter((event) => event.eventName === "account_link_finalized")).toHaveLength(
+      1
+    );
+  });
+
+  it("reaches terminal finalize again on redelivery and replies only with a usable token", async () => {
+    const finalizeBinding = vi.fn().mockResolvedValue({ status: "completed" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        createBinding: vi.fn(),
+        finalizeBinding
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const first = accountLinkBody({
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uactual" },
+      link: { result: "ok", nonce: "native-nonce" }
+    });
+    const second = accountLinkBody({
+      source: { type: "user", userId: "Uactual" },
+      link: { result: "ok", nonce: "native-nonce" }
+    });
+
+    for (const body of [first, second]) {
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/helper",
+        headers: signedHeaders(body, "helper-secret"),
+        payload: body
+      });
+    }
+
+    expect(finalizeBinding).toHaveBeenCalledTimes(2);
+    expect(replyText).toHaveBeenCalledTimes(1);
+  });
+
+  it("acknowledges terminal finalize when the optional LINE reply fails", async () => {
+    const finalizeBinding = vi.fn().mockResolvedValue({ status: "completed" });
+    const replyText = vi.fn().mockRejectedValue(new Error("spent reply token"));
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        createBinding: vi.fn(),
+        finalizeBinding
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = accountLinkBody({
+      replyToken: "spent-reply-token",
+      source: { type: "user", userId: "Uactual" },
+      link: { result: "ok", nonce: "native-nonce" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(finalizeBinding).toHaveBeenCalledOnce();
+    expect(replyText).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry the same LINE reply token when a login-link reply fails", async () => {
+    const issueLinkToken = vi.fn().mockResolvedValue("native-link-token");
+    const createBinding = vi.fn().mockResolvedValue({
+      bindingUrl: "https://account.alive.org.tw/line/bind#token=opaque",
+      expiresAt: "2026-08-08T12:00:00Z"
+    });
+    const replyText = vi.fn().mockRejectedValue(new Error("spent reply token"));
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        createBinding,
+        finalizeBinding: vi.fn()
+      },
+      createLineAccountLinkClient: () => ({ issueLinkToken }),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = JSON.stringify({
+      destination: "channel-destination",
+      events: [
+        {
+          type: "message",
+          webhookEventId: "login-reply-failure",
+          replyToken: "spent-reply-token",
+          source: { type: "user", userId: "U1" },
+          message: { type: "text", text: "登入帳戶" }
+        }
+      ]
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(issueLinkToken).toHaveBeenCalledOnce();
+    expect(createBinding).toHaveBeenCalledOnce();
+    expect(replyText).toHaveBeenCalledOnce();
+  });
+
+  it("rejects accountLink signed for another profile before finalize", async () => {
+    const finalizeBinding = vi.fn();
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        createBinding: vi.fn(),
+        finalizeBinding
+      }
+    });
+    const body = accountLinkBody({
+      source: { type: "user", userId: "Uactual" },
+      link: { result: "ok", nonce: "native-nonce" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main-public",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(finalizeBinding).not.toHaveBeenCalled();
   });
 
   it("blocks non-text messages until the profile explicitly allows them", async () => {
@@ -4513,4 +5432,11 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function accountLinkBody(event: Record<string, unknown>): string {
+  return JSON.stringify({
+    destination: "channel-destination",
+    events: [{ type: "accountLink", webhookEventId: "account-link-event", ...event }]
+  });
 }

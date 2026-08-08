@@ -19,6 +19,41 @@ export interface ExternalBinaryClient {
   }): Promise<ExternalBinaryDownloadResult>;
 }
 
+export type ExternalBinaryReadErrorCode =
+  | "external_binary_invalid_url"
+  | "external_binary_https_required"
+  | "external_binary_credentials_forbidden"
+  | "external_binary_unsafe_address"
+  | "external_binary_invalid_address"
+  | "external_binary_timeout"
+  | "external_binary_too_many_redirects"
+  | "external_binary_invalid_redirect"
+  | "external_binary_http_error"
+  | "external_binary_not_direct_file"
+  | "external_binary_too_large"
+  | "external_binary_empty"
+  | "external_binary_unavailable";
+
+export class ExternalBinaryReadError extends Error {
+  readonly transient: boolean;
+
+  constructor(
+    readonly code: ExternalBinaryReadErrorCode,
+    options: { statusCode?: number } = {}
+  ) {
+    super(code);
+    this.name = "ExternalBinaryReadError";
+    this.transient =
+      code === "external_binary_timeout" ||
+      code === "external_binary_unavailable" ||
+      (code === "external_binary_http_error" && isTransientHttpStatus(options.statusCode));
+  }
+}
+
+export function isExternalBinaryReadError(error: unknown): error is ExternalBinaryReadError {
+  return error instanceof ExternalBinaryReadError;
+}
+
 type DnsAnswer = { address: string; family: number };
 type Resolver = (hostname: string) => Promise<DnsAnswer[]>;
 
@@ -30,13 +65,13 @@ export async function validateExternalBinaryUrl(
   try {
     url = new URL(rawUrl);
   } catch {
-    throw new Error("external_binary_invalid_url");
+    throw new ExternalBinaryReadError("external_binary_invalid_url");
   }
   if (url.protocol !== "https:") {
-    throw new Error("external_binary_https_required");
+    throw new ExternalBinaryReadError("external_binary_https_required");
   }
   if (url.username || url.password) {
-    throw new Error("external_binary_credentials_forbidden");
+    throw new ExternalBinaryReadError("external_binary_credentials_forbidden");
   }
   const hostname = url.hostname.replace(/^\[|\]$/gu, "");
   const literalFamily = isIP(hostname);
@@ -44,11 +79,11 @@ export async function validateExternalBinaryUrl(
     ? [{ address: hostname, family: literalFamily }]
     : await resolve(hostname);
   if (answers.length === 0 || answers.some((answer) => isUnsafeAddress(answer.address))) {
-    throw new Error("external_binary_unsafe_address");
+    throw new ExternalBinaryReadError("external_binary_unsafe_address");
   }
   const selected = answers[0];
   if (!selected || (selected.family !== 4 && selected.family !== 6)) {
-    throw new Error("external_binary_invalid_address");
+    throw new ExternalBinaryReadError("external_binary_invalid_address");
   }
   return { url, hostname, address: selected.address, family: selected.family };
 }
@@ -56,7 +91,12 @@ export async function validateExternalBinaryUrl(
 export function createExternalBinaryClient(): ExternalBinaryClient {
   return {
     async download(input) {
-      return downloadUrl(input.url, input, 0);
+      try {
+        return await downloadUrl(input.url, input, 0);
+      } catch (error) {
+        if (isExternalBinaryReadError(error)) throw error;
+        throw new ExternalBinaryReadError("external_binary_unavailable");
+      }
     }
   };
 }
@@ -80,7 +120,7 @@ async function downloadUrl(
       resolve
     );
     request.setTimeout(limits.timeoutMs, () =>
-      request.destroy(new Error("external_binary_timeout"))
+      request.destroy(new ExternalBinaryReadError("external_binary_timeout"))
     );
     request.once("error", reject);
     request.end();
@@ -89,17 +129,25 @@ async function downloadUrl(
   if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400) {
     response.resume();
     if (redirects >= limits.maxRedirects) {
-      throw new Error("external_binary_too_many_redirects");
+      throw new ExternalBinaryReadError("external_binary_too_many_redirects");
     }
     const location = response.headers.location;
     if (!location) {
-      throw new Error("external_binary_invalid_redirect");
+      throw new ExternalBinaryReadError("external_binary_invalid_redirect");
     }
-    return downloadUrl(new URL(location, validated.url).toString(), limits, redirects + 1);
+    let redirectUrl: string;
+    try {
+      redirectUrl = new URL(location, validated.url).toString();
+    } catch {
+      throw new ExternalBinaryReadError("external_binary_invalid_redirect");
+    }
+    return downloadUrl(redirectUrl, limits, redirects + 1);
   }
   if (response.statusCode !== 200) {
     response.resume();
-    throw new Error(`external_binary_http_${response.statusCode ?? "unknown"}`);
+    throw new ExternalBinaryReadError("external_binary_http_error", {
+      statusCode: response.statusCode
+    });
   }
 
   const contentType = String(response.headers["content-type"] ?? "")
@@ -108,12 +156,12 @@ async function downloadUrl(
     .toLowerCase();
   if (contentType === "text/html" || (contentType && !isAllowedContentType(contentType))) {
     response.resume();
-    throw new Error("external_binary_not_direct_file");
+    throw new ExternalBinaryReadError("external_binary_not_direct_file");
   }
   const declaredLength = Number(response.headers["content-length"] ?? 0);
   if (Number.isFinite(declaredLength) && declaredLength > limits.maxBytes) {
     response.destroy();
-    throw new Error("external_binary_too_large");
+    throw new ExternalBinaryReadError("external_binary_too_large");
   }
 
   const chunks: Buffer[] = [];
@@ -123,21 +171,38 @@ async function downloadUrl(
     size += buffer.byteLength;
     if (size > limits.maxBytes) {
       response.destroy();
-      throw new Error("external_binary_too_large");
+      throw new ExternalBinaryReadError("external_binary_too_large");
     }
     chunks.push(buffer);
   }
   if (size === 0) {
-    throw new Error("external_binary_empty");
+    throw new ExternalBinaryReadError("external_binary_empty");
   }
   return {
     data: new Uint8Array(Buffer.concat(chunks, size)),
     finalUrl: validated.url.toString(),
     fileName:
       fileNameFromHeaders(response.headers["content-disposition"]) ??
-      decodeURIComponent(validated.url.pathname.split("/").at(-1) ?? ""),
+      fileNameFromUrl(validated.url),
     contentType
   };
+}
+
+function fileNameFromUrl(url: URL): string {
+  try {
+    return decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+  } catch {
+    throw new ExternalBinaryReadError("external_binary_invalid_url");
+  }
+}
+
+function isTransientHttpStatus(statusCode: number | undefined): boolean {
+  return (
+    statusCode === undefined ||
+    statusCode === 408 ||
+    statusCode === 429 ||
+    (statusCode >= 500 && statusCode <= 599)
+  );
 }
 
 function isAllowedContentType(value: string): boolean {

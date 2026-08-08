@@ -30,11 +30,17 @@ export function loadAttachmentScanWorkerConfigFromEnv(
   if (!Array.isArray(rawProfiles) || rawProfiles.length === 0) {
     throw new Error("PROFILE_CONFIG_PATH must contain profiles");
   }
-  const profiles = rawProfiles.map((value) => {
+  const profiles = rawProfiles.flatMap((value) => {
     if (!value || typeof value !== "object") {
       throw new Error("PROFILE_CONFIG_PATH contains an invalid profile");
     }
     const profile = value as Record<string, unknown>;
+    if (
+      !Array.isArray(profile.enabledFunctions) ||
+      !profile.enabledFunctions.includes("save_resource")
+    ) {
+      return [];
+    }
     const name = nonBlank(profile.name);
     const tokenEnv = nonBlank(profile.channelAccessTokenEnv);
     const directToken = nonBlank(profile.channelAccessToken);
