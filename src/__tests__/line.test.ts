@@ -1,8 +1,51 @@
 import { Readable } from "node:stream";
 
-import { describe, expect, it } from "vitest";
+import { messagingApi } from "@line/bot-sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { contentTypeFromLineStream, readableToUint8Array } from "../clients/line.js";
+import {
+  contentTypeFromLineStream,
+  createLineSdkAccountLinkClient,
+  readableToUint8Array
+} from "../clients/line.js";
+import type { BotProfileConfig } from "../types.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("LINE account link tokens", () => {
+  const profile = { channelAccessToken: "profile-token" } as BotProfileConfig;
+
+  it("returns the nonblank native link token issued for the exact LINE user", async () => {
+    const issueLinkToken = vi
+      .spyOn(messagingApi.MessagingApiClient.prototype, "issueLinkToken")
+      .mockResolvedValue({ linkToken: " native-link-token " });
+
+    await expect(createLineSdkAccountLinkClient(profile).issueLinkToken("Uuser")).resolves.toBe(
+      "native-link-token"
+    );
+    expect(issueLinkToken).toHaveBeenCalledWith("Uuser");
+  });
+
+  it("rejects a blank SDK response", async () => {
+    vi.spyOn(messagingApi.MessagingApiClient.prototype, "issueLinkToken").mockResolvedValue({
+      linkToken: " "
+    });
+
+    await expect(createLineSdkAccountLinkClient(profile).issueLinkToken("Uuser")).rejects.toThrow(
+      "line_link_token_invalid"
+    );
+  });
+
+  it("does not hide SDK issuance failures", async () => {
+    vi.spyOn(messagingApi.MessagingApiClient.prototype, "issueLinkToken").mockRejectedValue(
+      new Error("sdk unavailable")
+    );
+
+    await expect(createLineSdkAccountLinkClient(profile).issueLinkToken("Uuser")).rejects.toThrow(
+      "sdk unavailable"
+    );
+  });
+});
 
 describe("LINE content streaming", () => {
   it("retains a safe response content type for worker-side extension validation", () => {

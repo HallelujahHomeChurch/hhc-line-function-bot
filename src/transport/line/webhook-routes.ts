@@ -2,7 +2,11 @@ import fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { AdminActionRegistry } from "../../actions/admin-registry.js";
-import { matchesNaturalLanguageAdminActionHint } from "../../actions/catalog.js";
+import {
+  matchesNaturalLanguageAdminActionHint,
+  matchNaturalLanguageSystemActionHint
+} from "../../actions/catalog.js";
+import { evaluateActionPolicy } from "../../actions/policy.js";
 import type { ConfirmationStore } from "../../actions/confirmation-store.js";
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
 import type { AgentRuntime } from "../../agent/agent-runtime.js";
@@ -16,7 +20,12 @@ import {
 } from "../../agent/context-manager.js";
 import { formatAgentTurnTraces, type AgentTraceStore } from "../../agent/trace-store.js";
 import type { AccessPrincipalType, AccessStore } from "../../access/types.js";
-import type { AccountAdminClient } from "../../account/account-admin-client.js";
+import {
+  AccountApiError,
+  type AccountAdminClient,
+  type FinalizeLineBindingInput,
+  type LineBindingTerminalStatus
+} from "../../account/account-admin-client.js";
 import {
   isDefaultUserFunctionAvailable,
   resolveEffectiveAccessContext
@@ -44,6 +53,7 @@ import {
 } from "../../llm/provider-runtime.js";
 import { messages } from "../../messages.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
+import { emitProductEvent } from "../../observability/product-events.js";
 import { resolveRequesterDisplayName } from "../../requester-personalization.js";
 import { createControlledSmallTalkReply } from "../../small-talk.js";
 import { formatLastErrors, type LastErrorStore } from "../../observability/last-error-store.js";
@@ -57,6 +67,8 @@ import type {
   AdminHandlerRegistry,
   BotProfileConfig,
   FunctionExecutionResult,
+  LineAccountLinkClient,
+  LineAccountLinkEvent,
   LineIdentityClient,
   LineEvent,
   ModelProviderName,
@@ -86,6 +98,7 @@ export interface AppDependencies {
   textMessageHandlers: TextMessageHandlerRegistry;
   adminHandlers: AdminHandlerRegistry;
   createLineReplyClient: (profile: BotProfileConfig) => LineReplyClient;
+  createLineAccountLinkClient: (profile: BotProfileConfig) => LineAccountLinkClient;
   createLineIdentityClient: (profile: BotProfileConfig) => LineIdentityClient;
   routeObserver?: RouteObserver;
   requestIdFactory: () => string;
@@ -238,6 +251,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.textMessageHandlers,
         deps.adminHandlers,
         createReplyClient,
+        deps.createLineAccountLinkClient,
         createIdentityClient,
         deps.routeObserver,
         requestIdFactory,
@@ -276,6 +290,7 @@ async function handleWebhook(
   textMessageHandlers: TextMessageHandlerRegistry,
   adminHandlers: AdminHandlerRegistry,
   createReplyClient: (profile: BotProfileConfig) => LineReplyClient,
+  createAccountLinkClient: (profile: BotProfileConfig) => LineAccountLinkClient,
   createIdentityClient: (profile: BotProfileConfig) => LineIdentityClient,
   routeObserver: RouteObserver | undefined,
   requestIdFactory: () => string,
@@ -313,13 +328,186 @@ async function handleWebhook(
     return reply.code(400).send({ ok: false, error: "invalid_line_payload" });
   }
 
+  const ignoredCounts = new Map<string, number>();
+  for (const event of payload.events) {
+    if (!isAccountLinkEvent(event)) continue;
+    const input = accountLinkFinalizeInput(event, payload.destination, profile.name);
+    if (!input) {
+      incrementIgnored(ignoredCounts, "invalid_account_link_event");
+      continue;
+    }
+    const requestId = requestIdFactory();
+    const startedAt = Date.now();
+    let status: LineBindingTerminalStatus;
+    try {
+      status = (await accountAdminClient.finalizeBinding(input)).status;
+    } catch (error) {
+      const retryable = !(error instanceof AccountApiError) || error.retryable;
+      if (retryable) {
+        await emitRouteEvent(routeObserver, {
+          kind: "route",
+          profileName: profile.name,
+          sourceType: event.source?.type ?? "unknown",
+          requestId,
+          provider: "keyword",
+          outcome: "respond",
+          action: "account_login",
+          ok: false,
+          retry: true,
+          durationMs: elapsedMs(startedAt)
+        });
+        await emitProductEvent(routeObserver, {
+          eventName: "account_link_finalized",
+          requestId,
+          profileName: profile.name,
+          source: event.source ?? { type: "unknown" },
+          hmacKey: config.observability?.hmacKey,
+          action: "account_login",
+          resultClass: "error",
+          retry: true,
+          durationMs: elapsedMs(startedAt)
+        });
+        return reply.code(503).send({ ok: false, error: "account_link_finalize_retry" });
+      }
+      status = "failed";
+    }
+    await emitRouteEvent(routeObserver, {
+      kind: "route",
+      profileName: profile.name,
+      sourceType: event.source?.type ?? "unknown",
+      requestId,
+      provider: "keyword",
+      outcome: "respond",
+      action: "account_login",
+      ok: status === "completed",
+      retry: false,
+      durationMs: elapsedMs(startedAt)
+    });
+    await emitProductEvent(routeObserver, {
+      eventName: "account_link_finalized",
+      requestId,
+      profileName: profile.name,
+      source: event.source ?? { type: "unknown" },
+      hmacKey: config.observability?.hmacKey,
+      action: "account_login",
+      resultClass: status === "completed" ? "success" : "error",
+      retry: false,
+      durationMs: elapsedMs(startedAt)
+    });
+    if (input.result === "ok" && event.replyToken) {
+      const line = createReplyClient(profile);
+      await replyTextBestEffort(
+        line,
+        event.replyToken,
+        status === "completed"
+          ? "已完成 HHC 帳戶登入／綁定。"
+          : "目前無法完成 HHC 帳戶登入／綁定，請重新操作。"
+      );
+    }
+    incrementIgnored(ignoredCounts, `account_link_${status}`);
+  }
+
+  const ordinaryEvents = payload.events.filter(isOrdinaryLineEvent);
+  const handledLoginEvents = new Set<LineEvent>();
+  for (const event of ordinaryEvents) {
+    if (matchNaturalLanguageSystemActionHint(event.message?.text ?? "") !== "account_login") {
+      continue;
+    }
+    handledLoginEvents.add(event);
+    const policy = await evaluateActionPolicy({
+      action: "account_login",
+      profile,
+      source: event.source
+    });
+    if (
+      !policy.allowed ||
+      event.type !== "message" ||
+      event.message?.type !== "text" ||
+      !boundedOpaque(event.source.userId, 255) ||
+      !boundedOpaque(event.replyToken, 255) ||
+      !boundedOpaque(event.webhookEventId, 255) ||
+      !boundedOpaque(payload.destination, 255)
+    ) {
+      incrementIgnored(ignoredCounts, policy.allowed ? "invalid_account_login" : policy.reason);
+      continue;
+    }
+    if (
+      (await webhookEventStore.tryStart(
+        profile.name,
+        event.webhookEventId,
+        7 * 24 * 60 * 60 * 1000
+      )) === "duplicate"
+    ) {
+      incrementIgnored(ignoredCounts, "duplicate_webhook_event");
+      continue;
+    }
+    const requestId = requestIdFactory();
+    const line = createReplyClient(profile);
+    const rateLimit = await rateLimiter.check({ profileName: profile.name, source: event.source });
+    if (!rateLimit.allowed) {
+      await replyTextBestEffort(line, event.replyToken, "你傳得太快了，請稍後再試。");
+      await emitRouteEvent(routeObserver, {
+        kind: "rate_limited",
+        profileName: profile.name,
+        sourceType: event.source.type,
+        requestId,
+        action: "account_login",
+        ok: false
+      });
+      continue;
+    }
+    const startedAt = Date.now();
+    let responseText: string;
+    let ok: boolean;
+    try {
+      const lineLinkToken = await createAccountLinkClient(profile).issueLinkToken(
+        event.source.userId
+      );
+      const binding = await accountAdminClient.createBinding({
+        expectedLineUserId: event.source.userId,
+        profileName: profile.name,
+        channelId: payload.destination,
+        lineLinkToken
+      });
+      responseText = `登入／綁定 HHC 帳戶：\n${binding.bindingUrl}`;
+      ok = true;
+    } catch {
+      responseText = "目前無法開始帳戶登入／綁定，請稍後再試。";
+      ok = false;
+    }
+    ok = (await replyTextBestEffort(line, event.replyToken, responseText)) && ok;
+    await emitRouteEvent(routeObserver, {
+      kind: "route",
+      profileName: profile.name,
+      sourceType: event.source.type,
+      requestId,
+      provider: "keyword",
+      outcome: "respond",
+      action: "account_login",
+      ok,
+      durationMs: elapsedMs(startedAt)
+    });
+    await emitProductEvent(routeObserver, {
+      eventName: "account_link_started",
+      requestId,
+      profileName: profile.name,
+      source: event.source,
+      hmacKey: config.observability?.hmacKey,
+      action: "account_login",
+      resultClass: ok ? "success" : "error",
+      retry: false,
+      durationMs: elapsedMs(startedAt)
+    });
+    incrementIgnored(ignoredCounts, ok ? "account_login_started" : "account_login_failed");
+  }
+
   const allowedEvents: Array<{
     event: LineEvent;
     accountAuthorization: { available: boolean; bound: boolean; allowed: boolean };
   }> = [];
-  const ignoredCounts = new Map<string, number>();
 
-  for (const event of payload.events) {
+  for (const event of ordinaryEvents) {
+    if (handledLoginEvents.has(event)) continue;
     const accountAuthorization = await authorizeAdministrator(
       accountAdminClient,
       event.source.userId
@@ -336,7 +524,7 @@ async function handleWebhook(
     if (allow.allowed) {
       allowedEvents.push({ event, accountAuthorization });
     } else {
-      ignoredCounts.set(allow.reason, (ignoredCounts.get(allow.reason) ?? 0) + 1);
+      incrementIgnored(ignoredCounts, allow.reason);
     }
   }
 
@@ -520,10 +708,8 @@ async function handleWebhook(
         await line.replyText(
           event.replyToken,
           await adminAuthorizationReply({
-            profile,
             event,
-            authorization: accountAuthorization,
-            accountAdminClient
+            authorization: accountAuthorization
           }),
           undefined
         );
@@ -631,10 +817,8 @@ async function handleWebhook(
       await line.replyText(
         event.replyToken,
         await adminAuthorizationReply({
-          profile,
           event,
-          authorization: accountAuthorization,
-          accountAdminClient
+          authorization: accountAuthorization
         }),
         undefined
       );
@@ -768,6 +952,76 @@ function parseWebhookPayload(body: Buffer): LineWebhookPayload | null {
   } catch {
     return null;
   }
+}
+
+function isAccountLinkEvent(value: unknown): value is LineAccountLinkEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "accountLink"
+  );
+}
+
+function isOrdinaryLineEvent(value: unknown): value is LineEvent {
+  if (typeof value !== "object" || value === null || isAccountLinkEvent(value)) return false;
+  const source = (value as { source?: unknown }).source;
+  return (
+    typeof (value as { type?: unknown }).type === "string" &&
+    typeof source === "object" &&
+    source !== null &&
+    typeof (source as { type?: unknown }).type === "string"
+  );
+}
+
+function accountLinkFinalizeInput(
+  event: LineAccountLinkEvent,
+  destination: string | undefined,
+  profileName: string
+): FinalizeLineBindingInput | undefined {
+  const nonce = event.link?.nonce;
+  const result = event.link?.result;
+  if (
+    !boundedOpaque(nonce, 255) ||
+    (result !== "ok" && result !== "failed") ||
+    !boundedOpaque(event.webhookEventId, 255) ||
+    !boundedOpaque(destination, 255) ||
+    (event.replyToken !== undefined && !boundedOpaque(event.replyToken, 255))
+  ) {
+    return undefined;
+  }
+  const base: FinalizeLineBindingInput = {
+    nonce,
+    result,
+    profileName,
+    channelId: destination,
+    webhookEventId: event.webhookEventId
+  };
+  if (result === "failed") return base;
+  if (event.source?.type !== "user" || !boundedOpaque(event.source.userId, 255)) {
+    return undefined;
+  }
+  return { ...base, actualLineUserId: event.source.userId };
+}
+
+function boundedOpaque(value: unknown, maximumLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maximumLength &&
+    value.trim() === value &&
+    !hasAsciiControl(value)
+  );
+}
+
+function hasAsciiControl(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  });
+}
+
+function incrementIgnored(counts: Map<string, number>, reason: string): void {
+  counts.set(reason, (counts.get(reason) ?? 0) + 1);
 }
 
 async function shouldAllowGroupRegistrationPrompt(
@@ -1768,10 +2022,8 @@ function requiresAdminAuthorization(
 }
 
 async function adminAuthorizationReply(input: {
-  profile: BotProfileConfig;
   event: LineEvent;
   authorization: { available: boolean; bound: boolean; allowed: boolean };
-  accountAdminClient: AccountAdminClient;
 }): Promise<string> {
   if (!input.authorization.available) {
     return "目前無法確認管理權限，請稍後再試。";
@@ -1782,15 +2034,7 @@ async function adminAuthorizationReply(input: {
   if (input.event.source.type !== "user" || !input.event.source.userId) {
     return "請先在 1 對 1 對話中綁定 HHC 帳戶。";
   }
-  try {
-    const binding = await input.accountAdminClient.createBinding(
-      input.event.source.userId,
-      input.profile.name
-    );
-    return `請先綁定 HHC 帳戶，再重新執行管理操作：\n${binding.bindingUrl}`;
-  } catch {
-    return "目前無法建立帳戶綁定連結，請稍後再試。";
-  }
+  return "請先傳送「登入 HHC 帳戶」完成登入／綁定，再重新執行管理操作。";
 }
 
 async function isGroupAllowed(
@@ -1857,6 +2101,19 @@ async function emitRouteEvent(
     await observer(sanitizeActionTelemetryEvent(event) as RouteObserverEvent);
   } catch {
     // Observability must not change LINE webhook behavior.
+  }
+}
+
+async function replyTextBestEffort(
+  client: LineReplyClient,
+  replyToken: string,
+  text: string
+): Promise<boolean> {
+  try {
+    await client.replyText(replyToken, text, undefined);
+    return true;
+  } catch {
+    return false;
   }
 }
 

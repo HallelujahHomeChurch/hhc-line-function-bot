@@ -9,7 +9,11 @@ import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createControlledCompletionObserver } from "../application/turn/completion-observer.js";
-import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
+import {
+  createLineSdkAccountLinkClient,
+  createLineSdkIdentityClient,
+  createLineSdkReplyClient
+} from "../clients/line.js";
 import { createStaticAppDiagnostics } from "../diagnostics/dependencies.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import { InMemoryWebhookEventStore } from "../idempotency/webhook-event-store.js";
@@ -62,9 +66,12 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     },
     async createBinding() {
       return {
-        bindingUrl: "https://account.alive.org.tw/line/bind?token=test",
+        bindingUrl: "https://account.alive.org.tw/line/bind#token=test",
         expiresAt: "2026-07-28T12:00:00Z"
       };
+    },
+    async finalizeBinding() {
+      return { status: "completed" as const };
     }
   };
   const completionObserver =
@@ -114,6 +121,8 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     postbackHandlers: overrides.postbackHandlers ?? {},
     textMessageHandlers,
     adminHandlers: overrides.adminHandlers ?? {},
+    createLineAccountLinkClient:
+      overrides.createLineAccountLinkClient ?? createLineSdkAccountLinkClient,
     createLineReplyClient: overrides.createLineReplyClient ?? createLineSdkReplyClient,
     createLineIdentityClient: overrides.createLineIdentityClient ?? createLineSdkIdentityClient,
     routeObserver: overrides.routeObserver,

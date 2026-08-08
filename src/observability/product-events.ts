@@ -1,6 +1,6 @@
 import { sanitizeActionTelemetryEvent } from "./action-telemetry.js";
 import { createActorFingerprint } from "./opaque-identifiers.js";
-import type { FunctionName, LineSource, RouteObserver } from "../types.js";
+import type { ActionName, LineSource, RouteObserver } from "../types.js";
 
 export const PRODUCT_EVENT_NAMES = [
   "registration_completed",
@@ -9,7 +9,9 @@ export const PRODUCT_EVENT_NAMES = [
   "write_previewed",
   "write_committed",
   "retry_observed",
-  "first_success"
+  "first_success",
+  "account_link_started",
+  "account_link_finalized"
 ] as const;
 
 export type ProductEventName = (typeof PRODUCT_EVENT_NAMES)[number];
@@ -21,7 +23,7 @@ export interface ProductEventInput {
   profileName: string;
   source: LineSource;
   hmacKey?: string;
-  action?: FunctionName;
+  action?: ActionName;
   resultClass?: ProductResultClass;
   durationMs?: number;
   clarificationCount?: number;

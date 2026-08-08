@@ -49,7 +49,7 @@ export const FUNCTION_NAMES = [
 
 export type FunctionName = (typeof FUNCTION_NAMES)[number];
 
-export const SYSTEM_ACTION_NAMES = ["introduce_bot", "small_talk"] as const;
+export const SYSTEM_ACTION_NAMES = ["introduce_bot", "small_talk", "account_login"] as const;
 
 export type SystemActionName = (typeof SYSTEM_ACTION_NAMES)[number];
 
@@ -457,8 +457,10 @@ export interface AppDiagnostics {
 
 export interface LineWebhookPayload {
   destination?: string;
-  events: LineEvent[];
+  events: LineWebhookEvent[];
 }
+
+export type LineWebhookEvent = LineEvent | LineAccountLinkEvent;
 
 export interface LineEvent {
   type: string;
@@ -468,6 +470,18 @@ export interface LineEvent {
   source: LineSource;
   message?: LineMessage;
   postback?: LinePostback;
+}
+
+export interface LineAccountLinkEvent {
+  type: "accountLink";
+  webhookEventId?: string;
+  deliveryContext?: { isRedelivery?: boolean };
+  replyToken?: string;
+  source?: LineSource;
+  link?: {
+    result?: string;
+    nonce?: string;
+  };
 }
 
 export interface LinePostback {
@@ -529,6 +543,10 @@ export interface TextGenerationProvider {
 
 export interface LineReplyClient {
   replyText(replyToken: string, text: string, options?: LineReplyOptions): Promise<void>;
+}
+
+export interface LineAccountLinkClient {
+  issueLinkToken(userId: string): Promise<string>;
 }
 
 export interface LineIdentityClient {

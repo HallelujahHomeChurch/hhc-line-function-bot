@@ -11,11 +11,28 @@ import {
 import type {
   BotProfileConfig,
   BinaryReadLimits,
+  LineAccountLinkClient,
   LineContentClient,
   LineIdentityClient,
   LineReplyClient,
   LineReplyOptions
 } from "../types.js";
+
+export function createLineSdkAccountLinkClient(
+  profile: Pick<BotProfileConfig, "channelAccessToken">
+): LineAccountLinkClient {
+  const client = new messagingApi.MessagingApiClient({
+    channelAccessToken: profile.channelAccessToken
+  });
+
+  return {
+    async issueLinkToken(userId: string): Promise<string> {
+      const token = (await client.issueLinkToken(userId)).linkToken.trim();
+      if (!token) throw new Error("line_link_token_invalid");
+      return token;
+    }
+  };
+}
 
 export function createLineSdkReplyClient(profile: BotProfileConfig): LineReplyClient {
   const client = new messagingApi.MessagingApiClient({

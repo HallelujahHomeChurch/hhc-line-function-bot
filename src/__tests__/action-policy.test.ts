@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { getActionDefinition, matchNaturalLanguageSystemActionHint } from "../actions/catalog.js";
 import { actionRequiresConfirmation, evaluateActionPolicy } from "../actions/policy.js";
 import type { BotProfileConfig } from "../types.js";
 
@@ -25,6 +26,27 @@ function profile(): BotProfileConfig {
 }
 
 describe("action policy", () => {
+  it("defines account login as an exact direct public security action", async () => {
+    expect(getActionDefinition("account_login")).toMatchObject({
+      kind: "system_action",
+      auth: "public",
+      sourcePolicy: "direct",
+      sideEffect: "security_change",
+      naturalLanguage: true
+    });
+    expect(matchNaturalLanguageSystemActionHint("  登入 HHC 帳戶  ")).toBe("account_login");
+    expect(matchNaturalLanguageSystemActionHint("login")).toBe("account_login");
+    expect(matchNaturalLanguageSystemActionHint("我想登入帳戶看看")).toBeUndefined();
+
+    await expect(
+      evaluateActionPolicy({
+        action: "account_login",
+        profile: profile(),
+        source: { type: "group", groupId: "C1", userId: "U1" }
+      })
+    ).resolves.toEqual({ allowed: false, reason: "source_direct_required" });
+  });
+
   it("allows Account-authorized admins to run invite-code creation in direct chat", async () => {
     await expect(
       evaluateActionPolicy({

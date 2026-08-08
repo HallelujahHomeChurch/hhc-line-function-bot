@@ -82,43 +82,44 @@ For normal LINE webhook messages, read the flow in this order:
 2. `src/transport/line/webhook-routes.ts` receives the Fastify webhook route;
    `src/server.ts` is only a compatibility re-export.
 3. LINE signature and profile path select the `BotProfileConfig`.
-4. Access policy checks direct user, group, registration, and admin identity.
-5. Group engagement decides whether the bot was actually addressed.
-6. A short requester-scoped group conversation window may allow the same user to
+4. Native `accountLink` events finalize through Account API before admin lookup, access policy, rate limits, ordinary webhook dedupe, or routing. Exact direct-chat account-login actions use ordinary dedupe and rate limits, then issue a native LINE link token without entering the LLM router.
+5. Access policy checks direct user, group, registration, and admin identity.
+6. Group engagement decides whether the bot was actually addressed.
+7. A short requester-scoped group conversation window may allow the same user to
    continue without repeating the wake word.
-7. Slash commands are adapted under `src/transport/line/*`; normal text turns
+8. Slash commands are adapted under `src/transport/line/*`; normal text turns
    enter `src/application/turn/runtime.ts` through the compatibility export in
    `src/agent/turn-runtime.ts`.
-8. Text continuation handlers declare a controlled workflow stage. The kernel
+9. Text continuation handlers declare a controlled workflow stage. The kernel
    orders pending confirmation/cancellation and slot collection first, then
    capability/entity selection and attachment workflow. Registration or object
    iteration order is never authority. There is no pre-route resource-recall
    bypass; replay and field follow-ups use the normal task-frame candidate,
    planner, validator, and exact-reference path. A bare
    confirmation stays with its current pending write.
-9. Intro and small-talk system actions can respond without function execution.
-10. In controlled mode, the runtime reads the independently expiring,
+10. Intro, small-talk, and account-login system actions can respond without function execution.
+11. In controlled mode, the runtime reads the independently expiring,
     requester-scoped version-2 task frame and generates at most the configured number of
     candidates from declarative function contracts.
-11. `src/agent/planner.ts` asks the `function_routing` provider for a bounded
+12. `src/agent/planner.ts` asks the `function_routing` provider for a bounded
     semantic proposal. DeepSeek is the only semantic provider.
-12. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
+13. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
     rechecks current-message evidence, task-frame authority, effective function
     policy, side effects, source, confidence, schema, and required slots.
-13. Definition-driven validation separates `collect` from `execute`. Missing
+14. Definition-driven validation separates `collect` from `execute`. Missing
     slots create requester-scoped collection state regardless of whether the
     model proposed execute, clarify, chat, low confidence, or no plan.
     Ambiguity remains clarification. The model cannot invent a function, make a
     write authoritative, or carry an undeclared value from old context.
-14. After a validated file-search plan, agent memory can resolve explicit aliases
+15. After a validated file-search plan, agent memory can resolve explicit aliases
     before an expensive provider search.
-15. The turn runtime applies in-flight locks, calls only the registered handler,
+16. The turn runtime applies in-flight locks, calls only the registered handler,
     records a sanitized result envelope, and transitions task-frame state only
     from a successful structured read result.
-16. Slow turns can be stored as long-running jobs and returned through a
+17. Slow turns can be stored as long-running jobs and returned through a
     requester-scoped LINE postback.
-17. Successful file handlers can record resource metadata for later recall.
-18. Handler output is replied through the LINE client.
+18. Successful file handlers can record resource metadata for later recall.
+19. Handler output is replied through the LINE client.
 
 Controlled routing is the only production text-routing path. Deprecated
 `controlledAgent.enabled` and `controlledAgent.shadow` configuration is rejected
@@ -139,7 +140,7 @@ distinguish cheap local classification from remote smart-talk generation.
 There are three action categories. Keep them separate.
 
 - User functions are in `FUNCTION_NAMES` and `enabledFunctions`.
-- System actions are `introduce_bot` and `small_talk`; they are not function
+- System actions are `introduce_bot`, `small_talk`, and `account_login`; they are not function
   handlers and should not expose implementation details.
 - Admin actions are management operations behind admin identity, source policy,
   action catalog metadata, audit, and sanitized observability.

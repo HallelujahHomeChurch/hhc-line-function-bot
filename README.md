@@ -25,6 +25,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Per-profile access policy with PostgreSQL-backed user/group registration.
 - Public `/help`, `/registry <code>`, and `/whoami` commands.
 - Direct-chat admin commands authorized by the linked HHC account and Account roles.
+- Native LINE account linking from the exact direct-chat phrases `登入帳戶`, `登入 HHC 帳戶`, `連結帳戶`, `綁定帳戶`, or `login`; linking uses LINE's accountLink event and does not enter the LLM router.
 - Admin natural language for selected management actions: invite-code creation and group function scope management.
 - Minimal `/healthz`, data-layer `/readyz`, and admin-only `/diag` diagnostics.
 - Destructive admin-action confirmation infrastructure through `/confirm <code>`.
@@ -341,7 +342,7 @@ Set `DATABASE_URL` to persist access state and agent memory. If PostgreSQL is co
 
 Sheet music search reads a fresh PostgreSQL catalog snapshot when available. A proven fresh miss can proceed to the existing consent-based web fallback; a never-published or unavailable snapshot may perform a current provider lookup instead of treating stale state as a definitive miss. The old unversioned 30-minute provider index cache is removed, so a later query can see newly added files.
 
-Admin commands use slash syntax and are gated by account-api. An unbound direct user receives a short-lived HHC account binding URL; Account API failures deny admin access. Ordinary `/help` lists public commands plus only the current requester's effective capabilities. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
+Admin commands use slash syntax and are gated by account-api. An unbound direct user is asked to send `登入 HHC 帳戶`; the resulting native LINE flow creates the short-lived HHC binding URL. Account API failures deny admin access. Ordinary `/help` lists public commands plus only the current requester's effective capabilities. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
 
 Admins can also use natural language for selected admin actions: invite-code creation and function-scope management. Invite-code creation is direct-chat only. Function scope grant/revoke/list is the only group natural-language exception, and only when an admin clearly asks to manage the current group.
 
