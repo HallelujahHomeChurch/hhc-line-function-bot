@@ -100,6 +100,7 @@ export async function downloadWeeklyPaper(
   try {
     const response = await fetchImpl(`${DAPR_BASE_URL}${path}?locale=zh-Hant`, {
       method: "GET",
+      redirect: "error",
       signal: controller.signal
     });
     if (response.status === 404) return notFoundResult();

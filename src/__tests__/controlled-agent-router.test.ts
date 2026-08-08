@@ -5,7 +5,7 @@ import {
   createControlledAgentRouter,
   type DynamicKnowledgeMetadataProvider
 } from "../agent/controlled-agent-router.js";
-import type { AgentPlanner } from "../agent/planner.js";
+import { createAgentPlanner, type AgentPlanner } from "../agent/planner.js";
 
 const now = new Date("2026-07-13T00:00:30.000Z");
 
@@ -255,6 +255,29 @@ describe("ControlledAgentRouter", () => {
       });
     }
   );
+
+  it("keeps a negated provider-free read local without deterministic execution", async () => {
+    const completeJson = vi.fn();
+    const planner = createAgentPlanner({
+      primary: { providerName: "deepseek", completeJson },
+      providersEnabledForProfile: () => false
+    });
+
+    const result = await createRouter(planner).resolve({
+      profileName: "main",
+      text: "不要下載週報",
+      enabledFunctions: ["download_weekly_paper"],
+      sourceType: "user",
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    });
+
+    expect(result).not.toMatchObject({
+      disposition: "execute",
+      capability: "download_weekly_paper"
+    });
+    expect(completeJson).not.toHaveBeenCalled();
+  });
 
   it("keeps an explicit memory write controlled when the planner succeeds", async () => {
     const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({

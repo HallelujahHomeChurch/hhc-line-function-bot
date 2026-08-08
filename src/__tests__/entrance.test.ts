@@ -925,7 +925,7 @@ describe("LINE entrance", () => {
       webhookEventId: "unrelated-managed-group",
       replyToken: "reply-token",
       source: { type: "group", groupId: "Cmain", userId: "U1" },
-      message: { type: "text", text: "大家晚上好" }
+      message: { type: "text", text: "晚安" }
     });
 
     const response = await app.inject({
@@ -945,6 +945,68 @@ describe("LINE entrance", () => {
     expect(authorizeAdministrator).not.toHaveBeenCalled();
     expect(createLineIdentityClient).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["duplicate", "duplicate", true],
+    ["rate limited", "started", false]
+  ] as const)(
+    "gates a %s helper group continuation before stateful admission",
+    async (_label, dedupeResult, rateAllowed) => {
+      const config = testConfig();
+      config.profiles[0] = {
+        ...config.profiles[0]!,
+        generalAgent: { enabled: true, conversationWindowSeconds: 60 }
+      };
+      const accessStore = defaultAccessStore();
+      const accessRead = vi.spyOn(accessStore, "hasActivePrincipal");
+      const sessionStore = new InMemorySessionStore();
+      const sessionRead = vi.spyOn(sessionStore, "findPendingCapabilityResolution");
+      const conversationWindowStore = new InMemoryConversationWindowStore();
+      const conversationRead = vi.spyOn(conversationWindowStore, "isActive");
+      const dedupe = vi.fn().mockResolvedValue(dedupeResult);
+      const rateCheck = vi.fn().mockResolvedValue({
+        allowed: rateAllowed,
+        remaining: rateAllowed ? 19 : 0,
+        resetAt: "2026-08-08T12:00:00Z"
+      });
+      const authorizeAdministrator = vi.fn();
+      const app = createTestApp(config, {
+        accessStore,
+        sessionStore,
+        conversationWindowStore,
+        webhookEventStore: { tryStart: dedupe },
+        rateLimiter: { check: rateCheck },
+        accountAdminClient: {
+          authorizeAdministrator,
+          createBinding: vi.fn(),
+          finalizeBinding: vi.fn()
+        },
+        createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
+      });
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `helper-${_label}`,
+        replyToken: "reply-token",
+        source: { type: "group", groupId: "Cmain", userId: "U1" },
+        message: { type: "text", text: "奇異恩典" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(dedupe).toHaveBeenCalledOnce();
+      expect(rateCheck).toHaveBeenCalledTimes(dedupeResult === "duplicate" ? 0 : 1);
+      expect(accessRead).not.toHaveBeenCalled();
+      expect(sessionRead).not.toHaveBeenCalled();
+      expect(conversationRead).not.toHaveBeenCalled();
+      expect(authorizeAdministrator).not.toHaveBeenCalled();
+    }
+  );
 
   it("ignores third-person group mentions of the bot before calling the router", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({

@@ -34,6 +34,7 @@ import type { ControlledCompletionObserver } from "../../application/turn/comple
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import { renderCapabilityHelp } from "../../application/capabilities/capability-presenters.js";
 import {
+  classifySmallTalkCategory,
   classifyGroupEngagement,
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
@@ -503,7 +504,6 @@ async function handleWebhook(
   }
 
   const allowedEvents: LineEvent[] = [];
-  const providerGroupPreAdmission = new Set<LineEvent>();
 
   for (const event of ordinaryEvents) {
     if (handledLoginEvents.has(event)) continue;
@@ -513,20 +513,11 @@ async function handleWebhook(
       continue;
     }
     if (profileUsesProviders(profile) && event.source.type === "group") {
-      const preAdmission = await allowEvent(
-        profile,
-        event,
-        textMessageHandlers,
-        accessStore,
-        conversationWindowStore,
-        false,
-        sessionStore
-      );
+      const preAdmission = allowProviderGroupBeforeDedupe(profile, event);
       if (!preAdmission.allowed) {
         incrementIgnored(ignoredCounts, preAdmission.reason);
         continue;
       }
-      providerGroupPreAdmission.add(event);
     }
     allowedEvents.push(event);
   }
@@ -576,18 +567,15 @@ async function handleWebhook(
     const accountAuthorization = profileUsesProviders(profile)
       ? await authorizeAdministrator(accountAdminClient, event.source.userId)
       : { available: true, bound: false, allowed: false };
-    const allow =
-      providerGroupPreAdmission.has(event) && !accountAuthorization.allowed
-        ? { allowed: true, reason: "provider_group_pre_admitted" }
-        : await allowEvent(
-            profile,
-            event,
-            textMessageHandlers,
-            accessStore,
-            conversationWindowStore,
-            accountAuthorization.allowed,
-            sessionStore
-          );
+    const allow = await allowEvent(
+      profile,
+      event,
+      textMessageHandlers,
+      accessStore,
+      conversationWindowStore,
+      accountAuthorization.allowed,
+      sessionStore
+    );
     if (!allow.allowed) {
       incrementIgnored(ignoredCounts, allow.reason);
       rejectedAfterStructuralGate = true;
@@ -1242,6 +1230,26 @@ function structurallyAllowEvent(profile: BotProfileConfig, event: LineEvent): Al
     return { allowed: false, reason: "message_type_not_allowed" };
   }
   return { allowed: true, reason: "message_structurally_allowed" };
+}
+
+function allowProviderGroupBeforeDedupe(profile: BotProfileConfig, event: LineEvent): AllowResult {
+  if (event.type !== "message" || event.message?.type !== "text") {
+    return { allowed: true, reason: "stateful_admission_required" };
+  }
+  if (parseAdminCommand(event.message.text)?.command) {
+    return { allowed: true, reason: "stateful_admission_required" };
+  }
+  const engagement = classifyGroupEngagement(profile, event.message);
+  if (groupEngagementAllowsReply(engagement)) {
+    return { allowed: true, reason: "group_engagement_matched" };
+  }
+  if (
+    engagement.kind === "third_person" ||
+    classifySmallTalkCategory(event.message.text ?? "") !== undefined
+  ) {
+    return { allowed: false, reason: groupEngagementIgnoredReason(engagement) };
+  }
+  return { allowed: true, reason: "stateful_admission_required" };
 }
 
 function profileUsesProviders(profile: BotProfileConfig): boolean {

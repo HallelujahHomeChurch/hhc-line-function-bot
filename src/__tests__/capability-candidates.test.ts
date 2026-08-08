@@ -64,6 +64,15 @@ describe("deterministic capability candidates", () => {
     for (const text of ["1733", "下戴最新週包"]) {
       expect(candidates(text), text).toEqual([]);
     }
+    expect(candidates("不要下載週報")).not.toContainEqual(
+      expect.objectContaining({ reason: "explicit_intent" })
+    );
+    expect(candidates("不要忘記下載週報")).toContainEqual(
+      expect.objectContaining({
+        capability: "download_weekly_paper",
+        reason: "explicit_intent"
+      })
+    );
   });
   it("accepts bounded profile routing hints for declaratively added domains", () => {
     expect(

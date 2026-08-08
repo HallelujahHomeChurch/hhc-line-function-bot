@@ -17,7 +17,7 @@ import {
   isConservativeKnowledgeEvidenceText,
   isInterpersonalOrSmallTalkText
 } from "./knowledge-evidence-guard.js";
-import { hasActiveEntityTextEvidence } from "./plan-evidence.js";
+import { hasActiveEntityTextEvidence, hasUnnegatedIntentEvidence } from "./plan-evidence.js";
 import { projectRetrievalQuery } from "./retrieval-query.js";
 
 export interface KnowledgeSourceMetadata extends Omit<KnowledgeRoutingMetadata, "sampleQueries"> {
@@ -149,7 +149,7 @@ function strongestReason(
       ? "explicit_intent"
       : undefined;
   }
-  if (matchesAnyExact(input.text, contract.intents)) return "explicit_intent";
+  if (hasUnnegatedIntentEvidence(input.text, contract.intents)) return "explicit_intent";
   if (isInterpersonalOrSmallTalkText(input.text)) return undefined;
   if (!hasWriteIntent(input.text) && hasDeclarativeArgumentEvidence(definition, input.text)) {
     return "argument_evidence";

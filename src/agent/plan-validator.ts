@@ -17,7 +17,12 @@ import {
   hasDeclarativeArgumentEvidence,
   type CapabilityCandidateReason
 } from "./capability-candidates.js";
-import { groundPlanRecord, hasActiveEntityTextEvidence, liveActiveTask } from "./plan-evidence.js";
+import {
+  groundPlanRecord,
+  hasActiveEntityTextEvidence,
+  hasUnnegatedIntentEvidence,
+  liveActiveTask
+} from "./plan-evidence.js";
 import { findMissingRequiredSlot } from "./slot-clarification.js";
 import { hasWriteIntent, isTaskShapedText } from "./knowledge-evidence-guard.js";
 
@@ -532,7 +537,7 @@ function revalidatedExplicitCandidates(input: ValidateAgentPlanInput): FunctionN
       definition.agentCapability &&
       sourceAllowed(definition, input.sourceType) &&
       (definition.sideEffectLevel === "read"
-        ? definition.agentCapability.intents.some((intent) => textContains(input.text, intent)) ||
+        ? hasUnnegatedIntentEvidence(input.text, definition.agentCapability.intents) ||
           hasDeclarativeArgumentEvidence(definition, input.text)
         : hasWriteIntent(input.text) &&
           definition.agentCapability.intents.some((intent) => textContains(input.text, intent)))
@@ -548,7 +553,7 @@ function revalidatedDisabledExplicitCandidates(input: ValidateAgentPlanInput): F
       Boolean(definition.agentCapability) &&
       sourceAllowed(definition, input.sourceType) &&
       (definition.sideEffectLevel === "read"
-        ? definition.agentCapability?.intents.some((intent) => textContains(input.text, intent)) ||
+        ? hasUnnegatedIntentEvidence(input.text, definition.agentCapability?.intents ?? []) ||
           hasDeclarativeArgumentEvidence(definition, input.text)
         : hasWriteIntent(input.text) &&
           Boolean(

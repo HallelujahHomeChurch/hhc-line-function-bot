@@ -41,6 +41,7 @@ const EXPLICIT_NEGATIVE_PATTERN =
 const AFFIRMATIVE_NEGATION_PREFIX = /(?:不要|不用|不必|先不要|先別|別|不)$/u;
 const ACTIVE_TASK_REPLAY_PATTERN =
   /(?:再給我一次|再給一次|再傳一次|再貼一次|剛剛那份|剛才那份|剛剛那個|上一份)/u;
+const ADJACENT_INTENT_NEGATIONS = ["不要", "不用", "不必", "別"] as const;
 
 export function groundPlanRecord(input: GroundPlanRecordInput): GroundedPlanRecord {
   const output: JsonRecord = {};
@@ -82,6 +83,23 @@ export function hasCurrentTextEvidence(text: string, value: unknown): boolean {
     );
   }
   return containsNormalizedPhrase(text, normalizedValue);
+}
+
+export function hasUnnegatedIntentEvidence(text: string, intents: readonly string[]): boolean {
+  const normalizedText = normalizeComparable(text);
+  return intents.some((intent) => {
+    const normalizedIntent = normalizeComparable(intent);
+    if (!normalizedIntent) return false;
+    let start = normalizedText.indexOf(normalizedIntent);
+    while (start !== -1) {
+      const prefix = normalizedText.slice(0, start);
+      if (!ADJACENT_INTENT_NEGATIONS.some((negation) => prefix.endsWith(negation))) {
+        return true;
+      }
+      start = normalizedText.indexOf(normalizedIntent, start + normalizedIntent.length);
+    }
+    return false;
+  });
 }
 
 export function hasActiveEntityTextEvidence(

@@ -39,6 +39,12 @@
 - Canonicality follow-up RED: absolute plain and encoded dot-segment paths normalized by `URL` to `/assets/<id>` and were incorrectly accepted. GREEN derives the raw path/query from the accepted input shape, requires the raw pathname itself to match the asset path contract, and requires the parsed pathname to equal it before accepting the URI.
 - Verification evidence was corrected in the same round: controller reproduction shows the disposable integration gate is Docker-blocked, not passed.
 
+## Fix round 2
+
+- RED: five focused files produced six expected failures: the Dapr request omitted redirect policy; negated Weekly Paper text remained an explicit candidate and deterministic router/validator execution; duplicate and rate-limited helper group continuations reached stateful admission before webhook/rate gates.
+- GREEN: Weekly Paper fetches use `redirect: "error"`, keep 3xx plus `Location` unavailable, and never perform a second fetch. Candidate generation and validator revalidation share one adjacent-prefix read-intent guard, so `不要下載週報` cannot execute while `不要忘記下載週報` remains explicit and normal helper reads are unchanged.
+- GREEN: provider-backed group pre-dedupe admission is now pure. Structural checks plus already-classified unaddressed small talk/third-person chatter may stop early; unknown continuation text reaches dedupe and rate limiting before Account, access, conversation-window, session, or effective-access reads. Duplicate and rate-limited counter regressions verify those stateful dependencies remain untouched.
+
 ## Changed files
 
 - Capability/provider/runtime: `src/capabilities/download-weekly-paper.ts`, `src/function-arguments.ts`, `src/functions/argument-normalization.ts`, `src/functions/{definitions,modules,registry}.ts`, `src/application/contracts/{function-execution,function-module}.ts`, `src/agent/{planner,plan-validator}.ts`, `src/llm/{provider-policy,provider-runtime}.ts`, `src/bootstrap/create-production-runtime.ts`, `src/types.ts`.

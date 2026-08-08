@@ -118,6 +118,25 @@ describe("download_weekly_paper", () => {
     expect(serverErrorResult).not.toHaveProperty("quickReplies");
   });
 
+  it("rejects Dapr redirects without following Location", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://private.example.test/weekly-paper" }
+      })
+    );
+
+    const result = await downloadWeeklyPaper({}, fetchImpl);
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ method: "GET", redirect: "error" })
+    );
+    expect(result).toMatchObject({ ok: true, agentResult: { status: "unavailable" } });
+    expect(result).not.toHaveProperty("quickReplies");
+  });
+
   it("enforces a hard request timeout", async () => {
     vi.useFakeTimers();
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
