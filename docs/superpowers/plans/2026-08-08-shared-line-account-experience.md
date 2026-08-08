@@ -1,10 +1,12 @@
 # Shared LINE Account Experience Implementation Plan
 
-> Implement repository by repository with TDD and a review checkpoint after each production contract. Do not merge a deploy-triggering PR without explicit production approval.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give `main` and `helper` reusable, profile-controlled help, HHC Account login, safe whoami, and predictable fallback behavior without LINE Login or LINE Account Link.
+**Goal:** Give `main` and `helper` reusable, profile-controlled help, HHC Account login, safe whoami, Account-RBAC function authorization, own-profile editing, and predictable fallback behavior without LINE Login or LINE Account Link.
 
-**Architecture:** Reuse the existing Account API intent, authenticated consent, nonce, Finalize transaction, and signed LINE webhook identity. The browser prepares a one-time challenge and opens the official account chat with a prefilled confirmation message; only the initiating signed LINE UID can finish the link. Functions remain globally registered and profile policy remains authoritative.
+**Architecture:** Reuse the existing Account API intent, authenticated consent, nonce, Finalize transaction, signed LINE webhook identity, and role/direct-permission RBAC. The browser prepares a one-time challenge and opens the official account chat with a prefilled confirmation message; only the initiating signed LINE UID can finish the link. Functions remain globally registered, profile config is the function ceiling, and Account API returns bounded function decisions without exposing raw permissions or making Bot code understand role names.
+
+**Tech Stack:** Go, Gin, GORM/PostgreSQL, Redis-backed opaque tokens, React/TypeScript, Fastify/TypeScript, LINE Messaging API, Vitest, Go testing, GitHub Actions, Azure Container Apps.
 
 **No new:** database table, direct-completion repository path, router, keyword DSL, LIFF app, OAuth client, provider, dependency, or profile-specific implementation.
 
@@ -18,6 +20,10 @@
 - Account API private routes require a proven non-public Dapr boundary; a caller-supplied header is not sufficient on public ingress.
 - Exact aliases use the existing normalizer and negation guard.
 - Main local paths make zero DeepSeek and embedding calls.
+- `permissionRequiredFunctions` is a subset of `enabledFunctions`; bot-local grants never expand either set.
+- Permission code is derived exactly as `line:<profileName>:function:<functionName>:execute`; clients never submit arbitrary permission codes.
+- Existing bot-local grant rows are not migrated or deleted in this rollout. They are ignored by effective authorization and retained only for rollback.
+- Permission-required actions are checked live, at most once per turn as a batch, and rechecked at confirmation/execution. Do not cache authorization initially.
 
 ---
 
@@ -55,6 +61,7 @@ type PrepareLineBindingRequest struct {
 type PrepareLineBindingResult struct {
     ReturnURL string `json:"return_url"`
 }
+
 ```
 
 Internal create accepts trusted expected LINE UID, profile/channel context, bounded public display name, and canonical `@...` LINE ID. It does not require a Messaging API link token for new intents. The provider identifier is used only by bot startup/deployment validation; the binding transaction does not need another stored copy.
@@ -67,17 +74,70 @@ Internal create accepts trusted expected LINE UID, profile/channel context, boun
 - [ ] Construct the exact `https://line.me/R/oaMessage/...` URL server-side from stored trusted metadata and a 32-byte random nonce encoded as unpadded 43-character base64url. The prefilled message is exactly `HHC_ACCOUNT_LINK_V1:<nonce>`. Validate exact HTTPS host/path, canonical percent encoding, bounded length, no userinfo/port/fragment/extra query.
 - [ ] Define Prepare replay semantics: after the first successful transition to `awaiting_line`, the same HHC user + intent session + view nonce returns the same stored challenge/URL until expiry. Parallel calls converge on that value; response loss never mints a replacement nonce or invalidates the first challenge.
 - [ ] Reuse Consent/AwaitLINE and the existing Finalize transaction. Narrowly fix terminal replay ordering: for `completed`, compare the current signed UID with `ExpectedLineUserID` before returning idempotent success. Same-UID replay succeeds; different-UID replay returns conflict/non-success without changing terminal state or adding audit. Add both integration regressions. Add no repository method or migration.
-- [ ] Extend identity/authorization response to `{bound, allowed, account?}` with display name, masked email, and sorted roles filtered to `user|admin`; omit HHC `user_id` from the bot response.
 - [ ] Keep legacy Prepare behavior only for legacy records carrying a link token. New records return only the `oaMessage` URL.
 - [ ] Verify cookie clearing on terminal outcomes and retention on retryable failures.
 - [ ] Run `go test -race ./... -count=1 -p=1`, `go vet ./...`, and existing migration/bootstrap policy scripts.
-- [ ] Commit one focused Account API change and open a PR; do not merge until Task 2 compatibility is ready and deployment is approved.
+- [ ] Commit one focused Account API change and open a PR; do not merge until Task 3 frontend compatibility is ready and deployment is approved.
 
 **Acceptance:** forwarded browser links cannot finalize; tab A cannot prepare tab B; existing Finalize remains idempotent and atomic; legacy records still work during rollback.
 
 ---
 
-## Task 2: Account Frontend — Replace Account Link With Return-to-LINE Challenge
+## Task 2: Account API — Add Bounded LINE Function Authorization
+
+**Repository:** `account/account-api`
+
+**Primary files:**
+
+- `internal/services/line_binding_service.go`
+- `internal/services/line_binding_service_test.go`
+- `internal/services/rbac_service.go`
+- `internal/services/rbac_service_test.go`
+- `internal/handlers/line_handler.go`
+- `internal/handlers/line_handler_test.go`
+- `internal/routes/routes.go`
+- `internal/routes/routes_test.go`
+
+### Contract
+
+```go
+type AuthorizeLineFunctionsInput struct {
+    LineUserID    string   `json:"line_user_id"`
+    ProfileName   string   `json:"profile_name"`
+    FunctionNames []string `json:"function_names"`
+}
+
+type LineAccountSummary struct {
+    DisplayName string   `json:"display_name"`
+    MaskedEmail string   `json:"masked_email"`
+    Roles       []string `json:"roles"`
+}
+
+type LineFunctionAuthorization struct {
+    Bound            bool                `json:"bound"`
+    Active           bool                `json:"active"`
+    Administrator    bool                `json:"administrator"`
+    AllowedFunctions []string            `json:"allowed_functions"`
+    Account          *LineAccountSummary `json:"account,omitempty"`
+}
+```
+
+Exact Dapr-only route: `POST /priv/account/v1/line/authorize`.
+
+### Steps
+
+- [ ] Add RED service tests for unbound, inactive, and active identities; account summary includes display name, masked email, and sorted roles filtered to `user|admin`, and omits HHC user ID.
+- [ ] Accept at most 32 unique canonical function names and one valid profile name. Derive `line:<profile>:function:<function>:execute` server-side; reject raw permission strings, `*`, duplicates, malformed names, and oversized lists.
+- [ ] Add RBAC RED/GREEN cases proving direct permission, role-derived permission, wildcard admin, missing permission, immediate revocation, unknown permission, and mixed allowed/denied batches. Return requested function names only, never raw permission codes.
+- [ ] Derive `administrator` from the RBAC decision for `line:admin`; do not test role-name equality. Preserve the existing administrator endpoint during rollback, but new bot code uses this bounded route.
+- [ ] Keep the route Dapr-only and strict-body. Add handler/route tests for wrong caller, unknown fields, malformed envelopes, and sanitized errors.
+- [ ] Run `go test -race ./... -count=1 -p=1`, `go vet ./...`, and existing policy scripts; commit independently.
+
+**Acceptance:** Bot authorization is permission-based, role-agnostic, immediately revocable, bounded to requested LINE functions, and contains no raw permissions or internal IDs.
+
+---
+
+## Task 3: Account Frontend — Replace Account Link With Return-to-LINE Challenge
 
 **Repository:** `account/account-fe`
 
@@ -108,7 +168,7 @@ Internal create accepts trusted expected LINE UID, profile/channel context, boun
 
 ---
 
-## Task 3: Bot — Add Profile Account Presentation and Safe Client Contracts
+## Task 4: Bot — Add Profile Account Presentation and Safe Client Contracts
 
 **Repository:** `hhc-line-function-bot`
 
@@ -132,6 +192,23 @@ type AccountLinkPresentation = {
   lineId: string;
   providerId: string;
 };
+
+type ProfileFunctionPolicy = {
+  enabledFunctions: FunctionName[];
+  permissionRequiredFunctions: FunctionName[];
+};
+
+type LineFunctionAuthorization = {
+  bound: boolean;
+  active: boolean;
+  administrator: boolean;
+  allowedFunctions: FunctionName[];
+  account?: {
+    displayName: string;
+    maskedEmail: string;
+    roles: Array<"user" | "admin">;
+  };
+};
 ```
 
 Production profile JSON uses environment references for deployment identifiers rather than committed real IDs; normalization produces the runtime shape.
@@ -139,10 +216,11 @@ Production profile JSON uses environment references for deployment identifiers r
 ### Steps
 
 - [ ] Add RED config tests for absent accountLink, complete valid accountLink, partial/invalid config, canonical `@` LINE ID, and equal provider IDs across every enabled profile.
+- [ ] Add RED config tests requiring `permissionRequiredFunctions` to contain unique known functions and be a subset of `enabledFunctions`. Default to `[]` only for legacy/test fixtures; production profiles declare it explicitly.
 - [ ] Add `accountLink` to both production profiles without putting credentials or real provider IDs in the repository. Keep bot ACA as the only holder of channel secret/access token.
 - [ ] Resolve `lineIdEnv` and `providerIdEnv` only in the bot runtime config path. Attachment, catalog-sync, ClamAV, and assurance/background loaders must not require or receive those values.
 - [ ] Remove Messaging API link-token issuance from new `createBinding`; send expected signed UID plus trusted presentation to Account API.
-- [ ] Parse the sanitized identity response strictly. Reject raw/unmasked email, unknown roles, unexpected identifiers, malformed envelopes, redirects, and noncanonical responses.
+- [ ] Add `authorizeFunctions({ lineUserId, profileName, functionNames })` against Task 2. Parse the sanitized response strictly; reject raw/unmasked email, unknown roles/functions, unexpected identifiers, malformed envelopes, redirects, and noncanonical responses.
 - [ ] Preserve existing timeout/429/5xx retry classification and permanent 4xx fail-closed behavior.
 - [ ] Add deployment tests proving account-link environment values reach only the bot container and are absent from background jobs, logs, and release artifacts.
 - [ ] Run focused tests, `pnpm typecheck`, and `pnpm architecture:check`.
@@ -151,7 +229,7 @@ Production profile JSON uses environment references for deployment identifiers r
 
 ---
 
-## Task 4: Bot — Shared Help, Login, Whoami, and Signed Confirmation
+## Task 5: Bot — Shared Help, Login, Whoami, and Signed Confirmation
 
 **Repository:** `hhc-line-function-bot`
 
@@ -183,9 +261,12 @@ Production profile JSON uses environment references for deployment identifiers r
 - [ ] Preserve legacy `accountLink` webhook finalization during rollback. New flow never creates one. Test new and legacy events independently, including the same webhook event receiving transient 503 then redelivering into Finalize again, terminal acknowledgement, reply failure, and mixed batches.
 - [ ] Login: public direct-only when accountLink exists. Already-linked active users get no new intent; inactive/bound users get support guidance; unavailable lookup gets retry guidance.
 - [ ] Whoami: direct-only and safe. Return only display name, masked email, and public `user|admin` roles. Unbound offers Login; inactive never offers a second binding.
-- [ ] Help: resolve effective functions and one reusable account state. Do not hard-code weekly paper. Linked active hides Login; inactive/unavailable states follow the design. Group help omits account state/actions.
+- [ ] Whoami additionally renders human function display names from the allowed intersection; never render permission codes or arbitrary Account roles.
+- [ ] Help: resolve profile-enabled public functions plus the Account-allowed intersection of `permissionRequiredFunctions` in one bounded request. Do not hard-code weekly paper. Linked active hides Login; inactive/unavailable states follow the design. Group help omits account state/actions.
 - [ ] Preserve managed helper access: unmanaged users see no protected function names and receive only registration/public guidance.
-- [ ] Ensure at most one identity lookup per local event and no account lookup for weekly/unknown paths that do not need it.
+- [ ] Remove `access_user_function_grants`, group grants, and bot role-capability bindings as sources of effective functions. Keep access principals/group registration as source authorization. Hide/reject `/function-grant`, `/function-user-grant`, revoke/list variants, and matching natural-language admin actions; do not drop their tables.
+- [ ] Before planner input, batch-authorize only permission-required candidates and remove denied functions. Recheck an active task, collection, preview, and confirmation before continuing; an Account API failure denies the restricted function without affecting public functions.
+- [ ] Ensure at most one account authorization lookup per handled turn and no account lookup for public weekly/unknown paths that do not need it.
 - [ ] Add both-profile matrices for linked/unlinked/inactive/API-failure, direct/group, managed/unmanaged, enabled/disabled functions, and provider spies.
 - [ ] Run focused entrance/presenter/action tests, `pnpm eval:agent`, and `pnpm eval:kernel`.
 
@@ -193,7 +274,7 @@ Production profile JSON uses environment references for deployment identifiers r
 
 ---
 
-## Task 5: Bot — Correct Provider-Free Fallback
+## Task 6: Bot — Correct Provider-Free Fallback
 
 **Repository:** `hhc-line-function-bot`
 
@@ -218,7 +299,102 @@ Production profile JSON uses environment references for deployment identifiers r
 
 ---
 
-## Task 6: Prove the Private Boundary and Update Assurance
+## Task 7: Account API — Update the Linked User's Own Profile
+
+**Repository:** `account/account-api`
+
+**Primary files:**
+
+- `internal/repository/interfaces.go`
+- `internal/services/user_service.go`
+- `internal/services/user_service_test.go`
+- `internal/services/line_binding_service.go`
+- `internal/services/line_binding_service_test.go`
+- `internal/handlers/line_handler.go`
+- `internal/handlers/line_handler_test.go`
+- `internal/routes/routes.go`
+- `internal/routes/routes_test.go`
+
+### Contract
+
+```go
+type UpdateOwnLineProfileInput struct {
+    LineUserID  string `json:"line_user_id"`
+    ProfileName string `json:"profile_name"`
+    FirstName   string `json:"first_name"`
+    LastName    string `json:"last_name"`
+}
+```
+
+Exact Dapr-only route: `POST /priv/account/v1/line/profile`.
+
+### Steps
+
+- [ ] Add RED tests for linked active user, unlinked/inactive user, missing `line:<profile>:function:update_own_profile:execute`, wildcard admin, permission revocation, wrong caller, malformed/bounded Unicode names, strict unknown-field rejection, and repeated identical updates.
+- [ ] Resolve the HHC user only from the federated LINE identity; never accept a target HHC user ID. Derive the canonical permission server-side and check it through existing RBAC.
+- [ ] Reuse `UserService.UpdateProfile` for `first_name` and `last_name` only. Reject email, password, identity, avatar, role, permission, active-state, or unknown fields with strict JSON decoding.
+- [ ] Treat setting the same normalized names as a safe no-op so request retry is naturally idempotent. Use the existing user update transaction and `updated_at`; do not add an idempotency table or misuse the LINE-binding audit table.
+- [ ] Return only normalized first/last name and update timestamp; no ID, email, roles, or permission codes.
+- [ ] Run full Account API race/vet/policy/integration gates and commit independently.
+
+**Acceptance:** the bot can update only the linked caller, only with the canonical permission, and only the two allowed fields.
+
+---
+
+## Task 8: Bot — Shared `update_own_profile` Function
+
+**Repository:** `hhc-line-function-bot`
+
+**Primary files:**
+
+- `src/types.ts`
+- `src/functions/definitions.ts`, `src/functions/modules.ts`, `src/functions/registry.ts`
+- Create: `src/capabilities/update-own-profile/definition.ts`
+- Create: `src/capabilities/update-own-profile/ports.ts`
+- Create: `src/capabilities/update-own-profile/handler.ts`
+- Create: `src/capabilities/update-own-profile/module.ts`
+- Create: `src/capabilities/update-own-profile/eval-cases.ts`
+- Modify: `src/function-arguments.ts`
+- Modify: `src/functions/argument-normalization.ts`
+- Modify: `src/agent/capability-candidates.ts`
+- Modify: `src/agent/plan-validator.ts`
+- Modify: `src/application/turn/runtime.ts`
+- Modify: `src/account/account-admin-client.ts`
+- Create: `src/__tests__/update-own-profile.test.ts`
+- Modify: `src/__tests__/entrance.test.ts`
+- Modify: `src/__tests__/controlled-agent-router.test.ts`
+- Modify: `src/__tests__/plan-validator.test.ts`
+- Modify: `src/__tests__/agent-turn-runtime.test.ts`
+- Modify: `src/evals/kernel/cases/product-experience.ts`
+- `config/profiles.json`
+
+### Function contract
+
+```ts
+type UpdateOwnProfileArgs = {
+  firstName?: string;
+  lastName?: string;
+};
+```
+
+Exact intents: `/profile`, `修改個人資料`, `修改姓名`, `更新姓名`. Version 1 updates first and last name only.
+
+### Steps
+
+- [ ] Register `update_own_profile` once with direct-only source, state-change side effect, no resource/memory output, required linked-account permission, bounded name slots, preview, confirmation, and sanitized result envelope.
+- [ ] Enable it only in `main.enabledFunctions` and `main.permissionRequiredFunctions`. Keep the same module available for future profiles without literal `main` branches.
+- [ ] Add RED provider-free routing tests: unique exact write intent may enter slot collection/preview with zero providers, but can never execute directly. Negated, embedded, ambiguous, group, disabled-profile, unlinked, and denied-permission cases do not collect or mutate.
+- [ ] Reuse the controlled turn state machine for first/last-name collection, preview, cancel, stale state, and explicit confirmation. Do not add a parallel form/router.
+- [ ] At confirmation, live-recheck Account authorization, then call Task 7 with signed UID/profile and normalized names. Do not send an HHC user ID or permission code.
+- [ ] Return success with normalized name only; do not store it in agent memory/task entities or telemetry. `/whoami` reads the updated account summary on the next request.
+- [ ] Add Kernel cases for allowed/denied/revoked-before-confirmation, provider zero-call, requester isolation, repeated confirmation/no-op behavior, and helper-disabled behavior.
+- [ ] Run focused tests, `pnpm eval:agent`, `pnpm eval:kernel`, full bot gates, and commit independently.
+
+**Acceptance:** one shared function updates only the linked caller on profiles that enable it; `main` is deterministic/provider-free and `helper` remains disabled by config.
+
+---
+
+## Task 9: Prove the Private Boundary and Update Assurance
 
 **Repositories:** `account/account-api`, `account/api-gateway`, deployment configuration, `hhc-line-function-bot`
 
@@ -229,6 +405,8 @@ Production profile JSON uses environment references for deployment identifiers r
 - [ ] Verify the bot workload's Dapr app ID is the only accepted caller. If the Account API can be reached directly from public ingress, stop and add cryptographic workload authentication before deployment.
 - [ ] Add sanitized release/smoke checks for identity lookup and binding outcomes without UIDs, emails, nonces, URLs, or account data.
 - [ ] Add config/deployment assertion that all participating production channels use the same LINE Provider; require a manual Console evidence checkpoint because repository config alone cannot prove provider ownership.
+- [ ] Add a release preflight that every production `permissionRequiredFunctions` entry has its derived permission record in Account RBAC. Missing records block only deployment/that function; never auto-create or auto-grant permissions from the bot.
+- [ ] Add safe smoke cases for direct, role-derived, wildcard, denied, and immediately revoked decisions, plus own-profile update. Reports contain function names/outcomes only, never roles, permissions, account data, or IDs.
 - [ ] Update README/architecture/runbook with the shared surface, challenge flow, proof limits, rollback compatibility, and real-device acceptance steps.
 - [ ] Run each repository's existing release-policy, routing, safe-logging, and deployment-contract suites.
 
@@ -236,7 +414,7 @@ Production profile JSON uses environment references for deployment identifiers r
 
 ---
 
-## Task 7: Ordered PR Rollout and Real LINE Acceptance
+## Task 10: Ordered PR Rollout and Real LINE Acceptance
 
 No merge/deploy is implicit. Request explicit approval before each deploy-triggering merge.
 
@@ -246,8 +424,9 @@ No merge/deploy is implicit. Request explicit approval before each deploy-trigge
 2. Verify old FE and old bot remain functional.
 3. Deploy Account FE dual compatibility.
 4. Verify old bot intent and new FE behavior.
-5. Deploy LINE bot new challenge flow and shared surfaces.
-6. Run real-device acceptance on both profiles.
+5. Through existing Account RBAC administration, create the required canonical permissions and assign them to roles/users. Do not migrate bot-local grants.
+6. Deploy LINE bot new challenge flow, permission authority, own-profile function, and shared surfaces.
+7. Run real-device acceptance on both profiles.
 
 ### Required live checks
 
@@ -257,6 +436,8 @@ No merge/deploy is implicit. Request explicit approval before each deploy-trigge
 - [ ] Return-to-LINE button opens the correct official account; user sends the prefilled challenge; completion reply arrives.
 - [ ] Forward the browser link to another signed-in browser and prove it cannot finalize without the initiating LINE UID.
 - [ ] After linking: help hides Login; whoami shows masked account + public roles; enabled functions only.
+- [ ] Grant and revoke a derived function permission in Account RBAC and prove help/execution changes immediately without deploying either service.
+- [ ] Update first/last name through `main`, verify preview/confirmation and `/whoami`, then prove `helper` cannot invoke it while disabled.
 - [ ] Latest/specified weekly paper works only where enabled.
 - [ ] Provider telemetry stays zero for all `main` cases; logs/telemetry contain no binding material.
 - [ ] Legacy Account Link event redelivery remains safe during rollback.
@@ -265,6 +446,7 @@ No merge/deploy is implicit. Request explicit approval before each deploy-trigge
 
 - Roll back each service only to a revision compatible with the still-deployed neighbors.
 - Keep legacy metadata and finalization until the separately approved rollback window ends.
+- Keep old bot grant tables for rollback, but do not read, backfill, or migrate them in the new revision.
 - Do not include legacy deletion in these PRs. A later cleanup requires fresh usage evidence, its own PR, and production approval.
 
 ## Final Verification Matrix

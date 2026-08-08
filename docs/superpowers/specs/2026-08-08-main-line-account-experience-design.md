@@ -1,20 +1,22 @@
 # Shared LINE Profile Account Experience Design
 
-**Status:** Approved after two-agent review on 2026-08-08
+**Status:** Revised with Account-RBAC function authorization on 2026-08-09; pending user review
 
 ## Goal
 
-Make `main` and `helper` share the same help, HHC Account linking, and account-identity surfaces while profile configuration remains the authority for executable user functions. Replace the redundant LINE Login / LINE Account Link step without weakening proof that the person completing the flow controls the initiating LINE user ID.
+Make `main` and `helper` share the same help, HHC Account linking, account identity, and reusable function implementations while profile configuration remains the function ceiling and HHC Account RBAC remains the sole person-level authorization authority. Replace the redundant LINE Login / LINE Account Link step without weakening proof that the person completing the flow controls the initiating LINE user ID. Add the first linked-account write function for updating the caller's own name.
 
 ## Decisions
 
-- User functions remain registered once. `enabledFunctions`, source policy, grants, and effective-capability projection control availability per profile and requester.
+- User functions remain registered once. `enabledFunctions` is the profile ceiling; `permissionRequiredFunctions`, source policy, HHC Account authorization, and effective-capability projection control availability per requester.
 - Help, account login, and account identity remain shared system surfaces, not user functions.
 - A profile enables account surfaces through optional `accountLink` presentation config. Both current profiles enable it.
 - No code branches on literal profile names.
 - New linking does not issue a LINE Login token or Messaging API Account Link token.
 - The browser records authenticated HHC consent; a signature-verified message from the same LINE user finishes the binding.
 - Existing Account API binding transaction, nonce verification, uniqueness constraints, idempotency, and audit remain the authority. No new table or direct-completion repository path is added.
+- LINE Bot never authorizes from role names. Account API resolves direct and role-derived permissions through the existing RBAC model and returns only bounded decisions requested by the bot.
+- Existing bot-local user/group function grants and role-capability bindings stop expanding effective functions. Their tables remain untouched for rollback; no data migration or backfill is performed.
 
 ## Why Browser-Only Completion Is Rejected
 
@@ -36,6 +38,43 @@ type AccountLinkPresentation = {
 - `lineId` is the Basic/Premium LINE ID beginning with `@`, used to construct the canonical `oaMessage` URL.
 - `providerId` is a deployment invariant, not user-facing copy. All account-link-enabled profiles must belong to the same LINE Developers Provider because Account API currently stores one global `provider = line` subject namespace.
 - Config validation requires all enabled profiles to declare the same nonempty `providerId`. Deployment is blocked until the actual LINE Developers Console ownership is verified. If the profiles do not share one Provider, this design stops and a provider-namespaced identity migration is required.
+
+Each profile also declares:
+
+```ts
+type ProfileFunctionPolicy = {
+  enabledFunctions: FunctionName[];
+  permissionRequiredFunctions: FunctionName[];
+};
+```
+
+`permissionRequiredFunctions` must be a subset of `enabledFunctions`. A function absent from `enabledFunctions` cannot be added by a user, group, role, or Account permission. A missing or unavailable Account permission denies only the permission-required function; it never falls back to an old bot grant.
+
+## Authorization Model
+
+For a permission-required function, Account API derives the canonical permission code rather than trusting a client-supplied permission string:
+
+```text
+line:<profileName>:function:<functionName>:execute
+```
+
+Execution authority is:
+
+```text
+profile enables function
+AND source policy allows the event
+AND linked HHC Account is active
+AND Account RBAC grants the canonical permission
+```
+
+- Existing Account roles remain human-manageable permission bundles.
+- Direct permissions remain available for exceptions.
+- The `admin` role's wildcard continues to satisfy requested permissions.
+- Bot code never maps `admin`, `helper_operator`, or another role name to functions.
+- Permission definitions and role assignments are RBAC data managed through the existing Account administration surface. Adding a new LINE function does not require Account API code: the bot derives the permission name, and deployment fails closed until that permission exists and is assigned.
+- Account API accepts only a bounded list of canonical profile/function pairs, never `*` or arbitrary Account permissions, and returns allowed function names rather than raw permission codes.
+- Permission decisions are not cached initially. Help and one turn batch the required checks into at most one Account API request so revocation takes effect immediately.
+- Public functions do not require account lookup. Active tasks and confirmations recheck permission before every side effect.
 
 ## Secure User Flow
 
@@ -124,6 +163,7 @@ Additional rules:
 - Whoami is safe direct-chat behavior only.
 - Help resolves effective access. An unmanaged `helper` user sees no protected function names; it shows only available public guidance such as registration and account login.
 - The bot performs at most one account-identity lookup for a handled local event and reuses the result for help/login/whoami presentation.
+- Permission-required candidates are removed before planner/validator authority. The validator rechecks the same bounded decision before collection, preview, confirmation, and execution.
 - Group help never exposes account state or account actions.
 - The `main` paths above make zero DeepSeek and embedding calls.
 
@@ -155,8 +195,23 @@ When linked and active, both profiles return only:
 - HHC display name
 - masked email
 - sorted public roles limited to `user` and `admin`
+- human-readable names of currently enabled functions that Account RBAC allows
 
-They do not return HHC user ID, LINE UID, profile/channel identifiers, arbitrary custom roles, claims, or access-policy internals. Unbound users get a login action. Bound inactive users get support guidance, not a second link action.
+They do not return raw permission codes, HHC user ID, LINE UID, profile/channel identifiers, arbitrary custom roles, claims, or access-policy internals. Unbound users get a login action. Bound inactive users get support guidance, not a second link action.
+
+## Update Own Profile
+
+`update_own_profile` is a globally registered write function. Production enables it initially only on `main` and lists it in `permissionRequiredFunctions`; `helper` can enable the same module later without another implementation.
+
+Version 1 changes only `first_name` and `last_name`, reusing the existing Account profile service. Email, password, OAuth identities, roles, permissions, active status, and avatar are out of scope.
+
+The flow is direct-chat only:
+
+1. Exact intent such as `/profile`, `修改個人資料`, `修改姓名`, or `更新姓名` selects the function without an LLM.
+2. The controlled turn collects missing first/last-name fields and shows a preview.
+3. Explicit confirmation is required. Provider-free routing may collect or preview a unique explicit write candidate, but can never directly execute it.
+4. At confirmation, the bot rechecks the canonical Account permission and calls a Dapr-only Account API operation with the signed LINE UID, profile/channel context, and bounded names.
+5. Account API resolves the linked active HHC user server-side, checks the same canonical permission, and updates that user only. It never accepts a target HHC user ID from LINE Bot. Repeating the same normalized names is a no-op; no new idempotency or audit table is added.
 
 ## Service Changes
 
@@ -170,6 +225,8 @@ They do not return HHC user ID, LINE UID, profile/channel identifiers, arbitrary
 - Keep legacy Prepare/Account Link event handling for previously issued intents during the rollback window, but new intent creation never issues a link token.
 - Extend the existing Dapr-only identity operation to return `bound`, `allowed`, and optional sanitized active account `{display_name, masked_email, roles}`. Stop returning HHC `user_id` to the bot.
 - Keep roles limited to public `user` and `admin` values.
+- Replace the administrator-only decision with one bounded authorization operation accepting `{line_user_id, profile_name, function_names}` and returning sanitized account state plus allowed function names. Validate canonical names, cap the list, reject duplicates and arbitrary permission codes, and use existing RBAC direct/role/wildcard evaluation.
+- Add a Dapr-only update-own-profile operation. Resolve the user through the LINE identity, require active state and `line:<profile>:function:update_own_profile:execute`, and update only first/last name through the existing profile service. Repeating the same normalized values is a no-op; do not add or repurpose an audit/idempotency table.
 
 ### Account Frontend
 
@@ -182,12 +239,15 @@ They do not return HHC user ID, LINE UID, profile/channel identifiers, arbitrary
 ### LINE Bot
 
 - Add optional `accountLink` presentation to profile config and validate the shared Provider invariant.
+- Add `permissionRequiredFunctions` as a validated subset of `enabledFunctions`; production explicitly declares it for both profiles.
 - Reuse the existing account action/client and legacy `accountLink` finalization boundary.
 - Add an exact local confirmation-challenge path that calls the same Finalize operation using signed event identity.
 - Never write the confirmation message or nonce to route traces, product events, recent errors, or ordinary conversation state.
 - Build help from effective capability projection plus the single resolved account state.
 - Add aliases through the existing shared public-action boundary; do not create a keyword DSL or second router.
 - Add an explicit provider-free unknown classification instead of replacing the global unsupported message.
+- Remove bot-local function grants and role-capability bindings from effective-function calculation. Keep managed user/group registration as source authorization. Hide/reject obsolete function-grant administration commands, while leaving storage intact for rollback.
+- Add the shared `update_own_profile` function module and enable it only through profile configuration.
 
 ## Internal Boundary and Deployment Security
 
@@ -205,11 +265,13 @@ No secret or opaque binding value may appear in deployment output, logs, telemet
 
 Deploy through separate protected-main PRs, each requiring explicit production approval:
 
-1. Account API: additive metadata, view correlation, sanitized identity, new Prepare response, and legacy compatibility.
+1. Account API: additive metadata, view correlation, bounded RBAC authorization, own-profile update, sanitized identity, new Prepare response, and legacy compatibility.
 2. Account FE: consume both legacy and new summaries; new challenge-return UX; current-session account switch.
-3. LINE bot: new intents without link tokens, shared commands, confirmation challenge, and provider-free fallback.
+3. LINE bot: new intents without link tokens, shared commands, permission authority, own-profile update, confirmation challenge, and provider-free fallback.
 
 Keep legacy fields and Account Link event finalization through a separately approved rollback window, not merely the intent TTL. Remove dead legacy issuance/consumption in a later cleanup only after all three services have remained stable and the known-good rollback revision no longer needs it.
+
+There is no grant migration. Existing bot-local grant/role rows remain inert for rollback and are not copied into Account RBAC. Required production permissions and role assignments are created explicitly through existing RBAC administration before the bot release. Missing permission data blocks that function rather than broadening access.
 
 ## Acceptance Criteria
 
@@ -227,6 +289,9 @@ For both profiles, cover linked, unlinked, inactive, and Account API unavailable
 - Negated/cross-function phrases do not execute.
 - Main provider spies remain zero; helper regressions retain existing provider behavior.
 - One local event performs at most one Account API identity lookup.
+- Permission-required functions are absent before authorization, present only for allowed linked users, and rechecked on continuation/confirmation.
+- Bot-local user/group grants cannot enable a function that profile config or Account RBAC denies.
+- `/profile` and natural aliases collect, preview, confirm, and update only the caller's first/last name on `main`; the same module remains disabled on `helper` until configured.
 
 ### Browser and Binding Correctness
 
@@ -238,12 +303,16 @@ For both profiles, cover linked, unlinked, inactive, and Account API unavailable
 - Two tabs cannot prepare the other tab's intent.
 - Cancel, switch account, retry, StrictMode, back navigation, and terminal errors do not reuse old bearer state.
 - Finalize remains idempotent; concurrent ownership produces one owner and one conflict; audit failure rolls back all mutations.
+- Account authorization rejects missing/inactive/unlinked users, malformed profile/function names, arbitrary permission codes, and Account API failure; a canonical permission record that does not exist is simply denied.
+- Own-profile update cannot select another user, cannot modify protected fields, rechecks permission at write time, and is idempotent for redelivery.
 
 ### Production Acceptance
 
 - Verify the two channels are under the same LINE Developers Provider before merge/deploy.
 - Verify Dapr/private-ingress assertions before any production mutation.
 - Test help, login, return-to-LINE send, completion, post-link help, whoami roles, and enabled functions on real `main` and `helper` accounts.
+- Assign and revoke a permission through existing Account RBAC, then prove help and execution change immediately without a Bot or Account deployment.
+- On `main`, update first/last name through preview and confirmation; verify `/whoami` reflects the change. Verify `helper` denies the function while disabled.
 - Verify iOS and Android app opening when available; browser fallback remains usable.
 - Confirm no LINE Login/Account Link page appears.
 - Confirm `main` provider telemetry remains zero and all account telemetry is sanitized.
