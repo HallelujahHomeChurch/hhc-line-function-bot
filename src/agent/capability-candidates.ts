@@ -17,7 +17,11 @@ import {
   isConservativeKnowledgeEvidenceText,
   isInterpersonalOrSmallTalkText
 } from "./knowledge-evidence-guard.js";
-import { hasActiveEntityTextEvidence, hasUnnegatedIntentEvidence } from "./plan-evidence.js";
+import {
+  hasActiveEntityTextEvidence,
+  hasUnnegatedIntentEvidence,
+  unnegatedIntentClauses
+} from "./plan-evidence.js";
 import { projectRetrievalQuery } from "./retrieval-query.js";
 
 export interface KnowledgeSourceMetadata extends Omit<KnowledgeRoutingMetadata, "sampleQueries"> {
@@ -151,7 +155,10 @@ function strongestReason(
   }
   if (hasUnnegatedIntentEvidence(input.text, contract.intents)) return "explicit_intent";
   if (isInterpersonalOrSmallTalkText(input.text)) return undefined;
-  if (!hasWriteIntent(input.text) && hasDeclarativeArgumentEvidence(definition, input.text)) {
+  if (
+    !hasWriteIntent(input.text) &&
+    hasUnnegatedDeclarativeArgumentEvidence(definition, input.text)
+  ) {
     return "argument_evidence";
   }
   const knowledgeDefinition = definition.requires.includes("knowledge");
@@ -199,6 +206,15 @@ export function hasDeclarativeArgumentEvidence(
   const parsed = parseFunctionArguments(definition.name, normalized);
   if (!parsed || !rule.allOf.every((field) => hasArgumentValue(parsed[field]))) return false;
   return !rule.anyOf?.length || rule.anyOf.some((field) => hasArgumentValue(parsed[field]));
+}
+
+export function hasUnnegatedDeclarativeArgumentEvidence(
+  definition: FunctionDefinition,
+  text: string
+): boolean {
+  return unnegatedIntentClauses(text).some((clause) =>
+    hasDeclarativeArgumentEvidence(definition, clause)
+  );
 }
 
 function hasArgumentValue(value: unknown): boolean {

@@ -64,9 +64,16 @@ describe("deterministic capability candidates", () => {
     for (const text of ["1733", "下戴最新週包"]) {
       expect(candidates(text), text).toEqual([]);
     }
-    expect(candidates("不要下載週報")).not.toContainEqual(
-      expect.objectContaining({ reason: "explicit_intent" })
-    );
+    for (const text of [
+      "不要下載週報",
+      "不要下載第1733期週報",
+      "取消下載週報",
+      "不用幫我下載週報"
+    ]) {
+      expect(candidates(text), text).not.toContainEqual(
+        expect.objectContaining({ reason: "explicit_intent" })
+      );
+    }
     expect(candidates("不要忘記下載週報")).toContainEqual(
       expect.objectContaining({
         capability: "download_weekly_paper",
@@ -195,6 +202,18 @@ describe("deterministic capability candidates", () => {
       expect(candidate.contract.argumentEvidence?.allOf).toContain(secondField);
     }
   );
+
+  it("does not turn negated read arguments into explicit schedule evidence", () => {
+    expect(
+      buildCapabilityCandidates({
+        text: "不要查明天前攝影是誰",
+        enabledFunctions: ["query_schedule"],
+        source: "group",
+        knowledgeSources: [],
+        maxCandidates: 3
+      })
+    ).not.toContainEqual(expect.objectContaining({ reason: "argument_evidence" }));
+  });
 
   it("does not encode schedule role combinations as explicit intent phrases", () => {
     const intents = getFunctionDefinition("query_schedule")!.agentCapability!.intents;

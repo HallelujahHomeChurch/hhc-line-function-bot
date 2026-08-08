@@ -900,15 +900,17 @@ describe("LINE entrance", () => {
     expect(router.route).not.toHaveBeenCalled();
   });
 
-  it("rejects unrelated managed helper group chatter before dedupe, rate, Account, or identity", async () => {
+  it("rejects unrelated managed helper group chatter after common dedupe and rate gates", async () => {
     const rateCheck = vi.fn().mockResolvedValue({
       allowed: true,
       remaining: 19,
       resetAt: "2026-08-08T12:00:00Z"
     });
     const authorizeAdministrator = vi.fn();
-    const createLineIdentityClient = vi.fn();
-    const dedupe = vi.fn();
+    const getUserDisplayName = vi.fn();
+    const getGroupDisplayName = vi.fn();
+    const createLineIdentityClient = vi.fn(() => ({ getUserDisplayName, getGroupDisplayName }));
+    const dedupe = vi.fn().mockResolvedValue("started");
     const app = createTestApp(testConfig(), {
       rateLimiter: { check: rateCheck },
       webhookEventStore: { tryStart: dedupe },
@@ -940,10 +942,12 @@ describe("LINE entrance", () => {
       ignored: true,
       reason: "wake_word_missing"
     });
-    expect(dedupe).not.toHaveBeenCalled();
-    expect(rateCheck).not.toHaveBeenCalled();
-    expect(authorizeAdministrator).not.toHaveBeenCalled();
-    expect(createLineIdentityClient).not.toHaveBeenCalled();
+    expect(dedupe).toHaveBeenCalledOnce();
+    expect(rateCheck).toHaveBeenCalledOnce();
+    expect(authorizeAdministrator).toHaveBeenCalledOnce();
+    expect(createLineIdentityClient).toHaveBeenCalledOnce();
+    expect(getUserDisplayName).not.toHaveBeenCalled();
+    expect(getGroupDisplayName).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1007,6 +1011,49 @@ describe("LINE entrance", () => {
       expect(authorizeAdministrator).not.toHaveBeenCalled();
     }
   );
+
+  it("preserves unaddressed small talk for an active helper group conversation", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      wakeKeywords: ["bot"],
+      generalAgent: { enabled: true, conversationWindowSeconds: 90 }
+    };
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "deepseek"
+    });
+    const conversationWindowStore = new InMemoryConversationWindowStore();
+    await conversationWindowStore.recordTurn({
+      scope: { profileName: "main", sourceKey: "group:Cmain", requesterUserId: "U1" },
+      role: "assistant",
+      text: "active",
+      ttlMs: 90_000
+    });
+    const app = createTestApp(config, {
+      router: { route },
+      conversationWindowStore,
+      createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "active-group-small-talk",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "晚安" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(route).toHaveBeenCalledWith(expect.objectContaining({ text: "晚安" }));
+  });
 
   it("ignores third-person group mentions of the bot before calling the router", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({

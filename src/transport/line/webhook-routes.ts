@@ -34,7 +34,6 @@ import type { ControlledCompletionObserver } from "../../application/turn/comple
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import { renderCapabilityHelp } from "../../application/capabilities/capability-presenters.js";
 import {
-  classifySmallTalkCategory,
   classifyGroupEngagement,
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
@@ -511,13 +510,6 @@ async function handleWebhook(
     if (!allow.allowed) {
       incrementIgnored(ignoredCounts, allow.reason);
       continue;
-    }
-    if (profileUsesProviders(profile) && event.source.type === "group") {
-      const preAdmission = allowProviderGroupBeforeDedupe(profile, event);
-      if (!preAdmission.allowed) {
-        incrementIgnored(ignoredCounts, preAdmission.reason);
-        continue;
-      }
     }
     allowedEvents.push(event);
   }
@@ -1230,26 +1222,6 @@ function structurallyAllowEvent(profile: BotProfileConfig, event: LineEvent): Al
     return { allowed: false, reason: "message_type_not_allowed" };
   }
   return { allowed: true, reason: "message_structurally_allowed" };
-}
-
-function allowProviderGroupBeforeDedupe(profile: BotProfileConfig, event: LineEvent): AllowResult {
-  if (event.type !== "message" || event.message?.type !== "text") {
-    return { allowed: true, reason: "stateful_admission_required" };
-  }
-  if (parseAdminCommand(event.message.text)?.command) {
-    return { allowed: true, reason: "stateful_admission_required" };
-  }
-  const engagement = classifyGroupEngagement(profile, event.message);
-  if (groupEngagementAllowsReply(engagement)) {
-    return { allowed: true, reason: "group_engagement_matched" };
-  }
-  if (
-    engagement.kind === "third_person" ||
-    classifySmallTalkCategory(event.message.text ?? "") !== undefined
-  ) {
-    return { allowed: false, reason: groupEngagementIgnoredReason(engagement) };
-  }
-  return { allowed: true, reason: "stateful_admission_required" };
 }
 
 function profileUsesProviders(profile: BotProfileConfig): boolean {

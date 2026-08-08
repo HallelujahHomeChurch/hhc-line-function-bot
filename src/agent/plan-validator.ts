@@ -14,7 +14,7 @@ import type { AgentPlanDisposition, FunctionName, JsonRecord } from "../types.js
 import { isFunctionName } from "../types.js";
 import type { ActiveTaskContext } from "./active-task.js";
 import {
-  hasDeclarativeArgumentEvidence,
+  hasUnnegatedDeclarativeArgumentEvidence,
   type CapabilityCandidateReason
 } from "./capability-candidates.js";
 import {
@@ -538,7 +538,7 @@ function revalidatedExplicitCandidates(input: ValidateAgentPlanInput): FunctionN
       sourceAllowed(definition, input.sourceType) &&
       (definition.sideEffectLevel === "read"
         ? hasUnnegatedIntentEvidence(input.text, definition.agentCapability.intents) ||
-          hasDeclarativeArgumentEvidence(definition, input.text)
+          hasUnnegatedDeclarativeArgumentEvidence(definition, input.text)
         : hasWriteIntent(input.text) &&
           definition.agentCapability.intents.some((intent) => textContains(input.text, intent)))
     );
@@ -554,7 +554,7 @@ function revalidatedDisabledExplicitCandidates(input: ValidateAgentPlanInput): F
       sourceAllowed(definition, input.sourceType) &&
       (definition.sideEffectLevel === "read"
         ? hasUnnegatedIntentEvidence(input.text, definition.agentCapability?.intents ?? []) ||
-          hasDeclarativeArgumentEvidence(definition, input.text)
+          hasUnnegatedDeclarativeArgumentEvidence(definition, input.text)
         : hasWriteIntent(input.text) &&
           Boolean(
             definition.agentCapability?.intents.some((intent) => textContains(input.text, intent))

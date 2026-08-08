@@ -256,25 +256,52 @@ describe("ControlledAgentRouter", () => {
     }
   );
 
-  it("keeps a negated provider-free read local without deterministic execution", async () => {
+  it.each(["不要下載週報", "不要下載第1733期週報", "取消下載週報", "不用幫我下載週報"])(
+    "keeps a negated provider-free read local without deterministic execution: %s",
+    async (text) => {
+      const completeJson = vi.fn();
+      const planner = createAgentPlanner({
+        primary: { providerName: "deepseek", completeJson },
+        providersEnabledForProfile: () => false
+      });
+
+      const result = await createRouter(planner).resolve({
+        profileName: "main",
+        text,
+        enabledFunctions: ["download_weekly_paper"],
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      });
+
+      expect(result).not.toMatchObject({
+        disposition: "execute",
+        capability: "download_weekly_paper"
+      });
+      expect(completeJson).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps a Weekly Paper reminder affirmative without calling a provider", async () => {
     const completeJson = vi.fn();
     const planner = createAgentPlanner({
       primary: { providerName: "deepseek", completeJson },
       providersEnabledForProfile: () => false
     });
 
-    const result = await createRouter(planner).resolve({
-      profileName: "main",
-      text: "不要下載週報",
-      enabledFunctions: ["download_weekly_paper"],
-      sourceType: "user",
-      maxCandidates: 3,
-      minPlannerConfidence: 0.65
-    });
-
-    expect(result).not.toMatchObject({
+    await expect(
+      createRouter(planner).resolve({
+        profileName: "main",
+        text: "不要忘記下載週報",
+        enabledFunctions: ["download_weekly_paper"],
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toMatchObject({
       disposition: "execute",
-      capability: "download_weekly_paper"
+      capability: "download_weekly_paper",
+      reasonCode: "deterministic_explicit_intent"
     });
     expect(completeJson).not.toHaveBeenCalled();
   });

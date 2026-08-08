@@ -42,8 +42,9 @@
 ## Fix round 2
 
 - RED: five focused files produced six expected failures: the Dapr request omitted redirect policy; negated Weekly Paper text remained an explicit candidate and deterministic router/validator execution; duplicate and rate-limited helper group continuations reached stateful admission before webhook/rate gates.
-- GREEN: Weekly Paper fetches use `redirect: "error"`, keep 3xx plus `Location` unavailable, and never perform a second fetch. Candidate generation and validator revalidation share one adjacent-prefix read-intent guard, so `不要下載週報` cannot execute while `不要忘記下載週報` remains explicit and normal helper reads are unchanged.
-- GREEN: provider-backed group pre-dedupe admission is now pure. Structural checks plus already-classified unaddressed small talk/third-person chatter may stop early; unknown continuation text reaches dedupe and rate limiting before Account, access, conversation-window, session, or effective-access reads. Duplicate and rate-limited counter regressions verify those stateful dependencies remain untouched.
+- GREEN: Weekly Paper fetches use `redirect: "error"`, keep 3xx plus `Location` unavailable, and never perform a second fetch. Candidate generation and validator revalidation share one clause-scoped read-intent guard, so negated read actions cannot execute while `不要忘記下載週報` remains explicit and normal helper reads are unchanged.
+- GREEN: the provider-group prefilter was removed. The pure structural gate is followed by webhook dedupe and rate limiting before Account, access, conversation-window, session, or effective-access reads. Duplicate and rate-limited counter regressions verify those stateful dependencies remain untouched, while active requester state still admits unaddressed small talk after the common gates.
+- Controller follow-up RED: nested issue intent (`不要下載第1733期週報`), cancellation (`取消下載週報`), helper-form negation (`不用幫我下載週報`), common-order ambient handling, and active-window small talk produced nine focused failures. GREEN uses clause-scoped negated read-action prefixes for both exact intent and declarative argument authority; `不要忘記下載週報` remains affirmative.
 
 ## Changed files
 
