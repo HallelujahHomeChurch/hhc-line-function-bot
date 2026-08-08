@@ -68,7 +68,6 @@ import type {
   AdminHandlerRegistry,
   BotProfileConfig,
   FunctionExecutionResult,
-  LineAccountLinkClient,
   LineAccountLinkEvent,
   LineIdentityClient,
   LineEvent,
@@ -99,7 +98,6 @@ export interface AppDependencies {
   textMessageHandlers: TextMessageHandlerRegistry;
   adminHandlers: AdminHandlerRegistry;
   createLineReplyClient: (profile: BotProfileConfig) => LineReplyClient;
-  createLineAccountLinkClient: (profile: BotProfileConfig) => LineAccountLinkClient;
   createLineIdentityClient: (profile: BotProfileConfig) => LineIdentityClient;
   routeObserver?: RouteObserver;
   requestIdFactory: () => string;
@@ -252,7 +250,6 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.textMessageHandlers,
         deps.adminHandlers,
         createReplyClient,
-        deps.createLineAccountLinkClient,
         createIdentityClient,
         deps.routeObserver,
         requestIdFactory,
@@ -291,7 +288,6 @@ async function handleWebhook(
   textMessageHandlers: TextMessageHandlerRegistry,
   adminHandlers: AdminHandlerRegistry,
   createReplyClient: (profile: BotProfileConfig) => LineReplyClient,
-  createAccountLinkClient: (profile: BotProfileConfig) => LineAccountLinkClient,
   createIdentityClient: (profile: BotProfileConfig) => LineIdentityClient,
   routeObserver: RouteObserver | undefined,
   requestIdFactory: () => string,
@@ -461,14 +457,12 @@ async function handleWebhook(
     let responseText: string;
     let ok: boolean;
     try {
-      const lineLinkToken = await createAccountLinkClient(profile).issueLinkToken(
-        event.source.userId
-      );
+      if (!profile.accountLink) throw new Error("account_link_disabled");
       const binding = await accountAdminClient.createBinding({
         expectedLineUserId: event.source.userId,
         profileName: profile.name,
         channelId: payload.destination,
-        lineLinkToken
+        presentation: profile.accountLink
       });
       responseText = `登入／綁定 HHC 帳戶：\n${binding.bindingUrl}`;
       ok = true;

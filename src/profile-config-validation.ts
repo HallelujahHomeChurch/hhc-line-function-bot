@@ -30,6 +30,18 @@ export function validateProductionProfileConfig(path: string): ProductionProfile
         env[envName] = "placeholder";
       }
     }
+    const accountLink = record.accountLink;
+    if (accountLink && typeof accountLink === "object") {
+      const presentation = accountLink as Record<string, unknown>;
+      const lineIdEnv = presentation.lineIdEnv;
+      const providerIdEnv = presentation.providerIdEnv;
+      if (typeof lineIdEnv === "string" && lineIdEnv.trim()) {
+        env[lineIdEnv] = "@validation";
+      }
+      if (typeof providerIdEnv === "string" && providerIdEnv.trim()) {
+        env[providerIdEnv] = "validation-provider";
+      }
+    }
     const registration = record.registration;
     if (
       registration &&

@@ -261,6 +261,12 @@ describe("production profile configuration deployment contract", () => {
       name: string;
       allowedMessageTypes: string[];
       enabledFunctions: string[];
+      permissionRequiredFunctions?: string[];
+      accountLink?: {
+        displayName: string;
+        lineIdEnv: string;
+        providerIdEnv: string;
+      };
       controlledAgent?: {
         enabled: boolean;
         shadow: boolean;
@@ -346,6 +352,22 @@ describe("production profile configuration deployment contract", () => {
       enabledFunctions: ["download_weekly_paper"],
       controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 }
     });
+    expect(helper).toMatchObject({
+      permissionRequiredFunctions: [],
+      accountLink: {
+        displayName: "小哈",
+        lineIdEnv: "LINE_HELPER_ACCOUNT_ID",
+        providerIdEnv: "LINE_ACCOUNT_PROVIDER_ID"
+      }
+    });
+    expect(main).toMatchObject({
+      permissionRequiredFunctions: [],
+      accountLink: {
+        displayName: "哈利路亞家教會官方 LINE",
+        lineIdEnv: "LINE_MAIN_ACCOUNT_ID",
+        providerIdEnv: "LINE_ACCOUNT_PROVIDER_ID"
+      }
+    });
     expect(main?.providerPolicy).toEqual({});
     expect(readProjectFile("README.md")).toContain("sole complete");
     expect(readProjectFile("README.md")).not.toContain("Example shape:");
@@ -384,6 +406,37 @@ describe("production profile configuration deployment contract", () => {
     for (const path of jobPaths.filter((path) => path !== "aca.release-probe-job.yaml")) {
       expect(readProjectFile(path)).not.toContain("LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE");
     }
+  });
+
+  it("injects account presentation identifiers into the bot container only", () => {
+    const bot = readProjectFile("aca.containerapp.yaml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const accountEnvNames = [
+      "LINE_HELPER_ACCOUNT_ID",
+      "LINE_MAIN_ACCOUNT_ID",
+      "LINE_ACCOUNT_PROVIDER_ID"
+    ];
+
+    for (const name of accountEnvNames) {
+      expect(bot).toContain(`name: ${name}`);
+      expect(bot).toContain(`value: PLACEHOLDER_${name}`);
+      expect(deployment).toContain(`"${name}"`);
+      expect(readProjectFile(".env.example")).toContain(`${name}=PLACEHOLDER_${name}`);
+      for (const path of [
+        "aca.attachment-scan-job.yaml",
+        "aca.catalog-sync-job.yaml",
+        "aca.clamav-signature-refresh-job.yaml",
+        "aca.periodic-assurance-job.yaml",
+        "aca.release-probe-job.yaml",
+        "scripts/release-assurance.sh"
+      ]) {
+        expect(readProjectFile(path)).not.toContain(name);
+      }
+    }
+    expect(deployment).not.toMatch(/echo[^\n]*LINE_(?:HELPER|MAIN|ACCOUNT)_/u);
+    expect(readProjectFile(".github/workflows/release.yml")).toContain(
+      "path: artifacts/release-assurance/report.json"
+    );
   });
 
   it("validates pull requests before a separate main-only production release", () => {

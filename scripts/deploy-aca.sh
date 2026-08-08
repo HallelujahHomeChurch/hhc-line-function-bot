@@ -462,6 +462,9 @@ env_values = {
     if item.get("name")
 }
 source_env_names = [
+    "LINE_HELPER_ACCOUNT_ID",
+    "LINE_MAIN_ACCOUNT_ID",
+    "LINE_ACCOUNT_PROVIDER_ID",
     "GRAPH_TENANT_ID",
     "GRAPH_CLIENT_ID",
     "GRAPH_DRIVE_ID",

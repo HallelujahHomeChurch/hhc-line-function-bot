@@ -204,6 +204,7 @@ describe("config", () => {
           channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
           channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
           enabledFunctions: ["query_schedule"],
+          permissionRequiredFunctions: [],
           registration: { enabled: true }
         }
       ],
@@ -223,6 +224,30 @@ describe("config", () => {
     );
   });
 
+  it("requires production profiles to declare permission-required functions explicitly", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "main",
+          webhookPath: "/api/line/webhook/main",
+          channelSecretEnv: "LINE_MAIN_CHANNEL_SECRET",
+          channelAccessTokenEnv: "LINE_MAIN_CHANNEL_ACCESS_TOKEN"
+        }
+      ],
+      async (path) => {
+        expect(() =>
+          loadConfigFromEnv({
+            NODE_ENV: "production",
+            PROFILE_CONFIG_PATH: path,
+            LINE_MAIN_CHANNEL_SECRET: "secret",
+            LINE_MAIN_CHANNEL_ACCESS_TOKEN: "token",
+            OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef"
+          })
+        ).toThrow("permissionRequiredFunctions");
+      }
+    );
+  });
+
   it("requires an attachment scan queue when save_resource is enabled in production", async () => {
     await withProfileFile(
       [
@@ -231,7 +256,8 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
           channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
-          enabledFunctions: ["save_resource"]
+          enabledFunctions: ["save_resource"],
+          permissionRequiredFunctions: []
         }
       ],
       async (path) => {
@@ -281,7 +307,8 @@ describe("config", () => {
           name: "helper",
           webhookPath: "/api/line/webhook/helper",
           channelSecret: "secret",
-          channelAccessToken: "token"
+          channelAccessToken: "token",
+          permissionRequiredFunctions: []
         }
       ],
       async (path) => {
@@ -472,6 +499,139 @@ describe("config", () => {
     expect(config.profiles[0]).not.toHaveProperty("channelSecretEnv");
     expect(config.profiles[0]).not.toHaveProperty("channelAccessTokenEnv");
   });
+
+  it("defaults legacy profile account policy to disabled with no permission-required functions", () => {
+    const profile = loadConfigFromEnv(baseEnv()).profiles[0];
+
+    expect(profile?.accountLink).toBeUndefined();
+    expect(profile?.permissionRequiredFunctions).toEqual([]);
+  });
+
+  it("resolves complete account-link presentation only in the bot runtime config", () => {
+    const config = loadConfigFromEnv({
+      ...profilesEnv([
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          enabledFunctions: ["query_schedule"],
+          permissionRequiredFunctions: ["query_schedule"],
+          accountLink: {
+            displayName: "小哈",
+            lineIdEnv: "LINE_HELPER_ACCOUNT_ID",
+            providerIdEnv: "LINE_ACCOUNT_PROVIDER_ID"
+          }
+        }
+      ]),
+      LINE_HELPER_ACCOUNT_ID: "@hhc-helper",
+      LINE_ACCOUNT_PROVIDER_ID: "provider-1"
+    });
+
+    expect(config.profiles[0]).toMatchObject({
+      permissionRequiredFunctions: ["query_schedule"],
+      accountLink: {
+        displayName: "小哈",
+        lineId: "@hhc-helper",
+        providerId: "provider-1"
+      }
+    });
+    expect(config.profiles[0]?.accountLink).not.toHaveProperty("lineIdEnv");
+    expect(config.profiles[0]?.accountLink).not.toHaveProperty("providerIdEnv");
+  });
+
+  it.each([
+    ["partial", { displayName: "小哈", lineIdEnv: "LINE_HELPER_ACCOUNT_ID" }],
+    ["inline identifiers", { displayName: "小哈", lineId: "@hhc-helper", providerId: "provider-1" }]
+  ])("rejects %s account-link presentation", (_label, accountLink) => {
+    expect(() =>
+      loadConfigFromEnv({
+        ...profilesEnv([
+          {
+            name: "helper",
+            webhookPath: "/api/line/webhook/helper",
+            channelSecret: "secret",
+            channelAccessToken: "token",
+            accountLink
+          }
+        ]),
+        LINE_HELPER_ACCOUNT_ID: "@hhc-helper"
+      })
+    ).toThrow();
+  });
+
+  it.each(["hhc-helper", "@", "@white space", "@a/b"])(
+    "rejects noncanonical LINE account id %s",
+    (lineId) => {
+      expect(() =>
+        loadConfigFromEnv({
+          ...profilesEnv([
+            {
+              name: "helper",
+              webhookPath: "/api/line/webhook/helper",
+              channelSecret: "secret",
+              channelAccessToken: "token",
+              accountLink: {
+                displayName: "小哈",
+                lineIdEnv: "LINE_HELPER_ACCOUNT_ID",
+                providerIdEnv: "LINE_ACCOUNT_PROVIDER_ID"
+              }
+            }
+          ]),
+          LINE_HELPER_ACCOUNT_ID: lineId,
+          LINE_ACCOUNT_PROVIDER_ID: "provider-1"
+        })
+      ).toThrow("LINE_HELPER_ACCOUNT_ID");
+    }
+  );
+
+  it("rejects account-link profiles owned by different LINE providers", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        ...profilesEnv(
+          ["helper", "main"].map((name) => ({
+            name,
+            webhookPath: `/api/line/webhook/${name}`,
+            channelSecret: `${name}-secret`,
+            channelAccessToken: `${name}-token`,
+            accountLink: {
+              displayName: name,
+              lineIdEnv: `LINE_${name.toUpperCase()}_ACCOUNT_ID`,
+              providerIdEnv: `LINE_${name.toUpperCase()}_PROVIDER_ID`
+            }
+          }))
+        ),
+        LINE_HELPER_ACCOUNT_ID: "@hhc-helper",
+        LINE_MAIN_ACCOUNT_ID: "@hhc-main",
+        LINE_HELPER_PROVIDER_ID: "provider-1",
+        LINE_MAIN_PROVIDER_ID: "provider-2"
+      })
+    ).toThrow("same LINE provider");
+  });
+
+  it.each([
+    ["duplicate", ["query_schedule", "query_schedule"], ["query_schedule"]],
+    ["unknown", ["unknown_function"], ["query_schedule"]],
+    ["not enabled", ["find_resource"], ["query_schedule"]]
+  ])(
+    "rejects %s permission-required functions",
+    (_label, permissionRequiredFunctions, enabledFunctions) => {
+      expect(() =>
+        loadConfigFromEnv({
+          ...profilesEnv([
+            {
+              name: "helper",
+              webhookPath: "/api/line/webhook/helper",
+              channelSecret: "secret",
+              channelAccessToken: "token",
+              enabledFunctions,
+              permissionRequiredFunctions
+            }
+          ])
+        })
+      ).toThrow();
+    }
+  );
 
   it("rejects missing environment references for profile credentials", () => {
     expect(() =>
@@ -1029,6 +1189,7 @@ describe("config", () => {
           webhookPath: "/api/line/webhook/helper",
           channelSecretEnv: "LINE_HELPER_CHANNEL_SECRET",
           channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
+          permissionRequiredFunctions: [],
           smallTalk: {
             mode: "llm",
             maxChars: 80,

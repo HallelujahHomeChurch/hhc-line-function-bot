@@ -1,10 +1,31 @@
+import { isFunctionName } from "../types.js";
+import type { AccountLinkPresentation, FunctionName } from "../types.js";
+
 export type LineBindingTerminalStatus = "completed" | "failed" | "conflict" | "expired";
 
 export interface CreateLineBindingInput {
   expectedLineUserId: string;
   profileName: string;
   channelId: string;
-  lineLinkToken: string;
+  presentation: AccountLinkPresentation;
+}
+
+export interface AuthorizeLineFunctionsInput {
+  lineUserId: string;
+  profileName: string;
+  functionNames: FunctionName[];
+}
+
+export interface LineFunctionAuthorization {
+  bound: boolean;
+  active: boolean;
+  administrator: boolean;
+  allowedFunctions: FunctionName[];
+  account?: {
+    displayName: string;
+    maskedEmail: string;
+    roles: Array<"user" | "admin">;
+  };
 }
 
 export interface FinalizeLineBindingInput {
@@ -18,6 +39,7 @@ export interface FinalizeLineBindingInput {
 
 export interface AccountAdminClient {
   authorizeAdministrator(lineUserId: string): Promise<{ bound: boolean; allowed: boolean }>;
+  authorizeFunctions(input: AuthorizeLineFunctionsInput): Promise<LineFunctionAuthorization>;
   createBinding(input: CreateLineBindingInput): Promise<{ bindingUrl: string; expiresAt: string }>;
   finalizeBinding(input: FinalizeLineBindingInput): Promise<{ status: LineBindingTerminalStatus }>;
 }
@@ -47,6 +69,7 @@ export function createAccountAdminClient(options: {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        redirect: "manual",
         signal: AbortSignal.timeout(options.timeoutMs)
       });
     } catch {
@@ -77,12 +100,25 @@ export function createAccountAdminClient(options: {
       }
       return payload;
     },
+    async authorizeFunctions(input) {
+      const payload = await post("/priv/account/v1/line/authorize", {
+        line_user_id: input.lineUserId,
+        profile_name: input.profileName,
+        function_names: input.functionNames
+      });
+      const authorization = parseFunctionAuthorization(payload, input.functionNames);
+      if (!authorization) {
+        throw new AccountApiError("account_api_invalid_function_authorization", false);
+      }
+      return authorization;
+    },
     async createBinding(input) {
       const payload = await post("/priv/account/v1/line/bindings", {
         expected_line_user_id: input.expectedLineUserId,
         profile_name: input.profileName,
         channel_id: input.channelId,
-        line_link_token: input.lineLinkToken
+        line_account_name: input.presentation.displayName,
+        line_account_id: input.presentation.lineId
       });
       if (!isBinding(payload)) {
         throw new AccountApiError("account_api_invalid_binding", false);
@@ -109,6 +145,83 @@ export function createAccountAdminClient(options: {
       return payload;
     }
   };
+}
+
+function parseFunctionAuthorization(
+  value: unknown,
+  requestedFunctions: readonly FunctionName[]
+): LineFunctionAuthorization | undefined {
+  if (!isExactRecord(value, ["bound", "active", "administrator", "allowed_functions", "account"])) {
+    return undefined;
+  }
+  const { bound, active, administrator, allowed_functions: allowedFunctions, account } = value;
+  if (
+    typeof bound !== "boolean" ||
+    typeof active !== "boolean" ||
+    typeof administrator !== "boolean" ||
+    !Array.isArray(allowedFunctions) ||
+    !isCanonicalAllowedFunctions(allowedFunctions, requestedFunctions)
+  ) {
+    return undefined;
+  }
+  if (!bound || !active) {
+    if (active || administrator || allowedFunctions.length > 0 || account !== undefined)
+      return undefined;
+    return { bound, active, administrator, allowedFunctions: [] };
+  }
+  const parsedAccount = parseAccountSummary(account);
+  if (!parsedAccount) return undefined;
+  return { bound, active, administrator, allowedFunctions, account: parsedAccount };
+}
+
+function isCanonicalAllowedFunctions(
+  value: unknown[],
+  requested: readonly FunctionName[]
+): value is FunctionName[] {
+  let previousIndex = -1;
+  for (const candidate of value) {
+    if (typeof candidate !== "string" || !isFunctionName(candidate)) return false;
+    const index = requested.indexOf(candidate);
+    if (index <= previousIndex) return false;
+    previousIndex = index;
+  }
+  return true;
+}
+
+function parseAccountSummary(value: unknown): LineFunctionAuthorization["account"] | undefined {
+  if (!isExactRecord(value, ["display_name", "masked_email", "roles"])) return undefined;
+  const { display_name: displayName, masked_email: maskedEmail, roles } = value;
+  if (
+    typeof displayName !== "string" ||
+    displayName.trim() !== displayName ||
+    displayName.length === 0 ||
+    displayName.length > 160 ||
+    typeof maskedEmail !== "string" ||
+    !isMaskedEmail(maskedEmail) ||
+    !Array.isArray(roles) ||
+    !roles.every((role) => role === "admin" || role === "user") ||
+    new Set(roles).size !== roles.length ||
+    roles.join(",") !== [...roles].sort().join(",")
+  ) {
+    return undefined;
+  }
+  return { displayName, maskedEmail, roles };
+}
+
+function isMaskedEmail(value: string): boolean {
+  return value === "***" || /^.\*{3}@[^\s@]+$/u.test(value);
+}
+
+function isExactRecord(
+  value: unknown,
+  allowedKeys: readonly string[]
+): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.every((key) => allowedKeys.includes(key)) &&
+    allowedKeys.filter((key) => key !== "account").every((key) => keys.includes(key))
+  );
 }
 
 function isAuthorization(value: unknown): value is { bound: boolean; allowed: boolean } {

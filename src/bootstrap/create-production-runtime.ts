@@ -40,7 +40,6 @@ import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import {
-  createLineSdkAccountLinkClient,
   createLineSdkContentClient,
   createLineSdkIdentityClient,
   createLineSdkReplyClient
@@ -363,7 +362,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     postbackHandlers: registries.postbacks,
     textMessageHandlers: registries.textMessages,
     adminHandlers: registries.adminHandlers,
-    createLineAccountLinkClient: createLineSdkAccountLinkClient,
     createLineReplyClient: createLineSdkReplyClient,
     createLineIdentityClient: createLineSdkIdentityClient,
     requestIdFactory: randomUUID,

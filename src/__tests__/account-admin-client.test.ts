@@ -8,7 +8,11 @@ const createInput = {
   expectedLineUserId: lineUserId,
   profileName: "helper",
   channelId: "channel-destination",
-  lineLinkToken: "native-link-token"
+  presentation: {
+    displayName: "小哈",
+    lineId: "@hhc-helper",
+    providerId: "provider-1"
+  }
 };
 const finalizeInput = {
   nonce: "native-nonce",
@@ -47,7 +51,7 @@ describe("account admin client", () => {
     expect(new Headers(request?.headers).has("dapr-caller-app-id")).toBe(false);
   });
 
-  it("creates the native binding with exact LINE channel context", async () => {
+  it("creates a binding with trusted presentation and no Messaging API link token", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -74,10 +78,129 @@ describe("account admin client", () => {
           expected_line_user_id: lineUserId,
           profile_name: "helper",
           channel_id: "channel-destination",
-          line_link_token: "native-link-token"
+          line_account_name: "小哈",
+          line_account_id: "@hhc-helper"
         })
       })
     );
+  });
+
+  it("authorizes a bounded function set and returns only canonical sanitized account state", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          bound: true,
+          active: true,
+          administrator: true,
+          allowed_functions: ["query_schedule"],
+          account: {
+            display_name: "Ada Lovelace",
+            masked_email: "a***@example.com",
+            roles: ["admin", "user"]
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(
+      client.authorizeFunctions({
+        lineUserId,
+        profileName: "helper",
+        functionNames: ["query_schedule", "find_resource"]
+      })
+    ).resolves.toEqual({
+      bound: true,
+      active: true,
+      administrator: true,
+      allowedFunctions: ["query_schedule"],
+      account: {
+        displayName: "Ada Lovelace",
+        maskedEmail: "a***@example.com",
+        roles: ["admin", "user"]
+      }
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
+      line_user_id: lineUserId,
+      profile_name: "helper",
+      function_names: ["query_schedule", "find_resource"]
+    });
+  });
+
+  it.each([
+    ["raw email", { account: { display_name: "Ada", masked_email: "ada@example.com", roles: [] } }],
+    [
+      "unknown role",
+      { account: { display_name: "Ada", masked_email: "a***@example.com", roles: ["owner"] } }
+    ],
+    ["unknown function", { allowed_functions: ["delete_everything"] }],
+    ["unrequested function", { allowed_functions: ["find_ppt_slides"] }],
+    ["unexpected identifier", { user_id: "internal-user" }],
+    [
+      "noncanonical roles",
+      {
+        account: { display_name: "Ada", masked_email: "a***@example.com", roles: ["user", "admin"] }
+      }
+    ],
+    ["inactive account details", { active: false }]
+  ])("rejects a noncanonical authorization response: %s", async (_label, override) => {
+    const payload = {
+      bound: true,
+      active: true,
+      administrator: false,
+      allowed_functions: ["query_schedule"],
+      account: {
+        display_name: "Ada",
+        masked_email: "a***@example.com",
+        roles: ["user"]
+      },
+      ...override
+    };
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+      )
+    });
+
+    await expect(
+      client.authorizeFunctions({
+        lineUserId,
+        profileName: "helper",
+        functionNames: ["query_schedule", "find_resource"]
+      })
+    ).rejects.toMatchObject({
+      message: "account_api_invalid_function_authorization",
+      retryable: false
+    });
+  });
+
+  it("does not follow Account API redirects", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(null, { status: 302, headers: { location: "https://evil.example/authorize" } })
+      );
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(client.authorizeAdministrator(lineUserId)).rejects.toMatchObject({
+      message: "account_api_http_302",
+      retryable: false
+    });
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
   });
 
   it("finalizes native LINE account-link events with an exact payload", async () => {

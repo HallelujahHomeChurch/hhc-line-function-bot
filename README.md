@@ -106,6 +106,7 @@ Each profile controls:
 - Optional registration flow.
 - Wake keywords and mention handling.
 - Enabled functions.
+- Optional HHC Account presentation and the permission-required subset of enabled functions.
 - HHC account binding for administrator authorization.
 
 The checked-in [`config/profiles.json`](config/profiles.json) is the sole complete
@@ -116,6 +117,14 @@ Provision both credential pairs in ACA before deployment and require
 Profile names must use lowercase letters, numbers, dash, or underscore. The `webhookPath` must match the profile name exactly; for example, profile `helper` must use `/api/line/webhook/helper`.
 
 `channelSecretEnv` and `channelAccessTokenEnv` resolve LINE credentials from ACA secrets at startup. Admin authorization is not profile configuration: the bot calls account-api through Dapr and trusts the linked account's `admin` role. LLM small-talk profiles must configure all four `smallTalk.prompting` layers in `config/profiles.json`; the runtime does not supply a helper-specific persona or safety fallback. Legacy LINE admin settings and static allowlists are rejected.
+
+`accountLink` keeps only public display copy plus environment references in the
+profile file. The bot runtime resolves each canonical `@` LINE account ID and
+the shared LINE Developers Provider ID; account-link-enabled profiles with
+different Provider IDs fail startup. These identifiers are injected only into
+the bot container, not attachment, catalog, ClamAV, probe, or assurance jobs.
+Production profiles also declare `permissionRequiredFunctions` explicitly; it
+must contain unique known functions and remain a subset of `enabledFunctions`.
 
 ## Access Control
 

@@ -9,11 +9,7 @@ import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createControlledCompletionObserver } from "../application/turn/completion-observer.js";
-import {
-  createLineSdkAccountLinkClient,
-  createLineSdkIdentityClient,
-  createLineSdkReplyClient
-} from "../clients/line.js";
+import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createStaticAppDiagnostics } from "../diagnostics/dependencies.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import { InMemoryWebhookEventStore } from "../idempotency/webhook-event-store.js";
@@ -63,6 +59,14 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     async authorizeAdministrator(lineUserId: string) {
       const allowed = config.profiles.some((profile) => profile.adminUserId === lineUserId);
       return { bound: allowed, allowed };
+    },
+    async authorizeFunctions() {
+      return {
+        bound: false,
+        active: false,
+        administrator: false,
+        allowedFunctions: []
+      };
     },
     async createBinding() {
       return {
@@ -121,8 +125,6 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     postbackHandlers: overrides.postbackHandlers ?? {},
     textMessageHandlers,
     adminHandlers: overrides.adminHandlers ?? {},
-    createLineAccountLinkClient:
-      overrides.createLineAccountLinkClient ?? createLineSdkAccountLinkClient,
     createLineReplyClient: overrides.createLineReplyClient ?? createLineSdkReplyClient,
     createLineIdentityClient: overrides.createLineIdentityClient ?? createLineSdkIdentityClient,
     routeObserver: overrides.routeObserver,

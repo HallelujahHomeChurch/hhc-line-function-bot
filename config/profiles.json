@@ -5,6 +5,11 @@
     "webhookPath": "/api/line/webhook/helper",
     "channelSecretEnv": "LINE_HELPER_CHANNEL_SECRET",
     "channelAccessTokenEnv": "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
+    "accountLink": {
+      "displayName": "小哈",
+      "lineIdEnv": "LINE_HELPER_ACCOUNT_ID",
+      "providerIdEnv": "LINE_ACCOUNT_PROVIDER_ID"
+    },
     "allowDirectUser": true,
     "allowRooms": false,
     "allowedMessageTypes": ["text", "image", "file"],
@@ -23,6 +28,7 @@
       "save_memory",
       "retrieve_memory"
     ],
+    "permissionRequiredFunctions": [],
     "adminDirectOnly": true,
     "directAccessPolicy": "managed",
     "groupAccessPolicy": "managed",
@@ -122,6 +128,11 @@
     "webhookPath": "/api/line/webhook/main",
     "channelSecretEnv": "LINE_MAIN_CHANNEL_SECRET",
     "channelAccessTokenEnv": "LINE_MAIN_CHANNEL_ACCESS_TOKEN",
+    "accountLink": {
+      "displayName": "哈利路亞家教會官方 LINE",
+      "lineIdEnv": "LINE_MAIN_ACCOUNT_ID",
+      "providerIdEnv": "LINE_ACCOUNT_PROVIDER_ID"
+    },
     "allowDirectUser": true,
     "allowRooms": false,
     "allowedMessageTypes": ["text"],
@@ -129,6 +140,7 @@
     "wakeKeywords": [],
     "acceptMention": false,
     "enabledFunctions": ["download_weekly_paper"],
+    "permissionRequiredFunctions": [],
     "adminDirectOnly": true,
     "directAccessPolicy": "public",
     "groupAccessPolicy": "blocked",

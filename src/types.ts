@@ -265,6 +265,23 @@ export interface AgentRuntimeConfig {
   taskFrameSeconds: number;
 }
 
+export interface RawAccountLinkPresentation {
+  displayName: string;
+  lineIdEnv: string;
+  providerIdEnv: string;
+}
+
+export interface AccountLinkPresentation {
+  displayName: string;
+  lineId: string;
+  providerId: string;
+}
+
+export interface ProfileFunctionPolicy {
+  enabledFunctions: FunctionName[];
+  permissionRequiredFunctions: FunctionName[];
+}
+
 export interface BotProfileConfig {
   name: string;
   identityLine?: string;
@@ -278,6 +295,9 @@ export interface BotProfileConfig {
   wakeKeywords: string[];
   acceptMention: boolean;
   enabledFunctions: FunctionName[];
+  /** Defaults to [] for legacy and test fixtures; production profiles declare it explicitly. */
+  permissionRequiredFunctions?: FunctionName[];
+  accountLink?: AccountLinkPresentation;
   /** @deprecated Test fixtures only. Production profile parsing rejects this field. */
   adminUserId?: string;
   adminDirectOnly?: boolean;

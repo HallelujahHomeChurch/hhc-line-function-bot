@@ -22,7 +22,6 @@ import type {
   FunctionRouterPort,
   GraphDriveClient,
   LineIdentityClient,
-  LineAccountLinkClient,
   LineReplyClient,
   TextMessageHandlerRegistry,
   PostbackHandlerRegistry,
@@ -50,6 +49,7 @@ function testConfig(): AppConfig {
         wakeKeywords: ["小哈"],
         acceptMention: true,
         enabledFunctions: ["find_ppt_slides", "query_schedule"],
+        accountLink: { displayName: "小哈", lineId: "@hhc-helper", providerId: "provider-1" },
         adminUserId: "Uadmin",
         adminDirectOnly: true,
         directAccessPolicy: "managed",
@@ -205,6 +205,7 @@ function accessConfig(): AppConfig {
         wakeKeywords: ["小哈"],
         acceptMention: true,
         enabledFunctions: ["find_ppt_slides", "query_schedule"],
+        accountLink: { displayName: "小哈", lineId: "@hhc-helper", providerId: "provider-1" },
         adminUserId: "Uroot",
         adminDirectOnly: true,
         directAccessPolicy: "managed",
@@ -255,6 +256,11 @@ function providerFreeMainConfig(): AppConfig {
       wakeKeywords: [],
       acceptMention: false,
       enabledFunctions: ["download_weekly_paper"],
+      accountLink: {
+        displayName: "哈利路亞家教會官方 LINE",
+        lineId: "@hhc-main",
+        providerId: "provider-1"
+      },
       adminDirectOnly: true,
       directAccessPolicy: "public",
       groupAccessPolicy: "blocked",
@@ -3916,9 +3922,6 @@ describe("LINE entrance", () => {
           createBinding,
           finalizeBinding: vi.fn()
         },
-        createLineAccountLinkClient: () => ({
-          issueLinkToken: vi.fn().mockResolvedValue("native-link-token")
-        }),
         createLineReplyClient: () => ({ replyText }),
         createLineIdentityClient: () => ({
           getUserDisplayName: vi.fn(async () => {
@@ -4068,9 +4071,6 @@ describe("LINE entrance", () => {
   });
 
   it("starts native account linking for an unmanaged direct user without authorization or routing", async () => {
-    const issueLinkToken = vi
-      .fn<LineAccountLinkClient["issueLinkToken"]>()
-      .mockResolvedValue("native-link-token");
     const authorizeAdministrator = vi.fn();
     const createBinding = vi.fn().mockResolvedValue({
       bindingUrl: "https://account.alive.org.tw/line/bind#token=opaque",
@@ -4088,7 +4088,6 @@ describe("LINE entrance", () => {
         createBinding,
         finalizeBinding: vi.fn()
       },
-      createLineAccountLinkClient: () => ({ issueLinkToken }),
       createLineIdentityClient,
       createLineReplyClient: () => ({ replyText })
     });
@@ -4113,12 +4112,15 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(issueLinkToken).toHaveBeenCalledWith("Uunmanaged");
     expect(createBinding).toHaveBeenCalledWith({
       expectedLineUserId: "Uunmanaged",
       profileName: "helper",
       channelId: "channel-destination",
-      lineLinkToken: "native-link-token"
+      presentation: {
+        displayName: "小哈",
+        lineId: "@hhc-helper",
+        providerId: "provider-1"
+      }
     });
     expect(replyText).toHaveBeenCalledWith(
       "reply-token",
@@ -4137,7 +4139,7 @@ describe("LINE entrance", () => {
       })
     );
     expect(JSON.stringify(routeObserver.mock.calls)).not.toMatch(
-      /Uunmanaged|native-link-token|channel-destination|#token=opaque/u
+      /Uunmanaged|channel-destination|#token=opaque/u
     );
   });
 
@@ -4148,43 +4150,50 @@ describe("LINE entrance", () => {
     ["missing uid", { type: "user" }, "登入帳戶", "reply", "dest"],
     ["missing reply", { type: "user", userId: "U1" }, "登入帳戶", undefined, "dest"],
     ["missing destination", { type: "user", userId: "U1" }, "登入帳戶", "reply", undefined]
-  ])(
-    "does not issue a native token for %s",
-    async (_label, source, text, replyToken, destination) => {
-      const issueLinkToken = vi.fn();
-      const app = createApp(accessConfig(), {
-        createLineAccountLinkClient: () => ({ issueLinkToken }),
-        createLineReplyClient: () => ({ replyText: vi.fn() })
-      });
-      const body = JSON.stringify({
-        ...(destination ? { destination } : {}),
-        events: [
-          {
-            type: "message",
-            webhookEventId: "login-invalid",
-            ...(replyToken ? { replyToken } : {}),
-            source,
-            message: { type: "text", text }
-          }
-        ]
-      });
+  ])("does not create a binding for %s", async (_label, source, text, replyToken, destination) => {
+    const createBinding = vi.fn();
+    const app = createApp(accessConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn(),
+        createBinding,
+        finalizeBinding: vi.fn()
+      },
+      createLineReplyClient: () => ({ replyText: vi.fn() })
+    });
+    const body = JSON.stringify({
+      ...(destination ? { destination } : {}),
+      events: [
+        {
+          type: "message",
+          webhookEventId: "login-invalid",
+          ...(replyToken ? { replyToken } : {}),
+          source,
+          message: { type: "text", text }
+        }
+      ]
+    });
 
-      await app.inject({
-        method: "POST",
-        url: "/api/line/webhook/helper",
-        headers: signedHeaders(body, "helper-secret"),
-        payload: body
-      });
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
 
-      expect(issueLinkToken).not.toHaveBeenCalled();
-    }
-  );
+    expect(createBinding).not.toHaveBeenCalled();
+  });
 
-  it("deduplicates and rate-limits explicit login before issuing a token", async () => {
-    const issueLinkToken = vi.fn();
+  it("deduplicates and rate-limits explicit login before creating a binding", async () => {
+    const createBinding = vi.fn();
     const duplicateApp = createApp(accessConfig(), {
       webhookEventStore: { tryStart: vi.fn().mockResolvedValue("duplicate") },
-      createLineAccountLinkClient: () => ({ issueLinkToken }),
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn(),
+        createBinding,
+        finalizeBinding: vi.fn()
+      },
       createLineReplyClient: () => ({ replyText: vi.fn() })
     });
     const body = JSON.stringify({
@@ -4214,7 +4223,12 @@ describe("LINE entrance", () => {
           resetAt: "2026-08-08T12:00:00Z"
         })
       },
-      createLineAccountLinkClient: () => ({ issueLinkToken }),
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn(),
+        createBinding,
+        finalizeBinding: vi.fn()
+      },
       createLineReplyClient: () => ({ replyText: vi.fn() })
     });
     await rateLimitedApp.inject({
@@ -4224,7 +4238,7 @@ describe("LINE entrance", () => {
       payload: body
     });
 
-    expect(issueLinkToken).not.toHaveBeenCalled();
+    expect(createBinding).not.toHaveBeenCalled();
   });
 
   it("finalizes a completed accountLink before every ordinary entrance dependency", async () => {
@@ -4565,7 +4579,6 @@ describe("LINE entrance", () => {
   });
 
   it("does not retry the same LINE reply token when a login-link reply fails", async () => {
-    const issueLinkToken = vi.fn().mockResolvedValue("native-link-token");
     const createBinding = vi.fn().mockResolvedValue({
       bindingUrl: "https://account.alive.org.tw/line/bind#token=opaque",
       expiresAt: "2026-08-08T12:00:00Z"
@@ -4577,7 +4590,6 @@ describe("LINE entrance", () => {
         createBinding,
         finalizeBinding: vi.fn()
       },
-      createLineAccountLinkClient: () => ({ issueLinkToken }),
       createLineReplyClient: () => ({ replyText })
     });
     const body = JSON.stringify({
@@ -4601,7 +4613,6 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(issueLinkToken).toHaveBeenCalledOnce();
     expect(createBinding).toHaveBeenCalledOnce();
     expect(replyText).toHaveBeenCalledOnce();
   });
