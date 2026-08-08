@@ -17,6 +17,8 @@ export type AssuranceFailureCode =
   | "diagnostic_folder_failed"
   | "diagnostic_upload_failed"
   | "diagnostic_delete_failed"
+  | "asset_lifecycle_failed"
+  | "asset_cleanup_failed"
   | "network_failed"
   | "timeout"
   | "http_mismatch"
@@ -53,7 +55,8 @@ export type PeriodicCheckName =
   | "clamav_eicar"
   | "attachment_queue"
   | "diagnostic_write_delete"
-  | "clamav_signature";
+  | "clamav_signature"
+  | "asset_lifecycle";
 export type AssuranceCheckName = ReleaseCheckName | PeriodicCheckName;
 
 export interface AssuranceCheck {
@@ -108,6 +111,8 @@ const failureCodes = new Set<AssuranceFailureCode>([
   "diagnostic_folder_failed",
   "diagnostic_upload_failed",
   "diagnostic_delete_failed",
+  "asset_lifecycle_failed",
+  "asset_cleanup_failed",
   "network_failed",
   "timeout",
   "http_mismatch",
@@ -147,7 +152,8 @@ const periodicChecks = new Set<PeriodicCheckName>([
   "clamav_eicar",
   "attachment_queue",
   "diagnostic_write_delete",
-  "clamav_signature"
+  "clamav_signature",
+  "asset_lifecycle"
 ]);
 
 export function buildAssuranceReport(input: AssuranceReportInput): AssuranceReport {

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createAssetApiClient, isTransientAssetApiError } from "../clients/asset-api.js";
+import {
+  createAssetApiClient,
+  isAssetAccessDeniedError,
+  isTransientAssetApiError
+} from "../clients/asset-api.js";
 
 describe("asset api client", () => {
   it("uses one workload token and deterministic idempotency keys for the asset lifecycle", async () => {
@@ -46,8 +50,10 @@ describe("asset api client", () => {
     });
 
     const created = await client.createUpload({
-      workId: "work-1",
-      lineMessageId: "line-1",
+      idempotencyKey: "line-attachment:work-1",
+      ownerType: "line_message",
+      ownerId: "line-1",
+      purpose: "resource",
       fileName: "weekly.pdf",
       mimeType: "application/pdf",
       maxSizeBytes: 1024
@@ -58,7 +64,7 @@ describe("asset api client", () => {
       checksumSha256: "abc",
       mimeType: "application/pdf"
     });
-    await client.grantServiceRead("asset-1", "work-1");
+    await client.grantServiceRead("asset-1", "line-attachment-read:work-1");
     await client.get("asset-1");
     await client.download("asset-1");
 
@@ -151,6 +157,107 @@ describe("asset api client", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(isTransientAssetApiError(error)).toBe(false);
+  });
+
+  it("returns owner and grant identity for exact revoke and soft-delete cleanup", async () => {
+    const signal = AbortSignal.timeout(1_000);
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            asset: {
+              id: "asset-1",
+              ownerService: "hhc-line-function-bot",
+              ownerType: "assurance_probe",
+              ownerId: "asset-assurance:run-1",
+              visibility: "restricted",
+              uploadStatus: "created",
+              scanStatus: "pending"
+            },
+            uploadTarget: {
+              url: "https://blob.invalid/upload-secret",
+              method: "PUT",
+              headers: { "x-ms-blob-type": "BlockBlob" }
+            }
+          },
+          201
+        )
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: "grant-1" }, 201))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          id: "asset-1",
+          ownerService: "hhc-line-function-bot",
+          ownerType: "assurance_probe",
+          ownerId: "asset-assurance:run-1",
+          visibility: "restricted",
+          uploadStatus: "completed",
+          scanStatus: "clean"
+        })
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+    const getAccessToken = vi.fn().mockResolvedValue("workload-token");
+    const client = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      getAccessToken,
+      fetcher
+    });
+
+    const created = await client.createUpload(
+      {
+        idempotencyKey: "asset-assurance:run-1",
+        ownerType: "assurance_probe",
+        ownerId: "asset-assurance:run-1",
+        purpose: "assurance",
+        fileName: "asset-assurance.txt",
+        mimeType: "text/plain",
+        maxSizeBytes: 64
+      },
+      { signal }
+    );
+    const grant = await client.grantServiceRead("asset-1", "asset-assurance-read:run-1", {
+      signal
+    });
+    await client.revokeGrant("asset-1", grant.id, { signal });
+    const owned = await client.get("asset-1", { signal });
+    await client.softDelete("asset-1", { signal });
+    const denied = await client
+      .download("asset-1", { signal })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    expect(created.asset).toMatchObject({
+      ownerService: "hhc-line-function-bot",
+      ownerType: "assurance_probe",
+      ownerId: "asset-assurance:run-1",
+      visibility: "restricted"
+    });
+    expect(grant).toEqual({ id: "grant-1" });
+    expect(owned.ownerId).toBe("asset-assurance:run-1");
+    expect(isAssetAccessDeniedError(denied)).toBe(true);
+    expect(getAccessToken).toHaveBeenCalledWith(signal);
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
+      signal,
+      body: JSON.stringify({
+        namespace: "line.group.file",
+        ownerService: "hhc-line-function-bot",
+        ownerType: "assurance_probe",
+        ownerId: "asset-assurance:run-1",
+        purpose: "assurance",
+        originalFileName: "asset-assurance.txt",
+        expectedMimeType: "text/plain",
+        maxSizeBytes: 64,
+        visibility: "restricted"
+      })
+    });
+    expect(fetcher.mock.calls[2]?.[0]).toBe(
+      "https://asset.internal/priv/assets/asset-1/grants/grant-1"
+    );
+    expect(fetcher.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE", signal });
+    expect(fetcher.mock.calls[4]?.[1]).toMatchObject({ method: "DELETE", signal });
   });
 });
 

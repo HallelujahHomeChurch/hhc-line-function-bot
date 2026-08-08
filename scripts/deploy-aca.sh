@@ -187,6 +187,15 @@ if [[ "$(az role assignment list \
   echo "Attachment Job identity is missing its queue processor, queue reader, or ACR pull role" >&2
   exit 1
 fi
+if ! verify_asset_access_contract \
+  "${RESOURCE_GROUP}" \
+  "${ASSET_API_CONTAINER_APP_NAME}" \
+  "${ASSET_API_AUDIENCE}" \
+  "${attachment_job_client_id}" \
+  "${attachment_job_principal_id}"; then
+  echo "Asset API workload access contract is unavailable" >&2
+  exit 1
+fi
 
 azure_openai_embedding_endpoint="$(az cognitiveservices account show \
   --resource-group "${RESOURCE_GROUP}" \
@@ -781,7 +790,10 @@ deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
 mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"
 deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"
 mark_release_job_mutated "${PERIODIC_ASSURANCE_JOB_NAME}"
-deploy_job "${PERIODIC_ASSURANCE_JOB_NAME}" "${periodic_assurance_job_manifest}"
+deploy_job \
+  "${PERIODIC_ASSURANCE_JOB_NAME}" \
+  "${periodic_assurance_job_manifest}" \
+  "${attachment_job_identity_id}"
 
 run_release_gates
 write_release_report

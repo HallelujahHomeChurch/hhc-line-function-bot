@@ -32,7 +32,10 @@ describe("attachment asset worker", () => {
     expect(fixture.assets.createUpload).toHaveBeenCalledTimes(1);
     expect(fixture.assets.upload).toHaveBeenCalledTimes(1);
     expect(fixture.assets.complete).toHaveBeenCalledTimes(1);
-    expect(fixture.assets.grantServiceRead).toHaveBeenCalledWith("asset-1", fixture.workId);
+    expect(fixture.assets.grantServiceRead).toHaveBeenCalledWith(
+      "asset-1",
+      `line-attachment-read:${fixture.workId}`
+    );
     expect(fixture.publisher.publishVerifiedResource).toHaveBeenCalledWith(
       expect.objectContaining({ scan: { status: "clean", signatureVersion: "main-1" } })
     );
@@ -95,8 +98,10 @@ describe("attachment asset worker", () => {
 
     expect(result).toEqual({ status: "completed", signatureHealth: "current" });
     expect(fixture.assets.createUpload).toHaveBeenCalledWith({
-      workId: fixture.workId,
-      lineMessageId: "line-message-1",
+      idempotencyKey: `line-attachment:${fixture.workId}`,
+      ownerType: "line_message",
+      ownerId: "line-message-1",
+      purpose: "resource",
       fileName: "Sunday.pdf",
       mimeType: "application/pdf",
       maxSizeBytes: 14

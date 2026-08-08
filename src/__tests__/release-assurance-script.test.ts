@@ -1209,6 +1209,9 @@ if (command("containerapp", "job", "show")) {
           secretRef: "attachment-scan-queue-connection-string"
         },
         { name: "ATTACHMENT_SCAN_QUEUE_NAME", value: "queue-fixture" },
+        { name: "ASSET_API_URL", value: "https://asset.internal.example" },
+        { name: "ASSET_API_AUDIENCE", value: "api://asset-api" },
+        { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" },
         {
           name: "CLAMAV_SIGNATURE_MANIFEST_PATH",
           value: "/var/lib/clamav/current/manifest.json"
@@ -1244,7 +1247,7 @@ if (command("containerapp", "job", "show")) {
   if (scenario === "release_probe_mount_mismatch" && name === "hhc-line-bot-release-probe") definition.volumes[0].storageName = "clamav-signatures-readwrite";
   if (scenario === "release_probe_provider_env" && name === "hhc-line-bot-release-probe") definition.env.push({ name: "DEEPSEEK_API_KEY", secretRef: "forbidden" });
   if (scenario === "periodic_args_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.args = ["dist/tools/wrong.js"];
-  if (scenario === "periodic_env_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.env = definition.env.filter((entry) => entry.name !== "GRAPH_DRIVE_ID");
+  if (scenario === "periodic_env_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.env = definition.env.filter((entry) => entry.name !== "ASSET_API_URL");
   if (scenario === "periodic_resources_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.resources.memory = "1Gi";
   if (scenario === "periodic_mount_mismatch" && name === "hhc-line-bot-periodic-assurance") definition.volumes[0].storageName = "clamav-signatures-readwrite";
   if (scenario === "periodic_provider_env" && name === "hhc-line-bot-periodic-assurance") definition.env.push({ name: "AZURE_OPENAI_EMBEDDING_API_KEY", secretRef: "forbidden" });

@@ -724,7 +724,12 @@ reply-token behavior. Failed release gates copy the known-good revision into a
 new rollback revision and restore changed job images; a manual image update is
 only the bounded emergency fallback. Weekly dependency evidence is separate:
 `hhc-line-bot-periodic-assurance` writes
-`artifacts/release-assurance/periodic-report.json` after its own run.
+`artifacts/release-assurance/periodic-report.json` after its own run. Its bounded
+Asset lifecycle check uploads only fixed tiny clean text under a unique
+assurance owner with restricted visibility, grants service-read access, verifies
+the clean scan and downloaded bytes, then revokes and owner-verifies the exact
+soft-delete in cleanup. Cleanup failure fails the assurance; the check exposes
+no public URL and does not call LINE, Graph, or the catalog.
 
 The accepted baseline is production release
 [30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171),

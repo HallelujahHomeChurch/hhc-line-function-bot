@@ -10,7 +10,7 @@ import { loadAttachmentScanWorkerConfigFromEnv } from "../attachments/scan-worke
 import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
-import { createAssetApiClient } from "../clients/asset-api.js";
+import { assetAccessTokenScope, createAssetApiClient } from "../clients/asset-api.js";
 import { createExternalBinaryClient } from "../clients/external-binary.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createLineSdkContentClient } from "../clients/line.js";
@@ -48,9 +48,7 @@ export function readAttachmentAssetJobEnvironment(
   return { queueUrl, assetApiUrl, assetApiAudience, managedIdentityClientId };
 }
 
-export function assetAccessTokenScope(audience: string): string {
-  return `${audience.replace(/\/$/u, "")}/.default`;
-}
+export { assetAccessTokenScope } from "../clients/asset-api.js";
 
 export function attachmentAssetDeadlines(startedAt: Date): {
   scanDeadline: Date;

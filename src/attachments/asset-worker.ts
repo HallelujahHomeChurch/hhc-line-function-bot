@@ -99,8 +99,10 @@ export async function runAttachmentAssetWorker(
       }
 
       const created = await options.assets.createUpload({
-        workId: work.id,
-        lineMessageId: work.lineMessageId ?? work.id,
+        idempotencyKey: `line-attachment:${work.id}`,
+        ownerType: "line_message",
+        ownerId: work.lineMessageId ?? work.id,
+        purpose: "resource",
         fileName: descriptor.fileName,
         mimeType: descriptor.mimeType,
         maxSizeBytes: descriptor.sizeBytes
@@ -147,7 +149,7 @@ export async function runAttachmentAssetWorker(
       return permanentFailure(options.workStore, work, "scan_unavailable");
     }
 
-    await options.assets.grantServiceRead(asset.id, work.id);
+    await options.assets.grantServiceRead(asset.id, `line-attachment-read:${work.id}`);
     const clean = await options.assets.download(asset.id);
     const verified = prepareResourceBinary({
       binary: {

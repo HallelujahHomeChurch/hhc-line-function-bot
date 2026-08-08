@@ -103,6 +103,12 @@ describe("buildAssuranceReport", () => {
           status: "passed",
           observedAt: timestamp,
           code: "none"
+        },
+        {
+          name: "asset_lifecycle",
+          status: "passed",
+          observedAt: timestamp,
+          code: "none"
         }
       ],
       rollback: { status: "not_required" },
@@ -110,7 +116,7 @@ describe("buildAssuranceReport", () => {
     });
 
     expect(report.kind).toBe("periodic");
-    expect(report.checks).toHaveLength(2);
+    expect(report.checks).toHaveLength(3);
   });
 
   it("rejects a registry hostname instead of serializing it as an image identity", () => {

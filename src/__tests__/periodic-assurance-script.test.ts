@@ -46,7 +46,7 @@ describe("periodic assurance shell runner", () => {
       rollback: { status: "not_required" },
       providerRequests: { deepseek: 0, embedding: 0 }
     });
-    expect(report.checks).toHaveLength(7);
+    expect(report.checks).toHaveLength(8);
     expect(report.checks.every((check) => check.status !== "failed")).toBe(true);
     expect(reportText).not.toContain("private-registry");
     expect(reportText).not.toContain("fake-private-error");
@@ -93,6 +93,11 @@ describe("periodic assurance shell runner", () => {
       scenario: "diagnostic_failure_and_malformed_scan",
       check: "diagnostic_write_delete",
       code: "diagnostic_delete_failed"
+    },
+    {
+      scenario: "asset_cleanup_failure",
+      check: "asset_lifecycle",
+      code: "asset_cleanup_failed"
     }
   ])(
     "preserves late workload failure $code over later control-plane failures",
@@ -424,6 +429,7 @@ elif command("containerapp", "job", "execution", "show"):
         "periodic_and_scan_failure",
         "clamav_failure_and_scan_failure",
         "diagnostic_failure_and_malformed_scan",
+        "asset_cleanup_failure",
         "failed_check_with_none",
         "passed_check_with_failure_code",
         "warning_check_with_none",
@@ -462,11 +468,13 @@ elif command("monitor", "log-analytics", "query"):
         {"name":"clamav_clean","status":"passed","code":"none"},
         {"name":"clamav_eicar","status":"passed","code":"none"},
         {"name":"diagnostic_write_delete","status":"passed","code":"none"},
+        {"name":"asset_lifecycle","status":"passed","code":"none"},
     ]
     failures = {
         "periodic_and_scan_failure": ("graph_metadata", "graph_metadata_failed"),
         "clamav_failure_and_scan_failure": ("clamav_eicar", "clamav_eicar_failed"),
         "diagnostic_failure_and_malformed_scan": ("diagnostic_write_delete", "diagnostic_delete_failed"),
+        "asset_cleanup_failure": ("asset_lifecycle", "asset_cleanup_failed"),
     }
     if scenario in failures:
         failed_name, failed_code = failures[scenario]

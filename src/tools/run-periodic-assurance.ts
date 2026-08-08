@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { ManagedIdentityCredential } from "@azure/identity";
 import { QueueServiceClient } from "@azure/storage-queue";
 import { Client, LogLevel } from "@notionhq/client";
 
@@ -12,10 +13,20 @@ import {
   type PeriodicAssuranceDependencies,
   type PeriodicAssuranceInput
 } from "../assurance/periodic-probe.js";
+import { runAssetLifecycleAssurance } from "../assurance/asset-lifecycle-probe.js";
+import {
+  assetAccessTokenScope,
+  createAssetApiClient,
+  type AssetApiClient
+} from "../clients/asset-api.js";
 import { createGraphDriveClient, type CreateGraphDriveClientOptions } from "../clients/graph.js";
 import type { GraphConfig, GraphDriveClient } from "../types.js";
 
 const DEFAULT_SCAN_TIMEOUT_MS = 15_000;
+const ASSET_OPERATION_TIMEOUT_MS = 180_000;
+const ASSET_CLEANUP_TIMEOUT_MS = 30_000;
+const ASSET_POLL_INTERVAL_MS = 2_000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export interface PeriodicNotionClient {
   databases: {
@@ -44,13 +55,25 @@ export interface PeriodicAssuranceAdapterFactories {
     queueName: string,
     options: { retryOptions: { maxTries: 1 } }
   ): PeriodicQueueClient;
+  createCredential(clientId: string): {
+    getToken(
+      scope: string,
+      options: { abortSignal?: AbortSignal }
+    ): Promise<{ token: string } | null>;
+  };
+  createAsset(options: {
+    baseUrl: string;
+    getAccessToken: (signal?: AbortSignal) => Promise<string>;
+  }): AssetApiClient;
 }
 
 const defaultAdapterFactories: PeriodicAssuranceAdapterFactories = {
   createGraph: createGraphDriveClient,
   createNotion: (options) => new Client(options) as unknown as PeriodicNotionClient,
   createQueue: (connectionString, queueName, options) =>
-    QueueServiceClient.fromConnectionString(connectionString, options).getQueueClient(queueName)
+    QueueServiceClient.fromConnectionString(connectionString, options).getQueueClient(queueName),
+  createCredential: (clientId) => new ManagedIdentityCredential(clientId),
+  createAsset: createAssetApiClient
 };
 
 export async function runPeriodicAssuranceCli(
@@ -118,6 +141,18 @@ export function createPeriodicAssuranceDependencies(
     required(env, "ATTACHMENT_SCAN_QUEUE_NAME"),
     { retryOptions: { maxTries: 1 } }
   );
+  const credential = factories.createCredential(requiredUuid(env, "AZURE_CLIENT_ID"));
+  const assetAudience = requiredApplicationUri(env, "ASSET_API_AUDIENCE");
+  const assets = factories.createAsset({
+    baseUrl: requiredHttpsUrl(env, "ASSET_API_URL"),
+    getAccessToken: async (signal) => {
+      const token = await credential.getToken(assetAccessTokenScope(assetAudience), {
+        abortSignal: signal
+      });
+      if (!token?.token) throw new Error("periodic_assurance_asset_token_unavailable");
+      return token.token;
+    }
+  });
 
   return {
     readGraphMetadata: (driveId, itemId) => graph.getItemById!(driveId, itemId),
@@ -151,6 +186,15 @@ export function createPeriodicAssuranceDependencies(
     uploadDiagnostic: (driveId, parentItemId, fileName, data, contentType) =>
       graph.uploadFile!(driveId, parentItemId, fileName, data, contentType),
     deleteDiagnostic: (driveId, itemId) => graph.deleteItem!(driveId, itemId),
+    runAssetLifecycle: () =>
+      runAssetLifecycleAssurance(
+        {
+          operationTimeoutMs: ASSET_OPERATION_TIMEOUT_MS,
+          cleanupTimeoutMs: ASSET_CLEANUP_TIMEOUT_MS,
+          pollIntervalMs: ASSET_POLL_INTERVAL_MS
+        },
+        assets
+      ),
     now: () => new Date()
   };
 }
@@ -173,6 +217,28 @@ function graphConfig(env: Record<string, string | undefined>): GraphConfig {
 function required(env: Record<string, string | undefined>, key: string): string {
   const value = env[key]?.trim();
   if (!value) throw new Error("periodic_assurance_invalid_input");
+  return value;
+}
+
+function requiredHttpsUrl(env: Record<string, string | undefined>, key: string): string {
+  try {
+    const url = new URL(required(env, key));
+    if (url.protocol !== "https:") throw new Error();
+    return url.toString().replace(/\/$/u, "");
+  } catch {
+    throw new Error("periodic_assurance_invalid_input");
+  }
+}
+
+function requiredApplicationUri(env: Record<string, string | undefined>, key: string): string {
+  const value = required(env, key);
+  if (!/^(?:api|https):\/\//u.test(value)) throw new Error("periodic_assurance_invalid_input");
+  return value;
+}
+
+function requiredUuid(env: Record<string, string | undefined>, key: string): string {
+  const value = required(env, key);
+  if (!UUID_PATTERN.test(value)) throw new Error("periodic_assurance_invalid_input");
   return value;
 }
 
