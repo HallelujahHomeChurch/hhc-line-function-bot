@@ -63,3 +63,4 @@ Task 9 verification: focused release probe 12/12, report 21/21, deployment contr
 Task 9 authority boundary: release job receives only the derived `LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE`, never main channel credentials; other jobs receive neither credentials nor derived signature.
 Task 9 proof boundary: checks attest Gateway to Dapr to selected-profile routing, configured signature acceptance, and empty early return only; they do not attest LINE delivery, Console secret correctness, replies, account linking, or provider runtime.
 Task 9 production boundary: no broad/full repository test, push, merge, deployment, credential mutation, or live LINE, Azure, Account, Dapr, provider, or HHC API call was performed.
+Task 9 fix round 1: restored the exact release-assurance documentation contract with a singular probe limitation sentence while preserving both explicit check names and the LINE Console/provider-runtime exclusions; focused docs 4/4, format, and diff-check passed.

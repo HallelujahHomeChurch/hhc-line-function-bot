@@ -193,10 +193,11 @@ rollback status/revision/image. The normal success attestation includes
 
 The release probe sends separately signed empty `events: []` requests through
 the public gateway and records `gateway_helper_signed_empty_webhook` and
-`gateway_main_signed_empty_webhook`. They verify the Gateway→Dapr→selected-
-profile route, configured signature acceptance, and empty-batch early return.
-They do not prove LINE platform delivery, LINE Console secret correctness,
-reply-token behavior, or provider availability during normal turns. The
+`gateway_main_signed_empty_webhook`. Together, they verify the Gateway→Dapr→
+selected-profile route, configured signature acceptance, and empty-batch early
+return. This probe does not prove LINE delivery or reply-token behavior. It
+also does not prove LINE Console secret correctness or provider availability
+during normal turns. The
 `providerRequests: { deepseek: 0, embedding: 0 }` field attests only this
 provider-free release path; it is not provider runtime telemetry. Do not infer
 a human LINE reply from this probe; inspect sanitized naturally occurring
