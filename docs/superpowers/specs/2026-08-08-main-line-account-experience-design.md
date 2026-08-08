@@ -1,10 +1,10 @@
-# Official LINE Account Experience Design
+# Shared LINE Profile Account Experience Design
 
 **Status:** Approved in conversation on 2026-08-08
 
 ## Goal
 
-Make the provider-free `main` LINE profile predictable without an LLM, and replace the current two-stage LINE Account Link flow with one explicit HHC Account confirmation that securely binds the signed LINE user ID to the authenticated HHC user.
+Make provider-controlled LINE behavior predictable, and replace the current two-stage LINE Account Link flow with one reusable HHC Account confirmation that securely binds the signed LINE user ID to the authenticated HHC user. The `main` and `helper` profiles use the same login, help, and account-identity implementations; profile configuration remains the authority for which user functions each profile can execute.
 
 ## Problems Being Corrected
 
@@ -22,6 +22,14 @@ Make the provider-free `main` LINE profile predictable without an LLM, and repla
 Use the LINE user ID from the signature-verified Messaging API webhook as the identity being linked. The bot creates a short-lived opaque intent bound to that user ID and sends the HHC Account URL in the direct chat. The browser exchanges the fragment token for the existing secure HttpOnly intent cookie. After HHC authentication, the user explicitly confirms the link once, and Account API atomically attaches the LINE federated identity to the authenticated HHC user.
 
 The Account API keeps the existing one-time-token, expiry, ownership-conflict, active-user, unique-identity, transaction, and sanitized-audit boundaries. The user-facing flow no longer issues a LINE link token, redirects to `access.line.me/dialog/bot/accountLink`, or waits for an `accountLink` webhook event.
+
+### Profile Control Principle
+
+- Every user function remains registered once and reusable by every profile.
+- `profile.enabledFunctions`, source policy, grants, and the existing effective-capability projection decide what a profile and requester may execute.
+- Help renders only the caller's effective functions; it does not maintain a separate hard-coded feature list for `main` or `helper`.
+- Help, account login, and account identity remain shared system surfaces rather than entries in `enabledFunctions`, consistent with the existing separation between user functions and system actions.
+- Production routing must not branch on literal profile names such as `if (profile.name === "main")`. Differences come from profile policy, provider availability, effective functions, and account state.
 
 ### Rejected Alternatives
 
@@ -64,11 +72,11 @@ It immediately attempts to open the official account through the supported HTTPS
 
 ### Existing Link
 
-If the bot detects that the LINE user ID is already linked, `登入` does not create another intent. It replies that the HHC Account is already connected and offers `我是誰` and `下載週報` quick replies.
+If the bot detects that the LINE user ID is already linked, `登入` does not create another intent. It replies that the HHC Account is already connected and offers `我是誰` plus quick replies derived from that profile's effective functions.
 
 ## Deterministic Keyword Groups
 
-The provider-free profile recognizes normalized complete phrases. Normalization applies Unicode NFKC, trim, case folding for Latin text, and removal of terminal whitespace or punctuation. Matching is not a substring search, so negated or embedded phrases do not accidentally execute an action.
+The shared LINE entrance recognizes normalized complete phrases. Normalization applies Unicode NFKC, trim, case folding for Latin text, and removal of terminal whitespace or punctuation. Matching is not a substring search, so negated or embedded phrases do not accidentally execute an action. A matched action still passes the current profile, source, and access policy before execution.
 
 | Intent                | Accepted phrases                                                      |
 | --------------------- | --------------------------------------------------------------------- |
@@ -85,9 +93,9 @@ The routing precedence is:
 1. Signature, profile/source policy, webhook deduplication, and rate limit.
 2. Local help, account-login, and account-identity phrases.
 3. Existing weekly-paper controlled capability.
-4. Provider-free unsupported fallback.
+4. The profile's normal unsupported fallback.
 
-No route in this profile calls DeepSeek or an embedding provider.
+The provider-free `main` profile makes no DeepSeek or embedding request on any route above. Provider-enabled profiles continue through their existing controlled routing only after the shared local surfaces decline the message.
 
 ## Replies and Capability Projection
 
@@ -95,13 +103,13 @@ No route in this profile calls DeepSeek or an embedding provider.
 
 Unsupported provider-free input replies:
 
-> 這個功能目前尚未支援。輸入「幫助」查看我可以協助的項目。
+> 輸入「幫助」查看我可以協助的項目。
 
 Recognized greetings such as `你好` keep their existing friendly greeting instead of using the unsupported fallback.
 
 ### Help
 
-Help resolves the current LINE-to-HHC association before rendering:
+Help resolves the current LINE-to-HHC association before rendering for both `main` and `helper`:
 
 - **Unlinked:** show weekly-paper download and HHC Account login.
 - **Linked to an active account:** hide login; show weekly-paper download and account information.
@@ -111,7 +119,7 @@ Natural `幫助` and `/help` render the same result.
 
 ### Who Am I
 
-For `main`, `/whoami` and its natural-language aliases return only:
+For both `main` and `helper`, `/whoami` and its natural-language aliases return only:
 
 - HHC display name
 - Masked email
@@ -121,7 +129,7 @@ They never return HHC user ID, LINE user ID, profile/channel identifiers, claims
 
 If unlinked, the response says that no HHC Account is connected and offers an account-login quick reply. If the identity exists but its HHC user is unavailable or inactive, the response says the account is unavailable and directs the user to support rather than offering a second binding.
 
-The existing helper diagnostic `/whoami` remains unchanged unless a separate product decision is made later.
+Existing raw helper diagnostics do not remain in `/whoami`; administrators use the existing bounded diagnostic and access-management commands instead.
 
 ## Service Boundaries
 
@@ -145,6 +153,7 @@ The existing helper diagnostic `/whoami` remains unchanged unless a separate pro
 
 ### LINE Bot
 
+- Keep one shared implementation of help, account login, account identity, and each user function. Profile configuration and effective access determine availability and presentation.
 - Stop issuing a Messaging API link token for new login intents.
 - Resolve linked account state only for help, login, whoami, and authority-sensitive operations; weekly-paper and unsupported turns remain independent of Account API availability.
 - Reuse the existing action catalog and public command handling rather than creating a second router.
@@ -175,15 +184,16 @@ Each repository uses its protected-main PR and production workflow. A repository
 
 ### Bot Conversation
 
-- `幫助` and `/help` produce the same provider-free help.
-- `登入` starts the flow when unlinked and reports already linked when linked.
-- `我是誰` and `/whoami` share the same safe HHC result.
-- Help hides login after a successful link.
-- Unknown input uses the new basic unsupported reply and points to `幫助`.
+- `幫助` and `/help` produce the same profile-aware help in both `main` and `helper`.
+- `登入` starts the shared flow when unlinked and reports already linked when linked in both profiles.
+- `我是誰` and `/whoami` share the same safe HHC result in both profiles.
+- Help hides login after a successful link in both profiles.
+- Unknown provider-free input replies exactly `輸入「幫助」查看我可以協助的項目。`.
 - Greetings remain friendly.
 - Negated login or weekly-paper text never executes.
-- Latest and specified weekly-paper downloads continue to work.
-- Provider spies observe zero DeepSeek and embedding calls for all cases above.
+- Each profile exposes only the user functions permitted by its effective profile configuration and grants.
+- Latest and specified weekly-paper downloads continue to work where `download_weekly_paper` is enabled.
+- Provider spies observe zero DeepSeek and embedding calls for every `main` case above; helper provider behavior remains controlled by its existing policy.
 
 ### Browser Flow
 
@@ -204,10 +214,10 @@ Each repository uses its protected-main PR and production workflow. A repository
 
 ### Production Smoke Test
 
-- Verify help/login/whoami before linking with a real official-account user.
+- Verify help/login/whoami before linking in both the official `main` account and the `helper` account.
 - Complete HHC login and direct confirmation without a LINE Account Link screen.
 - Verify automatic or button-assisted return to the official chat on iOS and Android when available.
-- Verify post-link help, whoami roles, latest weekly paper, and a specified issue.
+- Verify post-link help and whoami roles in both profiles, then verify latest weekly paper and a specified issue in every profile where the weekly-paper function is enabled.
 - Confirm provider telemetry remains zero for the `main` profile and inspect sanitized account-link outcome telemetry without user IDs, emails, tokens, or URLs.
 
 ## Non-Goals
@@ -218,4 +228,4 @@ Each repository uses its protected-main PR and production workflow. A repository
 - No change to normal HHC login-provider policy.
 - No automatic binding from OAuth email claims.
 - No raw account identifiers in bot replies or telemetry.
-- No redesign of helper access registration or helper `/whoami` diagnostics.
+- No redesign of helper access registration or admin diagnostic commands outside the safe shared `/whoami` replacement.
