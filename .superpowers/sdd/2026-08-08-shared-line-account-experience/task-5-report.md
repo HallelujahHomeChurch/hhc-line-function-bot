@@ -325,3 +325,102 @@ script, or fake binaries.
 - Rollback can retain the legacy `accountLink` event path and revert this single
   focused application commit. No data migration or destructive cleanup is
   required because old grant tables remain intact.
+
+## Review Remediation Round 2: 2026-08-09
+
+The second review found two remaining cross-capability authorization gaps and
+one unnecessary Account lookup. They were fixed in a separate three-wave TDD
+round with existing handler ownership, memory-store methods, continuation state,
+and the per-event Account memo. No router, policy engine, cache, dynamic phase
+framework, or profile-specific generic branch was added.
+
+### Wave 1: external sheet-music import phase ownership
+
+The focused RED run reported 4 failures with 20 passing tests. It proved that
+the handler registered as `sheet_music_numeric_selection` owned only the public
+`find_sheet_music` capability while it also selected, targeted, and confirmed
+the `external_sheet_music_import` write flow. Denied and unavailable Account
+decisions therefore still matched that public handler.
+
+The public numeric-selection and external-search-consent handler now stops at
+the read boundary. A second statically registered continuation owns
+`save_resource` and matches only the external import session. The existing
+text-continuation authorization boundary temporarily restores the configured
+write only for matching, calls the per-event memo before the handler, and then
+either supplies the authorized write profile or skips the handler. Selection,
+target choice, confirmation, session consumption, durable scan work creation,
+and the resulting slow job therefore all carry `save_resource` authority.
+
+The administrator path covers all three interactive phases and makes exactly
+one authorization request per handled turn. Non-administrator and unavailable
+Account paths fail closed before the handler and leave the complete selecting
+session unchanged. The focused sheet-music and registry suite finished 24/24.
+
+### Wave 2: text-memory command isolation
+
+The focused RED run reported 1 failure with 19 passing tests. Its reply showed
+that `/memories` exposed a resource record and a structured schedule entry in
+addition to the explicit text memory. The same legacy runtime also fell through
+from text deletion to resource and schedule deletion.
+
+`/memories`, which is owned by `retrieve_memory`, now calls only
+`listTextMemories`. `/forget-memory`, which is owned by `save_memory`, now calls
+only `forgetMemory`; a resource or schedule identifier returns not found and
+the underlying record remains active. The regression covers hidden resource
+and schedule content, non-deletion of both record types, and successful listing
+and deletion of an ordinary text memory. The agent-memory suite finished 20/20.
+The administrator-only `/memory-status` diagnostic remains unchanged.
+
+### Wave 3: selected capability authorization
+
+The focused RED run proved that choosing the public `query_schedule` option
+from a mixed `query_schedule`/`save_memory` pending resolution still invoked
+Account for the unselected protected alternative.
+
+Candidate parsing is now a pure shared operation used both by continuation
+authorization and by capability-resolution resumption. The authorization
+inventory contains only the selected pending candidate plus any independently
+detected explicit switch candidate. A public selection makes zero Account
+calls. A selected protected candidate still makes one memoized lookup; allowed
+choices resume and consume the session, while denied and unavailable choices
+remain retryable. The complete agent-turn runtime suite finished 37/37,
+including the existing protected allow/deny/unavailable and explicit-switch
+regressions.
+
+### Round 2 verification
+
+Fresh proportional verification passed:
+
+```text
+pnpm exec vitest run <5 focused files>
+Test Files  5 passed (5)
+Tests       264 passed (264)
+
+pnpm eval:agent
+candidates 20/20, proposal 14/20, validated 20/20
+
+pnpm eval:kernel
+117 cases; core 117/117; schedule 50/50; core read 104/104;
+recurrence 12/12; unavailable 0/15; ambiguity 5/6; security 0/1
+
+pnpm eval:admin
+14/14
+
+pnpm typecheck
+pnpm lint
+pnpm architecture:check
+pnpm build
+git diff --check
+```
+
+Architecture validation again checked 399 TypeScript files. Every command in
+the block exited zero. A targeted Prettier check covers every Round 2 changed
+source, test, and report file. Repository-wide `pnpm format:check` remains
+nonzero only for the same seven pre-existing SDD Markdown inputs listed above;
+none is a Round 2 change.
+
+No live Account API smoke test was run. The authorization behavior is covered
+at the per-event authorizer seam and by the existing production-shaped helper,
+Account administrator, webhook, postback, and Kernel regressions. The known
+macOS `/dev/shm` full-suite limitation is unchanged; Round 2 required and ran
+the proportional suite rather than altering the unrelated live-runner fixture.

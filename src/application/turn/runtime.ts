@@ -57,7 +57,10 @@ import type {
   RouteResult
 } from "../contracts/routing.js";
 import type { AgentRuntime } from "../../agent/agent-runtime.js";
-import { createCapabilityResolution } from "../../agent/capability-resolution.js";
+import {
+  createCapabilityResolution,
+  selectCapabilityResolutionCandidate
+} from "../../agent/capability-resolution.js";
 import { buildCapabilityCandidates } from "../../agent/capability-candidates.js";
 import { projectAgentReply } from "../../agent/response-projector.js";
 import {
@@ -887,6 +890,12 @@ async function applyContinuationFunctionAuthorization(
           maxCandidates: 5
         }).map(({ capability }) => capability)
       : [];
+  const selectedCapability = pendingCapabilityResolution
+    ? selectCapabilityResolutionCandidate(
+        pendingCapabilityResolution,
+        input.event.message?.text ?? ""
+      )?.capability
+    : undefined;
   const requested = Array.from(
     new Set(
       [
@@ -894,9 +903,7 @@ async function applyContinuationFunctionAuthorization(
         pendingAttachment?.action,
         pendingResolution?.capability,
         activeTask?.currentCapability,
-        ...((pendingCapabilityResolution?.candidates ?? []).map(
-          ({ capability }) => capability
-        ) as FunctionName[]),
+        selectedCapability,
         ...explicitSwitchCandidates
       ].filter(
         (functionName): functionName is FunctionName =>

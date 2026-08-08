@@ -13,6 +13,7 @@ import {
   createFindPptSlidesTextMessageHandler
 } from "./find-ppt-slides.js";
 import {
+  createExternalSheetMusicImportTextMessageHandler,
   createFindPopSheetMusicHandler,
   createFindPopSheetMusicPostbackHandler,
   createFindPopSheetMusicTextMessageHandler
@@ -378,6 +379,22 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           }
         },
         textMessages: {
+          external_sheet_music_import: createExternalSheetMusicImportTextMessageHandler({
+            graph: clients.graph,
+            sessionStore: clients.sessionStore,
+            catalog: clients.catalog,
+            agentJobStore: clients.agentJobStore,
+            scanQueue: clients.attachmentScanQueue,
+            scanWorkStore: clients.attachmentScanWorkStore,
+            externalSearch:
+              clients.webSearch && clients.sheetMusicExternalSearchSummarizer
+                ? {
+                    webSearch: clients.webSearch,
+                    summarize: clients.sheetMusicExternalSearchSummarizer
+                  }
+                : undefined,
+            now: clients.now
+          }),
           sheet_music_numeric_selection: createFindPopSheetMusicTextMessageHandler({
             graph: clients.graph,
             sessionStore: clients.sessionStore,

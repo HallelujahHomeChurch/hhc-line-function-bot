@@ -5,7 +5,7 @@ import type {
   GraphDriveClient,
   JsonRecord
 } from "../types.js";
-import type { AgentMemoryStore, AgentResourceRecord } from "./memory-store.js";
+import type { AgentMemoryStore } from "./memory-store.js";
 import type { AccessStore } from "../access/types.js";
 
 export interface AgentRuntimeOptions {
@@ -88,23 +88,7 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
           requesterUserId: input.context.event.source.userId,
           limit: 10
         });
-        const resources = await options.memoryStore.searchResources({
-          profileName: input.context.profile.name,
-          source: input.context.event.source,
-          requesterUserId: input.context.event.source.userId,
-          limit: 10
-        });
-        const schedules = await options.memoryStore.searchScheduleEntries({
-          profileName: input.context.profile.name,
-          source: input.context.event.source,
-          requesterUserId: input.context.event.source.userId,
-          limit: 10
-        });
-        const lines = [
-          ...resources.map(formatResourceMemory),
-          ...memories.map(formatTextMemory),
-          ...schedules.map(formatScheduleMemory)
-        ];
+        const lines = memories.map(formatTextMemory);
         return {
           ok: true,
           replyText: lines.length === 0 ? "目前沒有記住的資訊。" : ["Memories", ...lines].join("\n")
@@ -123,34 +107,12 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
           deletedBy: input.context.event.source.userId,
           isAdmin: input.isAdmin
         });
-        const removedResource = removedText
-          ? false
-          : await options.memoryStore.forgetResource({
-              profileName: input.context.profile.name,
-              source: input.context.event.source,
-              id,
-              deletedBy: input.context.event.source.userId,
-              isAdmin: input.isAdmin
-            });
-        const removedSchedule =
-          removedText || removedResource
-            ? false
-            : await options.memoryStore.forgetScheduleMemory({
-                profileName: input.context.profile.name,
-                source: input.context.event.source,
-                id,
-                deletedBy: input.context.event.source.userId,
-                isAdmin: input.isAdmin
-              });
-        if (removedText || removedResource || removedSchedule) {
+        if (removedText) {
           await recordMemoryAudit(options.accessStore, input, "memory.delete");
         }
         return {
           ok: true,
-          replyText:
-            removedText || removedResource || removedSchedule
-              ? "已移除這段記憶。"
-              : "找不到這段記憶。"
+          replyText: removedText ? "已移除這段記憶。" : "找不到這段記憶。"
         };
       }
 
@@ -184,21 +146,6 @@ function stringArgument(args: JsonRecord, key: string): string | undefined {
 function formatTextMemory(memory: { id: string; title?: string; content: string }): string {
   const title = memory.title?.trim() || memory.content.slice(0, 16);
   return `- ${title} (${memory.id})\n${memory.content}`;
-}
-
-function formatResourceMemory(memory: AgentResourceRecord): string {
-  const source = memory.storage.provider === "external_link" ? "連結" : "檔案";
-  return `- ${memory.title} (${memory.id})\n${source}: ${memory.resourceType}`;
-}
-
-function formatScheduleMemory(memory: {
-  id: string;
-  memoryId: string;
-  serviceDate: string;
-  meetingName: string;
-  assignee: string;
-}): string {
-  return `- ${memory.serviceDate} ${memory.meetingName}：${memory.assignee} (${memory.memoryId})`;
 }
 
 function parseMemoryCommand(text: string): { command: string; args: string[] } | undefined {

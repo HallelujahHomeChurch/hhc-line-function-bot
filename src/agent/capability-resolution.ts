@@ -1,5 +1,5 @@
 import { getFunctionDefinition } from "../functions/definitions.js";
-import type { SessionStore } from "../state/session-store.js";
+import type { PendingCapabilityResolutionSession, SessionStore } from "../state/session-store.js";
 import type { FunctionExecutionResult, FunctionName, LineSource } from "../types.js";
 
 const CAPABILITY_RESOLUTION_TTL_MS = 10 * 60 * 1000;
@@ -43,6 +43,21 @@ export type CapabilityResolutionResume =
   | { kind: "reply"; result: FunctionExecutionResult }
   | { kind: "selected"; capability: FunctionName; originalText: string };
 
+export function selectCapabilityResolutionCandidate(
+  pending: PendingCapabilityResolutionSession,
+  text: string
+): PendingCapabilityResolutionSession["candidates"][number] | undefined {
+  const answer = text.normalize("NFKC").trim();
+  if (/^(?:取消|不要|先不要|不用)$/u.test(answer)) return undefined;
+  const numeric = /^\d+$/u.test(answer) ? Number.parseInt(answer, 10) - 1 : -1;
+  return (
+    pending.candidates[numeric] ??
+    pending.candidates.find(
+      ({ capability, label }) => answer === label || answer === capability || answer.includes(label)
+    )
+  );
+}
+
 export async function resumeCapabilityResolution(input: {
   sessionStore?: SessionStore;
   profileName: string;
@@ -63,12 +78,7 @@ export async function resumeCapabilityResolution(input: {
     await input.sessionStore.delete(pending.id);
     return { kind: "reply", result: { ok: true, replyText: "已取消這次查詢。" } };
   }
-  const numeric = /^\d+$/u.test(answer) ? Number.parseInt(answer, 10) - 1 : -1;
-  const selected =
-    pending.candidates[numeric] ??
-    pending.candidates.find(
-      ({ capability, label }) => answer === label || answer === capability || answer.includes(label)
-    );
+  const selected = selectCapabilityResolutionCandidate(pending, answer);
   if (!selected) {
     return { kind: "reply", result: capabilityChoiceReply(pending.candidates) };
   }

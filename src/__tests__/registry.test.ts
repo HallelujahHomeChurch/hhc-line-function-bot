@@ -82,6 +82,7 @@ describe("function registry", () => {
     expect(registries.functions.find_sheet_music).toBeDefined();
     expect(registries.postbacks.select_sheet_music).toBeDefined();
     expect(registries.textMessages.sheet_music_numeric_selection).toBeDefined();
+    expect(registries.textMessages.external_sheet_music_import?.capability).toBe("save_resource");
     expect(registries.adminHandlers["refresh-sheet-music-cache"]).toBeUndefined();
   });
 

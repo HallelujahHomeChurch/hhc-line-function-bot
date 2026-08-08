@@ -918,7 +918,7 @@ describe("AgentTurnRuntime controlled path", () => {
     });
   });
 
-  it("keeps a public selection available when Account denies the protected alternative", async () => {
+  it("keeps a public selection local without looking up its protected alternative", async () => {
     const sessionStore = new InMemorySessionStore({ now });
     await sessionStore.set({
       id: "pending-public-capability-switch",
@@ -934,7 +934,7 @@ describe("AgentTurnRuntime controlled path", () => {
       ],
       expiresAt: "2099-01-01T00:00:00.000Z"
     });
-    const authorizeFunctions = vi.fn().mockResolvedValue([]);
+    const authorizeFunctions = vi.fn().mockRejectedValue(new Error("public choices stay local"));
     const resolve = vi.fn().mockResolvedValue({
       disposition: "deny",
       reasonCode: "test_stop"
@@ -959,7 +959,7 @@ describe("AgentTurnRuntime controlled path", () => {
       authorizeFunctions
     });
 
-    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory"]);
+    expect(authorizeFunctions).not.toHaveBeenCalled();
     expect(resolve).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "主日音控是誰",
