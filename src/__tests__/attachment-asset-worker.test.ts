@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { HTTPError } from "@line/bot-sdk";
 
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { runAttachmentAssetWorker } from "../attachments/asset-worker.js";
@@ -8,6 +9,8 @@ import {
   type AssetApiClient,
   type AssetRecord
 } from "../clients/asset-api.js";
+import { ExternalBinaryReadError } from "../clients/external-binary.js";
+import { LineContentReadError } from "../clients/line.js";
 import type { ResourceBinaryPublisher } from "../functions/resource-binary-publisher.js";
 
 const clock = new Date("2026-08-01T08:00:00.000Z");
@@ -143,6 +146,112 @@ describe("attachment asset worker", () => {
     await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBeUndefined();
   });
 
+  it.each(["line_content_empty", "line_content_too_large"] as const)(
+    "makes deterministic LINE source failure %s durable without redownload",
+    async (code) => {
+      const fixture = await setup();
+      vi.mocked(fixture.options.lineContent.getMessageContent).mockRejectedValueOnce(
+        new LineContentReadError(code)
+      );
+
+      await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
+        status: "permanent_failure",
+        failureCode: "download_failed"
+      });
+      await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBe("failed");
+
+      await runAttachmentAssetWorker(fixture.workId, fixture.options);
+      expect(fixture.options.lineContent.getMessageContent).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("releases a LINE content timeout for retry", async () => {
+    const fixture = await setup();
+    vi.mocked(fixture.options.lineContent.getMessageContent).mockRejectedValueOnce(
+      new LineContentReadError("line_content_timeout")
+    );
+
+    await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
+      status: "transient_retry",
+      failureCode: "download_failed"
+    });
+    await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    [404, "permanent_failure"],
+    [429, "transient_retry"],
+    [503, "transient_retry"]
+  ] as const)("classifies LINE content HTTP %s as %s", async (statusCode, status) => {
+    const fixture = await setup();
+    vi.mocked(fixture.options.lineContent.getMessageContent).mockRejectedValueOnce(
+      new HTTPError("LINE content request failed", {
+        statusCode,
+        statusMessage: "failed",
+        originalError: new Error("provider detail")
+      })
+    );
+
+    await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
+      status,
+      failureCode: "download_failed"
+    });
+    await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBe(
+      status === "permanent_failure" ? "failed" : undefined
+    );
+  });
+
+  it.each([
+    ["unsafe URL", () => new ExternalBinaryReadError("external_binary_unsafe_address")],
+    [
+      "HTTP 404",
+      () =>
+        new ExternalBinaryReadError("external_binary_http_error", {
+          statusCode: 404
+        })
+    ]
+  ])("makes deterministic external source failure %s durable", async (_label, errorFactory) => {
+    const fixture = await setup({ source: "external" });
+    vi.mocked(fixture.options.externalBinary!.download).mockRejectedValueOnce(errorFactory());
+
+    await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
+      status: "permanent_failure",
+      failureCode: "download_failed"
+    });
+    await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBe("failed");
+
+    await runAttachmentAssetWorker(fixture.workId, fixture.options);
+    expect(fixture.options.externalBinary!.download).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["timeout", () => new ExternalBinaryReadError("external_binary_timeout")],
+    [
+      "HTTP 429",
+      () =>
+        new ExternalBinaryReadError("external_binary_http_error", {
+          statusCode: 429
+        })
+    ],
+    [
+      "HTTP 503",
+      () =>
+        new ExternalBinaryReadError("external_binary_http_error", {
+          statusCode: 503
+        })
+    ]
+  ])("releases transient external source failure %s for retry", async (_label, errorFactory) => {
+    const fixture = await setup({ source: "external" });
+    vi.mocked(fixture.options.externalBinary!.download).mockRejectedValueOnce(errorFactory());
+
+    await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
+      status: "transient_retry",
+      failureCode: "download_failed"
+    });
+    await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBeUndefined();
+    await expect(fixture.store.claim(fixture.workId)).resolves.toMatchObject({ status: "claimed" });
+  });
+
   it("reports claim contention separately from scan pending", async () => {
     const fixture = await setup();
     await fixture.store.claim(fixture.workId);
@@ -229,6 +338,7 @@ async function setup(
     scanStatus?: AssetRecord["scanStatus"];
     now?: () => Date;
     claimLeaseMs?: number;
+    source?: "line" | "external";
   } = {}
 ) {
   const now = input.now ?? (() => clock);
@@ -244,7 +354,9 @@ async function setup(
   });
   const work = await store.create({
     jobId: job.id,
-    lineMessageId: "line-message-1",
+    ...(input.source === "external"
+      ? { externalUrl: "https://example.org/Sunday.pdf" }
+      : { lineMessageId: "line-message-1" }),
     scope,
     target: {
       sourceKey: "ppt_slides",
@@ -303,6 +415,14 @@ async function setup(
       assets,
       lineContent: {
         getMessageContent: vi.fn().mockResolvedValue({ data: pdf, contentType: "application/pdf" })
+      },
+      externalBinary: {
+        download: vi.fn().mockResolvedValue({
+          data: pdf,
+          finalUrl: "https://example.org/Sunday.pdf",
+          fileName: "Sunday.pdf",
+          contentType: "application/pdf"
+        })
       },
       profiles: [{ name: "helper", channelAccessToken: "token" }],
       publisher,

@@ -1,6 +1,12 @@
 import type { Readable } from "node:stream";
 
-import { Client as LineClient, messagingApi } from "@line/bot-sdk";
+import {
+  Client as LineClient,
+  HTTPError,
+  messagingApi,
+  ReadError,
+  RequestError
+} from "@line/bot-sdk";
 
 import type {
   BotProfileConfig,
@@ -105,6 +111,23 @@ export class LineContentReadError extends Error {
     super(code);
     this.name = "LineContentReadError";
   }
+}
+
+export function lineContentFailureDisposition(
+  error: unknown
+): "permanent" | "transient" | undefined {
+  if (error instanceof LineContentReadError) {
+    return error.code === "line_content_timeout" ? "transient" : "permanent";
+  }
+  if (error instanceof HTTPError) {
+    return error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500
+      ? "transient"
+      : "permanent";
+  }
+  if (error instanceof RequestError || error instanceof ReadError) {
+    return "transient";
+  }
+  return undefined;
 }
 
 export async function readableToUint8Array(

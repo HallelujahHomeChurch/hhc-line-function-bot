@@ -3,7 +3,11 @@ import {
   type AssetApiClient,
   type AssetRecord
 } from "../clients/asset-api.js";
-import type { ExternalBinaryClient } from "../clients/external-binary.js";
+import {
+  isExternalBinaryReadError,
+  type ExternalBinaryClient
+} from "../clients/external-binary.js";
+import { lineContentFailureDisposition } from "../clients/line.js";
 import {
   prepareResourceBinary,
   type PreparedResourceBinary,
@@ -182,10 +186,28 @@ export async function runAttachmentAssetWorker(
     return { status: "completed", signatureHealth: "current" };
   } catch (error) {
     if (publishing) return { status: "contention" };
-    return isPermanentAssetApiError(error)
-      ? permanentFailure(options.workStore, work, "scan_unavailable")
-      : transientRetry(options.workStore, work, "scan_unavailable");
+    if (isPermanentAssetApiError(error)) {
+      return permanentFailure(options.workStore, work, "scan_unavailable");
+    }
+    const sourceDisposition = sourceFailureDisposition(error);
+    if (sourceDisposition === "permanent") {
+      return permanentFailure(options.workStore, work, "download_failed");
+    }
+    return transientRetry(
+      options.workStore,
+      work,
+      sourceDisposition === "transient" ? "download_failed" : "scan_unavailable"
+    );
   }
+}
+
+function sourceFailureDisposition(error: unknown): "permanent" | "transient" | undefined {
+  const lineDisposition = lineContentFailureDisposition(error);
+  if (lineDisposition) return lineDisposition;
+  if (isExternalBinaryReadError(error)) {
+    return error.transient ? "transient" : "permanent";
+  }
+  return undefined;
 }
 
 async function prepareWorkResource(

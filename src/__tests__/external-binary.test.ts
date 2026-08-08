@@ -17,12 +17,15 @@ describe("external binary URL policy", () => {
   });
 
   it("rejects a public hostname when any DNS answer is private", async () => {
-    await expect(
-      validateExternalBinaryUrl("https://example.org/file.pdf", async () => [
-        { address: "93.184.216.34", family: 4 },
-        { address: "10.0.0.1", family: 4 }
-      ])
-    ).rejects.toThrow("external_binary_unsafe_address");
+    const error = await validateExternalBinaryUrl("https://example.org/file.pdf", async () => [
+      { address: "93.184.216.34", family: 4 },
+      { address: "10.0.0.1", family: 4 }
+    ]).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "external_binary_unsafe_address",
+      transient: false
+    });
   });
 
   it("returns a validated public address for HTTPS", async () => {
