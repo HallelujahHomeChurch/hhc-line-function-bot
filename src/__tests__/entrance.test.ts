@@ -4,6 +4,7 @@ import { AccountApiError } from "../account/account-admin-client.js";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import { createControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import { createAgentPlanner, type AgentPlanner } from "../agent/planner.js";
@@ -11,6 +12,7 @@ import type { ControlledCompletionObserver } from "../application/turn/completio
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
+import { createSaveMemoryHandler } from "../functions/agent-memory-functions.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
 import { signLineBody } from "../line-signature.js";
@@ -118,6 +120,21 @@ function defaultAccessStore(): InMemoryAccessStore {
         type: "group",
         principalId: "Cslides",
         createdAt: "2026-07-06T00:00:00.000Z",
+        createdBy: "test"
+      }
+    ]
+  });
+}
+
+function managedHelperAccessStore(): InMemoryAccessStore {
+  return new InMemoryAccessStore({
+    principals: [
+      {
+        id: "principal-helper-user",
+        profileName: "helper",
+        type: "user",
+        principalId: "Uallowed",
+        createdAt: "2026-08-09T00:00:00.000Z",
         createdBy: "test"
       }
     ]
@@ -1269,10 +1286,10 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("可以查詢");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
-    expect(replyText.mock.calls[0]?.[1]).toContain("/registry <code>");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("/registry <code>");
     expect(replyText.mock.calls[0]?.[1]).toContain("/whoami");
-    expect(replyText.mock.calls[0]?.[1]).toContain("/memories");
-    expect(replyText.mock.calls[0]?.[1]).toContain("/forget-memory <id>");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("/memories");
+    expect(replyText.mock.calls[0]?.[1]).not.toContain("/forget-memory <id>");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("owner:");
     expect(replyText.mock.calls[0]?.[1]).not.toContain("freshness:");
     expect(replyText).toHaveBeenCalledWith(
@@ -1316,6 +1333,274 @@ describe("LINE entrance", () => {
     );
     expect(String(replyText.mock.calls[0]?.[1])).not.toContain("可以查詢");
     expect(String(replyText.mock.calls[0]?.[1])).toContain("登入 HHC 帳戶");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("/memories");
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("/forget-memory");
+  });
+
+  it("omits direct-only and unavailable protected commands from group help", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-group-help",
+      source: { type: "group", groupId: "Cmain", userId: "Uallowed" },
+      message: { type: "text", text: "/help" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    const help = String(replyText.mock.calls.at(-1)?.[1]);
+    expect(help).not.toContain("/whoami");
+    expect(help).not.toContain("/memories");
+    expect(help).not.toContain("/forget-memory");
+  });
+
+  it("hides an Account-denied memory command from otherwise authorized help", async () => {
+    const config = testConfig();
+    config.profiles[0]!.enabledFunctions.push("retrieve_memory");
+    config.profiles[0]!.permissionRequiredFunctions = ["retrieve_memory"];
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: false,
+      allowedFunctions: []
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      accountAdminClient: { authorizeFunctions },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-denied-memory-help",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "/help" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(String(replyText.mock.calls.at(-1)?.[1])).not.toContain("/memories");
+  });
+
+  it.each([
+    {
+      label: "denied",
+      authorize: vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: []
+      })
+    },
+    { label: "Account unavailable", authorize: vi.fn().mockRejectedValue(new Error("offline")) }
+  ])("blocks $label /memories before the legacy runtime", async ({ authorize }) => {
+    const config = testConfig();
+    config.profiles[0]!.enabledFunctions.push("retrieve_memory");
+    config.profiles[0]!.permissionRequiredFunctions = ["retrieve_memory"];
+    const handleCommand = vi.fn().mockResolvedValue({ ok: true, replyText: "unsafe memories" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      accountAdminClient: { authorizeFunctions: authorize },
+      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-protected-memories",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "/memories" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("權限");
+  });
+
+  it("blocks /memories when retrieve_memory is not configured without calling Account", async () => {
+    const authorizeFunctions = vi.fn();
+    const handleCommand = vi.fn().mockResolvedValue({ ok: true, replyText: "unsafe memories" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      accountAdminClient: { authorizeFunctions },
+      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-disabled-memories",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "/memories" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("權限");
+  });
+
+  it("runs public /memories locally without an Account lookup", async () => {
+    const config = testConfig();
+    config.profiles[0]!.enabledFunctions.push("retrieve_memory");
+    const authorizeFunctions = vi.fn();
+    const handleCommand = vi.fn().mockResolvedValue({ ok: true, replyText: "stored memories" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      accountAdminClient: { authorizeFunctions },
+      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-public-memories",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "/memories" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(handleCommand).toHaveBeenCalledOnce();
+    expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("stored memories");
+  });
+
+  it.each([
+    {
+      label: "Account admin",
+      authorization: {
+        bound: true,
+        active: true,
+        administrator: true,
+        allowedFunctions: []
+      },
+      expectedCalls: 1,
+      expectedReply: "removed"
+    },
+    {
+      label: "non-admin",
+      authorization: {
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: []
+      },
+      expectedCalls: 0,
+      expectedReply: "權限"
+    },
+    {
+      label: "Account unavailable",
+      authorization: new Error("offline"),
+      expectedCalls: 0,
+      expectedReply: "權限"
+    }
+  ])(
+    "applies save_memory write authority to /forget-memory for an $label",
+    async ({ authorization, expectedCalls, expectedReply }) => {
+      const config = testConfig();
+      config.profiles[0]!.enabledFunctions.push("save_memory");
+      config.profiles[0]!.permissionRequiredFunctions = [];
+      const authorizeFunctions =
+        authorization instanceof Error
+          ? vi.fn().mockRejectedValue(authorization)
+          : vi.fn().mockResolvedValue(authorization);
+      const handleCommand = vi.fn().mockResolvedValue({ ok: true, replyText: "removed" });
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const app = createTestApp(config, {
+        accountAdminClient: { authorizeFunctions },
+        agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "message",
+        replyToken: "reply-forget-memory",
+        source: { type: "user", userId: "Uallowed" },
+        message: { type: "text", text: "/forget-memory memory-1" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(handleCommand).toHaveBeenCalledTimes(expectedCalls);
+      expect(String(replyText.mock.calls.at(-1)?.[1])).toContain(expectedReply);
+    }
+  );
+
+  it("accepts an explicit save_memory Account grant for /forget-memory", async () => {
+    const config = testConfig();
+    config.profiles[0]!.enabledFunctions.push("save_memory");
+    config.profiles[0]!.permissionRequiredFunctions = ["save_memory"];
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: false,
+      allowedFunctions: ["save_memory"]
+    });
+    const handleCommand = vi.fn().mockResolvedValue({ ok: true, replyText: "removed" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      accountAdminClient: { authorizeFunctions },
+      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-granted-forget-memory",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "/forget-memory memory-1" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(handleCommand).toHaveBeenCalledOnce();
+    expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("removed");
   });
 
   it("ignores legacy grants while preserving profile reads and Account-authorized admin writes in help", async () => {
@@ -2449,8 +2734,12 @@ describe("LINE entrance", () => {
     expect(helpText).toContain("- 查服事表：");
     expect(introText).toContain("- 查投影片：");
     expect(introText).toContain("- 查服事表：");
-    for (const command of ["/registry", "/whoami", "/memories", "/forget-memory"]) {
+    for (const command of ["/whoami"]) {
       expect(helpText).toContain(command);
+      expect(introText).not.toContain(command);
+    }
+    for (const command of ["/registry", "/memories", "/forget-memory"]) {
+      expect(helpText).not.toContain(command);
       expect(introText).not.toContain(command);
     }
     expect(replyText.mock.calls[1]?.[2]?.quickReplies).toEqual(
@@ -5706,7 +5995,7 @@ describe("LINE entrance", () => {
       replyText: "已選擇第 1 個投影片"
     });
     const postbackHandlers: PostbackHandlerRegistry = {
-      select_ppt: handleSelect
+      select_ppt: { capability: "find_ppt_slides", handle: handleSelect }
     };
     const app = createTestApp(testConfig(), {
       router: { route: vi.fn() },
@@ -5741,6 +6030,510 @@ describe("LINE entrance", () => {
     expect(replyText).toHaveBeenCalledWith("reply-token", "已選擇第 1 個投影片", undefined);
   });
 
+  it("authorizes a permission-required selection once before invoking its declared capability", async () => {
+    const config = testConfig();
+    config.profiles[0]!.permissionRequiredFunctions = ["find_ppt_slides"];
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const handle = vi.fn().mockResolvedValue({ ok: true, replyText: "authorized selection" });
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: false,
+      allowedFunctions: ["find_ppt_slides"]
+    });
+    const postbackHandlers: PostbackHandlerRegistry = {
+      select_ppt: { capability: "find_ppt_slides", handle }
+    };
+    const app = createTestApp(config, {
+      router: { route: vi.fn() },
+      accountAdminClient: { authorizeFunctions },
+      postbackHandlers,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "postback",
+      replyToken: "reply-selection-allowed",
+      source: { type: "user", userId: "Uallowed" },
+      postback: { data: "action=select_ppt&requestId=req-allowed&index=0" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(handle).toHaveBeenCalledOnce();
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-selection-allowed",
+      "authorized selection",
+      undefined
+    );
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith({
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: ["find_ppt_slides"]
+    });
+  });
+
+  it.each([
+    {
+      label: "revoked",
+      authorize: vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: []
+      })
+    },
+    { label: "Account unavailable", authorize: vi.fn().mockRejectedValue(new Error("offline")) }
+  ])(
+    "fails a $label permission-required selection closed before its handler",
+    async ({ authorize, label }) => {
+      const config = testConfig();
+      config.profiles[0]!.permissionRequiredFunctions = ["find_ppt_slides"];
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const handle = vi.fn().mockResolvedValue({ ok: true, replyText: "unsafe selection" });
+      const postbackHandlers: PostbackHandlerRegistry = {
+        select_ppt: { capability: "find_ppt_slides", handle }
+      };
+      const app = createTestApp(config, {
+        router: { route: vi.fn() },
+        accountAdminClient: { authorizeFunctions: authorize },
+        postbackHandlers,
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "postback",
+        replyToken: `reply-selection-${label}`,
+        source: { type: "user", userId: "Uallowed" },
+        postback: { data: "action=select_ppt&requestId=req-denied&index=0" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(handle).not.toHaveBeenCalled();
+      expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
+      expect(authorize).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([
+    {
+      label: "allowed",
+      authorization: {
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: ["query_schedule"]
+      },
+      expectedReply: "stored schedule result"
+    },
+    {
+      label: "revoked",
+      authorization: {
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: []
+      },
+      expectedReply: "權限"
+    }
+  ])(
+    "reauthorizes a $label completed slow job once before delivery",
+    async ({ authorization, expectedReply }) => {
+      const config = testConfig();
+      config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+      const jobStore = new InMemoryAgentJobStore();
+      const job = await jobStore.createPending({
+        scope: {
+          profileName: "main",
+          sourceKey: "user:Uallowed",
+          requesterUserId: "Uallowed"
+        },
+        capability: "query_schedule",
+        label: "schedule",
+        ttlMs: 60_000
+      });
+      await jobStore.complete(job.id, { ok: true, replyText: "stored schedule result" });
+      const authorizeFunctions = vi.fn().mockResolvedValue(authorization);
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const app = createTestApp(config, {
+        router: { route: vi.fn() },
+        agentJobStore: jobStore,
+        accountAdminClient: { authorizeFunctions },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "postback",
+        replyToken: "reply-job",
+        source: { type: "user", userId: "Uallowed" },
+        postback: { data: `action=agent_job_result&jobId=${job.id}` }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(replyText.mock.calls.at(-1)?.[1]).toContain(expectedReply);
+      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledWith({
+        lineUserId: "Uallowed",
+        profileName: "main",
+        functionNames: ["query_schedule"]
+      });
+    }
+  );
+
+  it("fails a completed slow job closed when Account authorization is unavailable", async () => {
+    const config = testConfig();
+    config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+    const jobStore = new InMemoryAgentJobStore();
+    const job = await jobStore.createPending({
+      scope: {
+        profileName: "main",
+        sourceKey: "user:Uallowed",
+        requesterUserId: "Uallowed"
+      },
+      capability: "query_schedule",
+      label: "schedule",
+      ttlMs: 60_000
+    });
+    await jobStore.complete(job.id, { ok: true, replyText: "unsafe stored result" });
+    const authorizeFunctions = vi.fn().mockRejectedValue(new Error("offline"));
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      router: { route: vi.fn() },
+      agentJobStore: jobStore,
+      accountAdminClient: { authorizeFunctions },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "postback",
+      replyToken: "reply-job-offline",
+      source: { type: "user", userId: "Uallowed" },
+      postback: { data: `action=agent_job_result&jobId=${job.id}` }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
+    expect(replyText.mock.calls.at(-1)?.[1]).not.toContain("unsafe stored result");
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+  });
+
+  it("fails a legacy completed slow job without an owning capability closed", async () => {
+    const jobStore = new InMemoryAgentJobStore();
+    const job = await jobStore.createPending({
+      scope: {
+        profileName: "main",
+        sourceKey: "user:Uallowed",
+        requesterUserId: "Uallowed"
+      },
+      label: "legacy ownerless",
+      ttlMs: 60_000
+    });
+    await jobStore.complete(job.id, { ok: true, replyText: "unsafe legacy result" });
+    const authorizeFunctions = vi.fn();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      agentJobStore: jobStore,
+      accountAdminClient: { authorizeFunctions },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "postback",
+      replyToken: "reply-ownerless-job",
+      source: { type: "user", userId: "Uallowed" },
+      postback: { data: `action=agent_job_result&jobId=${job.id}` }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("權限");
+    expect(String(replyText.mock.calls.at(-1)?.[1])).not.toContain("unsafe legacy result");
+  });
+
+  it.each([
+    {
+      label: "Account admin",
+      authorize: vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: true,
+        allowedFunctions: []
+      }),
+      expectedReply: "stored write result"
+    },
+    {
+      label: "non-admin",
+      authorize: vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: []
+      }),
+      expectedReply: "權限"
+    },
+    {
+      label: "Account unavailable",
+      authorize: vi.fn().mockRejectedValue(new Error("offline")),
+      expectedReply: "權限"
+    }
+  ])(
+    "applies unlisted-write admin authority to a $label slow job",
+    async ({ authorize, expectedReply }) => {
+      const config = testConfig();
+      config.profiles[0]!.enabledFunctions = ["query_schedule", "save_resource"];
+      config.profiles[0]!.permissionRequiredFunctions = [];
+      const jobStore = new InMemoryAgentJobStore();
+      const job = await jobStore.createPending({
+        scope: {
+          profileName: "main",
+          sourceKey: "user:Uallowed",
+          requesterUserId: "Uallowed"
+        },
+        capability: "save_resource",
+        label: "save resource",
+        ttlMs: 60_000
+      });
+      await jobStore.complete(job.id, {
+        ok: true,
+        replyText: "stored write result",
+        executedAction: "save_resource"
+      });
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const app = createTestApp(config, {
+        agentJobStore: jobStore,
+        accountAdminClient: { authorizeFunctions: authorize },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "postback",
+        replyToken: "reply-write-job",
+        source: { type: "user", userId: "Uallowed" },
+        postback: { data: `action=agent_job_result&jobId=${job.id}` }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(replyText.mock.calls.at(-1)?.[1]).toContain(expectedReply);
+      expect(authorize).toHaveBeenCalledOnce();
+      expect(authorize).toHaveBeenCalledWith({
+        lineUserId: "Uallowed",
+        profileName: "main",
+        functionNames: []
+      });
+    }
+  );
+
+  it("does not let Account administrator status bypass an explicit function permission", async () => {
+    const config = testConfig();
+    config.profiles[0]!.permissionRequiredFunctions = ["find_ppt_slides"];
+    const handle = vi.fn().mockResolvedValue({ ok: true, replyText: "unsafe selection" });
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: true,
+      allowedFunctions: []
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      accountAdminClient: { authorizeFunctions },
+      postbackHandlers: {
+        select_ppt: { capability: "find_ppt_slides", handle }
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "postback",
+      replyToken: "reply-explicit-admin-denied",
+      source: { type: "user", userId: "Uallowed" },
+      postback: { data: "action=select_ppt&requestId=req-explicit-admin&index=0" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(handle).not.toHaveBeenCalled();
+    expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+  });
+
+  it("allows a managed Account admin to preview and confirm an unlisted helper write with one lookup per turn", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "helper-secret",
+      enabledFunctions: ["query_schedule", "save_memory"],
+      permissionRequiredFunctions: []
+    };
+    const sessionStore = new InMemorySessionStore();
+    const memoryStore = new InMemoryAgentMemoryStore();
+    const saveMemory = createSaveMemoryHandler({
+      memoryStore,
+      sessionStore,
+      requestIdFactory: () => "pending-helper-save"
+    });
+    const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+      status: "proposed",
+      version: 1,
+      disposition: "execute",
+      capability: "save_memory",
+      arguments: { content: "集合時間是下午兩點半" },
+      confidence: 0.98,
+      provider: "deepseek",
+      attempts: []
+    });
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: true,
+      allowedFunctions: []
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      accessStore: managedHelperAccessStore(),
+      sessionStore,
+      functionRegistry: { save_memory: saveMemory },
+      textMessageHandlers: {
+        pending_function_answer: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_memory: saveMemory }
+        })
+      },
+      controlledAgentRouter: createControlledAgentRouter({ planner: { propose } }),
+      accountAdminClient: { authorizeFunctions },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const send = async (replyToken: string, text: string) => {
+      const body = lineBody({
+        type: "message",
+        replyToken,
+        source: { type: "user", userId: "Uallowed" },
+        message: { type: "text", text }
+      });
+      return app.inject({
+        method: "POST",
+        url: "/api/line/webhook/helper",
+        headers: signedHeaders(body, "helper-secret"),
+        payload: body
+      });
+    };
+
+    expect((await send("preview", "幫我記住集合時間是下午兩點半")).statusCode).toBe(200);
+    expect(replyText.mock.calls.at(-1)?.[1]).toContain("請確認");
+    expect(authorizeFunctions).toHaveBeenCalledTimes(1);
+
+    expect((await send("confirm", "保存")).statusCode).toBe(200);
+    expect(replyText.mock.calls.at(-1)?.[1]).toContain("已記住");
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
+    expect(authorizeFunctions).toHaveBeenNthCalledWith(1, {
+      lineUserId: "Uallowed",
+      profileName: "helper",
+      functionNames: []
+    });
+    expect(authorizeFunctions).toHaveBeenNthCalledWith(2, {
+      lineUserId: "Uallowed",
+      profileName: "helper",
+      functionNames: []
+    });
+  });
+
+  it.each([
+    {
+      label: "non-admin",
+      authorize: vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: []
+      })
+    },
+    { label: "Account unavailable", authorize: vi.fn().mockRejectedValue(new Error("offline")) }
+  ])(
+    "denies an unlisted helper write for a managed $label before the planner",
+    async ({ authorize }) => {
+      const config = testConfig();
+      config.profiles[0] = {
+        ...config.profiles[0]!,
+        name: "helper",
+        webhookPath: "/api/line/webhook/helper",
+        channelSecret: "helper-secret",
+        enabledFunctions: ["query_schedule", "save_memory"],
+        permissionRequiredFunctions: []
+      };
+      const propose = vi.fn<AgentPlanner["propose"]>();
+      const execute = vi.fn().mockResolvedValue({ ok: true, replyText: "unsafe" });
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const app = createTestApp(config, {
+        accessStore: managedHelperAccessStore(),
+        functionRegistry: { save_memory: execute },
+        controlledAgentRouter: createControlledAgentRouter({ planner: { propose } }),
+        accountAdminClient: { authorizeFunctions: authorize },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "message",
+        replyToken: "reply-denied-helper-write",
+        source: { type: "user", userId: "Uallowed" },
+        message: { type: "text", text: "幫我記住集合時間是下午兩點半" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/helper",
+        headers: signedHeaders(body, "helper-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(authorize).toHaveBeenCalledOnce();
+      expect(propose).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
+    }
+  );
+
   it("invokes the shared completion boundary exactly once for an executed postback", async () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const complete = vi.fn<ControlledCompletionObserver["complete"]>(async ({ result }) => ({
@@ -5751,12 +6544,15 @@ describe("LINE entrance", () => {
       router: { route: vi.fn() },
       completionObserver: { complete },
       postbackHandlers: {
-        select_schedule: vi.fn().mockResolvedValue({
-          ok: true,
-          replyText: "原始未找到",
-          executedAction: "query_schedule",
-          agentResult: { status: "not_found", replyText: "原始未找到" }
-        })
+        select_schedule: {
+          capability: "query_schedule",
+          handle: vi.fn().mockResolvedValue({
+            ok: true,
+            replyText: "原始未找到",
+            executedAction: "query_schedule",
+            agentResult: { status: "not_found", replyText: "原始未找到" }
+          })
+        }
       },
       createLineReplyClient: () => ({ replyText })
     });
@@ -5853,7 +6649,9 @@ describe("LINE entrance", () => {
       });
     const app = createTestApp(config, {
       router: { route: vi.fn() },
-      postbackHandlers: { select_ppt: handleSelect },
+      postbackHandlers: {
+        select_ppt: { capability: "find_ppt_slides", handle: handleSelect }
+      },
       conversationWindowStore,
       createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
     });

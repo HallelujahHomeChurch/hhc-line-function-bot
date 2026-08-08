@@ -58,6 +58,7 @@ import type {
 } from "../contracts/routing.js";
 import type { AgentRuntime } from "../../agent/agent-runtime.js";
 import { createCapabilityResolution } from "../../agent/capability-resolution.js";
+import { buildCapabilityCandidates } from "../../agent/capability-candidates.js";
 import { projectAgentReply } from "../../agent/response-projector.js";
 import {
   type AgentTraceStore,
@@ -108,6 +109,7 @@ export interface AgentTurnRuntimeOptions {
 
 export interface AgentTextTurnInput {
   profile: BotProfileConfig;
+  configuredFunctions?: readonly FunctionName[];
   event: LineEvent;
   requestId: string;
   requesterDisplayName?: string;
@@ -115,6 +117,7 @@ export interface AgentTextTurnInput {
   engagement?: string;
   allowRouting?: boolean;
   authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  accountAdministrator?(): boolean;
 }
 
 export interface AgentTurnRuntime {
@@ -162,6 +165,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
   return {
     async handleTextTurn(input: AgentTextTurnInput): Promise<FunctionExecutionResult | undefined> {
       input = await applyContinuationFunctionAuthorization(options, input);
+      input = withMemoizedAccountAdministrator(input);
       const steps: AgentTurnTraceStep[] = [];
       const text = input.event.message?.text ?? "";
       const context: FunctionHandlerContext = {
@@ -197,9 +201,12 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           options.textMessageHandlers,
           input.requesterDisplayName,
           input.requesterIsAdmin,
-          input.authorizeFunctions
+          input.authorizeFunctions,
+          input.configuredFunctions
         );
         if (textMessageHandler) {
+          input = withMemoizedAccountAdministrator(input);
+          context.requesterIsAdmin = input.requesterIsAdmin;
           const handlerProfile = textMessageHandler.profile;
           const handlerContext: FunctionHandlerContext = {
             ...context,
@@ -364,6 +371,24 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             options.traceStore ? steps : undefined,
             routingFunctions
           );
+          input = withMemoizedAccountAdministrator(input);
+          context.requesterIsAdmin = input.requesterIsAdmin;
+          if (
+            (plan.disposition === "execute" || plan.disposition === "collect") &&
+            !input.profile.enabledFunctions.includes(plan.capability)
+          ) {
+            const allowed = (await input.authorizeFunctions?.([plan.capability])) ?? [];
+            if (allowed.includes(plan.capability)) {
+              input = {
+                ...input,
+                profile: {
+                  ...input.profile,
+                  enabledFunctions: [...input.profile.enabledFunctions, plan.capability]
+                }
+              };
+              context.profile = input.profile;
+            }
+          }
         } catch {
           plan = { disposition: "clarify", reasonCode: "planner_unavailable" };
         }
@@ -706,6 +731,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             durationMs,
             clarificationCount: 0
           });
+          const ownedResult = { ...result, executedAction: route.action };
           steps.push({
             phase: "function",
             outcome: "executed",
@@ -737,7 +763,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             ok: result.ok,
             durationMs
           });
-          return finish(input, steps, result);
+          return finish(input, steps, ownedResult);
         } catch (error) {
           const durationMs = elapsedMs(functionStartedAt);
           await recordRuntimeError({
@@ -814,31 +840,69 @@ async function applyContinuationFunctionAuthorization(
   options: AgentTurnRuntimeOptions,
   input: AgentTextTurnInput
 ): Promise<AgentTextTurnInput> {
-  if (!input.authorizeFunctions || input.profile.permissionRequiredFunctions.length === 0) {
+  if (!input.authorizeFunctions) {
     return input;
   }
   const restricted = new Set(input.profile.permissionRequiredFunctions);
+  const effective = new Set(input.profile.enabledFunctions);
+  const configured = new Set(
+    input.configuredFunctions ?? [
+      ...input.profile.enabledFunctions,
+      ...input.profile.permissionRequiredFunctions
+    ]
+  );
   const lookup = {
     profileName: input.profile.name,
     source: input.event.source,
     requesterUserId: input.event.source.userId
   };
-  const [pendingFunction, pendingAttachment, pendingResolution, activeTask] = await Promise.all([
+  const [
+    pendingFunction,
+    pendingAttachment,
+    pendingResolution,
+    pendingCapabilityResolution,
+    activeTask
+  ] = await Promise.all([
     options.sessionStore?.findPendingFunction(lookup),
     options.sessionStore?.findPendingAttachment(lookup),
     options.sessionStore?.findPendingResolution(lookup),
+    options.sessionStore?.findPendingCapabilityResolution(lookup),
     readActiveTask(options, input, false)
   ]);
+  const source = input.event.source.type;
+  const hasContinuation = Boolean(
+    pendingFunction ||
+    pendingAttachment ||
+    pendingResolution ||
+    pendingCapabilityResolution ||
+    activeTask
+  );
+  const explicitSwitchCandidates =
+    hasContinuation && (source === "user" || source === "group")
+      ? buildCapabilityCandidates({
+          text: input.event.message?.text ?? "",
+          enabledFunctions: [...configured],
+          source,
+          knowledgeSources: [],
+          maxCandidates: 5
+        }).map(({ capability }) => capability)
+      : [];
   const requested = Array.from(
     new Set(
       [
         pendingFunction?.action,
         pendingAttachment?.action,
         pendingResolution?.capability,
-        activeTask?.currentCapability
+        activeTask?.currentCapability,
+        ...((pendingCapabilityResolution?.candidates ?? []).map(
+          ({ capability }) => capability
+        ) as FunctionName[]),
+        ...explicitSwitchCandidates
       ].filter(
         (functionName): functionName is FunctionName =>
-          functionName !== undefined && restricted.has(functionName)
+          functionName !== undefined &&
+          configured.has(functionName) &&
+          (restricted.has(functionName) || !effective.has(functionName))
       )
     )
   );
@@ -854,7 +918,7 @@ async function applyContinuationFunctionAuthorization(
   const publicFunctions = input.profile.enabledFunctions.filter(
     (functionName) => !restricted.has(functionName)
   );
-  return {
+  return withMemoizedAccountAdministrator({
     ...input,
     profile: {
       ...input.profile,
@@ -863,7 +927,13 @@ async function applyContinuationFunctionAuthorization(
         ...requested.filter((functionName) => allowedSet.has(functionName))
       ]
     }
-  };
+  });
+}
+
+function withMemoizedAccountAdministrator(input: AgentTextTurnInput): AgentTextTurnInput {
+  return input.accountAdministrator?.() && !input.requesterIsAdmin
+    ? { ...input, requesterIsAdmin: true }
+    : input;
 }
 
 async function recordFunctionWriteAudit(

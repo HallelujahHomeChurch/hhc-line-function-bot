@@ -121,7 +121,12 @@ export type PostbackHandler = (
   context: PostbackContext
 ) => Promise<FunctionExecutionResult>;
 
-export type PostbackHandlerRegistry = Record<string, PostbackHandler>;
+export interface PostbackHandlerRegistration {
+  capability: FunctionName;
+  handle: PostbackHandler;
+}
+
+export type PostbackHandlerRegistry = Record<string, PostbackHandlerRegistration>;
 
 export interface TextMessageRequest {
   text: string;

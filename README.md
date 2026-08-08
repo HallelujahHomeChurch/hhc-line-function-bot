@@ -40,7 +40,7 @@ LINE webhook service for routing selected church bot requests to controlled func
   - `save_schedule`: previews and manages the helper profile's shared canonical text-only service schedules with one-year retention.
   - `save_resource`: validates, scans, confirms, publishes, and indexes authorized LINE attachments.
 
-The helper production profile enables the controlled church lookup functions, structured schedule management, `retrieve_memory`, and write-gated `save_memory`/`save_resource`. Registered sources receive profile-global reads plus the Account-authorized intersection of `permissionRequiredFunctions`; local grant and role-capability rows no longer expand effective functions.
+The helper production profile enables the controlled church lookup functions, structured schedule management, `retrieve_memory`, and write-gated `save_memory`/`save_resource`. Registered sources receive profile-global reads. A configured write outside that public read projection requires the same Account response to report `administrator: true`; a function explicitly listed in `permissionRequiredFunctions` instead requires its name in Account `allowedFunctions`. Local grant and role-capability rows no longer expand effective functions.
 
 Disabled, unknown, unclear, or explicitly denied actions are denied. There is no Azure OpenAI chat fallback in this version.
 
@@ -170,12 +170,12 @@ Function toggles are profile-scoped:
 
 - `enabledFunctions` means profile-global functions for that bot profile only.
 - Ordinary users receive profile-global read functions that do not require Account permission.
-- `permissionRequiredFunctions` is the Account-authorized subset of `enabledFunctions`. Only the bounded candidate or current requester-scoped continuation capability is sent to Account API, and denied/unavailable permissions fail closed before planner or handler execution.
+- `permissionRequiredFunctions` is the explicitly Account-granted subset of `enabledFunctions`; Account must return its names in `allowedFunctions` even for administrators. A configured write omitted from the public effective projection is available only when the same Account response reports `administrator: true`. Only bounded candidates or current requester-scoped continuation capabilities are sent to Account API, and denied/unavailable permissions fail closed before planner or handler execution.
 - Access principals and group registration still authorize the LINE source. Historical user/group grant and role-capability tables remain for rollback compatibility but do not add functions.
 - The retired `/function-grant`, `/function-user-grant`, revoke/list variants, and matching natural-language actions are hidden or rejected. Function permissions are managed by HHC Account.
 - Admin actions are not `enabledFunctions` and cannot be granted to groups. They are gated separately by admin identity, source policy, and audit rules.
 
-The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
+The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; its command section is source-, registration-, and capability-aware, so group help omits `/whoami` and protected memory commands are hidden unless currently usable. Onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
 
 `main` sets `allowedProviders: []`, which is the sole provider-free authority. Its planner returns a local `providers_disabled` result before any provider lookup, while deterministic validation can still execute one explicit `download_weekly_paper` read candidate. Weekly download uses Dapr to call `hhc-web-api`, accepts only the canonical root-relative asset path or its exact `https://www.alive.org.tw` absolute form, and places the validated URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
 
@@ -189,7 +189,7 @@ Provider access is profile-scoped. Every LLM-enabled profile must list `deepseek
 
 Provider-enabled profiles declare lane policy with `providerPolicy`. Their lanes use `primary: "deepseek"`, and semantic fallbacks are rejected during configuration validation. Provider-free main uses an empty policy.
 
-The helper profile enables the controlled agent with at most three candidates and a minimum planner confidence of `0.65`. Candidate generation is deterministic and considers the public effective set plus the configured `permissionRequiredFunctions` ceiling, each with a declarative `agentCapability` contract. Restricted candidates are removed unless Account authorizes them before planner input. Each contract declares semantic scope, required slots, allowed operations, safe evidence providers, output fields, ambiguity behavior, and successful write-to-read handoffs. Evidence can come from explicit current-message intent, declared argument patterns, a live requester-scoped task frame, promoted dynamic-knowledge metadata, or a bounded read-only retrieval probe. No provider may invent a capability or expand the effective function set.
+The helper profile enables the controlled agent with at most three candidates and a minimum planner confidence of `0.65`. Candidate generation is deterministic and keeps the full configured profile ceiling separate from the public effective projection, with a declarative `agentCapability` contract for each function. Restricted candidates are removed unless Account authorizes them before planner input. Each contract declares semantic scope, required slots, allowed operations, safe evidence providers, output fields, ambiguity behavior, and successful write-to-read handoffs. Evidence can come from explicit current-message intent, declared argument patterns, a live requester-scoped task frame, promoted dynamic-knowledge metadata, or a bounded read-only retrieval probe. No provider may invent a capability or expand the effective function set.
 
 Write capabilities use a narrower path: they enter the candidate set only from explicit, unnegated current-message intent after Account permission is resolved. Natural shorthand such as `幫我記服事表` and `記服事表` is write intent; passive recall such as `你記得服事表嗎` is not. Domain writes such as `save_schedule` suppress both read candidates and the generic `save_memory` fallback when both match. The validator grounds the payload in the current message, and the handler still requires requester-scoped preview and confirmation. Active tasks, slot collection, previews, and confirmations recheck restricted permission before continuation.
 
@@ -269,9 +269,9 @@ The command selects random loopback ports, creates a unique Compose project, sup
 
 When `generalAgent.enabled=true`, group conversations get a short requester-scoped follow-up window. The default is 60 seconds. If one user has just addressed the bot, that same user can send the next related message without repeating the wake word. Each handled reply records the latest turn and refreshes the window. Other group members do not inherit that window.
 
-When `longRunningJobs.enabled=true`, slow text turns race against `inlineReplyTimeoutMs`. If the turn is still running, the bot replies with a Quick Reply postback to check the result later. The stored result is scoped by profile, LINE source, and requester user id, and should use Redis in production.
+When `longRunningJobs.enabled=true`, slow text turns race against `inlineReplyTimeoutMs`. If the turn is still running, the bot replies with a Quick Reply postback to check the result later. The stored result is scoped by profile, LINE source, requester user id, and its owning capability. Result delivery reauthorizes that capability and fails closed if ownership is missing, revoked, or unavailable. Production should use Redis.
 
-Multi-result PPT and sheet music searches store short-lived in-memory sessions and reply with LINE postback Quick Replies. Users can also reply with a plain number such as `1` to select from the latest active candidate list for the same profile, LINE source, and requester. Numeric replies without an active selection session are ignored instead of being routed or answered.
+Multi-result PPT and sheet music searches store short-lived in-memory sessions and reply with LINE postback Quick Replies. Every registered postback declares its owning capability and is reauthorized before its handler runs. Users can also reply with a plain number such as `1` to select from the latest active candidate list for the same profile, LINE source, and requester. Numeric replies without an active selection session are ignored instead of being routed or answered.
 
 If any enabled function is missing a required slot, the bot stores a short-lived pending function session and asks for one value at a time. The same requester can answer without repeating the function name; cancellation clears the task, while an explicit new-function request releases it and starts a new plan. Multi-slot functions continue collecting until their declarative contract is complete, then call the registered handler. Group sessions remain requester-scoped.
 
@@ -342,7 +342,7 @@ Useful memory commands:
 /memory-status
 ```
 
-`/memories` and `/forget-memory <id>` work in the current LINE scope. `/memory-status` is admin-only.
+`/memories` requires effective `retrieve_memory`; `/forget-memory <id>` requires effective `save_memory` write authority in the current LINE scope. Both authorize before the memory runtime is entered. `/memory-status` is admin-only.
 `/memories` lists both text memories and resource memories. `/forget-memory <id>` can remove either kind.
 
 New explicit file lookups always run retrieval. Prior resources can be replayed only through a validated explicit continuation such as `剛剛那份`; legacy automatic aliases no longer short-circuit handlers.

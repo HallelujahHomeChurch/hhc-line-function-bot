@@ -111,6 +111,40 @@ describe("ControlledAgentRouter", () => {
     expect(propose).toHaveBeenCalledOnce();
   });
 
+  it("discovers an unlisted configured write outside the public read projection and authorizes it before planning", async () => {
+    const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+      status: "proposed",
+      version: 1,
+      disposition: "execute",
+      capability: "save_memory",
+      arguments: { content: "集合時間是下午兩點半" },
+      confidence: 0.96,
+      provider: "deepseek",
+      attempts: []
+    });
+    const authorizeCandidates = vi.fn().mockResolvedValue(["save_memory"]);
+
+    await expect(
+      createRouter({ propose }).resolve({
+        profileName: "helper",
+        text: "幫我記住集合時間是下午兩點半",
+        enabledFunctions: ["query_schedule"],
+        configuredFunctions: ["query_schedule", "save_memory"],
+        permissionRequiredFunctions: [],
+        authorizeCandidates,
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toMatchObject({
+      disposition: "execute",
+      capability: "save_memory",
+      arguments: { content: "集合時間是下午兩點半" }
+    });
+    expect(authorizeCandidates).toHaveBeenCalledWith(["save_memory"]);
+    expect(propose).toHaveBeenCalledOnce();
+  });
+
   it("emits bounded candidate, planner, and validator diagnostics", async () => {
     const diagnostics: unknown[] = [];
     const planner: AgentPlanner = {

@@ -184,11 +184,17 @@ function discoveryCase(slug: string, kind: DiscoveryKind): KernelAcceptanceCase 
       accessStore: fixture.store,
       requesterIsAdmin: kind === "admin"
     });
+    const discoveryProfile = profile(PROFILE_FUNCTIONS);
     const projection = projectEffectiveCapabilities({ context: access });
-    const help = renderCapabilityHelp(projection, "help");
-    const introduction = renderCapabilityHelp(projection, "introduction");
+    const help = renderCapabilityHelp(projection, "help", discoveryProfile, undefined, {
+      sourceType: fixture.event.source.type === "user" ? "user" : "group",
+      authorized: access.authorized
+    });
+    const introduction = renderCapabilityHelp(projection, "introduction", discoveryProfile);
     const expected = expectedDiscovery[kind];
     const publicCommands = ["/registry", "/whoami", "/memories", "/forget-memory"];
+    const expectedCommands =
+      kind === "group" ? [] : kind === "admin" ? ["/whoami", "/forget-memory"] : ["/whoami"];
     const passed =
       access.authorized &&
       sameValues(access.profile.enabledFunctions, expected.effective) &&
@@ -202,9 +208,11 @@ function discoveryCase(slug: string, kind: DiscoveryKind): KernelAcceptanceCase 
       ) &&
       expected.displayed.every((label) => help.replyText.includes(`- ${label}：`)) &&
       expected.omitted.every((label) => !help.replyText.includes(`- ${label}：`)) &&
-      publicCommands.every(
-        (command) => help.replyText.includes(command) && !introduction.replyText.includes(command)
-      ) &&
+      expectedCommands.every((command) => help.replyText.includes(command)) &&
+      publicCommands
+        .filter((command) => !expectedCommands.includes(command))
+        .every((command) => !help.replyText.includes(command)) &&
+      publicCommands.every((command) => !introduction.replyText.includes(command)) &&
       (help.quickReplies?.length ?? 0) <= 3 &&
       sameQuickReplies(help.quickReplies, introduction.quickReplies) &&
       expected.writes.length > 0 === help.replyText.includes("可以保存或更新");

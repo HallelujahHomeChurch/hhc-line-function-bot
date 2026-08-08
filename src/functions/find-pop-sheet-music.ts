@@ -1051,7 +1051,12 @@ async function enqueueExternalSheetMusicImport(input: {
   );
   let jobId: string | undefined;
   try {
-    const job = await agentJobStore.createPending({ scope, label: "匯入歌譜", ttlMs });
+    const job = await agentJobStore.createPending({
+      scope,
+      capability: "save_resource",
+      label: "匯入歌譜",
+      ttlMs
+    });
     jobId = job.id;
     const work = await scanWorkStore.create({
       jobId,

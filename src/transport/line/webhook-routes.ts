@@ -9,7 +9,7 @@ import {
 import { evaluateActionPolicy } from "../../actions/policy.js";
 import type { ConfirmationStore } from "../../actions/confirmation-store.js";
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
-import type { AgentRuntime } from "../../agent/agent-runtime.js";
+import { memoryCommandFunctionName, type AgentRuntime } from "../../agent/agent-runtime.js";
 import type { ControlledAgentRouter } from "../../agent/controlled-agent-router.js";
 import { applyActiveTaskTransition } from "../../agent/active-task-transition.js";
 import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
@@ -61,7 +61,6 @@ import type { SessionStore } from "../../state/session-store.js";
 import type {
   AppConfig,
   AppDiagnostics,
-  AgentResourceType,
   AdminHandlerRegistry,
   BotProfileConfig,
   FunctionExecutionResult,
@@ -782,35 +781,37 @@ async function handleWebhook(
         continue;
       }
       const startedAt = Date.now();
-      const { result, completionEligible } = await handlePostbackEvent(
+      const {
+        result,
+        completionEligible,
+        capability,
+        profile: authorizedPostbackProfile
+      } = await handlePostbackEvent(
         event,
         effectiveProfile,
         postbackHandlers,
         requestId,
         requesterDisplayName,
-        agentJobStore
+        agentJobStore,
+        profile.enabledFunctions,
+        turnAccountAuthorization.allowedFunctions
       );
-      const postbackFunctionName = completionEligible
-        ? (result.executedAction ??
-          functionNameForAgentResource(
-            result.agentResource?.resourceType,
-            effectiveProfile.enabledFunctions
-          ))
-        : undefined;
+      const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
+      const postbackFunctionName = completionEligible ? capability : undefined;
       if (postbackFunctionName) {
         await applyActiveTaskTransition({
           store: conversationWindowStore,
-          scope: activeTaskScopeForEvent(conversationWindowStore, effectiveProfile, event),
+          scope: activeTaskScopeForEvent(conversationWindowStore, postbackProfile, event),
           capability: postbackFunctionName,
-          enabledFunctions: effectiveProfile.enabledFunctions,
+          enabledFunctions: postbackProfile.enabledFunctions,
           result,
           now: new Date(),
-          ttlMs: Math.max(1, effectiveProfile.generalAgent?.conversationWindowSeconds ?? 60) * 1000
+          ttlMs: Math.max(1, postbackProfile.generalAgent?.conversationWindowSeconds ?? 60) * 1000
         });
       }
       if (postbackFunctionName) {
         await agentRuntime?.afterFunctionResult({
-          context: { profile: effectiveProfile, event, requestId, requesterDisplayName },
+          context: { profile: postbackProfile, event, requestId, requesterDisplayName },
           action: postbackFunctionName,
           arguments: {},
           result
@@ -820,7 +821,7 @@ async function handleWebhook(
       const completedResult = postbackFunctionName
         ? await completionObserver.complete({
             context: {
-              profile: effectiveProfile,
+              profile: postbackProfile,
               event,
               requestId,
               requesterDisplayName,
@@ -888,7 +889,13 @@ async function handleWebhook(
         !profileUsesProviders(effectiveProfile) &&
         !(parsedAdminCommand?.command === "help" && parsedAdminCommand.args.length === 0)
       ) {
-        const localHelp = renderCapabilityHelp(capabilityProjection, "help", effectiveProfile);
+        const localHelp = renderCapabilityHelp(
+          capabilityProjection,
+          "help",
+          effectiveProfile,
+          undefined,
+          { sourceType: effectiveAccess.sourceType, authorized: effectiveAccess.authorized }
+        );
         await line.replyText(
           event.replyToken,
           localHelp.replyText,
@@ -911,15 +918,55 @@ async function handleWebhook(
         );
         continue;
       }
+      const memoryCommandFunction = memoryCommandFunctionName(event.message.text);
+      let agentCommandProfile = effectiveProfile;
+      let agentCommandIsAdmin = requesterIsAdmin;
+      if (memoryCommandFunction) {
+        const definition = getFunctionDefinition(memoryCommandFunction);
+        const sourceType = event.source.type;
+        if (
+          !profile.enabledFunctions.includes(memoryCommandFunction) ||
+          (sourceType !== "user" && sourceType !== "group") ||
+          !definition?.allowedSources.includes(sourceType)
+        ) {
+          await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+          continue;
+        }
+        const allowed = await turnAccountAuthorization.allowedFunctions([memoryCommandFunction]);
+        if (!allowed.includes(memoryCommandFunction)) {
+          await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+          continue;
+        }
+        if (!agentCommandProfile.enabledFunctions.includes(memoryCommandFunction)) {
+          agentCommandProfile = {
+            ...agentCommandProfile,
+            enabledFunctions: [...agentCommandProfile.enabledFunctions, memoryCommandFunction]
+          };
+        }
+        const commandPolicy = await evaluateActionPolicy({
+          action: memoryCommandFunction,
+          profile,
+          source: event.source,
+          requesterIsAdmin: turnAccountAuthorization.administrator() || requesterIsAdmin,
+          effectiveFunctions: agentCommandProfile.enabledFunctions
+        });
+        if (!commandPolicy.allowed) {
+          await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+          continue;
+        }
+        agentCommandIsAdmin = turnAccountAuthorization.administrator() || requesterIsAdmin;
+      }
       const agentCommandResult = await agentRuntime?.handleCommand({
         text: event.message.text,
-        context: { profile: effectiveProfile, event, requestId, requesterDisplayName },
-        isAdmin: await adminAllowed(
-          effectiveProfile,
-          event,
-          requesterIsAdmin,
-          parsedAdminCommand?.command
-        )
+        context: { profile: agentCommandProfile, event, requestId, requesterDisplayName },
+        isAdmin: memoryCommandFunction
+          ? agentCommandIsAdmin
+          : await adminAllowed(
+              effectiveProfile,
+              event,
+              requesterIsAdmin,
+              parsedAdminCommand?.command
+            )
       });
       if (agentCommandResult) {
         await line.replyText(
@@ -1014,7 +1061,13 @@ async function handleWebhook(
 
     if (!requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
       if (!profileUsesProviders(effectiveProfile)) {
-        const localHelp = renderCapabilityHelp(capabilityProjection, "help", effectiveProfile);
+        const localHelp = renderCapabilityHelp(
+          capabilityProjection,
+          "help",
+          effectiveProfile,
+          undefined,
+          { sourceType: effectiveAccess.sourceType, authorized: effectiveAccess.authorized }
+        );
         await line.replyText(
           event.replyToken,
           localHelp.replyText,
@@ -1127,9 +1180,11 @@ async function handleWebhook(
       requestId,
       requesterDisplayName,
       requesterIsAdmin,
+      configuredFunctions: profile.enabledFunctions,
       engagement: conversationWindowActive ? "conversation_window" : groupEngagement?.kind,
       allowRouting: routingAllowed,
-      authorizeFunctions: turnAccountAuthorization.allowedFunctions
+      authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+      accountAdministrator: turnAccountAuthorization.administrator
     });
     if (agentTurnResult) {
       await line.replyText(
@@ -2023,20 +2078,6 @@ async function handleRouteTestCommand(
   };
 }
 
-function functionNameForAgentResource(
-  resourceType: AgentResourceType | undefined,
-  enabledFunctions: FunctionName[]
-) {
-  switch (resourceType) {
-    case "ppt_slide":
-      return "find_ppt_slides";
-    case "sheet_music":
-      return enabledFunctions.includes("find_sheet_music") ? "find_sheet_music" : undefined;
-    default:
-      return undefined;
-  }
-}
-
 function parseAdminCommand(text: string | undefined): ParsedAdminCommand | undefined {
   const normalized = text?.trim().replace(/^小哈[，,\s]*/i, "") ?? "";
   const match = normalized.match(/^\/([a-z0-9][a-z0-9-]*)(?:\s+(.*))?$/i);
@@ -2118,26 +2159,62 @@ function createTurnFunctionAuthorizer(
 ): {
   state(functionNames: readonly FunctionName[]): Promise<FunctionAuthorizationState>;
   allowedFunctions(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  administrator(): boolean;
 } {
   let authorization: Promise<FunctionAuthorizationState> | undefined;
+  let resolvedState: FunctionAuthorizationState | undefined;
   const state = (functionNames: readonly FunctionName[]): Promise<FunctionAuthorizationState> => {
     if (!authorization) {
       const restricted = new Set(profile.permissionRequiredFunctions);
       const requested = Array.from(
         new Set(functionNames.filter((functionName) => restricted.has(functionName)))
       );
-      authorization = authorizeFunctions(accountAdminClient, profile, lineUserId, requested);
+      authorization = authorizeFunctions(accountAdminClient, profile, lineUserId, requested).then(
+        (result) => {
+          resolvedState = result;
+          return result;
+        }
+      );
     }
     return authorization;
   };
   return {
     state,
     async allowedFunctions(functionNames) {
-      const result = await state(functionNames);
-      if (!result.available || !result.authorization.active) return [];
-      if (result.authorization.administrator) return [...functionNames];
-      const allowed = new Set(result.authorization.allowedFunctions);
-      return functionNames.filter((functionName) => allowed.has(functionName));
+      const configured = new Set(profile.enabledFunctions);
+      const restricted = new Set(profile.permissionRequiredFunctions);
+      const requested = Array.from(
+        new Set(functionNames.filter((functionName) => configured.has(functionName)))
+      );
+      const localReads = requested.filter(
+        (functionName) =>
+          !restricted.has(functionName) &&
+          getFunctionDefinition(functionName)?.sideEffectLevel === "read"
+      );
+      const protectedFunctions = requested.filter(
+        (functionName) => !localReads.includes(functionName)
+      );
+      if (protectedFunctions.length === 0) return localReads;
+
+      const result = await state(protectedFunctions);
+      if (!result.available || !result.authorization.active) return localReads;
+      const explicitlyAllowed = new Set(result.authorization.allowedFunctions);
+      return [
+        ...localReads,
+        ...protectedFunctions.filter((functionName) =>
+          restricted.has(functionName)
+            ? explicitlyAllowed.has(functionName)
+            : result.authorization.administrator &&
+              getFunctionDefinition(functionName)?.sideEffectLevel !== "read"
+        )
+      ];
+    },
+    administrator() {
+      return Boolean(
+        resolvedState?.available &&
+        resolvedState.authorization.active &&
+        resolvedState.authorization.administrator
+      );
     }
   };
 }

@@ -48,7 +48,9 @@ export interface KernelRuntimeHarnessOptions {
   sessionStore?: SessionStore;
   conversationWindowStore?: ConversationWindowStore;
   elapsedMs?: (turnIndex: number) => number;
+  configuredFunctions?: readonly FunctionName[];
   authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  accountAdministrator?(): boolean;
 }
 
 export function createKernelRuntimeHarness(
@@ -82,9 +84,11 @@ export function createKernelRuntimeHarness(
         const startedAt = performance.now();
         const result = await runtime.handleTextTurn({
           profile: options.profile,
+          configuredFunctions: options.configuredFunctions,
           event: textEvent(turn),
           requestId: turn.requestId,
-          authorizeFunctions: options.authorizeFunctions
+          authorizeFunctions: options.authorizeFunctions,
+          accountAdministrator: options.accountAdministrator
         });
         const measuredElapsedMs = Math.max(0, performance.now() - startedAt);
         results.push({

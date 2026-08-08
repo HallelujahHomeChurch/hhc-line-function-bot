@@ -72,13 +72,13 @@ export async function resumeCapabilityResolution(input: {
   if (!selected) {
     return { kind: "reply", result: capabilityChoiceReply(pending.candidates) };
   }
-  await input.sessionStore.delete(pending.id);
   if (!input.enabledFunctions.includes(selected.capability)) {
     return {
       kind: "reply",
       result: { ok: true, replyText: "這項功能目前沒有開放，請重新提出查詢。" }
     };
   }
+  await input.sessionStore.delete(pending.id);
   return {
     kind: "selected",
     capability: selected.capability,

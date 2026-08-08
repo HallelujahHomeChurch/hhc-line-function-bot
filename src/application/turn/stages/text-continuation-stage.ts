@@ -12,22 +12,29 @@ export async function matchTextContinuation(
   textMessageHandlers: TextMessageHandlerRegistry,
   requesterDisplayName?: string,
   requesterIsAdmin?: boolean,
-  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>
+  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>,
+  configuredFunctions: readonly FunctionName[] = [
+    ...profile.enabledFunctions,
+    ...profile.permissionRequiredFunctions
+  ]
 ) {
   const text = event.message?.text;
   if (event.type !== "message" || event.message?.type !== "text" || !text) {
     return undefined;
   }
   for (const { name, handler } of orderTurnHandlers(textMessageHandlers)) {
-    const restrictedCapability =
-      handler.capability && profile.permissionRequiredFunctions.includes(handler.capability)
+    const protectedCapability =
+      handler.capability &&
+      configuredFunctions.includes(handler.capability) &&
+      (profile.permissionRequiredFunctions.includes(handler.capability) ||
+        !profile.enabledFunctions.includes(handler.capability))
         ? handler.capability
         : undefined;
     const matchProfile =
-      restrictedCapability && !profile.enabledFunctions.includes(restrictedCapability)
+      protectedCapability && !profile.enabledFunctions.includes(protectedCapability)
         ? {
             ...profile,
-            enabledFunctions: [...profile.enabledFunctions, restrictedCapability]
+            enabledFunctions: [...profile.enabledFunctions, protectedCapability]
           }
         : profile;
     if (
@@ -36,14 +43,14 @@ export async function matchTextContinuation(
         { profile: matchProfile, event, requesterDisplayName, requesterIsAdmin }
       )
     ) {
-      if (restrictedCapability) {
+      if (protectedCapability) {
         let allowed: readonly FunctionName[] = [];
         try {
-          allowed = (await authorizeFunctions?.([restrictedCapability])) ?? [];
+          allowed = (await authorizeFunctions?.([protectedCapability])) ?? [];
         } catch {
           // A restricted text entrance fails closed without blocking later public handlers.
         }
-        if (!allowed.includes(restrictedCapability)) continue;
+        if (!allowed.includes(protectedCapability)) continue;
       }
       return { name, handler, profile: matchProfile };
     }

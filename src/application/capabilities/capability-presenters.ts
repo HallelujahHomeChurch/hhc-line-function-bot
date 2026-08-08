@@ -8,26 +8,16 @@ import type {
 export function renderCapabilityHelp(
   projection: EffectiveCapabilityProjection,
   mode: "help" | "introduction",
-  profile?: Pick<BotProfileConfig, "identityLine" | "allowedProviders">,
-  account?: AccountSurfacePresentation
+  profile?: Pick<BotProfileConfig, "identityLine" | "allowedProviders" | "registration">,
+  account?: AccountSurfacePresentation,
+  commandContext?: { sourceType: "user" | "group" | "room"; authorized: boolean }
 ): FunctionExecutionResult {
   const identityLine = profile?.identityLine ?? "我是小哈，家教會的小幫手。";
   const heading =
     mode === "introduction" ? [identityLine, "", "我目前可以協助："] : ["我目前可以協助："];
   const accountSection = renderHelpAccountSection(projection, account);
   const sections = [...capabilitySections(projection), ...(accountSection ? [accountSection] : [])];
-  const providerFree = profile?.allowedProviders?.length === 0;
-  const commandSection =
-    mode === "help" && !providerFree
-      ? [
-          "",
-          "常用指令",
-          "- /registry <code>：使用邀請碼開通",
-          "- /whoami：查看目前身分與來源",
-          "- /memories：查看已保存的文字記憶",
-          "- /forget-memory <id>：刪除指定的文字記憶"
-        ]
-      : [];
+  const commandSection = renderHelpCommandSection(projection, mode, profile, commandContext);
 
   return {
     ok: true,
@@ -39,6 +29,28 @@ export function renderCapabilityHelp(
     ].join("\n"),
     quickReplies: helpQuickReplies(projection, account)
   };
+}
+
+function renderHelpCommandSection(
+  projection: EffectiveCapabilityProjection,
+  mode: "help" | "introduction",
+  profile: Pick<BotProfileConfig, "allowedProviders" | "registration"> | undefined,
+  context: { sourceType: "user" | "group" | "room"; authorized: boolean } | undefined
+): string[] {
+  if (mode !== "help" || profile?.allowedProviders?.length === 0 || !context) return [];
+  const commands = [
+    ...(profile?.registration?.enabled ? ["- /registry <code>：使用邀請碼開通"] : []),
+    ...(context.sourceType === "user" ? ["- /whoami：查看 HHC 帳戶資訊"] : []),
+    ...(context.authorized &&
+    projection.reads.some(({ functionName }) => functionName === "retrieve_memory")
+      ? ["- /memories：查看已保存的文字記憶"]
+      : []),
+    ...(context.authorized &&
+    projection.writes.some(({ functionName }) => functionName === "save_memory")
+      ? ["- /forget-memory <id>：刪除指定的文字記憶"]
+      : [])
+  ];
+  return commands.length > 0 ? ["", "常用指令", ...commands] : [];
 }
 
 export interface AccountSurfacePresentation {

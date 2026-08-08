@@ -193,6 +193,7 @@ async function enqueueAttachmentScan(input: {
     try {
       const job = await input.options.agentJobStore.createPending({
         scope,
+        capability: "save_resource",
         label: "保存檔案",
         ttlMs
       });

@@ -95,7 +95,8 @@ export async function handlePublicAccessCommand(input: {
       projectEffectiveCapabilities({ context }),
       "help",
       input.profile,
-      input.event.source.type === "user" ? input.account : undefined
+      input.event.source.type === "user" ? input.account : undefined,
+      { sourceType: context.sourceType, authorized: context.authorized }
     );
     return context.authorized
       ? help

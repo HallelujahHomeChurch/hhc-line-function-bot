@@ -21,6 +21,7 @@ export interface ControlledAgentRouterInput {
   profileName: string;
   text: string;
   enabledFunctions: readonly FunctionName[];
+  configuredFunctions?: readonly FunctionName[];
   permissionRequiredFunctions?: readonly FunctionName[];
   authorizeCandidates?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
   sourceType: string;
@@ -64,7 +65,12 @@ export function createControlledAgentRouter(options: {
         source
       );
       const candidateFunctions = Array.from(
-        new Set([...input.enabledFunctions, ...(input.permissionRequiredFunctions ?? [])])
+        new Set(
+          input.configuredFunctions ?? [
+            ...input.enabledFunctions,
+            ...(input.permissionRequiredFunctions ?? [])
+          ]
+        )
       );
       const builtCandidates = buildCapabilityCandidates({
         text: input.text,
@@ -76,7 +82,7 @@ export function createControlledAgentRouter(options: {
         maxCandidates: input.maxCandidates,
         source
       });
-      const authorization = await authorizePermissionRequiredCandidates(input, builtCandidates);
+      const authorization = await authorizeUnavailableCandidates(input, builtCandidates);
       const candidates = builtCandidates.filter(({ capability }) =>
         authorization.enabledFunctions.includes(capability)
       );
@@ -147,16 +153,17 @@ export function createControlledAgentRouter(options: {
   };
 }
 
-async function authorizePermissionRequiredCandidates(
+async function authorizeUnavailableCandidates(
   input: ControlledAgentRouterInput,
   candidates: readonly { capability: FunctionName }[]
 ): Promise<{ enabledFunctions: readonly FunctionName[] }> {
   const restricted = new Set(input.permissionRequiredFunctions ?? []);
+  const effective = new Set(input.enabledFunctions);
   const requested = Array.from(
     new Set(
       candidates
         .map(({ capability }) => capability)
-        .filter((capability) => restricted.has(capability))
+        .filter((capability) => restricted.has(capability) || !effective.has(capability))
     )
   );
   const publicFunctions = input.enabledFunctions.filter(

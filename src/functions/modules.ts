@@ -109,11 +109,14 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           })
         },
         postbacks: {
-          select_ppt: createFindPptSlidesPostbackHandler({
-            graph: clients.graph,
-            sessionStore: clients.sessionStore,
-            now: clients.now
-          })
+          select_ppt: {
+            capability: "find_ppt_slides",
+            handle: createFindPptSlidesPostbackHandler({
+              graph: clients.graph,
+              sessionStore: clients.sessionStore,
+              now: clients.now
+            })
+          }
         },
         textMessages: {
           ppt_numeric_selection: createFindPptSlidesTextMessageHandler({
@@ -194,14 +197,17 @@ export const FUNCTION_MODULES: FunctionModule[] = [
               })
             },
             postbacks: {
-              select_knowledge_source: createQueryKnowledgePostbackHandler({
-                store: clients.knowledgeStore,
-                embedding: clients.embedding,
-                textGenerator: clients.knowledgeTextGenerator,
-                sessionStore: clients.sessionStore,
-                now: clients.now,
-                requestIdFactory: clients.requestIdFactory
-              })
+              select_knowledge_source: {
+                capability: "query_knowledge",
+                handle: createQueryKnowledgePostbackHandler({
+                  store: clients.knowledgeStore,
+                  embedding: clients.embedding,
+                  textGenerator: clients.knowledgeTextGenerator,
+                  sessionStore: clients.sessionStore,
+                  now: clients.now,
+                  requestIdFactory: clients.requestIdFactory
+                })
+              }
             },
             textMessages: {
               knowledge_numeric_selection: createQueryKnowledgeTextMessageHandler({
@@ -362,11 +368,14 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           })
         },
         postbacks: {
-          select_sheet_music: createFindPopSheetMusicPostbackHandler({
-            graph: clients.graph,
-            sessionStore: clients.sessionStore,
-            now: clients.now
-          })
+          select_sheet_music: {
+            capability: "find_sheet_music",
+            handle: createFindPopSheetMusicPostbackHandler({
+              graph: clients.graph,
+              sessionStore: clients.sessionStore,
+              now: clients.now
+            })
+          }
         },
         textMessages: {
           sheet_music_numeric_selection: createFindPopSheetMusicTextMessageHandler({

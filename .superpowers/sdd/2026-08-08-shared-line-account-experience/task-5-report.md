@@ -46,7 +46,7 @@ owners were traced:
 | Shared local account actions           | `/help`, `幫助`, `說明`, `功能`, and `可以做什麼` map to help; the six specified login phrases map to login; `/whoami` and the four specified identity phrases map to account identity. Matching is catalog-owned, normalized, exact, and negation-aware. The generic controlled router has no phrase-specific branch.                                                                                                 |
 | Byte-exact account challenge entrance  | Only `HHC_ACCOUNT_LINK_V1:` followed by exactly 43 unpadded base64url bytes is accepted. Parsing performs no Unicode normalization. An ASCII local guard reserves HHC/account/link lookalikes separated by spaces, `_`, or `-`. Reserved traffic is processed before ordinary webhook-event dedupe, with its own rate limit, retryable 503/redelivery behavior, terminal acknowledgment, and allowlist-only telemetry. |
 | Legacy rollback safety                 | Existing LINE `accountLink` event handling remains intact. Ordinary message dedupe is unchanged and is not reused for the one-shot Account challenge.                                                                                                                                                                                                                                                                  |
-| Account-aware help/login/whoami        | Disabled, unbound, active, inactive, and unavailable Account states use the shared presenter. Only unbound direct-chat users receive a binding action. Active identity output is limited to canonical account ID, trusted display name, masked email, and public roles. Internal Account/provider values are never shown. Function names use public display names.                                                     |
+| Account-aware help/login/whoami        | Disabled, unbound, active, inactive, and unavailable Account states use the shared presenter. Only unbound direct-chat users receive a binding action. Active identity output is limited to trusted display name, masked email, and public roles; no canonical Account ID is displayed. Internal Account/provider values are never shown. Function names use public display names.                                     |
 | No duplicate binding                   | Login asks Account for an empty function list and creates a binding only for the unbound state. Active/inactive accounts are presented without issuing another binding. Group and account-link-disabled profiles cannot start binding.                                                                                                                                                                                 |
 | Allowed function intersection          | Help, identity, intro, registration onboarding, and controlled routing present or execute only the intersection of profile configuration, public read defaults, Account authorization, source policy, and side-effect policy. The `main` profile remains provider-free.                                                                                                                                                |
 | Local grants and roles retired         | Stored user/group function grants and managed roles no longer add effective capability. Scope-management actions are absent from the action catalog/evals, retired slash forms are recognized only to return the hidden-management rejection, and old persistence methods/tables remain for compatibility.                                                                                                             |
@@ -115,7 +115,7 @@ Test Files  14 passed (14)
 Tests       382 passed (382)
 ```
 
-## Verification
+## Initial Verification
 
 The following final gates exited zero:
 
@@ -172,13 +172,151 @@ implementation.
 - Test/eval support: focused unit/entrance/runtime tests, test composition,
   Kernel runtime/cases/corpus, and admin evals.
 
+## Review Remediation: 2026-08-09
+
+The first review identified four important authorization gaps. They were fixed
+in a separate bounded TDD round without adding a router, policy engine, cache,
+or framework.
+
+### Wave 1: postback and slow-job ownership
+
+The focused RED run reported 8 failures with 159 passing tests. It proved that
+postback registrations did not declare an owning function, in-memory and Redis
+jobs did not retain that capability, selection postbacks made no Account
+authorization request, and revoked or unavailable job authorization could
+still reveal a stored result.
+
+Every postback registration now owns a declarative `FunctionName`. Slow jobs
+persist the capability that created the result, including explicit attachment
+and sheet-import jobs and generic controlled turns. Selection handlers and job
+result delivery authorize that owner through the existing per-event memo before
+the handler or result is exposed. Public reads remain local; restricted,
+revoked, unavailable, and missing-owner results fail closed. The focused wave
+finished with 167/167 tests passing, and the expanded boundary later passed as
+part of the 248-test suite.
+
+This also corrects the initial report's premature postback statement: before
+this remediation, postback result delivery was not fully reauthorized. It is
+now covered for allowed, denied, revoked, unavailable, and one-underlying-lookup
+selection-plus-job turns.
+
+A final diff audit found one remaining generic slow-turn edge: controlled
+results were not universally stamped with the validated route action, so only
+handlers that happened to return `executedAction` persisted an owner. The
+focused RED run reported 3 failures with 220 passing tests. The shared runtime
+now stamps every executed controlled result with its server-owned capability;
+an ownerless timed-out turn becomes a failed job; and legacy completed jobs
+without an owner cannot replay. That focused suite finished 223/223.
+
+### Wave 2: full configured ceiling and Account administrator writes
+
+The corrected RED fixture reported 6 failures with 221 passing tests. It used a
+managed helper principal and the production-shaped
+`permissionRequiredFunctions: []` configuration to prove that writes outside
+the public read projection disappeared before discovery, preview, and
+confirmation.
+
+The controlled input now carries the full configured `enabledFunctions`
+ceiling separately from the effective public projection. Explicit
+`permissionRequiredFunctions` require names returned in Account
+`allowedFunctions`; the administrator flag does not bypass that explicit
+contract. A configured write absent from the public projection is restored only
+when the same Account response has `administrator: true`. That status is
+propagated through preview, confirmation, continuation, text handlers, and job
+delivery. Managed admin allow, non-admin deny, Account-unavailable deny, and
+one-lookup behavior are covered. The focused entrance/router/job/turn boundary
+finished green.
+
+### Wave 3: memory commands and truthful help
+
+The focused RED run reported 9 failures with 170 passing tests. `/memories` and
+`/forget-memory` could enter the legacy memory runtime without explicit
+capability authorization, and help advertised commands that were unavailable
+to the current source or requester.
+
+The command catalog now maps `/memories` to `retrieve_memory` and
+`/forget-memory` to `save_memory`. Webhook entrance verifies configuration,
+declared source, the memoized Account decision, and normal action/write policy
+before invoking the memory runtime. Public `retrieve_memory` remains local;
+explicit `save_memory` grants and administrator-only configured writes follow
+their distinct rules. Help command presentation now observes registration,
+LINE source, effective functions, and Account/managed authorization. It hides
+protected commands for unmanaged requesters and hides `/whoami` in groups. The
+entrance suite passed 182/182 and the combined help/projection/memory suite
+passed 212/212.
+
+### Wave 4: protected capability-resolution continuation
+
+The RED run reported 4 failures with 32 passing tests. A pending protected
+capability choice performed no Account authorization, denied and unavailable
+choices were consumed before that decision, and an explicit protected-function
+switch authorized only the old pending function.
+
+The shared continuation inventory now includes bounded
+`pending_capability_resolution` candidates and deterministic explicit-switch
+candidates whenever continuation state exists. Authorization happens before a
+continuation handler, and a selected capability-resolution session is deleted
+only after the selected capability is effective. Denied and unavailable
+protected selections remain retryable; choosing a public alternative stays
+local; an allowed protected switch receives the restored capability. The
+focused entrance/router/jobs/turn suite passed 248/248.
+
+### Kernel and final verification
+
+A new versioned Kernel case,
+`kernel-v1/write/account-admin-outside-read-projection@1`, covers the actual
+helper-shaped administrator-write boundary. Its corpus-presence test was RED
+before the case was added. The case models the existing per-event Account memo,
+so its two runtime consumers represent one underlying Account lookup.
+
+Final gates for the remediation:
+
+```text
+pnpm exec vitest run <16 focused files>
+Test Files  16 passed (16)
+Tests       437 passed (437)
+
+pnpm eval:agent
+candidates 20/20, proposal 14/20, validated 20/20
+
+pnpm eval:kernel
+117 cases; core 117/117; schedule 50/50; core read 104/104;
+recurrence 12/12; unavailable 0/15; ambiguity 5/6; security 0/1
+
+pnpm eval:admin
+14/14
+
+pnpm typecheck
+pnpm lint
+pnpm architecture:check
+pnpm build
+git diff --check
+targeted Prettier check for every changed supported file
+```
+
+Architecture validation checked 399 TypeScript files. Every command above
+exited zero.
+
+The fresh full repository test result was:
+
+```text
+Test Files  139 passed | 1 failed (140)
+Tests       1643 passed | 7 failed (1650)
+```
+
+The same seven pre-existing fake-cleanup cases in
+`src/__tests__/kernel-local-live-runner.test.ts` fail on this macOS host because
+`/dev/shm` is absent and the runner exits before the fixture writes `calls.log`.
+The file's static test passes. This remediation does not change the runner,
+script, or fake binaries.
+
 ## Handoff / Concerns
 
-- The production helper profile currently declares
-  `permissionRequiredFunctions: []`. Task 5 implements and verifies the generic
-  Account-authorized write boundary, but the brief did not authorize choosing
-  or changing the production rollout list. Enabling a specific restricted
-  function remains an explicit configuration/product decision.
+- The production helper profile declares `permissionRequiredFunctions: []`.
+  Its configured writes are now reachable only for a currently active Account
+  administrator. If product policy later moves a function into
+  `permissionRequiredFunctions`, it will instead require an explicit
+  `allowedFunctions` entry; administrator status alone will not bypass it.
 - No live Account API smoke test was performed. Contract behavior is covered by
   strict fakes and the Task 4 bounded client tests; deployment requires the
   existing Account presentation/API environment to be provisioned.

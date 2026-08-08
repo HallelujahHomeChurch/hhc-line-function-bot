@@ -212,6 +212,17 @@ function parseMemoryCommand(text: string): { command: string; args: string[] } |
   };
 }
 
+export function memoryCommandFunctionName(text: string): FunctionName | undefined {
+  switch (parseMemoryCommand(text)?.command) {
+    case "memories":
+      return "retrieve_memory";
+    case "forget-memory":
+      return "save_memory";
+    default:
+      return undefined;
+  }
+}
+
 export function isMemoryFunctionName(action: FunctionName): boolean {
   return action === "save_memory" || action === "retrieve_memory";
 }
