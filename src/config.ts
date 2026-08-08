@@ -246,56 +246,11 @@ export function loadCatalogSyncConfigFromEnv(env: NodeJS.ProcessEnv): CatalogSyn
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required for catalog sync");
   }
-  const knowledgeEmbedding = readKnowledgeEmbeddingConfig(env);
 
   return {
     profiles: profiles.map(({ name }) => ({ name })),
     database: { url: databaseUrl, ssl: readBool(env.DATABASE_SSL, false) },
-    graph:
-      env.GRAPH_TENANT_ID &&
-      env.GRAPH_CLIENT_ID &&
-      env.GRAPH_CLIENT_SECRET &&
-      env.GRAPH_DRIVE_ID &&
-      env.GRAPH_PPT_FOLDER_ITEM_ID
-        ? {
-            tenantId: env.GRAPH_TENANT_ID,
-            clientId: env.GRAPH_CLIENT_ID,
-            clientSecret: env.GRAPH_CLIENT_SECRET,
-            driveId: env.GRAPH_DRIVE_ID,
-            pptFolderItemId: env.GRAPH_PPT_FOLDER_ITEM_ID,
-            sheetMusicAllowedExtensions: readList(
-              env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg,png"
-            ).map((ext) => (ext.startsWith(".") ? ext : `.${ext}`)),
-            allowedExtensions: [".pptx", ".ppt", ".key", ".odp"],
-            defaultIncludePdf: false,
-            linkType: readGraphLinkType(env.GRAPH_LINK_TYPE),
-            linkScope: readGraphLinkScope(env.GRAPH_LINK_SCOPE)
-          }
-        : undefined,
-    notion:
-      env.NOTION_TOKEN &&
-      env.NOTION_SERVICE_DATABASE_ID &&
-      env.NOTION_DATE_PROPERTY &&
-      env.NOTION_MEETING_PROPERTY &&
-      env.NOTION_ROLE_PROPERTY &&
-      env.NOTION_PERSON_PROPERTY
-        ? {
-            token: env.NOTION_TOKEN,
-            databaseId: env.NOTION_SERVICE_DATABASE_ID,
-            properties: {
-              date: env.NOTION_DATE_PROPERTY,
-              meeting: env.NOTION_MEETING_PROPERTY,
-              role: env.NOTION_ROLE_PROPERTY,
-              person: env.NOTION_PERSON_PROPERTY
-            }
-          }
-        : undefined,
-    knowledge: env.NOTION_TOKEN
-      ? {
-          notionToken: env.NOTION_TOKEN,
-          embedding: knowledgeEmbedding!
-        }
-      : undefined
+    ...loadCatalogSyncDependencies(env)
   };
 }
 
@@ -343,7 +298,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   if (env.NODE_ENV === "production" && !observabilityHmacKey) {
     throw new Error("OBSERVABILITY_HMAC_KEY is required in production");
   }
-  const knowledgeEmbedding = readKnowledgeEmbeddingConfig(env);
+  const catalogSyncDependencies = loadCatalogSyncDependencies(env);
   return {
     serviceName: env.SERVICE_NAME || "hhc-line-function-bot",
     host: env.HOST || "0.0.0.0",
@@ -380,51 +335,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       generalMaxOutputTokens: readInt(env.LLM_GENERAL_MAX_OUTPUT_TOKENS, 512),
       routeMaxOutputTokens: readInt(env.LLM_ROUTE_MAX_OUTPUT_TOKENS, 256)
     },
-    knowledge: env.NOTION_TOKEN
-      ? {
-          notionToken: env.NOTION_TOKEN,
-          embedding: knowledgeEmbedding!
-        }
-      : undefined,
-    graph:
-      env.GRAPH_TENANT_ID &&
-      env.GRAPH_CLIENT_ID &&
-      env.GRAPH_CLIENT_SECRET &&
-      env.GRAPH_DRIVE_ID &&
-      env.GRAPH_PPT_FOLDER_ITEM_ID
-        ? {
-            tenantId: env.GRAPH_TENANT_ID,
-            clientId: env.GRAPH_CLIENT_ID,
-            clientSecret: env.GRAPH_CLIENT_SECRET,
-            driveId: env.GRAPH_DRIVE_ID,
-            pptFolderItemId: env.GRAPH_PPT_FOLDER_ITEM_ID,
-            sheetMusicAllowedExtensions: readList(
-              env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg,png"
-            ).map((ext) => (ext.startsWith(".") ? ext : `.${ext}`)),
-            allowedExtensions: [".pptx", ".ppt", ".key", ".odp"],
-            defaultIncludePdf: false,
-            linkType: readGraphLinkType(env.GRAPH_LINK_TYPE),
-            linkScope: readGraphLinkScope(env.GRAPH_LINK_SCOPE)
-          }
-        : undefined,
-    notion:
-      env.NOTION_TOKEN &&
-      env.NOTION_SERVICE_DATABASE_ID &&
-      env.NOTION_DATE_PROPERTY &&
-      env.NOTION_MEETING_PROPERTY &&
-      env.NOTION_ROLE_PROPERTY &&
-      env.NOTION_PERSON_PROPERTY
-        ? {
-            token: env.NOTION_TOKEN,
-            databaseId: env.NOTION_SERVICE_DATABASE_ID,
-            properties: {
-              date: env.NOTION_DATE_PROPERTY,
-              meeting: env.NOTION_MEETING_PROPERTY,
-              role: env.NOTION_ROLE_PROPERTY,
-              person: env.NOTION_PERSON_PROPERTY
-            }
-          }
-        : undefined,
+    ...catalogSyncDependencies,
     wikipedia: {
       userAgent: env.WIKIMEDIA_USER_AGENT || "HHCLineBot/1.0 (https://alive.org.tw/contact)",
       timeoutMs: readInt(env.WIKIPEDIA_TIMEOUT_MS, 8000)
@@ -649,6 +560,59 @@ function assertNoRetiredLocalModelRuntimeSettings(env: NodeJS.ProcessEnv): void 
   ) {
     throw new Error("Local model runtime settings are no longer supported");
   }
+}
+
+function loadCatalogSyncDependencies(
+  env: NodeJS.ProcessEnv
+): Pick<CatalogSyncConfig, "graph" | "notion" | "knowledge"> {
+  const knowledgeEmbedding = readKnowledgeEmbeddingConfig(env);
+  return {
+    knowledge: env.NOTION_TOKEN
+      ? {
+          notionToken: env.NOTION_TOKEN,
+          embedding: knowledgeEmbedding!
+        }
+      : undefined,
+    graph:
+      env.GRAPH_TENANT_ID &&
+      env.GRAPH_CLIENT_ID &&
+      env.GRAPH_CLIENT_SECRET &&
+      env.GRAPH_DRIVE_ID &&
+      env.GRAPH_PPT_FOLDER_ITEM_ID
+        ? {
+            tenantId: env.GRAPH_TENANT_ID,
+            clientId: env.GRAPH_CLIENT_ID,
+            clientSecret: env.GRAPH_CLIENT_SECRET,
+            driveId: env.GRAPH_DRIVE_ID,
+            pptFolderItemId: env.GRAPH_PPT_FOLDER_ITEM_ID,
+            sheetMusicAllowedExtensions: readList(
+              env.SHEET_MUSIC_ALLOWED_EXTENSIONS || "pdf,jpg,jpeg,png"
+            ).map((ext) => (ext.startsWith(".") ? ext : `.${ext}`)),
+            allowedExtensions: [".pptx", ".ppt", ".key", ".odp"],
+            defaultIncludePdf: false,
+            linkType: readGraphLinkType(env.GRAPH_LINK_TYPE),
+            linkScope: readGraphLinkScope(env.GRAPH_LINK_SCOPE)
+          }
+        : undefined,
+    notion:
+      env.NOTION_TOKEN &&
+      env.NOTION_SERVICE_DATABASE_ID &&
+      env.NOTION_DATE_PROPERTY &&
+      env.NOTION_MEETING_PROPERTY &&
+      env.NOTION_ROLE_PROPERTY &&
+      env.NOTION_PERSON_PROPERTY
+        ? {
+            token: env.NOTION_TOKEN,
+            databaseId: env.NOTION_SERVICE_DATABASE_ID,
+            properties: {
+              date: env.NOTION_DATE_PROPERTY,
+              meeting: env.NOTION_MEETING_PROPERTY,
+              role: env.NOTION_ROLE_PROPERTY,
+              person: env.NOTION_PERSON_PROPERTY
+            }
+          }
+        : undefined
+  };
 }
 
 function readKnowledgeEmbeddingConfig(
