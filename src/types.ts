@@ -282,7 +282,7 @@ export interface ProfileFunctionPolicy {
   permissionRequiredFunctions: FunctionName[];
 }
 
-export interface BotProfileConfig {
+export interface BotProfileConfig extends ProfileFunctionPolicy {
   name: string;
   identityLine?: string;
   webhookPath: string;
@@ -294,9 +294,6 @@ export interface BotProfileConfig {
   groupRequireWakeWord: boolean;
   wakeKeywords: string[];
   acceptMention: boolean;
-  enabledFunctions: FunctionName[];
-  /** Defaults to [] for legacy and test fixtures; production profiles declare it explicitly. */
-  permissionRequiredFunctions?: FunctionName[];
   accountLink?: AccountLinkPresentation;
   /** @deprecated Test fixtures only. Production profile parsing rejects this field. */
   adminUserId?: string;

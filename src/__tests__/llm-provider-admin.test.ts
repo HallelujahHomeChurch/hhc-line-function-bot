@@ -27,6 +27,7 @@ function config(): AppConfig {
         wakeKeywords: ["小哈"],
         acceptMention: true,
         enabledFunctions: ["query_schedule"],
+        permissionRequiredFunctions: [],
         adminUserId: "Uroot",
         adminDirectOnly: true,
         directAccessPolicy: "managed",

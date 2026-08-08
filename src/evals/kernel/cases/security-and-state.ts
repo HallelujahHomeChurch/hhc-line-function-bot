@@ -426,6 +426,7 @@ function kernelProfile(enabledFunctions: FunctionName[]): BotProfileConfig {
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions,
+    permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },

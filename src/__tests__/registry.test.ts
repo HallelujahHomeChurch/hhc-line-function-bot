@@ -20,6 +20,7 @@ function profile(): BotProfileConfig {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["find_ppt_slides", "query_schedule", "find_sheet_music"],
+    permissionRequiredFunctions: [],
     adminUserId: "Uadmin",
     adminDirectOnly: true
   };

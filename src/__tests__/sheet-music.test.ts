@@ -30,7 +30,8 @@ function profile(): BotProfileConfig {
     groupRequireWakeWord: true,
     wakeKeywords: ["小哈"],
     acceptMention: true,
-    enabledFunctions: ["find_sheet_music"]
+    enabledFunctions: ["find_sheet_music"],
+    permissionRequiredFunctions: []
   };
 }
 

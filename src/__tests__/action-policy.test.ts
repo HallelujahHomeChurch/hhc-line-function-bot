@@ -17,6 +17,7 @@ function profile(): BotProfileConfig {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["find_ppt_slides"],
+    permissionRequiredFunctions: [],
     adminUserId: "Uroot",
     adminDirectOnly: true,
     directAccessPolicy: "managed",

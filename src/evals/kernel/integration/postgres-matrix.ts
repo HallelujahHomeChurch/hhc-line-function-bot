@@ -572,6 +572,7 @@ async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): P
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions: ["query_knowledge" as const],
+    permissionRequiredFunctions: [],
     allowedProviders: ["deepseek" as const],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },

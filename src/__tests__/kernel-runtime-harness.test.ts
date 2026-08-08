@@ -22,6 +22,7 @@ function profile(): BotProfileConfig {
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions: ["query_schedule"],
+    permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },

@@ -17,6 +17,7 @@ function profile(enabledFunctions: BotProfileConfig["enabledFunctions"]): BotPro
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions,
+    permissionRequiredFunctions: [],
     adminDirectOnly: true,
     directAccessPolicy: "managed",
     groupAccessPolicy: "managed"

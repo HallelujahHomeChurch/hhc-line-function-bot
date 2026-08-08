@@ -21,6 +21,7 @@ function profile(overrides: Partial<BotProfileConfig> = {}): BotProfileConfig {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["find_ppt_slides", "query_schedule"],
+    permissionRequiredFunctions: [],
     adminDirectOnly: true,
     directAccessPolicy: "managed",
     groupAccessPolicy: "managed",

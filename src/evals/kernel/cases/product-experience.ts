@@ -1163,6 +1163,7 @@ function profile(enabledFunctions: FunctionName[]): BotProfileConfig {
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions,
+    permissionRequiredFunctions: [],
     adminUserId: "U_SYNTHETIC_ADMIN",
     adminDirectOnly: true,
     directAccessPolicy: "managed",

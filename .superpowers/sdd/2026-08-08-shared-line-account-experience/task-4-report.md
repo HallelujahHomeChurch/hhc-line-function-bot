@@ -153,3 +153,76 @@ validator, result, state, or function execution behavior.
   only new binding creation stopped issuing Messaging API link tokens.
 - No production configuration, credential, account ID, Provider ID, external
   state, push, PR, merge, or deployment was performed.
+
+## Review Round 1 Fix
+
+### Status and scope
+
+Addressed both Important findings in `task-4-review.md` from Task 4 commit
+`f788e0551e880abffc2c68282088dfe0f4bbb9d6`.
+
+- `BotProfileConfig` now extends the exact required `ProfileFunctionPolicy`.
+  Optional omission and `[]` defaulting remain only in the raw config schema and
+  loader; direct runtime, eval, tool, and test profile builders declare `[]`
+  explicitly.
+- `scripts/deploy-aca.sh` now reads the current bot environment and rejects a
+  missing, non-string, empty, or whitespace-only account presentation value
+  before `capture_known_good_state`, `mark_release_mutated`, or any Azure write.
+  The later renderer check remains as defense in depth and reuses the preflight
+  environment snapshot.
+- No dependency, abstraction layer, background-job environment input, or
+  profile-specific branch was added.
+
+### TDD RED evidence
+
+The runtime-type, static mutation-order, and executable fake-Azure deployment
+regressions were added before production edits. The focused run failed exactly
+on the reviewed boundaries:
+
+```text
+Test Files  2 failed (2)
+Tests       3 failed | 91 passed (94)
+
+- BotProfileConfig did not extend ProfileFunctionPolicy.
+- required_account_presentation_env_names was absent before the snapshot/write boundary.
+- the deploy fixture reached known-good capture instead of emitting the required
+  ACA environment reference failure before writes.
+```
+
+After making the runtime field required, the first `pnpm typecheck` provided the
+expected compiler RED for ten direct source profile builders that omitted
+`permissionRequiredFunctions`. Each builder was updated explicitly with `[]`;
+legacy raw config omission tests were left unchanged.
+
+### GREEN and final verification
+
+The three focused review regressions passed, followed by the complete relevant
+deployment contract suite:
+
+```text
+Test Files  2 passed (2)
+Tests       94 passed (94)
+```
+
+The proportional repository run excluding only the previously documented
+macOS `/dev/shm` kernel-local-live fixture passed with the new regressions:
+
+```text
+Test Files  139 passed (139)
+Tests       1580 passed (1580)
+```
+
+Additional fresh gates all exited zero:
+
+```text
+pnpm typecheck
+pnpm lint
+pnpm architecture:check
+pnpm config:validate
+pnpm build
+targeted Prettier check for every touched supported file
+git diff --check
+```
+
+Architecture validation again checked 399 TypeScript files. No push, PR, merge,
+deployment, credential read, or production mutation was performed.

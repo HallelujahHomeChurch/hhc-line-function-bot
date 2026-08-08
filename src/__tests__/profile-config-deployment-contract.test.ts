@@ -439,6 +439,32 @@ describe("production profile configuration deployment contract", () => {
     );
   });
 
+  it("keeps the normalized permission policy required in the runtime profile type", () => {
+    const types = readProjectFile("src/types.ts");
+    const runtimeProfile = types.slice(
+      types.indexOf("export interface BotProfileConfig"),
+      types.indexOf("export interface AppConfig")
+    );
+
+    expect(runtimeProfile).toContain(
+      "export interface BotProfileConfig extends ProfileFunctionPolicy"
+    );
+    expect(runtimeProfile).not.toMatch(/permissionRequiredFunctions\s*\?:/u);
+  });
+
+  it("validates account presentation values before snapshot and every production write", () => {
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const validation = deployment.indexOf("required_account_presentation_env_names");
+    const snapshot = deployment.indexOf("capture_known_good_state");
+    const mutationMark = deployment.indexOf("mark_release_mutated");
+    const firstProductionWrite = deployment.indexOf("az containerapp secret set");
+
+    expect(validation).toBeGreaterThanOrEqual(0);
+    expect(validation).toBeLessThan(snapshot);
+    expect(validation).toBeLessThan(mutationMark);
+    expect(validation).toBeLessThan(firstProductionWrite);
+  });
+
   it("validates pull requests before a separate main-only production release", () => {
     const ciWorkflow = readProjectFile(".github/workflows/ci.yml");
     const releaseWorkflow = readProjectFile(".github/workflows/release.yml");

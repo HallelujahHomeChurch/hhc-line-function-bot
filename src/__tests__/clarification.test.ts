@@ -40,6 +40,7 @@ function testConfig(): AppConfig {
         wakeKeywords: ["小哈"],
         acceptMention: true,
         enabledFunctions: ["find_ppt_slides", "find_sheet_music"],
+        permissionRequiredFunctions: [],
         directAccessPolicy: "managed",
         groupAccessPolicy: "managed"
       }

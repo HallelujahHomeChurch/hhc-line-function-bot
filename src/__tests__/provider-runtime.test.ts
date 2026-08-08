@@ -27,6 +27,7 @@ function profile(overrides: Partial<BotProfileConfig> = {}): BotProfileConfig {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["query_schedule"],
+    permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     ...overrides

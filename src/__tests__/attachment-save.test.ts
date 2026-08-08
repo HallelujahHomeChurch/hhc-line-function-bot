@@ -31,7 +31,8 @@ function profile(): BotProfileConfig {
     groupRequireWakeWord: true,
     wakeKeywords: ["xiaoha"],
     acceptMention: true,
-    enabledFunctions: ["save_resource"]
+    enabledFunctions: ["save_resource"],
+    permissionRequiredFunctions: []
   };
 }
 

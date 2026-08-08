@@ -20,6 +20,7 @@ function profile(overrides: Partial<BotProfileConfig> = {}): BotProfileConfig {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["query_schedule"],
+    permissionRequiredFunctions: [],
     adminUserId: "Uadmin",
     adminDirectOnly: true,
     directAccessPolicy: "managed",

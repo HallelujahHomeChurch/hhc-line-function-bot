@@ -26,6 +26,7 @@ function config(): AppConfig {
         wakeKeywords: [],
         acceptMention: true,
         enabledFunctions: ["find_ppt_slides", "query_schedule"],
+        permissionRequiredFunctions: [],
         adminUserId: "Uadmin",
         adminDirectOnly: true,
         directAccessPolicy: "managed",

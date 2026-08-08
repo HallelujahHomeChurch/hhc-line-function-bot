@@ -26,7 +26,8 @@ const profile: BotProfileConfig = {
   groupRequireWakeWord: true,
   wakeKeywords: ["小哈"],
   acceptMention: true,
-  enabledFunctions: ["save_resource"]
+  enabledFunctions: ["save_resource"],
+  permissionRequiredFunctions: []
 };
 const freshSignature: ClamAvSignatureManifest = {
   version: 1,
