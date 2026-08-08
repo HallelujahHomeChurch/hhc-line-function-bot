@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   contentTypeFromLineStream,
   createLineSdkAccountLinkClient,
+  createLineSdkReplyClient,
   readableToUint8Array
 } from "../clients/line.js";
 import type { BotProfileConfig } from "../types.js";
@@ -44,6 +45,52 @@ describe("LINE account link tokens", () => {
     await expect(createLineSdkAccountLinkClient(profile).issueLinkToken("Uuser")).rejects.toThrow(
       "sdk unavailable"
     );
+  });
+});
+
+describe("LINE URI quick replies", () => {
+  it("serializes the SDK-native URI action without copying the URL into message text", async () => {
+    const replyMessage = vi
+      .spyOn(messagingApi.MessagingApiClient.prototype, "replyMessage")
+      .mockResolvedValue({ sentMessages: [] });
+    const profile = {
+      channelAccessToken: "profile-token"
+    } as BotProfileConfig;
+
+    await createLineSdkReplyClient(profile).replyText("reply-token", "週報已準備好。", {
+      quickReplies: [
+        {
+          label: "下載週報",
+          action: {
+            type: "uri",
+            label: "下載週報",
+            uri: "https://www.alive.org.tw/assets/0123456789abcdef0123456789abcdef"
+          }
+        }
+      ]
+    });
+
+    expect(replyMessage).toHaveBeenCalledWith({
+      replyToken: "reply-token",
+      messages: [
+        {
+          type: "text",
+          text: "週報已準備好。",
+          quickReply: {
+            items: [
+              {
+                type: "action",
+                action: {
+                  type: "uri",
+                  label: "下載週報",
+                  uri: "https://www.alive.org.tw/assets/0123456789abcdef0123456789abcdef"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    });
   });
 });
 

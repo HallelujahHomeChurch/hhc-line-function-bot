@@ -793,6 +793,27 @@ describe("config", () => {
     });
   });
 
+  it("accepts a provider-free profile with an empty lane policy", () => {
+    const config = loadConfigFromEnv({
+      ...profilesEnv([
+        {
+          name: "main",
+          webhookPath: "/api/line/webhook/main",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          allowedProviders: [],
+          providerPolicy: {}
+        }
+      ]),
+      LLM_PROVIDER: "deepseek"
+    });
+
+    expect(config.profiles[0]).toMatchObject({
+      allowedProviders: [],
+      providerPolicy: {}
+    });
+  });
+
   it("defaults the authoritative controlled agent policy", () => {
     const config = loadConfigFromEnv(baseEnv());
 

@@ -92,6 +92,11 @@ export interface QuickReplyItem {
         label: string;
         data: string;
         displayText?: string;
+      }
+    | {
+        type: "uri";
+        label: string;
+        uri: string;
       };
 }
 

@@ -18,6 +18,7 @@ const R41_PRODUCT_EXPERIENCE_CASE_IDS = [
   "kernel-v1/product_experience/effective-discovery-granted-user@1",
   "kernel-v1/product_experience/effective-discovery-admin@1",
   "kernel-v1/product_experience/registration-first-read@1",
+  "kernel-v1/product_experience/provider-free-weekly-read@1",
   "kernel-v1/product_experience/result-guidance-classes@1",
   "kernel-v1/product_experience/branch-group-isolation@1"
 ] as const;
@@ -137,7 +138,7 @@ describe("Kernel v1 versioned acceptance corpus", () => {
     );
   });
 
-  it("contains every versioned R4.1 product-experience boundary exactly once", () => {
+  it("contains every versioned product-experience boundary exactly once", () => {
     const corpusIds = KERNEL_ACCEPTANCE_CASES.map(({ id }) => id);
     const productExperienceIds = PRODUCT_EXPERIENCE_KERNEL_CASES.map(({ id }) => id);
 
@@ -147,7 +148,7 @@ describe("Kernel v1 versioned acceptance corpus", () => {
     );
   });
 
-  it("accepts exact discovery, registration-first-read, result guidance, and branch isolation", async () => {
+  it("accepts exact discovery, registration, provider-free, guidance, and isolation cases", async () => {
     const observations = await Promise.all(
       PRODUCT_EXPERIENCE_KERNEL_CASES.map((entry) =>
         entry.run({ now: () => new Date("2026-07-26T08:00:00.000Z") })

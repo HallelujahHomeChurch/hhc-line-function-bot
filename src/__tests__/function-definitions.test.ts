@@ -18,6 +18,32 @@ describe("function definitions", () => {
     expect(FUNCTION_NAMES).toContain("query_wikipedia");
   });
 
+  it("defines Weekly Paper download as a stateless profile read", () => {
+    const definition = getFunctionDefinition("download_weekly_paper" as never);
+
+    expect(FUNCTION_NAMES).toContain("download_weekly_paper");
+    expect(definition).toMatchObject({
+      name: "download_weekly_paper",
+      requires: ["hhc_web_api"],
+      scope: "profile",
+      sideEffectLevel: "read",
+      allowedSources: ["user"],
+      requiredSlots: [],
+      resourcePolicy: { kind: "none", remember: false, alias: false },
+      memoryPolicy: { kind: "none" },
+      agentCapability: {
+        operations: [],
+        refinableFields: []
+      }
+    });
+    expect(definition?.argumentSchema.safeParse({ issueNumber: 1 }).success).toBe(true);
+    expect(definition?.argumentSchema.safeParse({ issueNumber: 2_147_483_647 }).success).toBe(true);
+    expect(definition?.argumentSchema.safeParse({ issueNumber: 0 }).success).toBe(false);
+    expect(definition?.argumentSchema.safeParse({ issueNumber: 2_147_483_648 }).success).toBe(
+      false
+    );
+  });
+
   it("uses find_sheet_music as the canonical sheet music function", () => {
     expect(FUNCTION_NAMES).toContain("find_sheet_music");
     expect(getFunctionDefinition("find_sheet_music")).toMatchObject({

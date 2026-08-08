@@ -490,7 +490,8 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
               text,
               {
                 force: true,
-                variant: introVariantRouteArgument(route.arguments)
+                variant: introVariantRouteArgument(route.arguments),
+                profile: input.profile
               }
             );
             return finish(

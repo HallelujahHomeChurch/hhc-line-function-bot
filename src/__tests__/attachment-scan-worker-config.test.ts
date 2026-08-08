@@ -56,7 +56,7 @@ describe("attachment scan worker config", () => {
         {
           name: "main",
           channelAccessTokenEnv: "LINE_MAIN_CHANNEL_ACCESS_TOKEN",
-          enabledFunctions: ["query_schedule"]
+          enabledFunctions: ["download_weekly_paper"]
         }
       ],
       (path) => {

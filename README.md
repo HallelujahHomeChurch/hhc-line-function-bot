@@ -7,7 +7,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Fastify webhook server with LINE signature validation.
 - Multiple bot profiles in one service, each on its own webhook path.
 - Per-profile access policy, wake words, message type filtering, and function toggles.
-- Controlled semantic planner that uses DeepSeek as the sole LLM provider.
+- Controlled semantic planner that uses DeepSeek as the sole LLM provider for profiles that enable providers; the public `main` profile is provider-free.
 - Action catalog that separates user functions, admin actions, and system actions.
 - Policy gate and admin action registry for natural-language admin operations.
 - Deterministic candidate generation and validation when model providers fail, without a second legacy router.
@@ -31,6 +31,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Destructive admin-action confirmation infrastructure through `/confirm <code>`.
 - Function handlers:
   - `find_ppt_slides`: searches a configured presentation folder, fuzzy-matches `.pptx`, `.ppt`, `.key`, and `.odp` names, and returns 24 hour sharing links.
+  - `download_weekly_paper`: returns a LINE download action for the latest or an explicitly numbered public Weekly Paper through the fixed HHC web API boundary.
   - `query_schedule`: one user-facing service-schedule query that selects configured sources without exposing them.
   - `query_knowledge`: searches admin-registered, profile-shared Notion knowledge with grounded hybrid retrieval.
   - `find_sheet_music`: canonical sheet-music lookup for configured pop and hymn sheet sources.
@@ -69,6 +70,7 @@ pnpm dev
 Set the LINE webhook URL per bot profile, for example:
 
 - `/api/line/webhook/helper`
+- `/api/line/webhook/main`
 - `/api/line/webhook/slides`
 
 Provider auth callbacks are not exposed by this service. LINE webhook traffic should only use the canonical profile paths above.
@@ -107,10 +109,10 @@ Each profile controls:
 - HHC account binding for administrator authorization.
 
 The checked-in [`config/profiles.json`](config/profiles.json) is the sole complete
-production example and source of truth. It deliberately contains only the currently
-provisioned `helper` profile. Add another profile only after its separate LINE
-credential secret references have been provisioned in ACA and `pnpm config:validate`
-passes.
+production example and source of truth. It contains the managed `helper` and public
+direct-only `main` profiles; each has separate LINE credential secret references.
+Provision both credential pairs in ACA before deployment and require
+`pnpm config:validate` to pass.
 Profile names must use lowercase letters, numbers, dash, or underscore. The `webhookPath` must match the profile name exactly; for example, profile `helper` must use `/api/line/webhook/helper`.
 
 `channelSecretEnv` and `channelAccessTokenEnv` resolve LINE credentials from ACA secrets at startup. Admin authorization is not profile configuration: the bot calls account-api through Dapr and trusts the linked account's `admin` role. LLM small-talk profiles must configure all four `smallTalk.prompting` layers in `config/profiles.json`; the runtime does not supply a helper-specific persona or safety fallback. Legacy LINE admin settings and static allowlists are rejected.
@@ -120,7 +122,7 @@ Profile names must use lowercase letters, numbers, dash, or underscore. The `web
 Profiles can choose separate policies for direct chat and groups:
 
 - `directAccessPolicy: "managed"`: registered DB users and Account-authorized admins can use functions. If `registration.enabled=true`, unknown direct users receive a registration prompt.
-- `directAccessPolicy: "public"`: any direct user can use the profile. This is suitable for a future official one-to-one bot.
+- `directAccessPolicy: "public"`: any direct user can use the profile. The official `main` profile uses this direct-only policy.
 - `directAccessPolicy: "blocked"`: direct users are blocked except slash diagnostics such as `/whoami` and admin authorization checks.
 - `groupAccessPolicy: "managed"`: groups must be added through DB access management.
 - `groupAccessPolicy: "blocked"`: group events are ignored.
@@ -128,7 +130,7 @@ Profiles can choose separate policies for direct chat and groups:
 Registration is profile-scoped. The current intended split is:
 
 - `helper`: managed direct users, managed groups, invite-code registration enabled.
-- `main`: public direct users, groups blocked, registration disabled.
+- `main`: public direct users, groups blocked, registration disabled, provider-free, with only Weekly Paper download and public account login presented.
 
 Users and groups register with the same command:
 
@@ -164,17 +166,19 @@ Function toggles are profile-scoped:
 - `save_schedule` and `save_memory` are user-grant-only writes. Use `/function-user-grant`; group grants and group role capabilities cannot open them for every member.
 - Admin actions are not `enabledFunctions` and cannot be granted to groups. They are gated separately by admin identity, source policy, and audit rules.
 
-The application resolves this authority once and projects the exact effective capability set into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction remains `我是小哈，家教會的小幫手。`
+The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
+
+`main` sets `allowedProviders: []`, which is the sole provider-free authority. Its planner returns a local `providers_disabled` result before any provider lookup, while deterministic validation can still execute one explicit `download_weekly_paper` read candidate. Weekly download uses Dapr to call `hhc-web-api`, validates the public response and canonical root-relative asset path, and places the resolved `https://www.alive.org.tw` URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
 
 ## Routing
 
-Provider selection is lane-based. Every semantic lane uses DeepSeek as its sole provider, including function routing, admin routing, memory routing, smart talk, general-agent generation, context compression, and web summarization.
+Provider selection is lane-based. Every enabled semantic lane uses DeepSeek as its sole provider, including function routing, admin routing, memory routing, smart talk, general-agent generation, context compression, and web summarization. A profile with `allowedProviders: []` has no enabled semantic lane.
 
 The DeepSeek provider calls the OpenAI-compatible `/chat/completions` API with `DEEPSEEK_API_KEY`; it does not require provider login routes, mounted auth state, or PostgreSQL token storage.
 
 Provider access is profile-scoped. Every LLM-enabled profile must list `deepseek` in `allowedProviders`.
 
-Each profile declares lane policy with `providerPolicy`. Every lane has `primary: "deepseek"` and semantic fallbacks are rejected during configuration validation.
+Provider-enabled profiles declare lane policy with `providerPolicy`. Their lanes use `primary: "deepseek"`, and semantic fallbacks are rejected during configuration validation. Provider-free main uses an empty policy.
 
 The helper profile enables the controlled agent with at most three candidates and a minimum planner confidence of `0.65`. Candidate generation is deterministic and considers only effective, enabled functions with a declarative `agentCapability` contract. Each contract declares semantic scope, required slots, allowed operations, safe evidence providers, output fields, ambiguity behavior, and successful write-to-read handoffs. Evidence can come from explicit current-message intent, declared argument patterns, a live requester-scoped task frame, promoted dynamic-knowledge metadata, or a bounded read-only retrieval probe. No provider may invent a capability or expand the effective function set.
 
@@ -184,7 +188,7 @@ DeepSeek is the sole `function_routing` planner. The model proposes only semanti
 
 Read capabilities may declaratively opt into a bounded retrieval-evidence provider. Before probing, the contract removes only declared wake words, request wrappers, and capability nouns while preserving the user's identity, date, and topic conditions. The knowledge provider probes at most 20 promoted sources in the current profile and returns only a candidate reason to the planner—never source IDs/names, titles, URLs, or content. Provider failure is distinct from no-match and returns a temporary-unavailable reply instead of pretending the request was unclear. Every non-explicit knowledge-evidence path—task-frame entities, routing metadata, knowledge capability hints, and retrieval evidence—uses the same conservative small-talk and write-intent guard. Explicit knowledge queries remain eligible. DeepSeek proposals remain advisory: they never bypass deterministic profile policy, function toggles, argument validation, clarification, access control, or registered handler execution.
 
-Controlled routing is always authoritative. The removed `controlledAgent.enabled` and `controlledAgent.shadow` fields are rejected during configuration validation so production cannot silently return to a second routing flow. Keep every semantic lane on DeepSeek-only policy.
+Controlled routing is always authoritative. The removed `controlledAgent.enabled` and `controlledAgent.shadow` fields are rejected during configuration validation so production cannot silently return to a second routing flow. Keep every enabled semantic lane on DeepSeek-only policy; do not add a fallback lane for provider-free main.
 
 If DeepSeek returns invalid JSON, times out, or is unavailable, the runtime does not invoke a second semantic model. Only one unambiguous, revalidated high-confidence capability may be recovered from the same declarative contract; unresolved evidence fails closed. Small talk generation is bounded by `LLM_GENERAL_MAX_OUTPUT_TOKENS`.
 

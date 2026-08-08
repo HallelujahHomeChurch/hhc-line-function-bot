@@ -9,8 +9,8 @@ describe("production profile configuration", () => {
     const result = validateProductionProfileConfig(resolve(process.cwd(), "config/profiles.json"));
 
     expect(result).toEqual({
-      profileNames: ["helper"],
-      webhookPaths: ["/api/line/webhook/helper"],
+      profileNames: ["helper", "main"],
+      webhookPaths: ["/api/line/webhook/helper", "/api/line/webhook/main"],
       providerNames: ["deepseek"]
     });
   });

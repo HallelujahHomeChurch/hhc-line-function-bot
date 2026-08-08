@@ -39,7 +39,8 @@ export type AgentPlanProposalInput =
     }
   | {
       status: "no_plan";
-      reasonCode?: "no_candidates" | "providers_unavailable" | "invalid_output";
+      reasonCode?:
+        "no_candidates" | "providers_disabled" | "providers_unavailable" | "invalid_output";
     };
 
 export interface ValidateAgentPlanInput {

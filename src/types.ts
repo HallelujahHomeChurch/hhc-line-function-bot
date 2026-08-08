@@ -35,6 +35,7 @@ export type {
 } from "./application/contracts/function-execution.js";
 
 export const FUNCTION_NAMES = [
+  "download_weekly_paper",
   "find_ppt_slides",
   "query_schedule",
   "query_knowledge",
@@ -141,7 +142,7 @@ export interface ProposedAgentPlan extends AgentPlanProposal {
 
 export interface NoAgentPlan {
   status: "no_plan";
-  reasonCode: "no_candidates" | "providers_unavailable" | "invalid_output";
+  reasonCode: "no_candidates" | "providers_disabled" | "providers_unavailable" | "invalid_output";
   attempts: AgentPlannerAttemptDiagnostic[];
 }
 
@@ -164,7 +165,7 @@ export interface ProviderLanePolicy {
   fallback?: ModelProviderName;
 }
 
-export type ProviderPolicy = Record<ModelProviderLane, ProviderLanePolicy>;
+export type ProviderPolicy = Partial<Record<ModelProviderLane, ProviderLanePolicy>>;
 
 export interface ProviderCapabilities {
   structuredOutput: boolean;
@@ -266,6 +267,7 @@ export interface AgentRuntimeConfig {
 
 export interface BotProfileConfig {
   name: string;
+  identityLine?: string;
   webhookPath: string;
   channelSecret: string;
   channelAccessToken: string;

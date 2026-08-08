@@ -73,6 +73,8 @@ describe("production profile configuration deployment contract", () => {
         "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
         "PLACEHOLDER_LINE_HELPER_CHANNEL_ACCESS_TOKEN_SECRET_REF"
       ],
+      ["LINE_MAIN_CHANNEL_SECRET", "PLACEHOLDER_LINE_MAIN_CHANNEL_SECRET_REF"],
+      ["LINE_MAIN_CHANNEL_ACCESS_TOKEN", "PLACEHOLDER_LINE_MAIN_CHANNEL_ACCESS_TOKEN_SECRET_REF"],
       ["AZURE_OPENAI_EMBEDDING_API_KEY", "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF"],
       ["DEEPSEEK_API_KEY", "PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF"],
       ["OBSERVABILITY_HMAC_KEY", "PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF"],
@@ -270,6 +272,7 @@ describe("production profile configuration deployment contract", () => {
       };
     }>;
     const helper = profiles.find((profile) => profile.name === "helper");
+    const main = profiles.find((profile) => profile.name === "main");
 
     expect(dockerfile).toContain("COPY config ./config");
     expect(manifest).toContain("name: PROFILE_CONFIG_PATH");
@@ -338,6 +341,12 @@ describe("production profile configuration deployment contract", () => {
     expect(helper?.providerPolicy?.function_routing).toEqual({
       primary: "deepseek"
     });
+    expect(main).toMatchObject({
+      allowedMessageTypes: ["text"],
+      enabledFunctions: ["download_weekly_paper"],
+      controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 }
+    });
+    expect(main?.providerPolicy).toEqual({});
     expect(readProjectFile("README.md")).toContain("sole complete");
     expect(readProjectFile("README.md")).not.toContain("Example shape:");
     expect(readProjectFile("README.md")).not.toContain('"personaPrompt"');
@@ -345,6 +354,30 @@ describe("production profile configuration deployment contract", () => {
     expect(readProjectFile(".env.example")).not.toContain("BOT_PROFILES_JSON=");
     expect(readProjectFile(".env.example")).not.toContain("BOT_PROFILES_BASE64_JSON=");
     expect(readProjectFile(".env.example")).not.toContain("CATALOG_SOURCES_PATH");
+  });
+
+  it("injects main LINE credentials into the bot container only", () => {
+    const bot = readProjectFile("aca.containerapp.yaml");
+    expect(bot).toContain("name: LINE_MAIN_CHANNEL_SECRET");
+    expect(bot).toContain("secretRef: PLACEHOLDER_LINE_MAIN_CHANNEL_SECRET_REF");
+    expect(bot).toContain("name: LINE_MAIN_CHANNEL_ACCESS_TOKEN");
+    expect(bot).toContain("secretRef: PLACEHOLDER_LINE_MAIN_CHANNEL_ACCESS_TOKEN_SECRET_REF");
+    expect(readProjectFile(".env.example")).toContain(
+      "LINE_MAIN_CHANNEL_SECRET=PLACEHOLDER_LINE_MAIN_CHANNEL_SECRET"
+    );
+    expect(readProjectFile(".env.example")).toContain(
+      "LINE_MAIN_CHANNEL_ACCESS_TOKEN=PLACEHOLDER_LINE_MAIN_CHANNEL_ACCESS_TOKEN"
+    );
+
+    for (const path of [
+      "aca.attachment-scan-job.yaml",
+      "aca.catalog-sync-job.yaml",
+      "aca.clamav-signature-refresh-job.yaml",
+      "aca.periodic-assurance-job.yaml",
+      "aca.release-probe-job.yaml"
+    ]) {
+      expect(readProjectFile(path)).not.toContain("LINE_MAIN_");
+    }
   });
 
   it("validates pull requests before a separate main-only production release", () => {

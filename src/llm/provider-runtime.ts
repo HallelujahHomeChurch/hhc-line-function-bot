@@ -44,6 +44,7 @@ export function resolvePrimaryProviderName(
   config: AppConfig,
   profile: BotProfileConfig
 ): ModelProviderName {
+  assertProvidersEnabled(profile);
   const provider = config.llm.provider ?? "deepseek";
   assertProviderAllowedForProfile(profile, provider);
   return provider;
@@ -126,9 +127,16 @@ export function resolveProviderNameForLane(
   if (!profile) {
     throw new ProviderResponseError(`profile_not_found:${profileName}`);
   }
+  assertProvidersEnabled(profile);
   const policy =
     profile.providerPolicy?.[lane] ?? defaultPolicyForLane(lane, profile.allowedProviders);
   const provider = role === "primary" ? policy.primary : (policy.fallback ?? policy.primary);
   assertProviderAllowedForProfile(profile, provider);
   return provider;
+}
+
+function assertProvidersEnabled(profile: BotProfileConfig): void {
+  if (profile.allowedProviders.length === 0) {
+    throw new ProviderResponseError(`providers_disabled:${profile.name}`);
+  }
 }

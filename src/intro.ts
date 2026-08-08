@@ -1,15 +1,17 @@
 import { renderCapabilityHelp } from "./application/capabilities/capability-presenters.js";
 import type { EffectiveCapabilityProjection } from "./application/capabilities/effective-capability-projection.js";
 import type { FunctionExecutionResult } from "./types.js";
+import type { BotProfileConfig } from "./types.js";
 
 type IntroVariant = "identity" | "capabilities";
 
 interface IntroReplyOptions {
   force?: boolean;
   variant?: IntroVariant;
+  profile?: Pick<BotProfileConfig, "identityLine" | "allowedProviders">;
 }
 
-const identityTriggers = ["小哈", "小哈?", "小哈？", "小哈是誰", "小哈你是誰"];
+const identityTriggers = ["小哈", "小哈?", "小哈？", "小哈是誰", "小哈你是誰", "你是誰"];
 
 const capabilitiesTriggers = [
   "help",
@@ -40,9 +42,12 @@ export function createIntroReply(
 
   const selectedVariant = variant ?? "identity";
   if (selectedVariant === "identity") {
-    return { ok: true, replyText: "我是小哈，家教會的小幫手。" };
+    return {
+      ok: true,
+      replyText: options.profile?.identityLine ?? "我是小哈，家教會的小幫手。"
+    };
   }
-  return renderCapabilityHelp(projection, "introduction");
+  return renderCapabilityHelp(projection, "introduction", options.profile);
 }
 
 function introVariantFor(normalized: string): IntroVariant | undefined {

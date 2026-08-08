@@ -30,10 +30,12 @@ import {
   createQueryKnowledgeTextMessageHandler
 } from "./query-knowledge.js";
 import { createSaveScheduleHandler } from "./schedule-memory.js";
+import { downloadWeeklyPaperModule } from "../capabilities/download-weekly-paper.js";
 
 export type { FunctionModule, FunctionModuleContext, FunctionModuleRegistrations, RouterEvalCase };
 
 export const FUNCTION_MODULES: FunctionModule[] = [
+  downloadWeeklyPaperModule,
   {
     name: "find_ppt_slides",
     definition: requiredDefinition("find_ppt_slides"),

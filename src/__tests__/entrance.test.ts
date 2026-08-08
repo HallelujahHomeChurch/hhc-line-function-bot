@@ -5,11 +5,14 @@ import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
+import { createControlledAgentRouter } from "../agent/controlled-agent-router.js";
+import { createAgentPlanner } from "../agent/planner.js";
 import type { ControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
+import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
 import { signLineBody } from "../line-signature.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
@@ -234,6 +237,38 @@ function accessConfig(): AppConfig {
     },
     access: { registrationInviteCodeTtlMinutes: 60 }
   };
+}
+
+function providerFreeMainConfig(): AppConfig {
+  const config = accessConfig();
+  config.profiles = [
+    {
+      name: "main",
+      identityLine: "我是 HHC 家教會小幫手。",
+      webhookPath: "/api/line/webhook/main",
+      channelSecret: "main-secret",
+      channelAccessToken: "main-token",
+      allowDirectUser: true,
+      allowRooms: false,
+      allowedMessageTypes: ["text"],
+      groupRequireWakeWord: false,
+      wakeKeywords: [],
+      acceptMention: false,
+      enabledFunctions: ["download_weekly_paper"],
+      adminDirectOnly: true,
+      directAccessPolicy: "public",
+      groupAccessPolicy: "blocked",
+      registration: { enabled: false },
+      smallTalk: { mode: "template", maxChars: 80 },
+      allowedProviders: [],
+      allowSubscriptionProviders: false,
+      providerPolicy: {},
+      controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
+      schedulePolicy: { meetingWindows: [], domains: [] },
+      generalAgent: { enabled: false, conversationWindowSeconds: 60 }
+    }
+  ];
+  return config;
 }
 
 describe("LINE entrance", () => {
@@ -863,6 +898,52 @@ describe("LINE entrance", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, ignored: true, reason: "wake_word_missing" });
     expect(router.route).not.toHaveBeenCalled();
+  });
+
+  it("rejects unrelated managed helper group chatter before dedupe, rate, Account, or identity", async () => {
+    const rateCheck = vi.fn().mockResolvedValue({
+      allowed: true,
+      remaining: 19,
+      resetAt: "2026-08-08T12:00:00Z"
+    });
+    const authorizeAdministrator = vi.fn();
+    const createLineIdentityClient = vi.fn();
+    const dedupe = vi.fn();
+    const app = createTestApp(testConfig(), {
+      rateLimiter: { check: rateCheck },
+      webhookEventStore: { tryStart: dedupe },
+      accountAdminClient: {
+        authorizeAdministrator,
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
+      createLineIdentityClient,
+      createLineReplyClient: () => ({ replyText: vi.fn() })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "unrelated-managed-group",
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      message: { type: "text", text: "大家晚上好" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.json()).toMatchObject({
+      ok: true,
+      ignored: true,
+      reason: "wake_word_missing"
+    });
+    expect(dedupe).not.toHaveBeenCalled();
+    expect(rateCheck).not.toHaveBeenCalled();
+    expect(authorizeAdministrator).not.toHaveBeenCalled();
+    expect(createLineIdentityClient).not.toHaveBeenCalled();
   });
 
   it("ignores third-person group mentions of the bot before calling the router", async () => {
@@ -2035,7 +2116,7 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("我目前可以協助：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
-    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(3);
   });
 
   it("uses controlled LLM small talk for direct greetings when enabled by profile", async () => {
@@ -2160,7 +2241,7 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("我目前可以協助：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查投影片：");
     expect(replyText.mock.calls[0]?.[1]).toContain("- 查服事表：");
-    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(3);
   });
 
   it("does not disclose profile write functions in a regular user's capability reply", async () => {
@@ -2239,7 +2320,7 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[1]?.[2]?.quickReplies).toEqual(
       replyText.mock.calls[0]?.[2]?.quickReplies
     );
-    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(2);
+    expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(3);
   });
 
   it("introduces sheet music lookup without exposing storage details", async () => {
@@ -3653,6 +3734,162 @@ describe("LINE entrance", () => {
     expect(groupRes.json()).toMatchObject({ ok: true, ignored: true, reason: "group_blocked" });
     expect(route).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["latest", "下載最新週報", "user", "success"],
+    ["specified", "第1733期週報", "user", "success"],
+    ["not found", "第9999期週報", "user", "not_found"],
+    ["help", "/help", "user", "help"],
+    ["account login", "登入 HHC 帳戶", "user", "login"],
+    ["unknown", "我想知道這是什麼", "user", "local"],
+    ["blocked group", "下載最新週報", "group", "blocked"],
+    ["admin-looking", "幫我建立邀請碼", "user", "local"],
+    ["route test", "/route-test 查服事表", "user", "local"],
+    ["typo", "下戴最新週包", "user", "local"],
+    ["cross function", "查下一場服事表", "user", "local"],
+    ["write intent", "幫我保存這份週報", "user", "local"],
+    ["numeric only", "1733", "user", "local"]
+  ] as const)(
+    "keeps provider-free main entrance local and gate-ordered: %s",
+    async (_label, text, sourceType, expected) => {
+      const order: string[] = [];
+      const authorizeAdministrator = vi.fn();
+      const providerCompleteJson = vi.fn();
+      const providerCompleteText = vi.fn<TextGenerationProvider["completeText"]>();
+      const embeddingRequest = vi.fn();
+      const planner = createAgentPlanner({
+        primary: { providerName: "deepseek", completeJson: providerCompleteJson },
+        providersEnabledForProfile: () => false
+      });
+      const controlledAgentRouter = createControlledAgentRouter({ planner });
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("/by-number/9999")) {
+          return new Response("{}", { status: 404 });
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              issueNumber: 1733,
+              issueDate: "2026-08-09",
+              locale: "zh-Hant",
+              title: "第 1733 期週報",
+              subtitle: "HHC Weekly Paper",
+              downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
+              downloadFileName: "1733-weekly.pdf",
+              publishedAt: "2026-08-09T02:00:00.000Z",
+              version: 1
+            },
+            meta: {},
+            error: null
+          }),
+          { status: 200 }
+        );
+      });
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const createBinding = vi.fn().mockResolvedValue({
+        bindingUrl: "https://account.alive.org.tw/line/bind#token=opaque",
+        expiresAt: "2026-08-08T12:00:00Z"
+      });
+      const app = createApp(providerFreeMainConfig(), {
+        controlledAgentRouter,
+        functionRegistry: {
+          download_weekly_paper: (args) => downloadWeeklyPaper(args, fetchImpl),
+          query_knowledge: async () => {
+            embeddingRequest();
+            return { ok: true, replyText: "unexpected embedding path" };
+          }
+        },
+        textGenerator: { completeText: providerCompleteText },
+        textFallbackGenerator: { completeText: providerCompleteText },
+        accountAdminClient: {
+          authorizeAdministrator,
+          createBinding,
+          finalizeBinding: vi.fn()
+        },
+        createLineAccountLinkClient: () => ({
+          issueLinkToken: vi.fn().mockResolvedValue("native-link-token")
+        }),
+        createLineReplyClient: () => ({ replyText }),
+        createLineIdentityClient: () => ({
+          getUserDisplayName: vi.fn(async () => {
+            order.push("display");
+            return "Ray";
+          }),
+          getGroupDisplayName: vi.fn(async () => {
+            order.push("display");
+            return "Group";
+          })
+        }),
+        webhookEventStore: {
+          tryStart: vi.fn(async () => {
+            order.push("dedupe");
+            return "started" as const;
+          })
+        },
+        rateLimiter: {
+          check: vi.fn(async () => {
+            order.push("rate");
+            return { allowed: true, remaining: 19, resetAt: "2026-08-08T12:00:00Z" };
+          })
+        }
+      });
+      const source =
+        sourceType === "group"
+          ? { type: "group", groupId: "Cblocked", userId: "U1" }
+          : { type: "user", userId: "U1" };
+      const body = JSON.stringify({
+        destination: "channel-destination",
+        events: [
+          {
+            type: "message",
+            webhookEventId: `main-${_label}`,
+            replyToken: "reply-token",
+            source,
+            message: { type: "text", text }
+          }
+        ]
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(authorizeAdministrator).not.toHaveBeenCalled();
+      expect(providerCompleteJson).not.toHaveBeenCalled();
+      expect(providerCompleteText).not.toHaveBeenCalled();
+      expect(embeddingRequest).not.toHaveBeenCalled();
+      if (expected === "blocked") {
+        expect(response.json()).toMatchObject({ ignored: true, reason: "group_blocked" });
+        expect(order).toEqual([]);
+        expect(replyText).not.toHaveBeenCalled();
+        return;
+      }
+      expect(order.slice(0, 2)).toEqual(["dedupe", "rate"]);
+      if (expected === "login") {
+        expect(order).toEqual(["dedupe", "rate"]);
+        expect(createBinding).toHaveBeenCalledOnce();
+      } else {
+        const displayIndex = order.indexOf("display");
+        if (displayIndex !== -1) {
+          expect(displayIndex).toBeGreaterThan(order.indexOf("rate"));
+        }
+      }
+      const reply = String(replyText.mock.calls[0]?.[1]);
+      if (expected === "success") expect(reply).toContain("第 1733 期週報");
+      if (expected === "not_found") expect(reply).toContain("沒有找到");
+      if (expected === "help") {
+        expect(reply).toContain("下載週報");
+        expect(reply).toContain("登入 HHC 帳戶");
+        expect(reply).not.toMatch(/registry|memories|route-test/iu);
+      }
+      if (expected === "local") expect(reply).not.toContain("管理權限");
+    }
+  );
 
   it("ignores legacy local admin rows and trusts Account authorization", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();

@@ -1,4 +1,5 @@
-import type { FunctionExecutionResult } from "../contracts/function-execution.js";
+import type { FunctionExecutionResult, QuickReplyItem } from "../contracts/function-execution.js";
+import type { BotProfileConfig } from "../../types.js";
 import type {
   CapabilityPresentation,
   EffectiveCapabilityProjection
@@ -6,15 +7,19 @@ import type {
 
 export function renderCapabilityHelp(
   projection: EffectiveCapabilityProjection,
-  mode: "help" | "introduction"
+  mode: "help" | "introduction",
+  profile?: Pick<BotProfileConfig, "identityLine" | "allowedProviders">
 ): FunctionExecutionResult {
+  const identityLine = profile?.identityLine ?? "我是小哈，家教會的小幫手。";
   const heading =
-    mode === "introduction"
-      ? ["我是小哈，家教會的小幫手。", "", "我目前可以協助："]
-      : ["我目前可以協助："];
-  const sections = capabilitySections(projection);
+    mode === "introduction" ? [identityLine, "", "我目前可以協助："] : ["我目前可以協助："];
+  const sections = [
+    ...capabilitySections(projection),
+    ...(projection.accountLoginAvailable ? ["帳戶\n- 登入 HHC 帳戶：連結你的 HHC 帳戶。"] : [])
+  ];
+  const providerFree = profile?.allowedProviders?.length === 0;
   const commandSection =
-    mode === "help"
+    mode === "help" && !providerFree
       ? [
           "",
           "常用指令",
@@ -33,8 +38,18 @@ export function renderCapabilityHelp(
       ...(sections.length > 0 ? sections : ["目前還沒有開放可使用的項目。"]),
       ...commandSection
     ].join("\n"),
-    quickReplies: projection.onboarding.map((presentation) => presentation.quickReply).slice(0, 3)
+    quickReplies: helpQuickReplies(projection)
   };
+}
+
+function helpQuickReplies(projection: EffectiveCapabilityProjection): QuickReplyItem[] {
+  const capabilityReplies = projection.onboarding.map((presentation) => presentation.quickReply);
+  if (!projection.accountLoginAvailable) return capabilityReplies.slice(0, 3);
+  const loginReply: QuickReplyItem = {
+    label: "登入 HHC 帳戶",
+    action: { type: "message", label: "登入 HHC 帳戶", text: "登入 HHC 帳戶" }
+  };
+  return [...capabilityReplies.slice(0, 2), loginReply];
 }
 
 export function renderRegistrationCompletion(

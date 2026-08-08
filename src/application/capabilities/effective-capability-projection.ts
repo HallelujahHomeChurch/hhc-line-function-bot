@@ -19,6 +19,7 @@ export interface EffectiveCapabilityProjection {
   reads: CapabilityPresentation[];
   writes: CapabilityPresentation[];
   onboarding: CapabilityPresentation[];
+  accountLoginAvailable: boolean;
 }
 
 const preferredOnboardingReads: FunctionName[] = [
@@ -31,8 +32,9 @@ export function projectEffectiveCapabilities(input: {
   context: EffectiveAccessContext;
   definitions?: readonly FunctionDefinition[];
 }): EffectiveCapabilityProjection {
+  const accountLoginAvailable = input.context.sourceType === "user";
   if (!input.context.authorized) {
-    return emptyProjection();
+    return emptyProjection(accountLoginAvailable);
   }
 
   const effectiveNames = new Set(
@@ -57,7 +59,8 @@ export function projectEffectiveCapabilities(input: {
   return {
     reads,
     writes,
-    onboarding: preferredOnboarding(reads)
+    onboarding: preferredOnboarding(reads),
+    accountLoginAvailable
   };
 }
 
@@ -101,6 +104,6 @@ function preferredOnboarding(reads: CapabilityPresentation[]): CapabilityPresent
   return [...preferred, ...fallback].slice(0, 3);
 }
 
-function emptyProjection(): EffectiveCapabilityProjection {
-  return { reads: [], writes: [], onboarding: [] };
+function emptyProjection(accountLoginAvailable: boolean): EffectiveCapabilityProjection {
+  return { reads: [], writes: [], onboarding: [], accountLoginAvailable };
 }

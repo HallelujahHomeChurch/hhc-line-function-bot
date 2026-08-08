@@ -45,6 +45,26 @@ const retreatKnowledge: KnowledgeSourceMetadata = {
 };
 
 describe("deterministic capability candidates", () => {
+  it("requires explicit Weekly Paper evidence and never treats a fresh number as intent", () => {
+    const candidates = (text: string) =>
+      buildCapabilityCandidates({
+        text,
+        enabledFunctions: ["download_weekly_paper"],
+        source: "user",
+        knowledgeSources: [],
+        maxCandidates: 3
+      });
+
+    expect(candidates("下載第 1733 期週報")).toEqual([
+      expect.objectContaining({
+        capability: "download_weekly_paper",
+        reason: "explicit_intent"
+      })
+    ]);
+    for (const text of ["1733", "下戴最新週包"]) {
+      expect(candidates(text), text).toEqual([]);
+    }
+  });
   it("accepts bounded profile routing hints for declaratively added domains", () => {
     expect(
       buildCapabilityCandidates({

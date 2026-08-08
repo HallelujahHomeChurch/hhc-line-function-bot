@@ -112,7 +112,11 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     lane: "function_routing"
   });
   const agentPlanner = createAgentPlanner({
-    primary: functionRoutingPrimary
+    primary: functionRoutingPrimary,
+    providersEnabledForProfile: (profileName) =>
+      config.profiles.some(
+        (profile) => profile.name === profileName && profile.allowedProviders.length > 0
+      )
   });
   const adminRoutingPrimary = createProfileAwareProvider({
     config,

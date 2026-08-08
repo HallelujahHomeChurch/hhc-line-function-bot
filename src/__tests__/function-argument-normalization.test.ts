@@ -6,6 +6,45 @@ import {
 } from "../functions/argument-normalization.js";
 
 describe("function argument normalization", () => {
+  it("extracts a bounded issue number only from explicit Weekly Paper intent", () => {
+    expect(
+      normalizeFunctionArguments(
+        "download_weekly_paper" as never,
+        {},
+        { text: "下載第 1733 期週報" }
+      )
+    ).toEqual({ issueNumber: 1733 });
+    expect(
+      normalizeFunctionArguments(
+        "download_weekly_paper" as never,
+        { issueNumber: 1733 },
+        { text: "1733" }
+      )
+    ).toEqual({});
+    expect(
+      normalizeFunctionArguments(
+        "download_weekly_paper" as never,
+        {},
+        { text: "下載第 2147483648 期週報" }
+      )
+    ).toEqual({ issueNumber: 2_147_483_648 });
+    expect(
+      normalizeFunctionArguments("download_weekly_paper" as never, {}, { text: "1733期週報" })
+    ).toEqual({ issueNumber: 1733 });
+    expect(
+      normalizeFunctionArguments("download_weekly_paper" as never, {}, { text: "週報第1733期" })
+    ).toEqual({ issueNumber: 1733 });
+    expect(
+      normalizeFunctionArguments(
+        "download_weekly_paper" as never,
+        {},
+        {
+          text: "第10000001733期週報"
+        }
+      )
+    ).toEqual({ issueNumber: 10_000_001_733 });
+  });
+
   it("drops a model-only sheet music format and defaults the search to any", () => {
     expect(
       normalizeFunctionArguments(

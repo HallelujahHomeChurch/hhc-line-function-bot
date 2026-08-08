@@ -109,6 +109,7 @@ export interface CreateAgentPlannerOptions {
   primary: ChatProvider;
   fallback?: ChatProvider;
   timeoutMs?: number;
+  providersEnabledForProfile?: (profileName: string) => boolean;
 }
 
 interface CandidateSummary {
@@ -147,6 +148,9 @@ export function createAgentPlanner(options: CreateAgentPlannerOptions): AgentPla
       const candidates = summarizeCandidates(input.candidates);
       if (candidates.length === 0) {
         return { status: "no_plan", reasonCode: "no_candidates", attempts: [] };
+      }
+      if (options.providersEnabledForProfile?.(input.profileName) === false) {
+        return { status: "no_plan", reasonCode: "providers_disabled", attempts: [] };
       }
 
       const text = sanitizeText(input.text, LIMITS.queryCharacters);

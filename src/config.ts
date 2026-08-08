@@ -153,6 +153,7 @@ const profileSchema = z.object({
       message: "Profile name must use lowercase letters, numbers, dash, or underscore"
     }),
   webhookPath: z.string().startsWith("/"),
+  identityLine: z.string().trim().min(1).max(120).default("我是小哈，家教會的小幫手。"),
   channelSecret: z.string().min(1).optional(),
   channelSecretEnv: z.string().trim().min(1).optional(),
   channelAccessToken: z.string().min(1).optional(),
@@ -536,7 +537,10 @@ function validateProviderPolicy(
         throw new Error(`Profile ${profile.name} cannot allow subscription provider ${provider}`);
       }
     }
-    if (!profile.allowedProviders.includes(defaultProvider)) {
+    if (
+      profile.allowedProviders.length > 0 &&
+      !profile.allowedProviders.includes(defaultProvider)
+    ) {
       throw new Error(
         `Profile ${profile.name} default provider ${defaultProvider} must be listed in allowedProviders`
       );

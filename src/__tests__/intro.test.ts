@@ -51,7 +51,11 @@ describe("intro replies", () => {
     expect(result?.replyText).toContain("可以查詢\n- 查投影片：");
     expect(result?.replyText).toContain("- 查服事表：");
     expect(result?.replyText).toContain("可以保存或更新\n- 記服事表：");
-    expect(result?.quickReplies?.map(({ label }) => label)).toEqual(["查服事表", "查投影片"]);
+    expect(result?.quickReplies?.map(({ label }) => label)).toEqual([
+      "查服事表",
+      "查投影片",
+      "登入 HHC 帳戶"
+    ]);
   });
 
   it("understands capabilities questions with address punctuation", () => {
@@ -84,7 +88,16 @@ describe("intro replies", () => {
     expect(first?.quickReplies?.map(({ label }) => label)).toEqual([
       "查服事表",
       "查歌譜",
-      "查投影片"
+      "登入 HHC 帳戶"
     ]);
+  });
+
+  it("uses the current profile identity without helper-specific copy", () => {
+    const result = createIntroReply(projection(["download_weekly_paper"]), "你是誰", {
+      profile: { identityLine: "我是 HHC 家教會小幫手。" }
+    });
+
+    expect(result?.replyText).toBe("我是 HHC 家教會小幫手。");
+    expect(result?.replyText).not.toContain("小哈");
   });
 });

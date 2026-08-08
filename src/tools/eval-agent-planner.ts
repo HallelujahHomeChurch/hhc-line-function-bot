@@ -90,6 +90,7 @@ export interface AgentPlannerEvalCase {
   expectedCandidates: FunctionName[];
   expectedProposal: ExpectedProposal;
   expectedFinal: ExpectedFinal;
+  sourceType?: "user" | "group";
   activeTask?: ActiveTaskContext;
   knowledgeSources?: KnowledgeSourceMetadata[];
   retrievalEvidence?: FunctionName[];
@@ -364,6 +365,20 @@ export const AGENT_PLANNER_EVAL_CASES: AgentPlannerEvalCase[] = [
     }
   },
   {
+    name: "acceptance-15-provider-free-explicit-weekly-read",
+    text: "第1733期週報",
+    enabledFunctions: ["download_weekly_paper"],
+    expectedCandidates: ["download_weekly_paper"],
+    sourceType: "user",
+    expectedProposal: { status: "no_plan" },
+    expectedFinal: {
+      disposition: "execute",
+      capability: "download_weekly_paper",
+      reasonCode: "deterministic_explicit_intent",
+      arguments: { issueNumber: 1733 }
+    }
+  },
+  {
     name: "negative-no-capability",
     text: "你好",
     enabledFunctions: ["query_schedule", "query_knowledge"],
@@ -474,6 +489,7 @@ const OFFLINE_PLANNER_FIXTURES: Readonly<Record<string, AgentPlanProposalInput>>
     "save_schedule",
     {}
   ),
+  "acceptance-15-provider-free-explicit-weekly-read": noPlan(),
   "negative-no-capability": noPlan(),
   "disabled-capability": noPlan(),
   "ambiguous-active-entity": proposed("refine", "query_schedule", {
@@ -540,7 +556,7 @@ export async function evaluateAgentPlannerCases(
       knowledgeSources: entry.knowledgeSources ?? [],
       retrievalEvidence: entry.retrievalEvidence,
       maxCandidates: 3,
-      source: "group"
+      source: entry.sourceType ?? "group"
     });
     if (
       !sameValues(
@@ -566,7 +582,7 @@ export async function evaluateAgentPlannerCases(
       proposal,
       activeTask: resolvedTask.activeTask,
       minConfidence: 0.65,
-      sourceType: "group",
+      sourceType: entry.sourceType ?? "group",
       now: NOW
     });
     if (!matchesFinal(finalPlan, entry.expectedFinal)) {

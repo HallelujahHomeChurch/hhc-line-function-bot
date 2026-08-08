@@ -32,6 +32,7 @@ import {
 } from "../../application/access/effective-access.js";
 import type { ControlledCompletionObserver } from "../../application/turn/completion-observer.js";
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
+import { renderCapabilityHelp } from "../../application/capabilities/capability-presenters.js";
 import {
   classifyGroupEngagement,
   groupEngagementAllowsReply,
@@ -501,31 +502,33 @@ async function handleWebhook(
     incrementIgnored(ignoredCounts, ok ? "account_login_started" : "account_login_failed");
   }
 
-  const allowedEvents: Array<{
-    event: LineEvent;
-    accountAuthorization: { available: boolean; bound: boolean; allowed: boolean };
-  }> = [];
+  const allowedEvents: LineEvent[] = [];
+  const providerGroupPreAdmission = new Set<LineEvent>();
 
   for (const event of ordinaryEvents) {
     if (handledLoginEvents.has(event)) continue;
-    const accountAuthorization = await authorizeAdministrator(
-      accountAdminClient,
-      event.source.userId
-    );
-    const allow = await allowEvent(
-      profile,
-      event,
-      textMessageHandlers,
-      accessStore,
-      conversationWindowStore,
-      accountAuthorization.allowed,
-      sessionStore
-    );
-    if (allow.allowed) {
-      allowedEvents.push({ event, accountAuthorization });
-    } else {
+    const allow = structurallyAllowEvent(profile, event);
+    if (!allow.allowed) {
       incrementIgnored(ignoredCounts, allow.reason);
+      continue;
     }
+    if (profileUsesProviders(profile) && event.source.type === "group") {
+      const preAdmission = await allowEvent(
+        profile,
+        event,
+        textMessageHandlers,
+        accessStore,
+        conversationWindowStore,
+        false,
+        sessionStore
+      );
+      if (!preAdmission.allowed) {
+        incrementIgnored(ignoredCounts, preAdmission.reason);
+        continue;
+      }
+      providerGroupPreAdmission.add(event);
+    }
+    allowedEvents.push(event);
   }
 
   if (allowedEvents.length === 0) {
@@ -538,7 +541,9 @@ async function handleWebhook(
 
   const line = createReplyClient(profile);
   const lineIdentity = createIdentityClient(profile);
-  for (const { event, accountAuthorization } of allowedEvents) {
+  let admittedEvents = 0;
+  let rejectedAfterStructuralGate = false;
+  for (const event of allowedEvents) {
     if (
       event.webhookEventId &&
       (await webhookEventStore.tryStart(
@@ -554,6 +559,41 @@ async function handleWebhook(
       continue;
     }
     const requestId = requestIdFactory();
+    const rateLimit = await rateLimiter.check({ profileName: profile.name, source: event.source });
+    if (!rateLimit.allowed) {
+      if (event.replyToken) {
+        await line.replyText(event.replyToken, "你傳得太快了，請稍後再試。", undefined);
+      }
+      await emitRouteEvent(routeObserver, {
+        kind: "rate_limited",
+        profileName: profile.name,
+        sourceType: event.source.type,
+        requestId,
+        ok: false
+      });
+      continue;
+    }
+    const accountAuthorization = profileUsesProviders(profile)
+      ? await authorizeAdministrator(accountAdminClient, event.source.userId)
+      : { available: true, bound: false, allowed: false };
+    const allow =
+      providerGroupPreAdmission.has(event) && !accountAuthorization.allowed
+        ? { allowed: true, reason: "provider_group_pre_admitted" }
+        : await allowEvent(
+            profile,
+            event,
+            textMessageHandlers,
+            accessStore,
+            conversationWindowStore,
+            accountAuthorization.allowed,
+            sessionStore
+          );
+    if (!allow.allowed) {
+      incrementIgnored(ignoredCounts, allow.reason);
+      rejectedAfterStructuralGate = true;
+      continue;
+    }
+    admittedEvents += 1;
     const requesterIsAdmin = accountAuthorization.allowed;
     const effectiveAccess = await resolveEffectiveAccessContext({
       profile,
@@ -641,21 +681,6 @@ async function handleWebhook(
       if (!event.replyToken) {
         continue;
       }
-      const rateLimit = await rateLimiter.check({
-        profileName: profile.name,
-        source: event.source
-      });
-      if (!rateLimit.allowed) {
-        await line.replyText(event.replyToken, "你傳得太快了，請稍後再試。", undefined);
-        await emitRouteEvent(routeObserver, {
-          kind: "rate_limited",
-          profileName: profile.name,
-          sourceType: event.source.type,
-          requestId,
-          ok: false
-        });
-        continue;
-      }
       const attachmentResult = await handleAttachmentMessage({
         profile: effectiveProfile,
         event,
@@ -685,21 +710,20 @@ async function handleWebhook(
       continue;
     }
 
-    const rateLimit = await rateLimiter.check({ profileName: profile.name, source: event.source });
-    if (!rateLimit.allowed) {
-      await line.replyText(event.replyToken, "你傳得太快了，請稍後再試。", undefined);
-      await emitRouteEvent(routeObserver, {
-        kind: "rate_limited",
-        profileName: profile.name,
-        sourceType: event.source.type,
-        requestId,
-        ok: false
-      });
-      continue;
-    }
-
     if (isAdminCommand(event.message.text)) {
       const parsedAdminCommand = parseAdminCommand(event.message.text);
+      if (
+        !profileUsesProviders(effectiveProfile) &&
+        !(parsedAdminCommand?.command === "help" && parsedAdminCommand.args.length === 0)
+      ) {
+        const localHelp = renderCapabilityHelp(capabilityProjection, "help", effectiveProfile);
+        await line.replyText(
+          event.replyToken,
+          localHelp.replyText,
+          localHelp.quickReplies ? { quickReplies: localHelp.quickReplies } : undefined
+        );
+        continue;
+      }
       if (
         parsedAdminCommand &&
         requiresAdminAuthorization(parsedAdminCommand, adminHandlers) &&
@@ -814,6 +838,15 @@ async function handleWebhook(
     }
 
     if (!requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
+      if (!profileUsesProviders(effectiveProfile)) {
+        const localHelp = renderCapabilityHelp(capabilityProjection, "help", effectiveProfile);
+        await line.replyText(
+          event.replyToken,
+          localHelp.replyText,
+          localHelp.quickReplies ? { quickReplies: localHelp.quickReplies } : undefined
+        );
+        continue;
+      }
       await line.replyText(
         event.replyToken,
         await adminAuthorizationReply({
@@ -841,7 +874,10 @@ async function handleWebhook(
       Boolean(conversationScope) &&
       (await conversationWindowStore.isActive(conversationScope as ConversationWindowScope));
     if (groupEngagement?.kind === "intro") {
-      const intro = createIntroReply(capabilityProjection, event.message.text, { force: true });
+      const intro = createIntroReply(capabilityProjection, event.message.text, {
+        force: true,
+        profile: effectiveProfile
+      });
       await emitRouteEvent(routeObserver, {
         kind: "route",
         profileName: profile.name,
@@ -884,7 +920,9 @@ async function handleWebhook(
       continue;
     }
 
-    const intro = createIntroReply(capabilityProjection, event.message.text);
+    const intro = createIntroReply(capabilityProjection, event.message.text, {
+      profile: effectiveProfile
+    });
     if (intro) {
       await line.replyText(
         event.replyToken,
@@ -924,9 +962,16 @@ async function handleWebhook(
     }
   }
 
+  if (admittedEvents === 0 && rejectedAfterStructuralGate && ignoredCounts.size > 0) {
+    return reply.send({
+      ok: true,
+      ignored: true,
+      reason: formatIgnoredSummary(ignoredCounts)
+    });
+  }
   return reply.send({
     ok: true,
-    allowedEvents: allowedEvents.length,
+    allowedEvents: admittedEvents,
     ignored: ignoredCounts.size > 0 ? formatIgnoredSummary(ignoredCounts) : undefined
   });
 }
@@ -1166,6 +1211,41 @@ async function allowEvent(
     default:
       return { allowed: false, reason: "source_type_not_supported" };
   }
+}
+
+function structurallyAllowEvent(profile: BotProfileConfig, event: LineEvent): AllowResult {
+  const sourceType = event.source?.type?.trim().toLowerCase();
+  const eventType = event.type?.trim().toLowerCase();
+  const command = parseAdminCommand(event.message?.text)?.command;
+  if (sourceType === "room") {
+    return {
+      allowed: false,
+      reason: profile.allowRooms ? "room_not_implemented" : "room_blocked"
+    };
+  }
+  if (sourceType === "group" && groupAccessPolicy(profile) === "blocked") {
+    return { allowed: false, reason: "group_blocked" };
+  }
+  if (sourceType !== "user" && sourceType !== "group") {
+    return { allowed: false, reason: "source_type_not_supported" };
+  }
+  if (sourceType === "user" && directAccessPolicy(profile) === "blocked" && !command) {
+    return { allowed: false, reason: "direct_user_blocked" };
+  }
+  if (eventType === "postback") {
+    return { allowed: true, reason: "postback_structurally_allowed" };
+  }
+  if (eventType !== "message") {
+    return { allowed: false, reason: "event_type_not_allowed" };
+  }
+  if (!messageTypeAllowed(profile, event)) {
+    return { allowed: false, reason: "message_type_not_allowed" };
+  }
+  return { allowed: true, reason: "message_structurally_allowed" };
+}
+
+function profileUsesProviders(profile: BotProfileConfig): boolean {
+  return profile.allowedProviders?.length !== 0;
 }
 
 function isAdminCommand(text: string | undefined): boolean {
@@ -1435,7 +1515,7 @@ function resolveProviderArg(
   if (value) {
     return undefined;
   }
-  return profile.providerPolicy?.smart_talk.primary ?? "deepseek";
+  return profile.providerPolicy?.smart_talk?.primary ?? "deepseek";
 }
 
 function formatLanePolicy(policy: {
