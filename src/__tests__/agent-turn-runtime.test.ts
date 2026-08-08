@@ -888,4 +888,164 @@ describe("AgentTurnRuntime controlled path", () => {
       expect.objectContaining({ action: "save_memory", durationMs: expect.any(Number) })
     );
   });
+
+  it("reauthorizes a restricted pending function before its continuation handler", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const saveMemory = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "已保存"
+    });
+    await sessionStore.set({
+      id: "pending-restricted",
+      type: "pending_function",
+      action: "save_memory",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      arguments: { content: "測試" },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi.fn().mockResolvedValue([]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { save_memory: saveMemory },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_memory: saveMemory }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+    const restrictedProfile = profile(["save_memory"]);
+    restrictedProfile.permissionRequiredFunctions = ["save_memory"];
+
+    const result = await runtime.handleTextTurn({
+      profile: restrictedProfile,
+      event: event("保存"),
+      requestId: "restricted-continuation",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory"]);
+    expect(saveMemory).not.toHaveBeenCalled();
+    expect(result?.replyText).not.toBe("已保存");
+  });
+
+  it("restores an allowed restricted pending function into the continuation profile", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const saveMemory = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "已保存"
+    });
+    await sessionStore.set({
+      id: "pending-restricted-allowed",
+      type: "pending_function",
+      action: "save_memory",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      arguments: { content: "測試" },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi.fn().mockResolvedValue(["save_memory"]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { save_memory: saveMemory },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_memory: saveMemory }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+    const restrictedEffectiveProfile = profile([]);
+    restrictedEffectiveProfile.permissionRequiredFunctions = ["save_memory"];
+
+    const result = await runtime.handleTextTurn({
+      profile: restrictedEffectiveProfile,
+      event: event("保存"),
+      requestId: "restricted-continuation-allowed",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory"]);
+    expect(saveMemory).toHaveBeenCalledOnce();
+    expect(result?.replyText).toBe("已保存");
+  });
+
+  it("authorizes a capability-owned text entrance before matching its handler", async () => {
+    const activation = vi.fn().mockResolvedValue({ ok: true, replyText: "請上傳檔案" });
+    const authorizeFunctions = vi.fn().mockResolvedValue(["save_resource"]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {
+        upload_activation: {
+          turnStage: "attachment",
+          capability: "save_resource",
+          matches: (_request, context) =>
+            context.profile.enabledFunctions.includes("save_resource"),
+          handle: activation
+        }
+      },
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+    const restrictedEffectiveProfile = profile([]);
+    restrictedEffectiveProfile.permissionRequiredFunctions = ["save_resource"];
+
+    const result = await runtime.handleTextTurn({
+      profile: restrictedEffectiveProfile,
+      event: event("小哈我要上傳檔案"),
+      requestId: "restricted-text-entrance",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_resource"]);
+    expect(activation).toHaveBeenCalledOnce();
+    expect(result?.replyText).toBe("請上傳檔案");
+  });
+
+  it("fails a denied capability-owned text entrance closed", async () => {
+    const activation = vi.fn().mockResolvedValue({ ok: true, replyText: "請上傳檔案" });
+    const authorizeFunctions = vi.fn().mockResolvedValue([]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {
+        upload_activation: {
+          turnStage: "attachment",
+          capability: "save_resource",
+          matches: (_request, context) =>
+            context.profile.enabledFunctions.includes("save_resource"),
+          handle: activation
+        }
+      },
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+    const restrictedEffectiveProfile = profile([]);
+    restrictedEffectiveProfile.permissionRequiredFunctions = ["save_resource"];
+
+    await runtime.handleTextTurn({
+      profile: restrictedEffectiveProfile,
+      event: event("小哈我要上傳檔案"),
+      requestId: "restricted-text-entrance-denied",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_resource"]);
+    expect(activation).not.toHaveBeenCalled();
+  });
 });

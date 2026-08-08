@@ -1,9 +1,5 @@
 import type { AccessStore } from "../../access/types.js";
-import {
-  getFunctionDefinition,
-  isFunctionGrantableForPrincipal,
-  isGrantableFunctionName
-} from "../../functions/definitions.js";
+import { getFunctionDefinition } from "../../functions/definitions.js";
 import type { BotProfileConfig, FunctionName, LineEvent } from "../../types.js";
 
 export interface EffectiveAccessContext {
@@ -23,7 +19,7 @@ export async function resolveEffectiveAccessContext(input: {
   const requesterIsAdmin = input.requesterIsAdmin === true;
   const authorized = await sourceIsAuthorized({ ...input, requesterIsAdmin, sourceType });
   const enabledFunctions = authorized
-    ? await resolveEffectiveFunctions({ ...input, requesterIsAdmin, sourceType })
+    ? resolveEffectiveFunctions({ profile: input.profile, requesterIsAdmin })
     : [];
 
   return {
@@ -72,74 +68,13 @@ async function sourceIsAuthorized(input: {
   return false;
 }
 
-async function resolveEffectiveFunctions(input: {
+function resolveEffectiveFunctions(input: {
   profile: BotProfileConfig;
-  event: LineEvent;
-  accessStore: AccessStore;
   requesterIsAdmin: boolean;
-  sourceType: EffectiveAccessContext["sourceType"];
-}): Promise<FunctionName[]> {
-  const profileFunctions = input.requesterIsAdmin
+}): FunctionName[] {
+  return input.requesterIsAdmin
     ? input.profile.enabledFunctions
     : input.profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
-  const userFunctions = input.event.source.userId
-    ? await functionsForPrincipal(
-        input.profile,
-        input.accessStore,
-        "user",
-        input.event.source.userId
-      )
-    : [];
-
-  if (input.sourceType !== "group" || !input.event.source.groupId) {
-    return mergeFunctionNames(profileFunctions, userFunctions);
-  }
-
-  const groupFunctions = await functionsForPrincipal(
-    input.profile,
-    input.accessStore,
-    "group",
-    input.event.source.groupId
-  );
-  return mergeFunctionNames(mergeFunctionNames(profileFunctions, groupFunctions), userFunctions);
-}
-
-async function functionsForPrincipal(
-  profile: BotProfileConfig,
-  accessStore: AccessStore,
-  principal: "user" | "group",
-  principalId: string
-): Promise<FunctionName[]> {
-  const grants =
-    principal === "user"
-      ? await accessStore.listUserFunctionGrants(profile.name, principalId)
-      : await accessStore.listGroupFunctionGrants(profile.name, principalId);
-  const grantFunctions = grants.filter((name) => isFunctionGrantableForPrincipal(name, principal));
-  const roleFunctions = capabilitiesToFunctionNames(
-    await accessStore.listPrincipalCapabilities(profile.name, principal, principalId),
-    principal
-  );
-  return mergeFunctionNames(grantFunctions, roleFunctions).filter(
-    (name) => name !== "save_resource" || profile.enabledFunctions.includes(name)
-  );
-}
-
-function capabilitiesToFunctionNames(
-  capabilities: string[],
-  principal: "user" | "group"
-): FunctionName[] {
-  return capabilities
-    .map((capability) => capability.match(/^function:([^:]+):execute$/u)?.[1])
-    .filter(
-      (name): name is FunctionName =>
-        typeof name === "string" &&
-        isGrantableFunctionName(name as FunctionName) &&
-        isFunctionGrantableForPrincipal(name as FunctionName, principal)
-    );
-}
-
-function mergeFunctionNames(left: FunctionName[], right: FunctionName[]): FunctionName[] {
-  return Array.from(new Set([...left, ...right]));
 }
 
 function effectiveSourceType(event: LineEvent): EffectiveAccessContext["sourceType"] {

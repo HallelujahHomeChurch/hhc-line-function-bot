@@ -81,7 +81,7 @@ describe("effective access context", () => {
     expect(context.profile.enabledFunctions).toEqual(functions);
   });
 
-  it("merges defaults, grants, and role capabilities in stable policy order", async () => {
+  it("keeps legacy grants and role capabilities out of effective functions", async () => {
     const accessStore = await registeredStore(groupEvent("C1", "U1"));
     await accessStore.addGroupFunctionGrant({
       profileName: "helper",
@@ -129,14 +129,7 @@ describe("effective access context", () => {
     });
 
     expect(context.authorized).toBe(true);
-    expect(context.profile.enabledFunctions).toEqual([
-      "query_schedule",
-      "find_ppt_slides",
-      "find_sheet_music",
-      "find_resource",
-      "save_memory",
-      "save_schedule"
-    ]);
+    expect(context.profile.enabledFunctions).toEqual(["query_schedule", "find_ppt_slides"]);
   });
 
   it("does not make save_resource effective from a grant when the profile omits it", async () => {

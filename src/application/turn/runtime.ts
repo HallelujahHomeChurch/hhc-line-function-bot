@@ -114,6 +114,7 @@ export interface AgentTextTurnInput {
   requesterIsAdmin?: boolean;
   engagement?: string;
   allowRouting?: boolean;
+  authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
 }
 
 export interface AgentTurnRuntime {
@@ -160,6 +161,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
 
   return {
     async handleTextTurn(input: AgentTextTurnInput): Promise<FunctionExecutionResult | undefined> {
+      input = await applyContinuationFunctionAuthorization(options, input);
       const steps: AgentTurnTraceStep[] = [];
       const text = input.event.message?.text ?? "";
       const context: FunctionHandlerContext = {
@@ -194,15 +196,20 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           input.profile,
           options.textMessageHandlers,
           input.requesterDisplayName,
-
-          input.requesterIsAdmin
+          input.requesterIsAdmin,
+          input.authorizeFunctions
         );
         if (textMessageHandler) {
+          const handlerProfile = textMessageHandler.profile;
+          const handlerContext: FunctionHandlerContext = {
+            ...context,
+            profile: handlerProfile
+          };
           const startedAt = Date.now();
           const result = await textMessageHandler.handler.handle(
             { text },
             {
-              profile: input.profile,
+              profile: handlerProfile,
               event: input.event,
               requestId: input.requestId,
               requesterDisplayName: input.requesterDisplayName,
@@ -230,7 +237,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             if (result.executedAction) {
               await recordFunctionWriteAudit(
                 options.accessStore,
-                context,
+                handlerContext,
                 result.executedAction,
                 {},
                 result
@@ -238,7 +245,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             }
             const textHandlerFunctionName = functionNameForAgentResource(
               result.agentResource?.resourceType,
-              context.profile.enabledFunctions
+              handlerProfile.enabledFunctions
             );
             transitionFunctionName = result.executedAction ?? textHandlerFunctionName;
             if (transitionFunctionName) {
@@ -255,7 +262,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
                 store: options.conversationWindowStore,
                 scope: activeTaskScope(options.conversationWindowStore, input),
                 capability: transitionFunctionName,
-                enabledFunctions: input.profile.enabledFunctions,
+                enabledFunctions: handlerProfile.enabledFunctions,
                 result,
                 now: now(),
                 ttlMs: activeTaskTtlMs(input.profile),
@@ -271,7 +278,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
             }
             if (textHandlerFunctionName) {
               await options.agentRuntime?.afterFunctionResult({
-                context,
+                context: handlerContext,
                 action: textHandlerFunctionName,
                 arguments: {},
                 result
@@ -281,7 +288,7 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
           const completedResult =
             result && transitionFunctionName
               ? await completionObserver.complete({
-                  context,
+                  context: handlerContext,
                   action: transitionFunctionName,
                   result,
                   durationMs,
@@ -799,6 +806,62 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
         undefined
       );
       return outcome.kind === "handled" ? outcome.result : undefined;
+    }
+  };
+}
+
+async function applyContinuationFunctionAuthorization(
+  options: AgentTurnRuntimeOptions,
+  input: AgentTextTurnInput
+): Promise<AgentTextTurnInput> {
+  if (!input.authorizeFunctions || input.profile.permissionRequiredFunctions.length === 0) {
+    return input;
+  }
+  const restricted = new Set(input.profile.permissionRequiredFunctions);
+  const lookup = {
+    profileName: input.profile.name,
+    source: input.event.source,
+    requesterUserId: input.event.source.userId
+  };
+  const [pendingFunction, pendingAttachment, pendingResolution, activeTask] = await Promise.all([
+    options.sessionStore?.findPendingFunction(lookup),
+    options.sessionStore?.findPendingAttachment(lookup),
+    options.sessionStore?.findPendingResolution(lookup),
+    readActiveTask(options, input, false)
+  ]);
+  const requested = Array.from(
+    new Set(
+      [
+        pendingFunction?.action,
+        pendingAttachment?.action,
+        pendingResolution?.capability,
+        activeTask?.currentCapability
+      ].filter(
+        (functionName): functionName is FunctionName =>
+          functionName !== undefined && restricted.has(functionName)
+      )
+    )
+  );
+  if (requested.length === 0) return input;
+
+  let allowed: readonly FunctionName[] = [];
+  try {
+    allowed = await input.authorizeFunctions(requested);
+  } catch {
+    // Restricted continuations fail closed; public capabilities remain available.
+  }
+  const allowedSet = new Set(allowed);
+  const publicFunctions = input.profile.enabledFunctions.filter(
+    (functionName) => !restricted.has(functionName)
+  );
+  return {
+    ...input,
+    profile: {
+      ...input.profile,
+      enabledFunctions: [
+        ...publicFunctions,
+        ...requested.filter((functionName) => allowedSet.has(functionName))
+      ]
     }
   };
 }

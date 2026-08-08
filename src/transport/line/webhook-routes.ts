@@ -24,29 +24,26 @@ import {
   AccountApiError,
   type AccountAdminClient,
   type FinalizeLineBindingInput,
-  type LineBindingTerminalStatus
+  type LineBindingTerminalStatus,
+  type LineFunctionAuthorization
 } from "../../account/account-admin-client.js";
-import {
-  isDefaultUserFunctionAvailable,
-  resolveEffectiveAccessContext
-} from "../../application/access/effective-access.js";
+import { resolveEffectiveAccessContext } from "../../application/access/effective-access.js";
+import type { EffectiveAccessContext } from "../../application/access/effective-access.js";
 import type { ControlledCompletionObserver } from "../../application/turn/completion-observer.js";
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
-import { renderCapabilityHelp } from "../../application/capabilities/capability-presenters.js";
+import {
+  type AccountSurfacePresentation,
+  renderCapabilityHelp
+} from "../../application/capabilities/capability-presenters.js";
 import {
   classifyGroupEngagement,
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
 } from "../../engagement.js";
-import {
-  getFunctionDefinition,
-  isFunctionGrantableForPrincipal,
-  isGrantableFunctionName,
-  userFacingFunctionNames
-} from "../../functions/definitions.js";
+import { getFunctionDefinition } from "../../functions/definitions.js";
 import { handleAttachmentMessage } from "../../functions/attachment-entrance.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
-import { createIntroReply } from "../../intro.js";
+import { createIntroReply, introVariantForText } from "../../intro.js";
 import { verifyLineSignature } from "../../line-signature.js";
 import {
   allowedProvidersForProfile,
@@ -71,6 +68,7 @@ import type {
   LineAccountLinkEvent,
   LineIdentityClient,
   LineEvent,
+  LineReplyOptions,
   ModelProviderName,
   LineReplyClient,
   LineWebhookPayload,
@@ -81,7 +79,6 @@ import type {
   TextGenerationProvider,
   TextMessageHandlerRegistry
 } from "../../types.js";
-import { isFunctionName } from "../../types.js";
 import { registerHealthRoutes } from "../http/health-routes.js";
 import { runAdminCommand } from "./admin-commands.js";
 import {
@@ -156,18 +153,6 @@ const builtInAdminCommandGroups: AdminCommandHelpGroup[] = [
     ]
   },
   {
-    title: "功能範圍",
-    common: true,
-    entries: [
-      { usage: "/function-grant <functionName> [groupId]", description: "開放功能給群組" },
-      { usage: "/function-revoke <functionName> [groupId]", description: "移除群組功能開放" },
-      { usage: "/function-scopes [groupId]", description: "查看群組可用功能" },
-      { usage: "/function-user-grant <functionName> <userId>", description: "開放功能給使用者" },
-      { usage: "/function-user-revoke <functionName> <userId>", description: "移除使用者功能開放" },
-      { usage: "/function-user-scopes <userId>", description: "查看使用者可用功能" }
-    ]
-  },
-  {
     title: "查詢",
     common: true,
     entries: [
@@ -207,6 +192,15 @@ const groupScopedAdminCommands = new Set([
   "function-grant",
   "function-revoke",
   "function-scopes"
+]);
+
+const retiredFunctionScopeCommands = new Set([
+  "function-grant",
+  "function-revoke",
+  "function-scopes",
+  "function-user-grant",
+  "function-user-revoke",
+  "function-user-scopes"
 ]);
 
 export function createApp(config: AppConfig, deps: AppDependencies): FastifyInstance {
@@ -405,44 +399,14 @@ async function handleWebhook(
   }
 
   const ordinaryEvents = payload.events.filter(isOrdinaryLineEvent);
-  const handledLoginEvents = new Set<LineEvent>();
+  const handledAccountChallengeEvents = new Set<LineEvent>();
   for (const event of ordinaryEvents) {
-    if (matchNaturalLanguageSystemActionHint(event.message?.text ?? "") !== "account_login") {
-      continue;
-    }
-    handledLoginEvents.add(event);
-    const policy = await evaluateActionPolicy({
-      action: "account_login",
-      profile,
-      source: event.source
-    });
-    if (
-      !policy.allowed ||
-      event.type !== "message" ||
-      event.message?.type !== "text" ||
-      !boundedOpaque(event.source.userId, 255) ||
-      !boundedOpaque(event.replyToken, 255) ||
-      !boundedOpaque(event.webhookEventId, 255) ||
-      !boundedOpaque(payload.destination, 255)
-    ) {
-      incrementIgnored(ignoredCounts, policy.allowed ? "invalid_account_login" : policy.reason);
-      continue;
-    }
-    if (
-      (await webhookEventStore.tryStart(
-        profile.name,
-        event.webhookEventId,
-        7 * 24 * 60 * 60 * 1000
-      )) === "duplicate"
-    ) {
-      incrementIgnored(ignoredCounts, "duplicate_webhook_event");
-      continue;
-    }
+    const text = event.message?.type === "text" ? event.message.text : undefined;
+    if (!text || !looksLikeAccountLinkChallenge(text)) continue;
+    handledAccountChallengeEvents.add(event);
     const requestId = requestIdFactory();
-    const line = createReplyClient(profile);
     const rateLimit = await rateLimiter.check({ profileName: profile.name, source: event.source });
     if (!rateLimit.allowed) {
-      await replyTextBestEffort(line, event.replyToken, "你傳得太快了，請稍後再試。");
       await emitRouteEvent(routeObserver, {
         kind: "rate_limited",
         profileName: profile.name,
@@ -451,55 +415,81 @@ async function handleWebhook(
         action: "account_login",
         ok: false
       });
+      incrementIgnored(ignoredCounts, "account_link_challenge_rate_limited");
       continue;
     }
-    const startedAt = Date.now();
-    let responseText: string;
-    let ok: boolean;
-    try {
-      if (!profile.accountLink) throw new Error("account_link_disabled");
-      const binding = await accountAdminClient.createBinding({
-        expectedLineUserId: event.source.userId,
-        profileName: profile.name,
-        channelId: payload.destination,
-        presentation: profile.accountLink
-      });
-      responseText = `登入／綁定 HHC 帳戶：\n${binding.bindingUrl}`;
-      ok = true;
-    } catch {
-      responseText = "目前無法開始帳戶登入／綁定，請稍後再試。";
-      ok = false;
+    const nonce = parseAccountLinkChallenge(text);
+    if (
+      !nonce ||
+      !profile.accountLink ||
+      event.type !== "message" ||
+      event.source.type !== "user" ||
+      !boundedOpaque(event.source.userId, 255) ||
+      !boundedOpaque(event.webhookEventId, 255) ||
+      !boundedOpaque(payload.destination, 255) ||
+      (event.replyToken !== undefined && !boundedOpaque(event.replyToken, 255))
+    ) {
+      incrementIgnored(ignoredCounts, "invalid_account_link_challenge");
+      continue;
     }
-    ok = (await replyTextBestEffort(line, event.replyToken, responseText)) && ok;
-    await emitRouteEvent(routeObserver, {
-      kind: "route",
-      profileName: profile.name,
-      sourceType: event.source.type,
-      requestId,
-      provider: "keyword",
-      outcome: "respond",
-      action: "account_login",
-      ok,
-      durationMs: elapsedMs(startedAt)
-    });
-    await emitProductEvent(routeObserver, {
-      eventName: "account_link_started",
-      requestId,
-      profileName: profile.name,
+
+    const startedAt = Date.now();
+    let status: LineBindingTerminalStatus;
+    try {
+      status = (
+        await accountAdminClient.finalizeBinding({
+          nonce,
+          result: "ok",
+          actualLineUserId: event.source.userId,
+          profileName: profile.name,
+          channelId: payload.destination,
+          webhookEventId: event.webhookEventId
+        })
+      ).status;
+    } catch (error) {
+      const retryable = !(error instanceof AccountApiError) || error.retryable;
+      if (retryable) {
+        await emitAccountLinkFinalizedEvent({
+          routeObserver,
+          config,
+          profile,
+          source: event.source,
+          requestId,
+          status: "failed",
+          retry: true,
+          durationMs: elapsedMs(startedAt)
+        });
+        return reply.code(503).send({ ok: false, error: "account_link_finalize_retry" });
+      }
+      status = "failed";
+    }
+
+    await emitAccountLinkFinalizedEvent({
+      routeObserver,
+      config,
+      profile,
       source: event.source,
-      hmacKey: config.observability?.hmacKey,
-      action: "account_login",
-      resultClass: ok ? "success" : "error",
+      requestId,
+      status,
       retry: false,
       durationMs: elapsedMs(startedAt)
     });
-    incrementIgnored(ignoredCounts, ok ? "account_login_started" : "account_login_failed");
+    if (event.replyToken) {
+      await replyTextBestEffort(
+        createReplyClient(profile),
+        event.replyToken,
+        status === "completed"
+          ? "已完成 HHC 帳戶登入／連結。"
+          : "目前無法完成 HHC 帳戶登入／連結，請重新操作。"
+      );
+    }
+    incrementIgnored(ignoredCounts, `account_link_${status}`);
   }
 
   const allowedEvents: LineEvent[] = [];
 
   for (const event of ordinaryEvents) {
-    if (handledLoginEvents.has(event)) continue;
+    if (handledAccountChallengeEvents.has(event)) continue;
     const allow = structurallyAllowEvent(profile, event);
     if (!allow.allowed) {
       incrementIgnored(ignoredCounts, allow.reason);
@@ -517,7 +507,9 @@ async function handleWebhook(
   }
 
   const line = createReplyClient(profile);
-  const lineIdentity = createIdentityClient(profile);
+  let lineIdentity: LineIdentityClient | undefined;
+  const getLineIdentity = (): LineIdentityClient =>
+    (lineIdentity ??= createIdentityClient(profile));
   let admittedEvents = 0;
   let rejectedAfterStructuralGate = false;
   for (const event of allowedEvents) {
@@ -550,10 +542,191 @@ async function handleWebhook(
       });
       continue;
     }
-    const accountAuthorization = profileUsesProviders(profile)
-      ? await authorizeAdministrator(accountAdminClient, event.source.userId)
-      : { available: true, bound: false, allowed: false };
-    const allow = await allowEvent(
+    const turnAccountAuthorization = createTurnFunctionAuthorizer(
+      accountAdminClient,
+      profile,
+      event.source.userId
+    );
+    const localAction =
+      event.type === "message" && event.message?.type === "text"
+        ? matchNaturalLanguageSystemActionHint(event.message.text ?? "")
+        : undefined;
+    if (
+      localAction === "show_help" ||
+      localAction === "show_account" ||
+      localAction === "account_login"
+    ) {
+      const policy = await evaluateActionPolicy({
+        action: localAction,
+        profile,
+        source: event.source
+      });
+      if (!policy.allowed || !event.replyToken) {
+        incrementIgnored(ignoredCounts, policy.allowed ? "missing_reply_token" : policy.reason);
+        continue;
+      }
+      const requestedFunctions =
+        localAction === "account_login"
+          ? []
+          : profile.permissionRequiredFunctions.filter((name) =>
+              profile.enabledFunctions.includes(name)
+            );
+      const shouldAuthorizeAccount = Boolean(
+        event.source.userId &&
+        ((localAction === "show_help" && profileUsesProviders(profile)) ||
+          (profile.accountLink && (event.source.type === "user" || requestedFunctions.length > 0)))
+      );
+      const accountState = shouldAuthorizeAccount
+        ? await turnAccountAuthorization.state(requestedFunctions)
+        : {
+            available: Boolean(profile.accountLink),
+            authorization: emptyFunctionAuthorization()
+          };
+      const requesterIsAdmin = accountState.authorization.administrator;
+      const resolveCurrentAccess = async () =>
+        applyAccountFunctionAuthorization(
+          await resolveEffectiveAccessContext({ profile, event, accessStore, requesterIsAdmin }),
+          profile,
+          accountState
+        );
+      let bindingAttempted = false;
+      let bindingStarted = false;
+      const startedAt = Date.now();
+      const result = await handlePublicAccessCommand({
+        text: event.message?.text ?? "",
+        profile,
+        event,
+        accessStore,
+        registrationInviteCodeStore,
+        lineIdentity: undefined,
+        adminHandlers,
+        productContext: {
+          routeObserver,
+          requestId,
+          hmacKey: config.observability?.hmacKey
+        },
+        requesterIsAdmin,
+        account:
+          event.source.type === "user"
+            ? accountSurfacePresentation(profile, accountState)
+            : undefined,
+        accountAllowedFunctions: accountState.authorization.allowedFunctions,
+        startAccountLogin: async () => {
+          bindingAttempted = true;
+          if (
+            !profile.accountLink ||
+            !boundedOpaque(event.source.userId, 255) ||
+            !boundedOpaque(payload.destination, 255)
+          ) {
+            throw new Error("invalid_account_login");
+          }
+          const binding = await accountAdminClient.createBinding({
+            expectedLineUserId: event.source.userId,
+            profileName: profile.name,
+            channelId: payload.destination,
+            presentation: profile.accountLink
+          });
+          bindingStarted = true;
+          return binding;
+        },
+        policies: {
+          parseCommand: parseAdminCommand,
+          adminAllowed,
+          formatAdminHelp: formatAdminCommandHelpByMode,
+          directAccessPolicy,
+          groupAccessPolicy,
+          isDirectUserAllowed,
+          isGroupAllowed
+        },
+        resolveCurrentAccess
+      });
+      if (!result) {
+        incrementIgnored(ignoredCounts, "unsupported_public_surface");
+        continue;
+      }
+      admittedEvents += 1;
+      await replyTextBestEffort(
+        line,
+        event.replyToken,
+        result.replyText,
+        result.quickReplies ? { quickReplies: result.quickReplies } : undefined
+      );
+      await emitRouteEvent(routeObserver, {
+        kind: "route",
+        profileName: profile.name,
+        sourceType: event.source.type,
+        requestId,
+        provider: "keyword",
+        outcome: "respond",
+        action: localAction,
+        ok: result.ok,
+        durationMs: elapsedMs(startedAt)
+      });
+      if (localAction === "account_login" && bindingAttempted) {
+        await emitProductEvent(routeObserver, {
+          eventName: "account_link_started",
+          requestId,
+          profileName: profile.name,
+          source: event.source,
+          hmacKey: config.observability?.hmacKey,
+          action: "account_login",
+          resultClass: bindingStarted ? "success" : "error",
+          retry: false,
+          durationMs: elapsedMs(startedAt)
+        });
+      }
+      continue;
+    }
+    const eventText = event.type === "message" ? event.message?.text : undefined;
+    const introVariant = eventText ? introVariantForText(eventText) : undefined;
+    const parsedAdminCommand = parseAdminCommand(eventText);
+    const needsAdminAuthorization = Boolean(
+      (parsedAdminCommand && requiresAdminAuthorization(parsedAdminCommand, adminHandlers)) ||
+      (eventText && matchesNaturalLanguageAdminActionHint(eventText))
+    );
+    const needsAttachmentAuthorization =
+      event.type === "message" &&
+      event.message?.type !== "text" &&
+      profile.enabledFunctions.includes("save_resource");
+    const attachmentAuthorization = needsAttachmentAuthorization
+      ? profile.permissionRequiredFunctions.filter((name) => name === "save_resource")
+      : [];
+    const introAuthorization =
+      introVariant === "capabilities"
+        ? profile.permissionRequiredFunctions.filter((name) =>
+            profile.enabledFunctions.includes(name)
+          )
+        : [];
+    const registrationAuthorization =
+      parsedAdminCommand?.command === "registry"
+        ? profile.permissionRequiredFunctions.filter((name) =>
+            profile.enabledFunctions.includes(name)
+          )
+        : [];
+    const needsIntroAuthorization = Boolean(
+      event.source.userId &&
+      introVariant === "capabilities" &&
+      (profile.accountLink || introAuthorization.length > 0)
+    );
+    const needsRegistrationAuthorization = Boolean(
+      event.source.userId && profile.accountLink && parsedAdminCommand?.command === "registry"
+    );
+    let accountAuthorizationUsed =
+      needsAdminAuthorization ||
+      needsAttachmentAuthorization ||
+      needsIntroAuthorization ||
+      needsRegistrationAuthorization;
+    let accountState = accountAuthorizationUsed
+      ? await turnAccountAuthorization.state(
+          needsAttachmentAuthorization
+            ? attachmentAuthorization
+            : needsIntroAuthorization
+              ? introAuthorization
+              : registrationAuthorization
+        )
+      : { available: true, authorization: emptyFunctionAuthorization() };
+    let accountAuthorization = adminAuthorizationFromFunctionState(accountState);
+    let allow = await allowEvent(
       profile,
       event,
       textMessageHandlers,
@@ -562,6 +735,28 @@ async function handleWebhook(
       accountAuthorization.allowed,
       sessionStore
     );
+    if (
+      !allow.allowed &&
+      !needsAdminAuthorization &&
+      event.source.type === "user" &&
+      directAccessPolicy(profile) === "managed" &&
+      event.source.userId
+    ) {
+      accountAuthorizationUsed = true;
+      accountState = await turnAccountAuthorization.state([]);
+      accountAuthorization = adminAuthorizationFromFunctionState(accountState);
+      if (accountAuthorization.allowed) {
+        allow = await allowEvent(
+          profile,
+          event,
+          textMessageHandlers,
+          accessStore,
+          conversationWindowStore,
+          true,
+          sessionStore
+        );
+      }
+    }
     if (!allow.allowed) {
       incrementIgnored(ignoredCounts, allow.reason);
       rejectedAfterStructuralGate = true;
@@ -569,15 +764,18 @@ async function handleWebhook(
     }
     admittedEvents += 1;
     const requesterIsAdmin = accountAuthorization.allowed;
-    const effectiveAccess = await resolveEffectiveAccessContext({
+    const baseEffectiveAccess = await resolveEffectiveAccessContext({
       profile,
       event,
       accessStore,
       requesterIsAdmin
     });
+    const effectiveAccess = accountAuthorizationUsed
+      ? applyAccountFunctionAuthorization(baseEffectiveAccess, profile, accountState)
+      : baseEffectiveAccess;
     const effectiveProfile = effectiveAccess.profile;
     const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
-    const requesterDisplayName = await resolveRequesterDisplayName(lineIdentity, event);
+    const requesterDisplayName = await resolveRequesterDisplayName(getLineIdentity(), event);
 
     if (event.type === "postback") {
       if (!event.replyToken) {
@@ -739,7 +937,7 @@ async function handleWebhook(
         event,
         accessStore,
         registrationInviteCodeStore,
-        lineIdentity,
+        lineIdentity: getLineIdentity(),
         adminHandlers,
         productContext: {
           routeObserver,
@@ -756,13 +954,17 @@ async function handleWebhook(
           isDirectUserAllowed,
           isGroupAllowed
         },
-        resolveCurrentAccess: () =>
-          resolveEffectiveAccessContext({
+        resolveCurrentAccess: async () => {
+          const context = await resolveEffectiveAccessContext({
             profile,
             event,
             accessStore,
             requesterIsAdmin
-          })
+          });
+          return accountAuthorizationUsed
+            ? applyAccountFunctionAuthorization(context, profile, accountState)
+            : context;
+        }
       });
       if (accessCommandResult) {
         await line.replyText(
@@ -799,8 +1001,7 @@ async function handleWebhook(
             diagnostics,
             agentTraceStore,
             requestId,
-            requesterIsAdmin,
-            accountAdminClient
+            requesterIsAdmin
           )
       });
       await line.replyText(
@@ -850,7 +1051,11 @@ async function handleWebhook(
     if (groupEngagement?.kind === "intro") {
       const intro = createIntroReply(capabilityProjection, event.message.text, {
         force: true,
-        profile: effectiveProfile
+        profile: effectiveProfile,
+        account:
+          event.source.type === "user" && accountAuthorizationUsed
+            ? accountSurfacePresentation(profile, accountState)
+            : undefined
       });
       await emitRouteEvent(routeObserver, {
         kind: "route",
@@ -895,7 +1100,11 @@ async function handleWebhook(
     }
 
     const intro = createIntroReply(capabilityProjection, event.message.text, {
-      profile: effectiveProfile
+      profile: effectiveProfile,
+      account:
+        event.source.type === "user" && accountAuthorizationUsed
+          ? accountSurfacePresentation(profile, accountState)
+          : undefined
     });
     if (intro) {
       await line.replyText(
@@ -919,7 +1128,8 @@ async function handleWebhook(
       requesterDisplayName,
       requesterIsAdmin,
       engagement: conversationWindowActive ? "conversation_window" : groupEngagement?.kind,
-      allowRouting: routingAllowed
+      allowRouting: routingAllowed,
+      authorizeFunctions: turnAccountAuthorization.allowedFunctions
     });
     if (agentTurnResult) {
       await line.replyText(
@@ -990,6 +1200,14 @@ function isOrdinaryLineEvent(value: unknown): value is LineEvent {
     source !== null &&
     typeof (source as { type?: unknown }).type === "string"
   );
+}
+
+function parseAccountLinkChallenge(text: string): string | undefined {
+  return text.match(/^HHC_ACCOUNT_LINK_V1:([A-Za-z0-9_-]{43})$/)?.[1];
+}
+
+function looksLikeAccountLinkChallenge(text: string): boolean {
+  return /^HHC[ _-]+ACCOUNT[ _-]+LINK/i.test(text.trim());
 }
 
 function accountLinkFinalizeInput(
@@ -1321,8 +1539,7 @@ async function handleAdminCommand(
   diagnostics: AppDiagnostics,
   agentTraceStore: AgentTraceStore,
   requestId: string,
-  requesterIsAdmin: boolean,
-  accountAdminClient: AccountAdminClient
+  requesterIsAdmin: boolean
 ): Promise<FunctionExecutionResult> {
   const parsed = parseAdminCommand(text);
   if (!parsed) {
@@ -1421,8 +1638,7 @@ async function handleAdminCommand(
     event,
     accessStore,
     adminActionRegistry,
-    requesterIsAdmin,
-    accountAdminClient
+    requesterIsAdmin
   );
   if (accessResult) {
     return accessResult;
@@ -1507,12 +1723,18 @@ async function handleAdminAccessCommand(
   event: LineEvent,
   accessStore: AccessStore,
   adminActionRegistry: AdminActionRegistry,
-  requesterIsAdmin: boolean,
-  accountAdminClient: AccountAdminClient
+  requesterIsAdmin: boolean
 ): Promise<FunctionExecutionResult | undefined> {
   const actorUserId = event.source.userId;
   if (!actorUserId) {
     return { ok: true, replyText: messages.adminUnauthorized };
+  }
+
+  if (isRetiredFunctionScopeCommand(command)) {
+    return {
+      ok: true,
+      replyText: "功能權限已改由 HHC 帳戶統一管理，LINE bot 不再提供本地授權操作。"
+    };
   }
 
   if (command === "access-list") {
@@ -1559,181 +1781,6 @@ async function handleAdminAccessCommand(
     return {
       ok: true,
       replyText: ["Access list", ...rows].join("\n")
-    };
-  }
-
-  if (command === "function-grant" || command === "function-revoke") {
-    const functionName = parseFunctionName(args[0]);
-    if (!functionName) {
-      return {
-        ok: true,
-        replyText: `Usage: /${command} <functionName> [groupId]\n可用功能：${formatFunctionNames()}`
-      };
-    }
-    const targetGroupId =
-      args[1] ?? (event.source.type === "group" ? event.source.groupId : undefined);
-    if (!targetGroupId) {
-      return { ok: true, replyText: `Usage: /${command} <functionName> <groupId>` };
-    }
-    if (command === "function-grant") {
-      if (!isFunctionGrantableForPrincipal(functionName, "group")) {
-        return {
-          ok: true,
-          replyText: `${functionName} 只能開放給指定使用者，請使用 /function-user-grant。`
-        };
-      }
-      await accessStore.addGroupFunctionGrant({
-        profileName: profile.name,
-        groupId: targetGroupId,
-        functionName,
-        createdBy: actorUserId
-      });
-      await accessStore.recordAudit({
-        profileName: profile.name,
-        actorUserId,
-        action: "access.function.grant",
-        targetType: "group",
-        targetId: targetGroupId,
-        metadata: { functionName }
-      });
-      return {
-        ok: true,
-        replyText: `已開放 ${functionName} 給 group ${targetGroupId}`
-      };
-    }
-
-    const revoked = await accessStore.disableGroupFunctionGrant({
-      profileName: profile.name,
-      groupId: targetGroupId,
-      functionName,
-      disabledBy: actorUserId
-    });
-    if (revoked) {
-      await accessStore.recordAudit({
-        profileName: profile.name,
-        actorUserId,
-        action: "access.function.revoke",
-        targetType: "group",
-        targetId: targetGroupId,
-        metadata: { functionName }
-      });
-    }
-    return {
-      ok: true,
-      replyText: revoked
-        ? `已移除 group ${targetGroupId} 的 ${functionName}`
-        : "找不到群組功能開放設定。"
-    };
-  }
-
-  if (command === "function-user-grant" || command === "function-user-revoke") {
-    const functionName = parseFunctionName(args[0]);
-    const targetUserId = args[1];
-    if (!functionName || !targetUserId) {
-      return {
-        ok: true,
-        replyText: `Usage: /${command} <functionName> <userId>\n可用功能：${formatFunctionNames()}`
-      };
-    }
-    if (command === "function-user-grant") {
-      if (!isFunctionGrantableForPrincipal(functionName, "user")) {
-        return { ok: true, replyText: `${functionName} 不支援使用者授權。` };
-      }
-      await accessStore.addUserFunctionGrant({
-        profileName: profile.name,
-        userId: targetUserId,
-        functionName,
-        createdBy: actorUserId
-      });
-      await accessStore.recordAudit({
-        profileName: profile.name,
-        actorUserId,
-        action: "access.function.user.grant",
-        targetType: "user",
-        targetId: targetUserId,
-        metadata: { functionName }
-      });
-      return {
-        ok: true,
-        replyText: `已開放 ${functionName} 給 user ${targetUserId}`
-      };
-    }
-
-    const revoked = await accessStore.disableUserFunctionGrant({
-      profileName: profile.name,
-      userId: targetUserId,
-      functionName,
-      disabledBy: actorUserId
-    });
-    if (revoked) {
-      await accessStore.recordAudit({
-        profileName: profile.name,
-        actorUserId,
-        action: "access.function.user.revoke",
-        targetType: "user",
-        targetId: targetUserId,
-        metadata: { functionName }
-      });
-    }
-    return {
-      ok: true,
-      replyText: revoked
-        ? `已移除 user ${targetUserId} 的 ${functionName}`
-        : "找不到使用者功能開放紀錄"
-    };
-  }
-
-  if (command === "function-user-scopes") {
-    const targetUserId = args[0];
-    if (!targetUserId) {
-      return { ok: true, replyText: "Usage: /function-user-scopes <userId>" };
-    }
-    const userGrants = (
-      await accessStore.listUserFunctionGrants(profile.name, targetUserId)
-    ).filter((name) => isFunctionGrantableForPrincipal(name, "user"));
-    const isAdminTarget = await accountAdminClient
-      .authorizeAdministrator(targetUserId)
-      .then(({ allowed }) => allowed)
-      .catch(() => false);
-    const profileDefaults = isAdminTarget
-      ? profile.enabledFunctions
-      : profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
-    const effectiveFunctions = mergeFunctionNames(profileDefaults, userGrants);
-    return {
-      ok: true,
-      replyText: [
-        "User function scopes",
-        `profile: ${profile.name}`,
-        `user: ${targetUserId}`,
-        `profile-default: ${profileDefaults.join(", ") || "(none)"}`,
-        `user-grants: ${userGrants.join(", ") || "(none)"}`,
-        `effective: ${effectiveFunctions.join(", ") || "(none)"}`
-      ].join("\n")
-    };
-  }
-
-  if (command === "function-scopes") {
-    const targetGroupId =
-      args[0] ?? (event.source.type === "group" ? event.source.groupId : undefined);
-    if (!targetGroupId) {
-      return { ok: true, replyText: "Usage: /function-scopes <groupId>" };
-    }
-    const groupGrants = (
-      await accessStore.listGroupFunctionGrants(profile.name, targetGroupId)
-    ).filter((name) => isFunctionGrantableForPrincipal(name, "group"));
-    const profileDefaults = profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
-    const effectiveFunctions = mergeFunctionNames(profileDefaults, groupGrants);
-    return {
-      ok: true,
-      replyText: [
-        "Function scopes",
-        `profile: ${profile.name}`,
-        `group: ${targetGroupId}`,
-        `profile-global: ${profile.enabledFunctions.join(", ") || "(none)"}`,
-        `profile-default: ${profileDefaults.join(", ") || "(none)"}`,
-        `group-grants: ${groupGrants.join(", ") || "(none)"}`,
-        `effective: ${effectiveFunctions.join(", ") || "(none)"}`
-      ].join("\n")
     };
   }
 
@@ -1857,6 +1904,10 @@ async function handleAdminAccessCommand(
   return undefined;
 }
 
+function isRetiredFunctionScopeCommand(command: string): boolean {
+  return retiredFunctionScopeCommands.has(command);
+}
+
 function parseAccessPrincipalType(
   value: string | undefined,
   allowed: AccessPrincipalType[]
@@ -1864,14 +1915,6 @@ function parseAccessPrincipalType(
   return value && (allowed as string[]).includes(value)
     ? (value as AccessPrincipalType)
     : undefined;
-}
-
-function parseFunctionName(value: string | undefined): FunctionName | undefined {
-  return value && isFunctionName(value) && isGrantableFunctionName(value) ? value : undefined;
-}
-
-function formatFunctionNames(): string {
-  return userFacingFunctionNames().join(", ");
 }
 
 async function groupEffectiveFunctionDisplayNames(
@@ -1890,18 +1933,13 @@ async function groupEffectiveFunctionDisplayNames(
   );
 }
 
-function mergeFunctionNames(
-  profileFunctions: FunctionName[],
-  grantedFunctions: FunctionName[]
-): FunctionName[] {
-  return Array.from(new Set([...profileFunctions, ...grantedFunctions]));
-}
-
 function isKnownAdminCommand(command: string, adminHandlers: AdminHandlerRegistry): boolean {
   return (
+    retiredFunctionScopeCommands.has(command) ||
     builtInAdminCommandGroups.some((group) =>
       group.entries.some((entry) => commandNameFromUsage(entry.usage) === command)
-    ) || Boolean(adminHandlers[command])
+    ) ||
+    Boolean(adminHandlers[command])
   );
 }
 
@@ -2045,21 +2083,122 @@ async function isDirectUserAllowed(
   );
 }
 
-async function authorizeAdministrator(
+interface FunctionAuthorizationState {
+  available: boolean;
+  authorization: LineFunctionAuthorization;
+}
+
+async function authorizeFunctions(
   accountAdminClient: AccountAdminClient,
-  lineUserId: string | undefined
-): Promise<{ available: boolean; bound: boolean; allowed: boolean }> {
+  profile: BotProfileConfig,
+  lineUserId: string | undefined,
+  functionNames: FunctionName[]
+): Promise<FunctionAuthorizationState> {
   if (!lineUserId) {
-    return { available: true, bound: false, allowed: false };
+    return { available: false, authorization: emptyFunctionAuthorization() };
   }
   try {
     return {
       available: true,
-      ...(await accountAdminClient.authorizeAdministrator(lineUserId))
+      authorization: await accountAdminClient.authorizeFunctions({
+        lineUserId,
+        profileName: profile.name,
+        functionNames
+      })
     };
   } catch {
-    return { available: false, bound: false, allowed: false };
+    return { available: false, authorization: emptyFunctionAuthorization() };
   }
+}
+
+function createTurnFunctionAuthorizer(
+  accountAdminClient: AccountAdminClient,
+  profile: BotProfileConfig,
+  lineUserId: string | undefined
+): {
+  state(functionNames: readonly FunctionName[]): Promise<FunctionAuthorizationState>;
+  allowedFunctions(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+} {
+  let authorization: Promise<FunctionAuthorizationState> | undefined;
+  const state = (functionNames: readonly FunctionName[]): Promise<FunctionAuthorizationState> => {
+    if (!authorization) {
+      const restricted = new Set(profile.permissionRequiredFunctions);
+      const requested = Array.from(
+        new Set(functionNames.filter((functionName) => restricted.has(functionName)))
+      );
+      authorization = authorizeFunctions(accountAdminClient, profile, lineUserId, requested);
+    }
+    return authorization;
+  };
+  return {
+    state,
+    async allowedFunctions(functionNames) {
+      const result = await state(functionNames);
+      if (!result.available || !result.authorization.active) return [];
+      if (result.authorization.administrator) return [...functionNames];
+      const allowed = new Set(result.authorization.allowedFunctions);
+      return functionNames.filter((functionName) => allowed.has(functionName));
+    }
+  };
+}
+
+function adminAuthorizationFromFunctionState(state: FunctionAuthorizationState): {
+  available: boolean;
+  bound: boolean;
+  allowed: boolean;
+} {
+  return {
+    available: state.available,
+    bound: state.authorization.bound,
+    allowed: state.authorization.active && state.authorization.administrator
+  };
+}
+
+function emptyFunctionAuthorization(): LineFunctionAuthorization {
+  return {
+    bound: false,
+    active: false,
+    administrator: false,
+    allowedFunctions: []
+  };
+}
+
+function applyAccountFunctionAuthorization(
+  context: EffectiveAccessContext,
+  configuredProfile: BotProfileConfig,
+  accountState: FunctionAuthorizationState
+): EffectiveAccessContext {
+  const ceiling = new Set(configuredProfile.enabledFunctions);
+  const restricted = new Set(configuredProfile.permissionRequiredFunctions);
+  const allowed = new Set(accountState.authorization.allowedFunctions);
+  const accountFunctions = configuredProfile.enabledFunctions.filter(
+    (name) => restricted.has(name) && allowed.has(name)
+  );
+  return {
+    ...context,
+    profile: {
+      ...context.profile,
+      enabledFunctions: Array.from(
+        new Set([
+          ...context.profile.enabledFunctions.filter(
+            (name) => ceiling.has(name) && (!restricted.has(name) || allowed.has(name))
+          ),
+          ...(context.authorized ? accountFunctions : [])
+        ])
+      )
+    }
+  };
+}
+
+function accountSurfacePresentation(
+  profile: BotProfileConfig,
+  state: FunctionAuthorizationState
+): AccountSurfacePresentation {
+  if (!profile.accountLink) return { status: "disabled" };
+  if (!state.available) return { status: "unavailable" };
+  if (!state.authorization.bound) return { status: "unbound" };
+  if (!state.authorization.active) return { status: "inactive" };
+  return { status: "active", account: state.authorization.account };
 }
 
 function requiresAdminAuthorization(
@@ -2158,13 +2297,49 @@ async function emitRouteEvent(
   }
 }
 
+async function emitAccountLinkFinalizedEvent(input: {
+  routeObserver: RouteObserver | undefined;
+  config: AppConfig;
+  profile: BotProfileConfig;
+  source: LineEvent["source"];
+  requestId: string;
+  status: LineBindingTerminalStatus;
+  retry: boolean;
+  durationMs: number;
+}): Promise<void> {
+  await emitRouteEvent(input.routeObserver, {
+    kind: "route",
+    profileName: input.profile.name,
+    sourceType: input.source.type,
+    requestId: input.requestId,
+    provider: "keyword",
+    outcome: "respond",
+    action: "account_login",
+    ok: input.status === "completed",
+    retry: input.retry,
+    durationMs: input.durationMs
+  });
+  await emitProductEvent(input.routeObserver, {
+    eventName: "account_link_finalized",
+    requestId: input.requestId,
+    profileName: input.profile.name,
+    source: input.source,
+    hmacKey: input.config.observability?.hmacKey,
+    action: "account_login",
+    resultClass: input.status === "completed" ? "success" : "error",
+    retry: input.retry,
+    durationMs: input.durationMs
+  });
+}
+
 async function replyTextBestEffort(
   client: LineReplyClient,
   replyToken: string,
-  text: string
+  text: string,
+  options?: LineReplyOptions
 ): Promise<boolean> {
   try {
-    await client.replyText(replyToken, text, undefined);
+    await client.replyText(replyToken, text, options);
     return true;
   } catch {
     return false;

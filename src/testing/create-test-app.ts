@@ -55,17 +55,18 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
   const functionRegistry = overrides.functionRegistry ?? {};
   const textMessageHandlers = overrides.textMessageHandlers ?? {};
   const firstSuccessStore = overrides.firstSuccessStore ?? new InMemoryFirstSuccessStore();
-  const accountAdminClient = overrides.accountAdminClient ?? {
+  const defaultAccountAdminClient: AppDependencies["accountAdminClient"] = {
     async authorizeAdministrator(lineUserId: string) {
       const allowed = config.profiles.some((profile) => profile.adminUserId === lineUserId);
       return { bound: allowed, allowed };
     },
-    async authorizeFunctions() {
+    async authorizeFunctions({ lineUserId, functionNames }) {
+      const administrator = config.profiles.some((profile) => profile.adminUserId === lineUserId);
       return {
-        bound: false,
-        active: false,
-        administrator: false,
-        allowedFunctions: []
+        bound: administrator,
+        active: administrator,
+        administrator,
+        allowedFunctions: administrator ? functionNames : []
       };
     },
     async createBinding() {
@@ -77,6 +78,25 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     async finalizeBinding() {
       return { status: "completed" as const };
     }
+  };
+  const suppliedAccountAdminClient = overrides.accountAdminClient;
+  const accountAdminClient: AppDependencies["accountAdminClient"] = {
+    ...defaultAccountAdminClient,
+    ...suppliedAccountAdminClient,
+    authorizeFunctions:
+      suppliedAccountAdminClient?.authorizeFunctions ??
+      (async ({ lineUserId, functionNames }) => {
+        const legacy = await (
+          suppliedAccountAdminClient?.authorizeAdministrator ??
+          defaultAccountAdminClient.authorizeAdministrator
+        )(lineUserId);
+        return {
+          bound: legacy.bound,
+          active: legacy.allowed,
+          administrator: legacy.allowed,
+          allowedFunctions: legacy.allowed ? functionNames : []
+        };
+      })
   };
   const completionObserver =
     overrides.completionObserver ??

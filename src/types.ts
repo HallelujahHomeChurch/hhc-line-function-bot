@@ -50,7 +50,13 @@ export const FUNCTION_NAMES = [
 
 export type FunctionName = (typeof FUNCTION_NAMES)[number];
 
-export const SYSTEM_ACTION_NAMES = ["introduce_bot", "small_talk", "account_login"] as const;
+export const SYSTEM_ACTION_NAMES = [
+  "introduce_bot",
+  "small_talk",
+  "show_help",
+  "account_login",
+  "show_account"
+] as const;
 
 export type SystemActionName = (typeof SYSTEM_ACTION_NAMES)[number];
 

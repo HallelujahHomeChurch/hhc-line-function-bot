@@ -4,6 +4,7 @@ import { buildPostbackQuickReply } from "../../line-reply.js";
 import { messages } from "../../messages.js";
 import type {
   BotProfileConfig,
+  FunctionName,
   FunctionExecutionResult,
   LineEvent,
   PostbackHandlerRegistry,
@@ -59,6 +60,7 @@ export async function handleAgentTextTurnWithLongJob(input: {
   requesterIsAdmin?: boolean;
   engagement?: string;
   allowRouting: boolean;
+  authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
 }): Promise<FunctionExecutionResult | undefined> {
   const turnPromise = input.runtime.handleTextTurn({
     profile: input.profile,
@@ -67,7 +69,8 @@ export async function handleAgentTextTurnWithLongJob(input: {
     requesterDisplayName: input.requesterDisplayName,
     requesterIsAdmin: input.requesterIsAdmin,
     engagement: input.engagement,
-    allowRouting: input.allowRouting
+    allowRouting: input.allowRouting,
+    authorizeFunctions: input.authorizeFunctions
   });
   const config = input.profile.longRunningJobs;
   if (!config?.enabled || config.inlineReplyTimeoutMs <= 0) {

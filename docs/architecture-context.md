@@ -84,8 +84,8 @@ For normal LINE webhook messages, read the flow in this order:
 2. `src/transport/line/webhook-routes.ts` receives the Fastify webhook route;
    `src/server.ts` is only a compatibility re-export.
 3. LINE signature and profile path select the `BotProfileConfig`.
-4. Native `accountLink` events finalize through Account API before admin lookup, access policy, rate limits, ordinary webhook dedupe, or routing. Exact direct-chat account-login actions use ordinary dedupe and rate limits, then issue a native LINE link token without entering the LLM router.
-5. Ordinary events pass the structural source/message gate, webhook dedupe, and rate limit before optional dependency lookups. Provider-capable helper turns authorize Account only after those gates; provider-free main turns skip administrator authorization.
+4. Rollback-only native `accountLink` events finalize before ordinary entrance work. Reserved signed completion text uses a separate byte-exact `HHC_ACCOUNT_LINK_V1:` parser, applies the bounded rate limiter, bypasses ordinary dedupe, and terminates locally on every valid or malformed reserved-family message.
+5. Ordinary events pass the structural source/message gate, webhook dedupe, and rate limit before optional dependency lookups. Shared help/login/whoami surfaces use one bounded Account request. Other turns authorize only permission-required candidates or requester-scoped continuations; public Weekly Paper and unknown turns make no Account lookup.
 6. Access policy checks direct user, group, and registration; optional LINE display-name lookup follows admission.
 7. Group engagement decides whether the bot was actually addressed.
 8. A short requester-scoped group conversation window may allow the same user to
@@ -100,11 +100,11 @@ For normal LINE webhook messages, read the flow in this order:
     bypass; replay and field follow-ups use the normal task-frame candidate,
     planner, validator, and exact-reference path. A bare
     confirmation stays with its current pending write.
-11. Intro, small-talk, and account-login system actions can respond without function execution.
-12. In controlled mode, the runtime reads the independently expiring,
+11. Intro, small-talk, shared help/account identity, and account-login system actions can respond without function execution.
+12. The runtime rechecks any permission-required active task, slot collection, preview, or confirmation before its continuation handler. In controlled mode, it then reads the independently expiring,
     requester-scoped version-2 task frame and generates at most the configured number of
     candidates from declarative function contracts.
-13. `src/agent/planner.ts` asks the `function_routing` provider for a bounded
+13. Candidate generation batches only permission-required candidates through Account authorization and removes denied candidates before planner input. `src/agent/planner.ts` then asks the `function_routing` provider for a bounded
     semantic proposal when the profile enables providers. DeepSeek is the only semantic provider.
 14. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
     rechecks current-message evidence, task-frame authority, effective function
@@ -143,13 +143,13 @@ distinguish cheap local classification from remote smart-talk generation.
 There are three action categories. Keep them separate.
 
 - User functions are in `FUNCTION_NAMES` and `enabledFunctions`.
-- System actions are `introduce_bot`, `small_talk`, and `account_login`; they are not function
+- System actions are `introduce_bot`, `small_talk`, `show_help`, `show_account`, and `account_login`; they are not function
   handlers and should not expose implementation details.
 - Admin actions are management operations behind admin identity, source policy,
   action catalog metadata, audit, and sanitized observability.
 
-Do not put admin operations into user functions. Do not grant system actions
-through group function scopes.
+Do not put admin operations into user functions. System actions never enter
+function permission management.
 
 ## Profiles And Access
 
@@ -158,19 +158,9 @@ Profiles are independent bot configurations served by one process. In practice:
 - `helper` is invite-based for direct users and groups.
 - `main` allows public direct chat, blocks groups, and enables only provider-free Weekly Paper download.
 - `enabledFunctions` is profile-global for that profile only.
-- profile-global write functions are admin-only by default; non-admin users need
-  an explicit user or group function grant.
-- group-specific function grants are additive and stored by profile/group.
-- user-specific function grants are additive and stored by profile/user. They
-  apply to direct chat and to that requester inside a registered group.
-- Function definitions may narrow grant principals. `save_schedule` and
-  `save_memory` accept user grants but reject group grants and group role
-  capabilities, so write authority follows the requester rather than every
-  member of a registered group.
-- future role/capability bindings are documented in
-  [`docs/rbac-capability-model.md`](rbac-capability-model.md), but v1 runtime
-  behavior still uses explicit function grants as the operative override
-  mechanism.
+- profile-global read functions are available after source authorization unless they are listed in `permissionRequiredFunctions`.
+- Account authorization is the only per-user function expansion. The bot sends only bounded restricted candidates or a current continuation capability and uses at most one Account authorization lookup per turn.
+- historical group/user grant and role-capability rows remain stored for rollback but never expand the effective function set. Their slash and natural-language management surfaces are retired.
 - LINE administrators are resolved by account-api from the linked HHC account.
 - `config/profiles.json` is the sole complete production profile definition.
   It contains env-variable names for LINE credentials but never their values.
@@ -342,8 +332,9 @@ for a non-success result, never retries automatically, and offers a full-result
 action only when the capability contract declares `view_full`.
 
 Effective capability discovery follows the same downstream rule. The
-application access service resolves profile defaults, group/user grants and
-roles, administrator status, and source policy once. The pure capability
+application access service resolves profile defaults, Account administrator
+status, and source policy. Account permission filtering then intersects the
+configured restricted ceiling. The pure capability
 projector then filters that already-effective set by function metadata and
 source, groups reads and writes, and selects at most three deterministic
 onboarding reads in schedule, sheet-music, slide, then canonical order.
@@ -352,8 +343,8 @@ natural-language capability introduction render the same complete projection;
 identity-only introduction remains short. A write is never presented without
 current effective write authority.
 
-Administrator group summaries reuse the same configured profile and group
-grant/role calculation, not the inspecting administrator's requester grants.
+Administrator group summaries reuse the same configured profile read defaults;
+legacy grant/role rows do not affect the summary.
 They show display name, active state, effective function display names, and the
 latest successful function/timestamp only. Catalog and knowledge source views
 show owner and freshness responsibility only on administrator-gated surfaces;
@@ -452,7 +443,7 @@ To add or change an admin action:
 2. Keep execution in the admin action registry, not inline in `server.ts`.
 3. Define source policy, side-effect level, and confirmation requirements.
 4. Add slash command help only if a command is user-facing.
-5. Add natural-language admin routing for direct-chat admin use by default. Allow group natural language only for explicitly group-scoped actions such as function scope grant/revoke/list.
+5. Add natural-language admin routing for direct-chat admin use by default. Do not reintroduce retired function-scope grant/revoke/list actions.
 6. Audit the action and keep `/last-routes` sanitized.
 7. Add policy and observability tests.
 

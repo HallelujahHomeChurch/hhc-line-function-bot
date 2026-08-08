@@ -6,7 +6,7 @@ import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invi
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import { createControlledAgentRouter } from "../agent/controlled-agent-router.js";
-import { createAgentPlanner } from "../agent/planner.js";
+import { createAgentPlanner, type AgentPlanner } from "../agent/planner.js";
 import type { ControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
@@ -304,7 +304,7 @@ describe("LINE entrance", () => {
       payload: body
     });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({ ok: true, ignored: true });
     expect(createLineReplyClient).not.toHaveBeenCalled();
     expect(route).not.toHaveBeenCalled();
@@ -885,7 +885,7 @@ describe("LINE entrance", () => {
       payload: body
     });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode, response.body).toBe(200);
     expect(replyText.mock.calls[0]?.[1]).toBe("已找到投影片");
   });
 
@@ -955,8 +955,8 @@ describe("LINE entrance", () => {
     });
     expect(dedupe).toHaveBeenCalledOnce();
     expect(rateCheck).toHaveBeenCalledOnce();
-    expect(authorizeAdministrator).toHaveBeenCalledOnce();
-    expect(createLineIdentityClient).toHaveBeenCalledOnce();
+    expect(authorizeAdministrator).not.toHaveBeenCalled();
+    expect(createLineIdentityClient).not.toHaveBeenCalled();
     expect(getUserDisplayName).not.toHaveBeenCalled();
     expect(getGroupDisplayName).not.toHaveBeenCalled();
   });
@@ -1311,15 +1311,14 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(replyText).toHaveBeenCalledWith(
-      "reply-token",
-      "你尚未開通小哈，請先找管理員協助註冊。",
-      undefined
+    expect(String(replyText.mock.calls[0]?.[1])).toContain(
+      "你尚未開通小哈，請先找管理員協助註冊。"
     );
     expect(String(replyText.mock.calls[0]?.[1])).not.toContain("可以查詢");
+    expect(String(replyText.mock.calls[0]?.[1])).toContain("登入 HHC 帳戶");
   });
 
-  it("projects direct, group, granted-user, and admin help from exact effective access", async () => {
+  it("ignores legacy grants while preserving profile reads and Account-authorized admin writes in help", async () => {
     const config = testConfig();
     config.profiles[0].enabledFunctions = ["query_schedule", "save_schedule"];
     const accessStore = new InMemoryAccessStore({
@@ -1363,9 +1362,30 @@ describe("LINE entrance", () => {
       createdBy: "Uadmin"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const authorizeFunctions = vi.fn(async ({ lineUserId }: { lineUserId: string }) =>
+      lineUserId === "Uadmin"
+        ? {
+            bound: true,
+            active: true,
+            administrator: true,
+            allowedFunctions: [],
+            account: {
+              displayName: "Admin",
+              maskedEmail: "a***@example.com",
+              roles: ["admin"] as const
+            }
+          }
+        : { bound: false, active: false, administrator: false, allowedFunctions: [] }
+    );
     const app = createTestApp(config, {
       router: { route: vi.fn() },
       accessStore,
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions,
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
       createLineReplyClient: () => ({ replyText })
     });
     const sources = [
@@ -1398,10 +1418,10 @@ describe("LINE entrance", () => {
     expect(directHelp).not.toContain("查投影片");
     expect(directHelp).not.toContain("記服事表");
     expect(groupHelp).toContain("- 查服事表：");
-    expect(groupHelp).toContain("- 查投影片：");
+    expect(groupHelp).not.toContain("查投影片");
     expect(groupHelp).not.toContain("記服事表");
     expect(grantedHelp).toContain("- 查服事表：");
-    expect(grantedHelp).toContain("- 記服事表：");
+    expect(grantedHelp).not.toContain("記服事表");
     expect(grantedHelp).not.toContain("查投影片");
     expect(adminHelp).toContain("- 查服事表：");
     expect(adminHelp).toContain("- 記服事表：");
@@ -1647,7 +1667,7 @@ describe("LINE entrance", () => {
     await expect(accessStore.hasActivePrincipal("main", "group", "Cmain")).resolves.toBe(false);
   });
 
-  it("lets an admin grant a function to the current group for the current profile", async () => {
+  it("rejects retired group function grants without expanding effective functions", async () => {
     const config = testConfig();
     config.profiles[0].enabledFunctions = ["query_schedule"];
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
@@ -1690,11 +1710,12 @@ describe("LINE entrance", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(replyText.mock.calls[0]?.[1]).toContain("已開放");
+    expect(replyText.mock.calls[0]?.[1]).toContain("HHC 帳戶統一管理");
+    await expect(accessStore.listGroupFunctionGrants("main", "Cmain")).resolves.toEqual([]);
     expect(route).toHaveBeenCalledWith(
       expect.objectContaining({
         profileName: "main",
-        enabledFunctions: ["query_schedule", "find_ppt_slides"]
+        enabledFunctions: ["query_schedule"]
       })
     );
   });
@@ -1725,7 +1746,7 @@ describe("LINE entrance", () => {
         payload: body
       });
 
-      expect(replyText.mock.calls[0]?.[1]).toContain("只能開放給指定使用者");
+      expect(replyText.mock.calls[0]?.[1]).toContain("HHC 帳戶統一管理");
       await expect(accessStore.listGroupFunctionGrants("main", "Cmain")).resolves.toEqual([]);
     }
   );
@@ -1734,7 +1755,7 @@ describe("LINE entrance", () => {
     ["save_memory", ["retrieve_memory", "save_memory"]],
     ["save_schedule", ["query_schedule", "save_schedule"]]
   ] as const)(
-    "applies a %s user grant when the requester uses a registered group",
+    "ignores a stored %s user grant for a registered group requester",
     async (functionName, profileFunctions) => {
       const config = testConfig();
       config.profiles[0].enabledFunctions = [...profileFunctions];
@@ -1770,7 +1791,7 @@ describe("LINE entrance", () => {
       });
 
       expect(route).toHaveBeenCalledWith(
-        expect.objectContaining({ enabledFunctions: [...profileFunctions] })
+        expect.objectContaining({ enabledFunctions: [profileFunctions[0]] })
       );
     }
   );
@@ -1824,7 +1845,7 @@ describe("LINE entrance", () => {
     expect(resolve).toHaveBeenCalledWith(
       expect.objectContaining({
         profileName: "main",
-        enabledFunctions: ["query_schedule", "find_ppt_slides"],
+        enabledFunctions: ["query_schedule"],
         sourceType: "group"
       }),
       expect.any(Function)
@@ -1949,7 +1970,7 @@ describe("LINE entrance", () => {
     );
   });
 
-  it("lets a direct user use a write function through an explicit user grant", async () => {
+  it("does not let a stored user grant expand direct-user functions", async () => {
     const config = testConfig();
     config.profiles[0].enabledFunctions = ["query_schedule"];
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
@@ -1988,12 +2009,12 @@ describe("LINE entrance", () => {
     expect(route).toHaveBeenCalledWith(
       expect.objectContaining({
         profileName: "main",
-        enabledFunctions: ["query_schedule", "save_schedule"]
+        enabledFunctions: ["query_schedule"]
       })
     );
   });
 
-  it("lets an admin grant a function to a direct user for the current profile", async () => {
+  it("rejects retired direct-user grants without writing or expanding access", async () => {
     const config = testConfig();
     config.profiles[0].enabledFunctions = ["query_schedule"];
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
@@ -2036,19 +2057,17 @@ describe("LINE entrance", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(replyText.mock.calls[0]?.[1]).toContain("save_schedule");
-    await expect(accessStore.listUserFunctionGrants("main", "Uallowed")).resolves.toEqual([
-      "save_schedule"
-    ]);
+    expect(replyText.mock.calls[0]?.[1]).toContain("HHC 帳戶統一管理");
+    await expect(accessStore.listUserFunctionGrants("main", "Uallowed")).resolves.toEqual([]);
     expect(route).toHaveBeenCalledWith(
       expect.objectContaining({
         profileName: "main",
-        enabledFunctions: ["query_schedule", "save_schedule"]
+        enabledFunctions: ["query_schedule"]
       })
     );
   });
 
-  it("shows write functions as profile-global but not default effective group scope", async () => {
+  it("rejects the retired function scope listing command", async () => {
     const config = testConfig();
     config.profiles[0].enabledFunctions = ["query_schedule", "save_schedule"];
     const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
@@ -2077,10 +2096,7 @@ describe("LINE entrance", () => {
 
     const reply = String(replyText.mock.calls[0]?.[1] ?? "");
     expect(res.statusCode).toBe(200);
-    expect(reply).toContain("profile-global: query_schedule, save_schedule");
-    expect(reply).toContain("profile-default: query_schedule");
-    expect(reply).toContain("effective: query_schedule");
-    expect(reply).not.toContain("effective: query_schedule, save_schedule");
+    expect(reply).toContain("HHC 帳戶統一管理");
   });
 
   it("keeps group function grants isolated by profile", async () => {
@@ -2441,6 +2457,56 @@ describe("LINE entrance", () => {
       replyText.mock.calls[0]?.[2]?.quickReplies
     );
     expect(replyText.mock.calls[0]?.[2]?.quickReplies).toHaveLength(3);
+  });
+
+  it("filters natural capability introductions through the memoized Account permission lookup", async () => {
+    const config = testConfig();
+    config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: false,
+      allowedFunctions: [],
+      account: {
+        displayName: "王小明",
+        maskedEmail: "w***@example.com",
+        roles: ["user"]
+      }
+    });
+    const app = createTestApp(config, {
+      router: { route },
+      accountAdminClient: { authorizeFunctions },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "小哈你能做什麼" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith({
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: ["query_schedule"]
+    });
+    expect(route).not.toHaveBeenCalled();
+    const reply = String(replyText.mock.calls[0]?.[1]);
+    expect(reply).toContain("- 查投影片：");
+    expect(reply).not.toContain("- 查服事表：");
+    expect(reply).toContain("已連結 王小明（w***@example.com）");
+    expect(reply).not.toContain("登入 HHC 帳戶");
   });
 
   it("introduces sheet music lookup without exposing storage details", async () => {
@@ -3005,6 +3071,8 @@ describe("LINE entrance", () => {
   });
 
   it("registers direct users immediately with a one-time invite code", async () => {
+    const config = accessConfig();
+    config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const accessStore = new InMemoryAccessStore();
@@ -3022,10 +3090,22 @@ describe("LINE entrance", () => {
       getUserDisplayName: vi.fn().mockResolvedValue("Ray from LINE"),
       getGroupDisplayName: vi.fn()
     };
-    const app = createApp(accessConfig(), {
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: false,
+      active: false,
+      administrator: false,
+      allowedFunctions: []
+    });
+    const app = createApp(config, {
       router: { route },
       accessStore,
       registrationInviteCodeStore,
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions,
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
       createLineReplyClient: () => ({ replyText }),
       createLineIdentityClient: () => identityClient
     });
@@ -3045,17 +3125,21 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith({
+      lineUserId: "Unew",
+      profileName: "helper",
+      functionNames: ["query_schedule"]
+    });
     expect(identityClient.getUserDisplayName).toHaveBeenCalledWith("Unew");
     expect(replyText).toHaveBeenCalledWith(
       "reply-token",
       expect.stringContaining("已開通，你現在可以使用小哈。"),
       expect.objectContaining({
-        quickReplies: [
-          expect.objectContaining({ label: "查服事表" }),
-          expect.objectContaining({ label: "查投影片" })
-        ]
+        quickReplies: [expect.objectContaining({ label: "查投影片" })]
       })
     );
+    expect(String(replyText.mock.calls[0]?.[1])).not.toContain("查服事表");
     expect(String(replyText.mock.calls[0]?.[1])).not.toContain("Unew");
     expect(String(replyText.mock.calls[0]?.[1])).not.toContain("目前還沒有開放");
     await expect(accessStore.hasActivePrincipal("helper", "user", "Unew")).resolves.toBe(true);
@@ -3364,7 +3448,7 @@ describe("LINE entrance", () => {
     );
   });
 
-  it("lets admins manage current-group function scope through natural language", async () => {
+  it("does not route retired natural-language function management as an admin action", async () => {
     const config = testConfig();
     config.profiles[0].enabledFunctions = ["query_schedule"];
     config.profiles[0].groupRequireWakeWord = false;
@@ -3398,12 +3482,9 @@ describe("LINE entrance", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(route).not.toHaveBeenCalled();
-    expect(adminRoute).toHaveBeenCalledOnce();
-    await expect(accessStore.listGroupFunctionGrants("main", "Cmain")).resolves.toEqual([
-      "find_ppt_slides"
-    ]);
-    expect(replyText.mock.calls[0]?.[1]).toContain("find_ppt_slides");
+    expect(route).toHaveBeenCalledOnce();
+    expect(adminRoute).not.toHaveBeenCalled();
+    await expect(accessStore.listGroupFunctionGrants("main", "Cmain")).resolves.toEqual([]);
   });
 
   it("records admin natural-language routes and action results without raw text or invite codes", async () => {
@@ -3764,7 +3845,7 @@ describe("LINE entrance", () => {
     const reply = String(replyText.mock.calls[0]?.[1]);
     expect(reply).toContain("group: Cactive (影音同工群)");
     expect(reply).toContain("state: active");
-    expect(reply).toContain("effective: 查投影片, 查服事表, 查教會資料, 查歌譜");
+    expect(reply).toContain("effective: 查投影片, 查服事表");
     expect(reply).not.toContain("查維基百科");
     expect(reply).toContain("last-success: 查投影片 @ 2026-07-26T10:00:00.000Z");
     expect(reply).toContain("group: Cdisabled (舊服事群)");
@@ -3874,6 +3955,12 @@ describe("LINE entrance", () => {
     async (_label, text, sourceType, expected) => {
       const order: string[] = [];
       const authorizeAdministrator = vi.fn();
+      const authorizeFunctions = vi.fn().mockResolvedValue({
+        bound: false,
+        active: false,
+        administrator: false,
+        allowedFunctions: []
+      });
       const providerCompleteJson = vi.fn();
       const providerCompleteText = vi.fn<TextGenerationProvider["completeText"]>();
       const embeddingRequest = vi.fn();
@@ -3924,6 +4011,7 @@ describe("LINE entrance", () => {
         textFallbackGenerator: { completeText: providerCompleteText },
         accountAdminClient: {
           authorizeAdministrator,
+          authorizeFunctions,
           createBinding,
           finalizeBinding: vi.fn()
         },
@@ -3989,6 +4077,7 @@ describe("LINE entrance", () => {
       expect(order.slice(0, 2)).toEqual(["dedupe", "rate"]);
       if (expected === "login") {
         expect(order).toEqual(["dedupe", "rate"]);
+        expect(authorizeFunctions).toHaveBeenCalledOnce();
         expect(createBinding).toHaveBeenCalledOnce();
       } else {
         const displayIndex = order.indexOf("display");
@@ -4000,11 +4089,404 @@ describe("LINE entrance", () => {
       if (expected === "success") expect(reply).toContain("第 1733 期週報");
       if (expected === "not_found") expect(reply).toContain("沒有找到");
       if (expected === "help") {
+        expect(authorizeFunctions).toHaveBeenCalledOnce();
         expect(reply).toContain("下載週報");
         expect(reply).toContain("登入 HHC 帳戶");
         expect(reply).not.toMatch(/registry|memories|route-test/iu);
       }
       if (expected === "local") expect(reply).not.toContain("管理權限");
+    }
+  );
+
+  it.each([
+    [
+      "unbound",
+      { bound: false, active: false, administrator: false, allowedFunctions: [] },
+      ["下載週報", "登入 HHC 帳戶"],
+      ["查服事表"]
+    ],
+    [
+      "active",
+      {
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: ["query_schedule"],
+        account: { displayName: "Ray", maskedEmail: "r***@example.com", roles: ["user"] }
+      },
+      ["下載週報", "查服事表", "Ray", "r***@example.com"],
+      ["登入 HHC 帳戶"]
+    ],
+    [
+      "inactive",
+      { bound: true, active: false, administrator: false, allowedFunctions: [] },
+      ["下載週報", "聯絡管理同工"],
+      ["查服事表", "登入 HHC 帳戶"]
+    ]
+  ] as const)(
+    "renders Account-aware help from the allowed function intersection: %s",
+    async (_label, authorization, included, excluded) => {
+      const config = providerFreeMainConfig();
+      config.profiles[0]!.enabledFunctions = ["download_weekly_paper", "query_schedule"];
+      config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+      const authorizeFunctions = vi.fn().mockResolvedValue(authorization);
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const app = createApp(config, {
+        accountAdminClient: {
+          authorizeAdministrator: vi.fn(),
+          authorizeFunctions,
+          createBinding: vi.fn(),
+          finalizeBinding: vi.fn()
+        },
+        createLineReplyClient: () => ({ replyText }),
+        createLineIdentityClient: () => ({
+          getUserDisplayName: vi.fn(),
+          getGroupDisplayName: vi.fn()
+        })
+      });
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `help-${_label}`,
+        replyToken: "reply-token",
+        source: { type: "user", userId: "U1" },
+        message: { type: "text", text: "幫助！" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledWith({
+        lineUserId: "U1",
+        profileName: "main",
+        functionNames: ["query_schedule"]
+      });
+      const reply = String(replyText.mock.calls[0]?.[1]);
+      for (const value of included) expect(reply).toContain(value);
+      for (const value of excluded) expect(reply).not.toContain(value);
+    }
+  );
+
+  it("keeps public help available when Account authorization is unavailable", async () => {
+    const config = providerFreeMainConfig();
+    config.profiles[0]!.enabledFunctions = ["download_weekly_paper", "query_schedule"];
+    config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(config, {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn().mockRejectedValue(new Error("offline")),
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn(),
+        getGroupDisplayName: vi.fn()
+      })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "help-unavailable",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "U1" },
+      message: { type: "text", text: "/help" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    const reply = String(replyText.mock.calls[0]?.[1]);
+    expect(reply).toContain("下載週報");
+    expect(reply).toContain("目前無法確認帳戶狀態");
+    expect(reply).not.toContain("查服事表");
+    expect(reply).not.toContain("登入 HHC 帳戶");
+  });
+
+  it.each([
+    [
+      "unbound",
+      { bound: false, active: false, administrator: false, allowedFunctions: [] },
+      true,
+      "登入／綁定 HHC 帳戶"
+    ],
+    [
+      "active",
+      {
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: [],
+        account: { displayName: "Ray", maskedEmail: "r***@example.com", roles: ["user"] }
+      },
+      false,
+      "已連結"
+    ],
+    [
+      "inactive",
+      { bound: true, active: false, administrator: false, allowedFunctions: [] },
+      false,
+      "聯絡管理同工"
+    ]
+  ] as const)(
+    "starts login only for an unbound direct user: %s",
+    async (_label, authorization, creates, copy) => {
+      const authorizeFunctions = vi.fn().mockResolvedValue(authorization);
+      const createBinding = vi.fn().mockResolvedValue({
+        bindingUrl: "https://account.alive.org.tw/line/bind#token=opaque",
+        expiresAt: "2026-08-08T12:00:00Z"
+      });
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const app = createApp(providerFreeMainConfig(), {
+        accountAdminClient: {
+          authorizeAdministrator: vi.fn(),
+          authorizeFunctions,
+          createBinding,
+          finalizeBinding: vi.fn()
+        },
+        createLineReplyClient: () => ({ replyText }),
+        createLineIdentityClient: () => ({
+          getUserDisplayName: vi.fn(),
+          getGroupDisplayName: vi.fn()
+        })
+      });
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `login-${_label}`,
+        replyToken: "reply-token",
+        source: { type: "user", userId: "U1" },
+        message: { type: "text", text: "登入！" }
+      });
+
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledWith({
+        lineUserId: "U1",
+        profileName: "main",
+        functionNames: []
+      });
+      expect(createBinding).toHaveBeenCalledTimes(creates ? 1 : 0);
+      expect(String(replyText.mock.calls[0]?.[1])).toContain(copy);
+    }
+  );
+
+  it("returns only safe linked-account fields and human function names from whoami", async () => {
+    const config = providerFreeMainConfig();
+    config.profiles[0]!.enabledFunctions = ["download_weekly_paper", "query_schedule"];
+    config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: true,
+      allowedFunctions: ["query_schedule"],
+      account: {
+        displayName: "Ray",
+        maskedEmail: "r***@example.com",
+        roles: ["admin", "user"]
+      }
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(config, {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions,
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn(),
+        getGroupDisplayName: vi.fn()
+      })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "whoami-active",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "U-secret" },
+      message: { type: "text", text: "我的帳戶？" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    const reply = String(replyText.mock.calls[0]?.[1]);
+    expect(reply).toContain("Ray");
+    expect(reply).toContain("r***@example.com");
+    expect(reply).toContain("admin");
+    expect(reply).toContain("user");
+    expect(reply).toContain("查服事表");
+    expect(reply).not.toContain("query_schedule");
+    expect(reply).not.toContain("U-secret");
+    expect(reply).not.toMatch(/profile:|source:|groupId:|directPolicy:|permission:/u);
+  });
+
+  it("does not offer a second binding to an inactive account in whoami", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(providerFreeMainConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn().mockResolvedValue({
+          bound: true,
+          active: false,
+          administrator: false,
+          allowedFunctions: []
+        }),
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn(),
+        getGroupDisplayName: vi.fn()
+      })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "whoami-inactive",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "U1" },
+      message: { type: "text", text: "我是誰" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    const reply = String(replyText.mock.calls[0]?.[1]);
+    expect(reply).toContain("聯絡管理同工");
+    expect(reply).not.toContain("登入 HHC 帳戶");
+  });
+
+  it.each([
+    ["allowed", ["query_schedule"], 1],
+    ["denied", [], 0]
+  ] as const)(
+    "%s Account authorization filters a restricted candidate before planner execution",
+    async (_label, allowedFunctions, executions) => {
+      const config = providerFreeMainConfig();
+      config.profiles[0]!.enabledFunctions = ["download_weekly_paper", "query_schedule"];
+      config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+      const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+        status: "proposed",
+        version: 1,
+        disposition: "execute",
+        capability: "query_schedule",
+        arguments: { query: "查主日服事" },
+        confidence: 0.98,
+        provider: "deepseek",
+        attempts: []
+      });
+      const querySchedule = vi.fn().mockResolvedValue({
+        ok: true,
+        replyText: "主日服事表",
+        agentResult: { status: "success", replyText: "主日服事表" }
+      });
+      const authorizeFunctions = vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: [...allowedFunctions]
+      });
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const app = createApp(config, {
+        controlledAgentRouter: createControlledAgentRouter({ planner: { propose } }),
+        functionRegistry: { query_schedule: querySchedule },
+        accountAdminClient: {
+          authorizeAdministrator: vi.fn(),
+          authorizeFunctions,
+          createBinding: vi.fn(),
+          finalizeBinding: vi.fn()
+        },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `restricted-${_label}`,
+        replyToken: "reply-token",
+        source: { type: "user", userId: "U1" },
+        message: { type: "text", text: "查主日服事" }
+      });
+
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledWith({
+        lineUserId: "U1",
+        profileName: "main",
+        functionNames: ["query_schedule"]
+      });
+      expect(propose).toHaveBeenCalledTimes(executions);
+      expect(querySchedule).toHaveBeenCalledTimes(executions);
+    }
+  );
+
+  it.each(["下載第 1733 期週報", "今天天氣如何"])(
+    "does not look up Account authorization for an unrelated public turn: %s",
+    async (text) => {
+      const config = providerFreeMainConfig();
+      config.profiles[0]!.enabledFunctions = ["download_weekly_paper", "query_schedule"];
+      config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+      const authorizeFunctions = vi.fn();
+      const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+        status: "no_plan",
+        reasonCode: "providers_disabled",
+        attempts: []
+      });
+      const app = createApp(config, {
+        controlledAgentRouter: createControlledAgentRouter({ planner: { propose } }),
+        accountAdminClient: {
+          authorizeAdministrator: vi.fn(),
+          authorizeFunctions,
+          createBinding: vi.fn(),
+          finalizeBinding: vi.fn()
+        },
+        createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
+      });
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `public-${text.length}`,
+        replyToken: "reply-token",
+        source: { type: "user", userId: "U1" },
+        message: { type: "text", text }
+      });
+
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+
+      expect(authorizeFunctions).not.toHaveBeenCalled();
     }
   );
 
@@ -4077,6 +4559,12 @@ describe("LINE entrance", () => {
 
   it("starts native account linking for an unmanaged direct user without authorization or routing", async () => {
     const authorizeAdministrator = vi.fn();
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: false,
+      active: false,
+      administrator: false,
+      allowedFunctions: []
+    });
     const createBinding = vi.fn().mockResolvedValue({
       bindingUrl: "https://account.alive.org.tw/line/bind#token=opaque",
       expiresAt: "2026-08-08T12:00:00Z"
@@ -4090,6 +4578,7 @@ describe("LINE entrance", () => {
       routeObserver,
       accountAdminClient: {
         authorizeAdministrator,
+        authorizeFunctions,
         createBinding,
         finalizeBinding: vi.fn()
       },
@@ -4244,6 +4733,191 @@ describe("LINE entrance", () => {
     });
 
     expect(createBinding).not.toHaveBeenCalled();
+  });
+
+  it("finalizes a byte-exact account challenge before ordinary dedupe and retries the same event after a transient failure", async () => {
+    const nonce = "A".repeat(43);
+    const finalizeBinding = vi
+      .fn()
+      .mockRejectedValueOnce(new AccountApiError("account_api_http_503", true))
+      .mockResolvedValueOnce({ status: "completed" });
+    const authorizeFunctions = vi.fn();
+    const createBinding = vi.fn();
+    const tryStart = vi.fn();
+    const check = vi.fn().mockResolvedValue({
+      allowed: true,
+      remaining: 19,
+      resetAt: "2026-08-08T12:00:00Z"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const routeObserver = vi.fn();
+    const app = createApp(providerFreeMainConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions,
+        createBinding,
+        finalizeBinding
+      },
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn(),
+        getGroupDisplayName: vi.fn()
+      }),
+      webhookEventStore: { tryStart },
+      rateLimiter: { check },
+      routeObserver
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "challenge-event",
+      deliveryContext: { isRedelivery: true },
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uchallenge" },
+      message: { type: "text", text: `HHC_ACCOUNT_LINK_V1:${nonce}` }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(first.statusCode).toBe(503);
+    expect(second.statusCode).toBe(200);
+    expect(finalizeBinding).toHaveBeenCalledTimes(2);
+    expect(finalizeBinding).toHaveBeenLastCalledWith({
+      nonce,
+      result: "ok",
+      actualLineUserId: "Uchallenge",
+      profileName: "main",
+      channelId: "bot",
+      webhookEventId: "challenge-event"
+    });
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(tryStart).not.toHaveBeenCalled();
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(createBinding).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledOnce();
+    const observed = JSON.stringify(routeObserver.mock.calls);
+    expect(observed).not.toContain(nonce);
+    expect(observed).not.toContain("HHC_ACCOUNT_LINK_V1");
+  });
+
+  it.each([
+    [
+      "unsupported version",
+      `HHC_ACCOUNT_LINK_V2:${"A".repeat(43)}`,
+      { type: "user", userId: "U1" }
+    ],
+    ["edited prefix", `hhc-account-link-v1:${"A".repeat(43)}`, { type: "user", userId: "U1" }],
+    ["padded nonce", `HHC_ACCOUNT_LINK_V1:${"A".repeat(42)}=`, { type: "user", userId: "U1" }],
+    ["overlong nonce", `HHC_ACCOUNT_LINK_V1:${"A".repeat(44)}`, { type: "user", userId: "U1" }],
+    [
+      "group source",
+      `HHC_ACCOUNT_LINK_V1:${"A".repeat(43)}`,
+      { type: "group", groupId: "C1", userId: "U1" }
+    ],
+    ["missing user", `HHC_ACCOUNT_LINK_V1:${"A".repeat(43)}`, { type: "user" }]
+  ])("consumes malformed reserved account challenge locally: %s", async (_label, text, source) => {
+    const finalizeBinding = vi.fn();
+    const authorizeFunctions = vi.fn();
+    const tryStart = vi.fn();
+    const check = vi.fn().mockResolvedValue({
+      allowed: true,
+      remaining: 19,
+      resetAt: "2026-08-08T12:00:00Z"
+    });
+    const routeObserver = vi.fn();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(providerFreeMainConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions,
+        createBinding: vi.fn(),
+        finalizeBinding
+      },
+      webhookEventStore: { tryStart },
+      rateLimiter: { check },
+      routeObserver,
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn(),
+        getGroupDisplayName: vi.fn()
+      })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "reserved-invalid",
+      replyToken: "reply-token",
+      source,
+      message: { type: "text", text }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(check).toHaveBeenCalledOnce();
+    expect(finalizeBinding).not.toHaveBeenCalled();
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(tryStart).not.toHaveBeenCalled();
+    expect(JSON.stringify(routeObserver.mock.calls)).not.toContain(String(text));
+  });
+
+  it("throttles valid-shaped reserved challenges before Account API finalization", async () => {
+    const finalizeBinding = vi.fn();
+    const tryStart = vi.fn();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(providerFreeMainConfig(), {
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn(),
+        createBinding: vi.fn(),
+        finalizeBinding
+      },
+      webhookEventStore: { tryStart },
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn(),
+        getGroupDisplayName: vi.fn()
+      }),
+      rateLimiter: {
+        check: vi.fn().mockResolvedValue({
+          allowed: false,
+          remaining: 0,
+          resetAt: "2026-08-08T12:00:00Z"
+        })
+      }
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "challenge-flood",
+      replyToken: "reply-token",
+      source: { type: "user", userId: "Uflood" },
+      message: { type: "text", text: `HHC_ACCOUNT_LINK_V1:${"B".repeat(43)}` }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(finalizeBinding).not.toHaveBeenCalled();
+    expect(tryStart).not.toHaveBeenCalled();
   });
 
   it("finalizes a completed accountLink before every ordinary entrance dependency", async () => {
@@ -4592,6 +5266,12 @@ describe("LINE entrance", () => {
     const app = createApp(accessConfig(), {
       accountAdminClient: {
         authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn().mockResolvedValue({
+          bound: false,
+          active: false,
+          administrator: false,
+          allowedFunctions: []
+        }),
         createBinding,
         finalizeBinding: vi.fn()
       },
@@ -4678,7 +5358,8 @@ describe("LINE entrance", () => {
     config.profiles[0] = {
       ...config.profiles[0],
       allowedMessageTypes: ["text", "image", "file"],
-      enabledFunctions: ["save_resource"]
+      enabledFunctions: ["save_resource"],
+      permissionRequiredFunctions: ["save_resource"]
     };
     const router: FunctionRouterPort = { route: vi.fn() };
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -4739,6 +5420,17 @@ describe("LINE entrance", () => {
     const app = createTestApp(config, {
       router: { route: vi.fn() },
       sessionStore,
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn().mockResolvedValue({
+          bound: true,
+          active: true,
+          administrator: false,
+          allowedFunctions: ["save_resource"]
+        }),
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -4886,7 +5578,7 @@ describe("LINE entrance", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("allows a non-admin attachment when save_resource is granted through a role", async () => {
+  it("ignores a stored save_resource role capability for a non-admin attachment", async () => {
     const config = testConfig();
     config.profiles[0] = {
       ...config.profiles[0],
@@ -4935,10 +5627,7 @@ describe("LINE entrance", () => {
         source: { type: "user", userId: "Uallowed" },
         requesterUserId: "Uallowed"
       })
-    ).resolves.toMatchObject({
-      action: "save_resource",
-      attachment: { messageId: "image-role-1" }
-    });
+    ).resolves.toBeUndefined();
   });
 
   it("does not let another group requester continue a pending attachment", async () => {
@@ -4947,22 +5636,17 @@ describe("LINE entrance", () => {
       ...config.profiles[0],
       allowedMessageTypes: ["text", "file"],
       groupRequireWakeWord: false,
-      enabledFunctions: ["save_resource"]
+      enabledFunctions: ["save_resource"],
+      permissionRequiredFunctions: ["save_resource"]
     };
     const accessStore = defaultAccessStore();
-    await accessStore.addGroupFunctionGrant({
-      profileName: "main",
-      groupId: "Cmain",
-      functionName: "save_resource",
-      grantedBy: "Uadmin"
-    });
     const sessionStore = new InMemorySessionStore();
     await sessionStore.set({
       id: "upload-intent-existing-test",
       type: "upload_intent",
       profileName: "main",
-      requesterUserId: "U1",
-      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      requesterUserId: "Uadmin",
+      source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
       expiresAt: "2099-01-01T00:00:00.000Z"
     });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -4970,12 +5654,23 @@ describe("LINE entrance", () => {
       router: { route: vi.fn() },
       accessStore,
       sessionStore,
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions: vi.fn().mockResolvedValue({
+          bound: true,
+          active: true,
+          administrator: false,
+          allowedFunctions: ["save_resource"]
+        }),
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
       type: "message",
       replyToken: "reply-token",
-      source: { type: "group", groupId: "Cmain", userId: "U1" },
+      source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
       message: { type: "file", id: "file-1", fileName: "主日投影片.pptx", fileSize: 1234 }
     });
 
@@ -4996,8 +5691,8 @@ describe("LINE entrance", () => {
     await expect(
       sessionStore.findPendingAttachment({
         profileName: "main",
-        source: { type: "group", groupId: "Cmain", userId: "U1" },
-        requesterUserId: "U1"
+        source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+        requesterUserId: "Uadmin"
       })
     ).resolves.toMatchObject({
       attachment: { messageId: "file-1", messageType: "file", fileName: "主日投影片.pptx" }

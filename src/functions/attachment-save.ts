@@ -37,6 +37,7 @@ export function createPendingAttachmentTextMessageHandler(
 
   return {
     turnStage: "attachment",
+    capability: "save_resource",
     matches: async (_request, context) =>
       Boolean(
         await options.sessionStore.findPendingAttachment({

@@ -13,6 +13,7 @@ import { InMemoryLastRouteStore } from "../../observability/last-route-store.js"
 import { InMemorySessionStore, type SessionStore } from "../../state/session-store.js";
 import type {
   BotProfileConfig,
+  FunctionName,
   FunctionRegistry,
   LineEvent,
   LineSource,
@@ -47,6 +48,7 @@ export interface KernelRuntimeHarnessOptions {
   sessionStore?: SessionStore;
   conversationWindowStore?: ConversationWindowStore;
   elapsedMs?: (turnIndex: number) => number;
+  authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
 }
 
 export function createKernelRuntimeHarness(
@@ -81,7 +83,8 @@ export function createKernelRuntimeHarness(
         const result = await runtime.handleTextTurn({
           profile: options.profile,
           event: textEvent(turn),
-          requestId: turn.requestId
+          requestId: turn.requestId,
+          authorizeFunctions: options.authorizeFunctions
         });
         const measuredElapsedMs = Math.max(0, performance.now() - startedAt);
         results.push({

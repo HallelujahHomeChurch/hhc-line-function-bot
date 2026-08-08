@@ -23,10 +23,10 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Catalog-driven resource search foundation: OneDrive-style sources can be registered as catalog sources and indexed into a unified item table abstraction. User-facing lookup functions do not expose whether data came from OneDrive, Notion, PostgreSQL, or a future source.
 - Optional Redis backend for sessions, cache, recent errors, rate limiting, and one-time registration invite codes.
 - Per-profile access policy with PostgreSQL-backed user/group registration.
-- Public `/help`, `/registry <code>`, and `/whoami` commands.
+- Shared public help (`/help`, `幫助`, `說明`, `功能`, `可以做什麼`), account identity, and login surfaces.
 - Direct-chat admin commands authorized by the linked HHC account and Account roles.
-- Native LINE account linking from the exact direct-chat phrases `登入帳戶`, `登入 HHC 帳戶`, `連結帳戶`, `綁定帳戶`, or `login`; linking uses LINE's accountLink event and does not enter the LLM router.
-- Admin natural language for selected management actions: invite-code creation and group function scope management.
+- HHC account linking from the exact direct-chat phrases `登入`, `登入帳戶`, `登入 HHC 帳戶`, `連結帳戶`, `綁定帳戶`, or `login`; signed completion messages and the rollback-only LINE `accountLink` event finalize locally without entering the LLM router.
+- Admin natural language for selected management actions such as invite-code creation.
 - Minimal `/healthz`, data-layer `/readyz`, and admin-only `/diag` diagnostics.
 - Destructive admin-action confirmation infrastructure through `/confirm <code>`.
 - Function handlers:
@@ -40,7 +40,7 @@ LINE webhook service for routing selected church bot requests to controlled func
   - `save_schedule`: previews and manages the helper profile's shared canonical text-only service schedules with one-year retention.
   - `save_resource`: validates, scans, confirms, publishes, and indexes authorized LINE attachments.
 
-The helper production profile enables the controlled church lookup functions, structured schedule management, `retrieve_memory`, and write-gated `save_memory`/`save_resource`. Read access follows profile and group/user grants; memory and resource writes remain admin or explicit-user-grant only.
+The helper production profile enables the controlled church lookup functions, structured schedule management, `retrieve_memory`, and write-gated `save_memory`/`save_resource`. Registered sources receive profile-global reads plus the Account-authorized intersection of `permissionRequiredFunctions`; local grant and role-capability rows no longer expand effective functions.
 
 Disabled, unknown, unclear, or explicitly denied actions are denied. There is no Azure OpenAI chat fallback in this version.
 
@@ -169,10 +169,10 @@ If upgrading from the old pending-request registration flow, review `docs/sql/dr
 Function toggles are profile-scoped:
 
 - `enabledFunctions` means profile-global functions for that bot profile only.
-- Direct users can use profile-global read functions plus DB-managed grants for the same `profileName/userId`.
-- Groups can use profile-global read functions plus DB-managed grants for the same `profileName/groupId` and grants for the requester `profileName/userId`.
-- Group grants are additive. To make a function group-only, remove it from `enabledFunctions` and grant it to selected groups.
-- `save_schedule` and `save_memory` are user-grant-only writes. Use `/function-user-grant`; group grants and group role capabilities cannot open them for every member.
+- Ordinary users receive profile-global read functions that do not require Account permission.
+- `permissionRequiredFunctions` is the Account-authorized subset of `enabledFunctions`. Only the bounded candidate or current requester-scoped continuation capability is sent to Account API, and denied/unavailable permissions fail closed before planner or handler execution.
+- Access principals and group registration still authorize the LINE source. Historical user/group grant and role-capability tables remain for rollback compatibility but do not add functions.
+- The retired `/function-grant`, `/function-user-grant`, revoke/list variants, and matching natural-language actions are hidden or rejected. Function permissions are managed by HHC Account.
 - Admin actions are not `enabledFunctions` and cannot be granted to groups. They are gated separately by admin identity, source policy, and audit rules.
 
 The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
@@ -189,9 +189,9 @@ Provider access is profile-scoped. Every LLM-enabled profile must list `deepseek
 
 Provider-enabled profiles declare lane policy with `providerPolicy`. Their lanes use `primary: "deepseek"`, and semantic fallbacks are rejected during configuration validation. Provider-free main uses an empty policy.
 
-The helper profile enables the controlled agent with at most three candidates and a minimum planner confidence of `0.65`. Candidate generation is deterministic and considers only effective, enabled functions with a declarative `agentCapability` contract. Each contract declares semantic scope, required slots, allowed operations, safe evidence providers, output fields, ambiguity behavior, and successful write-to-read handoffs. Evidence can come from explicit current-message intent, declared argument patterns, a live requester-scoped task frame, promoted dynamic-knowledge metadata, or a bounded read-only retrieval probe. No provider may invent a capability or expand the effective function set.
+The helper profile enables the controlled agent with at most three candidates and a minimum planner confidence of `0.65`. Candidate generation is deterministic and considers the public effective set plus the configured `permissionRequiredFunctions` ceiling, each with a declarative `agentCapability` contract. Restricted candidates are removed unless Account authorizes them before planner input. Each contract declares semantic scope, required slots, allowed operations, safe evidence providers, output fields, ambiguity behavior, and successful write-to-read handoffs. Evidence can come from explicit current-message intent, declared argument patterns, a live requester-scoped task frame, promoted dynamic-knowledge metadata, or a bounded read-only retrieval probe. No provider may invent a capability or expand the effective function set.
 
-Write capabilities use a narrower path: they enter the candidate set only from explicit, unnegated current-message intent after requester grants are resolved. Natural shorthand such as `幫我記服事表` and `記服事表` is write intent; passive recall such as `你記得服事表嗎` is not. Domain writes such as `save_schedule` suppress both read candidates and the generic `save_memory` fallback when both match. The validator grounds the payload in the current message, and the handler still requires requester-scoped preview and confirmation.
+Write capabilities use a narrower path: they enter the candidate set only from explicit, unnegated current-message intent after Account permission is resolved. Natural shorthand such as `幫我記服事表` and `記服事表` is write intent; passive recall such as `你記得服事表嗎` is not. Domain writes such as `save_schedule` suppress both read candidates and the generic `save_memory` fallback when both match. The validator grounds the payload in the current message, and the handler still requires requester-scoped preview and confirmation. Active tasks, slot collection, previews, and confirmations recheck restricted permission before continuation.
 
 DeepSeek is the sole `function_routing` planner. The model proposes only semantics over a bounded candidate set; it does not own workflow state or execute tools. The server then revalidates the proposal against the candidate set, source policy, function toggle, side-effect policy, current-message evidence, active-task authority, required slots, argument schema, and the `0.65` threshold. A missing required slot becomes the deterministic `collect` state even if the model proposed execute, clarify, chat, low confidence, or no plan. Unsupported or ungrounded values are discarded, ambiguity becomes clarification, and disabled or unauthorized capabilities are denied. When DeepSeek is unavailable, an unambiguous explicit request may still use the deterministic definition contract; unresolved evidence fails closed to clarification rather than guessing.
 
@@ -240,7 +240,7 @@ Sheet music lookup remains catalog/local-first. If no local sheet music matches 
 
 The candidate generator and validator guard model output when the user names an explicit domain. For example, `查維基百科` with no topic asks for the missing topic instead of letting a model invent one, and `查週報音檔` resolves to internal catalog search rather than Wikipedia when `find_resource` is enabled.
 
-The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:kernel` runs the deterministic R0-R4.1 product gate through the real controlled turn runtime and application contracts. Its versioned R4.1 journeys cover exact direct, group, granted-user, and admin discovery; registration-to-first-read; every controlled result-guidance class; unavailable-write exclusion; and two synthetic branch groups with shared formal data but isolated interaction state. The gate uses stub planners and in-memory fixtures only—no DeepSeek or Azure embedding call—and writes privacy-safe reports to `artifacts/kernel-v1/report.json` and `artifacts/kernel-v1/report.md`. Exit code `0` means every required metric passed, while a non-zero exit means at least one metric, case, or corpus-completeness rule failed. `pnpm eval:kernel:integration` owns a disposable loopback-only Redis AOF and pgvector PostgreSQL Compose project, exercises two real clients, restarts the actual Redis server, and writes the allowlisted result to `artifacts/kernel-v1/integration-report.json`. It fails rather than skipping when Docker, a dependency, restart, or cleanup is unavailable. `case_execution_failed` identifies a case whose evaluator could not complete, not a user-facing result. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) DeepSeek-only `function_routing` policy and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
+The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:kernel` runs the deterministic R0-R4.1 product gate through the real controlled turn runtime and application contracts. Its versioned R4.1 journeys cover exact direct, group, Account-authorized-user, and admin discovery; registration-to-first-read; every controlled result-guidance class; unavailable-write exclusion; and two synthetic branch groups with shared formal data but isolated interaction state. The gate uses stub planners and in-memory fixtures only—no DeepSeek or Azure embedding call—and writes privacy-safe reports to `artifacts/kernel-v1/report.json` and `artifacts/kernel-v1/report.md`. Exit code `0` means every required metric passed, while a non-zero exit means at least one metric, case, or corpus-completeness rule failed. `pnpm eval:kernel:integration` owns a disposable loopback-only Redis AOF and pgvector PostgreSQL Compose project, exercises two real clients, restarts the actual Redis server, and writes the allowlisted result to `artifacts/kernel-v1/integration-report.json`. It fails rather than skipping when Docker, a dependency, restart, or cleanup is unavailable. `case_execution_failed` identifies a case whose evaluator could not complete, not a user-facing result. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) DeepSeek-only `function_routing` policy and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
 
 `pnpm eval:kernel:local-live` is the manual, bounded Kernel v1 live-provider gate. It requires a clean worktree so the reported commit is the exact Docker build input, creates disposable local app/PostgreSQL/Redis containers, sends signed synthetic LINE webhooks through the real controlled runtime, and permits outbound calls only to DeepSeek and the existing Azure `text-embedding-3-small` deployment. The host reads only `deepseek-api-key` and `azure-openai-embedding-key` from the `hhc-line-function-bot` Container App, stages them in memory-backed mode-`0600` files, enforces the declared per-case limits, at most one DeepSeek request per webhook turn, and exact successful suite evidence of 9 DeepSeek requests and 3 embedding batches under the absolute 10/3 authority cap with no automatic retry. Any failed or budget-exhausted provider observation fails the case. The runner writes allowlisted reports under `artifacts/kernel-v1` and removes the Compose project, volumes, Redis namespace, and secret files on every exit. Run one declared case with `bash scripts/run-kernel-local-live.sh --case <case-id>` only for bounded diagnosis; do not add this command to CI or a scheduler.
 
@@ -323,12 +323,12 @@ The memory layer adds controlled memory without making the bot an unrestricted c
 - Task-frame continuation is requester-scoped. In a group, another user cannot inherit or replay someone else's result.
 - Resource aliases are scope-scoped ranking hints. They never bypass a current catalog/provider search or reference validation.
 - Text memories are saved only when the user clearly asks the bot to remember, save, or store content. Normal group chatter is not saved.
-- The helper profile enables `retrieve_memory` for registered users and keeps `save_memory` admin/explicit-user-grant only. In a registered group, a granted requester may explicitly choose group sharing; otherwise the memory stays private to that requester in that group.
+- The helper profile enables `retrieve_memory` for registered users and keeps `save_memory` outside ordinary read access. An Account administrator—or a requester allowed when the profile lists `save_memory` in `permissionRequiredFunctions`—may explicitly choose group sharing in a registered group; otherwise the memory stays private to that requester in that group.
 - Explicit text-memory retrieval uses the Azure-hosted `text-embedding-3-small` deployment and PostgreSQL `vector(1536)`. Profile/source/requester visibility, deletion, and expiry are filtered before lexical/semantic ranking. Embedding failure falls back to lexical search, answer generation receives only authorized results, and a bounded non-blocking startup batch fills vectors for older records.
 - Text-memory previews state the private/group visibility and 30-day retention before confirmation. Direct-chat memories are always private, and group memories never cross into direct chat or another group.
 - Structured schedule memories are separate from plain text memories. They store a schedule header plus date-based entries, are shared across the helper profile, and expire after one year.
 - Saving another schedule of the same type and month replaces the previous canonical schedule after confirmation. Entry add, update, delete, and whole-schedule delete use the same preview-and-confirm flow.
-- A requester with a `save_schedule` user grant may replace a schedule or add an entry from direct chat or a registered group. Updating or deleting existing entries or whole schedules remains admin-only.
+- An Account-authorized `save_schedule` requester may replace a schedule or add an entry from direct chat or a registered group. Updating or deleting existing entries or whole schedules remains admin-only.
 - Queries such as `下次世緯家園服事是什麼時候？` and `下一次中平家族什麼時候舉牌？` search these shared entries. Identity-based `我下一次服事是什麼時候？` remains out of scope until LINE identity is bound to the church login system.
 - Structured schedule memory is text-only in this version. The bot should ask for pasted text instead of trying to store or parse schedule images.
 - Text memories currently expire after 30 days.
@@ -357,13 +357,13 @@ Sheet music search reads a fresh PostgreSQL catalog snapshot when available. A p
 
 Admin commands use slash syntax and are gated by account-api. An unbound direct user is asked to send `登入 HHC 帳戶`; the resulting native LINE flow creates the short-lived HHC binding URL. Account API failures deny admin access. Ordinary `/help` lists public commands plus only the current requester's effective capabilities. `/help admin` lists common admin commands by group, and `/help admin all` includes advanced and diagnostic commands.
 
-Admins can also use natural language for selected admin actions: invite-code creation and function-scope management. Invite-code creation is direct-chat only. Function scope grant/revoke/list is the only group natural-language exception, and only when an admin clearly asks to manage the current group.
+Admins can also use natural language for selected admin actions such as invite-code creation, which remains direct-chat only. Retired function-scope management text is not an admin-routing hint.
 
 `/registry <code>` remains a deterministic slash command and is not routed through the LLM. Admin natural-language requests pass through a conservative local hint check, the admin action router, the policy gate, and the admin action registry. `/last-routes` records sanitized admin route/action outcomes without raw message text or invite codes. Use `pnpm eval:admin` when changing admin intent hints or adding admin actions.
 
 Destructive admin actions must be confirmed with `/confirm <code>`. Invite-code creation is a `security_change` action and remains admin direct-chat only plus audited, but does not require confirmation.
 
-The role/capability model is documented in [`docs/rbac-capability-model.md`](docs/rbac-capability-model.md). Role tables and additive `function:<name>:execute` resolution are active, but no production roles are seeded. Existing user/group function grants remain supported; source and item-kind capability enforcement remains an extension point for future role administration.
+The historical role/capability model is documented in [`docs/rbac-capability-model.md`](docs/rbac-capability-model.md). Its tables and user/group function-grant tables remain for rollback compatibility, but `function:<name>:execute` bindings and local grants are no longer effective function sources.
 
 Common commands:
 
@@ -376,12 +376,6 @@ Common commands:
 /access-list [user|group|admin]
 /user-remove <userId>
 /group-remove [groupId]
-/function-grant <functionName> [groupId]
-/function-revoke <functionName> [groupId]
-/function-scopes [groupId]
-/function-user-grant <functionName> <userId>
-/function-user-revoke <functionName> <userId>
-/function-user-scopes <userId>
 /audit-list [limit]
 ```
 

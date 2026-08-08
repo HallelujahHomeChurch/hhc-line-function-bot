@@ -43,7 +43,7 @@ const ACTIVE_TASK_REPLAY_PATTERN =
   /(?:再給我一次|再給一次|再傳一次|再貼一次|剛剛那份|剛才那份|剛剛那個|上一份)/u;
 const INTENT_CLAUSE_SEPARATOR = /[,，、:：。.!！?？;；\n]+/u;
 const NEGATED_READ_ACTION_PREFIX =
-  /(?:不要|不用|不必|先不要|先別|別|取消)(?:(?:請)?(?:你|您)?(?:幫我|替我))?(?:再)?(?:查詢|查|尋找|找|搜尋|下載|取得|獲取|列出|顯示|讀取|給我)/u;
+  /(?:不要|不用|不必|先不要|先別|別|取消)(?:(?:請)?(?:你|您)?(?:幫我|替我))?(?:再)?(?:查詢|查|尋找|找|搜尋|下載|取得|獲取|列出|顯示|讀取|給我|登入|連結|綁定|幫助|說明)/u;
 
 export function groundPlanRecord(input: GroundPlanRecordInput): GroundedPlanRecord {
   const output: JsonRecord = {};

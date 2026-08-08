@@ -140,6 +140,7 @@ export type ControlledTurnStage =
 
 export interface TextMessageHandler {
   turnStage: ControlledTurnStage;
+  capability?: FunctionName;
   matches(request: TextMessageRequest, context: TextMessageContext): Promise<boolean> | boolean;
   handle(
     request: TextMessageRequest,

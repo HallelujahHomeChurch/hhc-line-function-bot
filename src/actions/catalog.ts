@@ -1,4 +1,5 @@
 import { getFunctionDefinitions } from "../functions/definitions.js";
+import { unnegatedIntentClauses } from "../agent/plan-evidence.js";
 import {
   FUNCTION_NAMES,
   type ActionName,
@@ -70,6 +71,16 @@ const systemActions: ActionDefinition<SystemActionName>[] = [
     description: "Controlled system response."
   },
   {
+    name: "show_help",
+    kind: "system_action",
+    auth: "public",
+    sourcePolicy: "direct_or_group",
+    sideEffect: "read_only",
+    naturalLanguage: true,
+    description: "Show source-safe enabled capabilities.",
+    naturalLanguageHints: ["/help", "幫助", "說明", "功能", "可以做什麼"]
+  },
+  {
     name: "account_login",
     kind: "system_action",
     auth: "public",
@@ -77,7 +88,17 @@ const systemActions: ActionDefinition<SystemActionName>[] = [
     sideEffect: "security_change",
     naturalLanguage: true,
     description: "Start native LINE account linking for the current direct user.",
-    naturalLanguageHints: ["登入帳戶", "登入 hhc 帳戶", "連結帳戶", "綁定帳戶", "login"]
+    naturalLanguageHints: ["登入", "登入帳戶", "登入 hhc 帳戶", "連結帳戶", "綁定帳戶", "login"]
+  },
+  {
+    name: "show_account",
+    kind: "system_action",
+    auth: "public",
+    sourcePolicy: "direct",
+    sideEffect: "read_only",
+    naturalLanguage: true,
+    description: "Show a safe summary of the linked HHC account.",
+    naturalLanguageHints: ["/whoami", "我是誰", "我的帳戶", "帳戶資訊", "我的身分"]
   }
 ];
 
@@ -101,69 +122,6 @@ const adminActions: ActionDefinition<AdminActionName>[] = [
       "建立邀請碼",
       "註冊碼",
       "邀請碼"
-    ]
-  },
-  {
-    name: "function_scope_grant",
-    kind: "admin_action",
-    auth: "admin",
-    sourcePolicy: "direct_or_group",
-    sideEffect: "security_change",
-    naturalLanguage: true,
-    groupNaturalLanguage: true,
-    auditAction: "access.function.grant",
-    description:
-      "Grant a function to a group or user. Arguments: functionName; optional targetType ('group' or 'user'), groupId, userId. In a group, missing groupId means the current group.",
-    naturalLanguageHints: [
-      "enable function",
-      "grant function",
-      "allow function",
-      "開啟功能",
-      "開放功能",
-      "允許功能",
-      "群組開啟",
-      "這個群組開啟"
-    ]
-  },
-  {
-    name: "function_scope_revoke",
-    kind: "admin_action",
-    auth: "admin",
-    sourcePolicy: "direct_or_group",
-    sideEffect: "state_change",
-    naturalLanguage: true,
-    groupNaturalLanguage: true,
-    auditAction: "access.function.revoke",
-    description:
-      "Revoke a group- or user-specific function grant. Arguments: functionName; optional targetType ('group' or 'user'), groupId, userId. In a group, missing groupId means the current group.",
-    naturalLanguageHints: [
-      "disable function",
-      "revoke function",
-      "remove function",
-      "關閉功能",
-      "停用功能",
-      "取消功能",
-      "群組關閉",
-      "這個群組關閉"
-    ]
-  },
-  {
-    name: "function_scope_list",
-    kind: "admin_action",
-    auth: "admin",
-    sourcePolicy: "direct_or_group",
-    sideEffect: "read_only",
-    naturalLanguage: true,
-    groupNaturalLanguage: true,
-    description:
-      "Show profile-global, group-granted/user-granted, and effective functions for a group or user. Arguments: optional targetType ('group' or 'user'), groupId, userId. In a group, missing groupId means the current group.",
-    naturalLanguageHints: [
-      "function scopes",
-      "enabled functions",
-      "group functions",
-      "群組功能",
-      "有哪些功能",
-      "能用哪些功能"
     ]
   },
   {
@@ -245,10 +203,23 @@ export function getActionDefinition(name: ActionName): ActionDefinition | undefi
 }
 
 export function matchNaturalLanguageSystemActionHint(text: string): SystemActionName | undefined {
-  const normalized = text.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+  const clauses = unnegatedIntentClauses(text);
+  if (clauses.length !== 1) return undefined;
+  const normalized = normalizeExactNaturalLanguagePhrase(clauses[0]);
   return systemActions.find((definition) =>
-    definition.naturalLanguageHints?.some((hint) => normalized === hint)
+    definition.naturalLanguageHints?.some(
+      (hint) => normalized === normalizeExactNaturalLanguagePhrase(hint)
+    )
   )?.name;
+}
+
+function normalizeExactNaturalLanguagePhrase(text: string): string {
+  return text
+    .normalize("NFKC")
+    .trim()
+    .replace(/[!！。.?？]+$/gu, "")
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase("zh-TW");
 }
 
 export function getNaturalLanguageAdminActions(): ActionDefinition<AdminActionName>[] {

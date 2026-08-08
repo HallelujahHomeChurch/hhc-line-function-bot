@@ -77,12 +77,75 @@ export const SECURITY_AND_STATE_KERNEL_CASES: KernelAcceptanceCase[] = [
     "write_safety_bypass",
     accountLoginDirectPolicy
   ),
+  accountPermissionCandidateCase(),
   safetyCase(
     "kernel-v1/state/replica-scope-key-stable@1",
     "replica_state_divergence",
     stableRequesterScope
   )
 ];
+
+function accountPermissionCandidateCase(): KernelAcceptanceCase {
+  const id = "kernel-v1/write/account-permission-before-planner@1";
+  const recurrenceFamily: RecurrenceFamily = "write_safety_bypass";
+  return {
+    id,
+    version: 1,
+    journey: "write",
+    recurrenceFamily,
+    boundary: "candidate_generation",
+    async run(context) {
+      let authorizationCalls = 0;
+      let plannerCalls = 0;
+      let executions = 0;
+      const profile = kernelProfile(["query_schedule"]);
+      profile.permissionRequiredFunctions = ["query_schedule"];
+      const harness = createKernelRuntimeHarness({
+        now: context.now,
+        profile,
+        functionRegistry: {
+          query_schedule: async () => {
+            executions += 1;
+            return { ok: true, replyText: "unsafe" };
+          }
+        },
+        planner: {
+          propose: async () => {
+            plannerCalls += 1;
+            return {
+              status: "proposed",
+              version: 1,
+              disposition: "execute",
+              capability: "query_schedule",
+              arguments: { query: "查主日服事" },
+              confidence: 0.99,
+              provider: "deepseek",
+              attempts: []
+            };
+          }
+        },
+        authorizeFunctions: async () => {
+          authorizationCalls += 1;
+          return [];
+        }
+      });
+      const [result] = await harness.runTurns([
+        {
+          text: "查主日服事",
+          requesterUserId: "U_SYNTHETIC_1",
+          requestId: id
+        }
+      ]);
+      const passed =
+        authorizationCalls === 1 && plannerCalls === 0 && executions === 0 && result !== undefined;
+      return {
+        ...observation(id, recurrenceFamily, passed, result?.elapsedMs ?? 9_000),
+        boundary: "candidate_generation",
+        securityViolations: passed ? [] : ["unauthorized_read"]
+      };
+    }
+  };
+}
 
 async function accountLoginDirectPolicy(): Promise<boolean> {
   const profile = kernelProfile([]);

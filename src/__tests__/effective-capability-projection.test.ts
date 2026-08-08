@@ -29,6 +29,7 @@ function context(
       groupRequireWakeWord: true,
       wakeKeywords: ["小哈"],
       acceptMention: true,
+      accountLink: { displayName: "小哈", lineId: "@hhc-helper", providerId: "provider-1" },
       enabledFunctions: input.enabledFunctions ?? [],
       adminUserId: "Uadmin",
       adminDirectOnly: true

@@ -14,8 +14,8 @@ import { messages } from "../messages.js";
 
 const R41_PRODUCT_EXPERIENCE_CASE_IDS = [
   "kernel-v1/product_experience/effective-discovery-direct@1",
-  "kernel-v1/product_experience/effective-discovery-group@1",
-  "kernel-v1/product_experience/effective-discovery-granted-user@1",
+  "kernel-v1/product_experience/effective-discovery-group-local-grant-ignored@1",
+  "kernel-v1/product_experience/effective-discovery-user-local-grant-ignored@1",
   "kernel-v1/product_experience/effective-discovery-admin@1",
   "kernel-v1/product_experience/registration-first-read@1",
   "kernel-v1/product_experience/provider-free-weekly-read@1",

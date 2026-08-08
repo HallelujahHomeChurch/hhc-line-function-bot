@@ -396,6 +396,7 @@ export function createFindPopSheetMusicTextMessageHandler(
 
   return {
     turnStage: "resolution",
+    capability: "find_sheet_music",
     matches: async (request, context) =>
       sheetMusicFunctionEnabled(context.profile.enabledFunctions) &&
       (Boolean(

@@ -383,6 +383,7 @@ export function createFindPptSlidesTextMessageHandler(
 
   return {
     turnStage: "resolution",
+    capability: "find_ppt_slides",
     matches: async (request, context) =>
       context.profile.enabledFunctions.includes("find_ppt_slides") &&
       numericSelectionToIndex(request.text) !== undefined &&

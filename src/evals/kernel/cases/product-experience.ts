@@ -58,8 +58,8 @@ const PROFILE_FUNCTIONS: FunctionName[] = [
 
 export const PRODUCT_EXPERIENCE_KERNEL_CASES: KernelAcceptanceCase[] = [
   discoveryCase("effective-discovery-direct", "direct"),
-  discoveryCase("effective-discovery-group", "group"),
-  discoveryCase("effective-discovery-granted-user", "granted_user"),
+  discoveryCase("effective-discovery-group-local-grant-ignored", "group"),
+  discoveryCase("effective-discovery-user-local-grant-ignored", "granted_user"),
   discoveryCase("effective-discovery-admin", "admin"),
   registrationFirstReadCase(),
   providerFreeWeeklyCase(),
@@ -152,18 +152,18 @@ const expectedDiscovery: Record<DiscoveryKind, ExpectedDiscovery> = {
     omitted: ["查投影片", "記住資訊", "保存檔案"]
   },
   group: {
-    effective: ["find_sheet_music", "query_schedule", "find_ppt_slides"],
-    reads: ["find_ppt_slides", "query_schedule", "find_sheet_music"],
+    effective: ["find_sheet_music", "query_schedule"],
+    reads: ["query_schedule", "find_sheet_music"],
     writes: [],
-    displayed: ["查投影片", "查服事表", "查歌譜"],
-    omitted: ["記住資訊", "保存檔案"]
+    displayed: ["查服事表", "查歌譜"],
+    omitted: ["查投影片", "記住資訊", "保存檔案"]
   },
   granted_user: {
-    effective: ["find_sheet_music", "query_schedule", "save_memory"],
+    effective: ["find_sheet_music", "query_schedule"],
     reads: ["query_schedule", "find_sheet_music"],
-    writes: ["save_memory"],
-    displayed: ["查服事表", "查歌譜", "記住資訊"],
-    omitted: ["查投影片", "保存檔案"]
+    writes: [],
+    displayed: ["查服事表", "查歌譜"],
+    omitted: ["查投影片", "記住資訊", "保存檔案"]
   },
   admin: {
     effective: PROFILE_FUNCTIONS,
