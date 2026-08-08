@@ -32,6 +32,18 @@ describe("buildAssuranceReport", () => {
             status: "passed",
             observedAt: timestamp,
             code: "none"
+          },
+          {
+            name: "gateway_helper_signed_empty_webhook",
+            status: "passed",
+            observedAt: timestamp,
+            code: "none"
+          },
+          {
+            name: "gateway_main_signed_empty_webhook",
+            status: "passed",
+            observedAt: timestamp,
+            code: "none"
           }
         ],
         rollback: {
@@ -61,6 +73,18 @@ describe("buildAssuranceReport", () => {
       checks: [
         {
           name: "release_probe",
+          status: "passed",
+          observedAt: timestamp,
+          code: "none"
+        },
+        {
+          name: "gateway_helper_signed_empty_webhook",
+          status: "passed",
+          observedAt: timestamp,
+          code: "none"
+        },
+        {
+          name: "gateway_main_signed_empty_webhook",
           status: "passed",
           observedAt: timestamp,
           code: "none"

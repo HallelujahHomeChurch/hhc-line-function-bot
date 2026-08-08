@@ -797,9 +797,11 @@ elif check_name == "release_probe":
                 "BOT_BASE_URL": {"value": None},
                 "SEARXNG_BASE_URL": {"value": None},
                 "GATEWAY_WEBHOOK_URL": {"value": None},
+                "GATEWAY_MAIN_WEBHOOK_URL": {"value": None},
                 "LINE_HELPER_CHANNEL_SECRET": {
                     "secretRef": "line-helper-channel-secret"
                 },
+                "LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE": {"value": None},
                 "CLAMAV_SIGNATURE_MANIFEST_PATH": {
                     "value": "/var/lib/clamav/current/manifest.json"
                 },
@@ -1052,7 +1054,11 @@ check_codes = {
         "contract_mismatch",
     },
     "searxng_root": {"none", "timeout", "http_mismatch", "network_failed"},
-    "gateway_empty_webhook": {
+    "gateway_helper_signed_empty_webhook": {
+        "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
+        "contract_mismatch",
+    },
+    "gateway_main_signed_empty_webhook": {
         "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
         "contract_mismatch",
     },
@@ -1520,7 +1526,8 @@ failure_map = {
     "bot_health_failed": "bot_health_failed",
     "bot_readiness_failed": "bot_readiness_failed",
     "searxng_root_failed": "searxng_root_failed",
-    "gateway_empty_webhook_failed": "gateway_webhook_failed",
+    "gateway_helper_signed_empty_webhook_failed": "gateway_webhook_failed",
+    "gateway_main_signed_empty_webhook_failed": "gateway_webhook_failed",
     "clamav_signature_failed": "clamav_manifest_invalid",
     "report_write_failed": "network_failed",
     "transaction_incomplete": "network_failed",
@@ -1541,7 +1548,8 @@ check_names = {
     "bot_health",
     "bot_readiness",
     "searxng_root",
-    "gateway_empty_webhook",
+    "gateway_helper_signed_empty_webhook",
+    "gateway_main_signed_empty_webhook",
     "clamav_signature",
 }
 check_codes = {

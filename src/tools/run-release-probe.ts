@@ -22,7 +22,9 @@ function readInput(env: Record<string, string | undefined>): ReleaseProbeInput {
     botBaseUrl: required(env, "BOT_BASE_URL"),
     searxngBaseUrl: required(env, "SEARXNG_BASE_URL"),
     gatewayWebhookUrl: required(env, "GATEWAY_WEBHOOK_URL"),
+    gatewayMainWebhookUrl: required(env, "GATEWAY_MAIN_WEBHOOK_URL"),
     lineHelperChannelSecret: required(env, "LINE_HELPER_CHANNEL_SECRET"),
+    lineMainEmptyWebhookSignature: required(env, "LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE"),
     clamavSignatureManifestPath: required(env, "CLAMAV_SIGNATURE_MANIFEST_PATH")
   };
 }

@@ -33,8 +33,12 @@ properties:
             value: PLACEHOLDER_SEARXNG_BASE_URL
           - name: GATEWAY_WEBHOOK_URL
             value: PLACEHOLDER_GATEWAY_WEBHOOK_URL
+          - name: GATEWAY_MAIN_WEBHOOK_URL
+            value: PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL
           - name: LINE_HELPER_CHANNEL_SECRET
             secretRef: line-helper-channel-secret
+          - name: LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE
+            value: PLACEHOLDER_LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE
           - name: CLAMAV_SIGNATURE_MANIFEST_PATH
             value: /var/lib/clamav/current/manifest.json
         volumeMounts:

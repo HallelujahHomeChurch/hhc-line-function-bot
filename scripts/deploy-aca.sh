@@ -560,6 +560,7 @@ if [[ -z "${bot_fqdn}" ]]; then
 fi
 bot_base_url="https://${bot_fqdn}"
 gateway_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/helper"
+gateway_main_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/main"
 
 retired_bot_secrets=(
   bot-profiles-base64-json
@@ -619,8 +620,12 @@ render_job_manifest() {
   BOT_BASE_URL="${bot_base_url}" \
   SEARXNG_BASE_URL="${searxng_base_url}" \
   GATEWAY_WEBHOOK_URL="${gateway_webhook_url}" \
+  GATEWAY_MAIN_WEBHOOK_URL="${gateway_main_webhook_url}" \
   python3 - <<'PY'
 from pathlib import Path
+import base64
+import hashlib
+import hmac
 import json
 import os
 
@@ -658,6 +663,19 @@ for line in lines:
     rendered.append(line)
 
 text = "\n".join(rendered) + "\n"
+main_signature_placeholder = "PLACEHOLDER_LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE"
+if main_signature_placeholder in text:
+    if text.count(main_signature_placeholder) != 1:
+        raise SystemExit(
+            f"Expected one assurance job placeholder: {main_signature_placeholder}"
+        )
+    main_secret = secret_values.get("line-main-channel-secret")
+    if not main_secret:
+        raise SystemExit("Required ACA secret is unavailable: line-main-channel-secret")
+    main_signature = base64.b64encode(
+        hmac.new(main_secret.encode("utf-8"), b'{"events":[]}', hashlib.sha256).digest()
+    ).decode("ascii")
+    text = text.replace(main_signature_placeholder, main_signature)
 substitutions = {
     "PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID": os.environ["MANAGED_ENVIRONMENT_ID"],
     "PLACEHOLDER_AZURE_REGION": os.environ["CONTAINER_APP_LOCATION"],
@@ -682,11 +700,13 @@ substitutions = {
     "PLACEHOLDER_BOT_BASE_URL": os.environ["BOT_BASE_URL"],
     "PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"],
     "PLACEHOLDER_GATEWAY_WEBHOOK_URL": os.environ["GATEWAY_WEBHOOK_URL"],
+    "PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL": os.environ["GATEWAY_MAIN_WEBHOOK_URL"],
 }
 strict_assurance_placeholders = {
     "PLACEHOLDER_BOT_BASE_URL",
     "PLACEHOLDER_SEARXNG_BASE_URL",
     "PLACEHOLDER_GATEWAY_WEBHOOK_URL",
+    "PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL",
 }
 for placeholder, value in substitutions.items():
     if placeholder in strict_assurance_placeholders and placeholder in text:

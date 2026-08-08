@@ -46,7 +46,8 @@ export type ReleaseCheckName =
   | "bot_health"
   | "bot_readiness"
   | "searxng_root"
-  | "gateway_empty_webhook"
+  | "gateway_helper_signed_empty_webhook"
+  | "gateway_main_signed_empty_webhook"
   | "clamav_signature";
 export type PeriodicCheckName =
   | "graph_metadata"
@@ -142,7 +143,8 @@ const releaseChecks = new Set<ReleaseCheckName>([
   "bot_health",
   "bot_readiness",
   "searxng_root",
-  "gateway_empty_webhook",
+  "gateway_helper_signed_empty_webhook",
+  "gateway_main_signed_empty_webhook",
   "clamav_signature"
 ]);
 const periodicChecks = new Set<PeriodicCheckName>([

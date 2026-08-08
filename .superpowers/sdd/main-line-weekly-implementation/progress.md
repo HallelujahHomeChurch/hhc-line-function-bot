@@ -2,7 +2,7 @@
 
 Branch root: /Users/rayselfs/Projects/hhc/hhc-line-function-bot/.worktrees/main-profile-prerequisites
 Merge base: f1b259c94008939ca1186bcd0daaedf9fc2115ab
-Status: Task 8 implementation in progress
+Status: Task 9 implementation complete
 Baseline: `pnpm vitest run --exclude src/__tests__/kernel-local-live-runner.test.ts` passed 135 files / 1359 tests.
 Baseline exception: `kernel-local-live-runner.test.ts` fails identically on untouched main because macOS lacks `/dev/shm`; Linux PR CI remains authoritative for that file.
 Task 1: fix round 1/5 (1 addressed, 0 open — shared catalog dependency parsing; commits ccc239a..57ef020)
@@ -58,3 +58,8 @@ Task 8 fix round 1 canonicality follow-up: absolute plain and encoded dot-segmen
 Task 8 fix round 2: Dapr redirects fail closed, negated provider-free reads cannot become deterministic execution through either candidate or validator authority, and helper group stateful admission now occurs only after webhook dedupe and rate limiting.
 Task 8 fix round 2 controller follow-up: clause-scoped negation closes nested/cancel/helper-form deterministic read bypasses without blocking reminders, and removal of the provider-group prefilter preserves active-window small talk after common dedupe/rate gates.
 Task 8 production boundary: no push, merge, deployment, production credential read, or live LINE, Azure, provider, Account, HHC web API, Dapr, Graph, catalog, or Asset call was performed.
+Task 9: implementation complete (fixed-empty-body derived-HMAC release probe for both helper and main routes; commit recorded in `task-9-report.md`).
+Task 9 verification: focused release probe 12/12, report 21/21, deployment contract 17/17, release assurance shell 68/68, exact entrance 1/1, shell syntax, focused format/lint, typecheck, build, and diff-check passed.
+Task 9 authority boundary: release job receives only the derived `LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE`, never main channel credentials; other jobs receive neither credentials nor derived signature.
+Task 9 proof boundary: checks attest Gateway to Dapr to selected-profile routing, configured signature acceptance, and empty early return only; they do not attest LINE delivery, Console secret correctness, replies, account linking, or provider runtime.
+Task 9 production boundary: no broad/full repository test, push, merge, deployment, credential mutation, or live LINE, Azure, Account, Dapr, provider, or HHC API call was performed.

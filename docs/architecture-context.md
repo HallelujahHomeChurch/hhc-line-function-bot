@@ -722,9 +722,13 @@ R4.1 production verification is complete. R5.0 production acceptance is complete
 
 The deploy transaction snapshots a known-good revision and image, deploys the
 target, and writes `artifacts/release-assurance/report.json`. Its release probe
-uses a signed empty `events: []` webhook and records zero provider calls. That
-is gateway/Dapr/bot contract evidence only: it does not prove LINE delivery or
-reply-token behavior. Failed release gates copy the known-good revision into a
+uses separately signed empty `events: []` webhooks for `helper` and `main` and
+records zero provider calls. The two explicit checks prove the
+Gateway→Dapr→selected-profile route, configured signature acceptance, and
+empty-batch early return only. They do not prove LINE platform delivery, LINE
+Console secret correctness, reply-token behavior, or provider availability in
+normal turns; the zero-provider count describes this release path, not runtime
+telemetry. Failed release gates copy the known-good revision into a
 new rollback revision and restore changed job images; a manual image update is
 only the bounded emergency fallback. Weekly dependency evidence is separate:
 `hhc-line-bot-periodic-assurance` writes

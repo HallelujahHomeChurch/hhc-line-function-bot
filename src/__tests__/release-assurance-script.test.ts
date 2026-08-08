@@ -15,6 +15,7 @@ const GOOD_SCAN_DIGEST = `sha256:${"3".repeat(64)}`;
 const GOOD_REFRESH_DIGEST = `sha256:${"4".repeat(64)}`;
 const GOOD_RELEASE_PROBE_DIGEST = `sha256:${"5".repeat(64)}`;
 const GOOD_PERIODIC_DIGEST = `sha256:${"6".repeat(64)}`;
+const MAIN_EMPTY_WEBHOOK_SIGNATURE = Buffer.alloc(32, 1).toString("base64");
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((entry) => rm(entry, { recursive: true })));
@@ -101,6 +102,7 @@ describe("release assurance shell transaction", () => {
     expect(reportText).not.toContain("internal.example");
     expect(reportText).not.toContain("missing_line_signature");
     expect(reportText).not.toContain("registry.example");
+    expect(reportText).not.toContain(MAIN_EMPTY_WEBHOOK_SIGNATURE);
     expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
     expect(calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")).toBe(
       false
@@ -1174,7 +1176,12 @@ if (command("containerapp", "job", "show")) {
           name: "GATEWAY_WEBHOOK_URL",
           value: "https://gateway.example/api/line/webhook/helper"
         },
+        {
+          name: "GATEWAY_MAIN_WEBHOOK_URL",
+          value: "https://gateway.example/api/line/webhook/main"
+        },
         { name: "LINE_HELPER_CHANNEL_SECRET", secretRef: "line-helper-channel-secret" },
+        { name: "LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE", value: "${MAIN_EMPTY_WEBHOOK_SIGNATURE}" },
         {
           name: "CLAMAV_SIGNATURE_MANIFEST_PATH",
           value: "/var/lib/clamav/current/manifest.json"
@@ -1268,7 +1275,8 @@ if (command("containerapp", "job", "logs", "show")) {
     { name: "bot_health", status: scenario === "release_probe_child_failure" ? "failed" : "passed", code: scenario === "release_probe_child_failure" ? "http_mismatch" : "none" },
     { name: "bot_readiness", status: "passed", code: "none" },
     { name: "searxng_root", status: "passed", code: "none" },
-    { name: "gateway_empty_webhook", status: "passed", code: "none" },
+    { name: "gateway_helper_signed_empty_webhook", status: "passed", code: "none" },
+    { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" },
     { name: "clamav_signature", status: scenario === "release_probe_warning" ? "warning" : "passed", code: scenario === "release_probe_warning" ? "signature_warning" : "none", ...(scenario === "release_probe_warning" ? { signatureHealth: "warning" } : { signatureHealth: "current" }) }
   ];
   const payload = {
@@ -1304,7 +1312,8 @@ if (command("monitor", "log-analytics", "query")) {
     },
     { name: "bot_readiness", status: "passed", code: "none" },
     { name: "searxng_root", status: "passed", code: "none" },
-    { name: "gateway_empty_webhook", status: "passed", code: "none" },
+    { name: "gateway_helper_signed_empty_webhook", status: "passed", code: "none" },
+    { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" },
     {
       name: "clamav_signature",
       status: scenario === "release_probe_warning" ? "warning" : "passed",

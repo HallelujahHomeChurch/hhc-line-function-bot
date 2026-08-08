@@ -5,7 +5,12 @@ import {
 import { signLineBody } from "../line-signature.js";
 
 export type ReleaseProbeCheckName =
-  "bot_health" | "bot_readiness" | "searxng_root" | "gateway_empty_webhook" | "clamav_signature";
+  | "bot_health"
+  | "bot_readiness"
+  | "searxng_root"
+  | "gateway_helper_signed_empty_webhook"
+  | "gateway_main_signed_empty_webhook"
+  | "clamav_signature";
 export type ReleaseProbeCheckStatus = "passed" | "failed" | "warning";
 export type ReleaseProbeFailureCode =
   | "none"
@@ -21,7 +26,9 @@ export interface ReleaseProbeInput {
   botBaseUrl: string;
   searxngBaseUrl: string;
   gatewayWebhookUrl: string;
+  gatewayMainWebhookUrl: string;
   lineHelperChannelSecret: string;
+  lineMainEmptyWebhookSignature: string;
   clamavSignatureManifestPath: string;
   timeoutMs?: number;
 }
@@ -52,6 +59,7 @@ export async function runReleaseProbe(
   dependencies: ReleaseProbeDependencies
 ): Promise<ReleaseProbeResult> {
   const timeoutMs = validTimeout(input.timeoutMs);
+  const mainSignature = validLineSignature(input.lineMainEmptyWebhookSignature);
   const checks = await Promise.all([
     checkJsonEndpoint(
       "bot_health",
@@ -68,7 +76,20 @@ export async function runReleaseProbe(
       isReady
     ),
     checkSearxng(endpoint(input.searxngBaseUrl, "/"), dependencies, timeoutMs),
-    checkWebhook(input, dependencies, timeoutMs),
+    checkWebhook(
+      "gateway_helper_signed_empty_webhook",
+      input.gatewayWebhookUrl,
+      signLineBody(Buffer.from(EMPTY_EVENT_BODY), input.lineHelperChannelSecret),
+      dependencies,
+      timeoutMs
+    ),
+    checkWebhook(
+      "gateway_main_signed_empty_webhook",
+      input.gatewayMainWebhookUrl,
+      mainSignature,
+      dependencies,
+      timeoutMs
+    ),
     checkSignatureManifest(input.clamavSignatureManifestPath, dependencies)
   ]);
   return {
@@ -113,30 +134,27 @@ async function checkSearxng(
 }
 
 async function checkWebhook(
-  input: ReleaseProbeInput,
+  name: "gateway_helper_signed_empty_webhook" | "gateway_main_signed_empty_webhook",
+  url: string,
+  signature: string,
   dependencies: ReleaseProbeDependencies,
   timeoutMs: number
 ): Promise<ReleaseProbeCheckResult> {
   try {
-    const response = await dependencies.fetch(input.gatewayWebhookUrl, {
+    const response = await dependencies.fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-line-signature": signLineBody(
-          Buffer.from(EMPTY_EVENT_BODY),
-          input.lineHelperChannelSecret
-        )
+        "x-line-signature": signature
       },
       body: EMPTY_EVENT_BODY,
       signal: AbortSignal.timeout(timeoutMs)
     });
-    if (response.status !== 200) return failed("gateway_empty_webhook", "http_mismatch");
+    if (response.status !== 200) return failed(name, "http_mismatch");
     const body = await json(response);
-    return isIgnoredEmptyEvent(body)
-      ? passed("gateway_empty_webhook")
-      : failed("gateway_empty_webhook", "contract_mismatch");
+    return isIgnoredEmptyEvent(body) ? passed(name) : failed(name, "contract_mismatch");
   } catch (error) {
-    return failed("gateway_empty_webhook", failureFrom(error));
+    return failed(name, failureFrom(error));
   }
 }
 
@@ -195,6 +213,14 @@ function endpoint(baseUrl: string, path: string): string {
 function validTimeout(value: number | undefined): number {
   if (value === undefined) return DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error("release_probe_invalid_input");
+  return value;
+}
+
+function validLineSignature(value: string): string {
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.length !== 32 || decoded.toString("base64") !== value) {
+    throw new Error("release_probe_invalid_input");
+  }
   return value;
 }
 
