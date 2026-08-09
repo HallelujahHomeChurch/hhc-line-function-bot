@@ -115,3 +115,63 @@ The implementation used bounded RED/GREEN waves before production behavior:
 ## Deployment
 
 No push, pull request, merge, deployment, or external mutation was performed.
+
+## Fix Round 1
+
+### Review adjudication
+
+- The raw-UID audit finding was not implemented because it conflicts with the
+  approved brief and the existing security-audit contract. Task 8 requires the
+  signed LINE UID for the Account call and prohibits the normalized name from
+  agent memory, task entities, or telemetry; it does not prohibit actor
+  identity in the access audit. Specifically, Task 8 brief steps 5 and 6 say
+  to call Account with the signed UID and keep the normalized name out of
+  memory/task entities/telemetry. In the existing schema,
+  `src/access/types.ts` declares `actorUserId: string` on both
+  `AccessAuditInput` and `AccessAuditEvent`;
+  `src/access/migrations.ts` declares `actor_user_id text not null`; and
+  `src/access/postgres-access-store.ts` writes that required value. The
+  administrator-only `/audit-list` surface deliberately renders the actor.
+  There is no approved shared audit pseudonymizer. Skipping or changing
+  attribution for this one write would weaken the existing write-audit
+  semantics rather than close a telemetry leak.
+- A persisted-audit regression now exercises the complete profile-update
+  lifecycle. It verifies the preview and commit audit records retain the
+  caller as `actorUserId`, while neither normalized name appears anywhere in
+  the serialized audit events. Production audit behavior was intentionally
+  left unchanged.
+- The duplicate exact-intent finding was valid. The action catalog's existing
+  NFKC, trailing-punctuation, whitespace, locale-casing, and unnegated-clause
+  behavior is now one shared exact whole-message matcher in
+  `agent/plan-evidence`. System-action hints, write-capability candidates, and
+  configured slash-command ownership all use it.
+- Non-slash exact write aliases additionally require the existing
+  `hasWriteIntent` guard. Slash aliases remain definition-owned. This preserves
+  provider-free exact intent while failing closed for negated, embedded, and
+  ambiguous messages without adding a function-specific branch or matcher
+  framework.
+- This round supersedes the earlier report's statement that all punctuation
+  changes are rejected: approved trailing sentence punctuation such as
+  `修改姓名！` is normalized and accepted. Embedded word spacing such as
+  `修改 姓名`, missing slash, negation, embedding, and ambiguity remain
+  rejected.
+
+### RED/GREEN and verification
+
+- RED command:
+  `pnpm vitest run src/__tests__/update-own-profile.test.ts src/__tests__/entrance.test.ts --reporter=dot`.
+  Output: 1 failed, 204 passed; the only failure was
+  `offers the shared capability for one exact intent: 修改姓名！`, because the
+  candidate list was empty.
+- GREEN command: the same focused command. Output: 2 test files passed,
+  205/205 tests passed after the shared matcher change. The wider capability,
+  action-policy, router, validator, runtime, Account client, webhook, and
+  production-profile command passed 9 test files and 465/465 tests.
+- `pnpm eval:agent`: passed; candidates 20/20 and validated plans 20/20.
+- `pnpm eval:kernel`: passed; 120/120 cases and every metric passed.
+- `pnpm typecheck`, `pnpm lint`, `pnpm architecture:check` (405 TypeScript
+  files), and `pnpm build`: passed.
+- Full `pnpm test`: 1,687/1,694 tests passed. The only seven failures remain
+  the pre-existing `kernel-local-live-runner.test.ts` fixture failures caused
+  by `ENOENT` while reading an absent generated `calls.log`; no Task 8 or
+  matcher test failed.

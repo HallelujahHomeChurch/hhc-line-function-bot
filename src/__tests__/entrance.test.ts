@@ -1045,6 +1045,7 @@ describe("LINE entrance", () => {
     const config = providerFreeMainConfig();
     config.profiles[0]!.enabledFunctions.push("update_own_profile");
     config.profiles[0]!.permissionRequiredFunctions.push("update_own_profile");
+    const accessStore = new InMemoryAccessStore();
     const sessionStore = new InMemorySessionStore();
     const providerCompleteJson = vi.fn();
     const planner = createAgentPlanner({
@@ -1074,6 +1075,7 @@ describe("LINE entrance", () => {
     }));
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createApp(config, {
+      accessStore,
       sessionStore,
       controlledAgentRouter: createControlledAgentRouter({ planner }),
       functionRegistry: { update_own_profile: handler },
@@ -1107,7 +1109,7 @@ describe("LINE entrance", () => {
       });
     };
 
-    await send("/profile");
+    await send("/PROFILE");
     expect(replyText).toHaveBeenLastCalledWith(
       "reply-1",
       expect.stringContaining("名字"),
@@ -1144,6 +1146,26 @@ describe("LINE entrance", () => {
     );
     expect(authorizeFunctions).toHaveBeenCalledTimes(4);
     expect(providerCompleteJson).not.toHaveBeenCalled();
+    expect(accessStore.audit).toEqual([
+      expect.objectContaining({
+        profileName: "main",
+        actorUserId: "Ucaller",
+        action: "function.write.commit",
+        targetType: "function",
+        targetId: "update_own_profile",
+        metadata: { sourceType: "user" }
+      }),
+      expect.objectContaining({
+        profileName: "main",
+        actorUserId: "Ucaller",
+        action: "function.write.preview",
+        targetType: "function",
+        targetId: "update_own_profile",
+        metadata: { sourceType: "user" }
+      })
+    ]);
+    expect(JSON.stringify(accessStore.audit)).not.toContain("Ray");
+    expect(JSON.stringify(accessStore.audit)).not.toContain("Self");
 
     await send("/whoami");
     expect(replyText).toHaveBeenLastCalledWith(

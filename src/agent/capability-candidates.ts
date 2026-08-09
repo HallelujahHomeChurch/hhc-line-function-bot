@@ -20,6 +20,7 @@ import {
 import {
   hasActiveEntityTextEvidence,
   hasUnnegatedIntentEvidence,
+  matchExactWholeMessageIntent,
   unnegatedIntentClauses
 } from "./plan-evidence.js";
 import { projectRetrievalQuery } from "./retrieval-query.js";
@@ -198,18 +199,14 @@ export function hasExplicitWriteIntent(
   const contract = definition.agentCapability;
   if (!contract || definition.sideEffectLevel === "read") return false;
   if (contract.exactIntents) {
-    const normalizedText = normalizeExactIntent(text);
-    return contract.intents.some((intent) => normalizeExactIntent(intent) === normalizedText);
+    const matchedIntent = matchExactWholeMessageIntent(text, contract.intents);
+    return Boolean(matchedIntent && (matchedIntent.trim().startsWith("/") || hasWriteIntent(text)));
   }
   return (
     hasWriteIntent(text) &&
     (matchesAnyExact(text, contract.intents) ||
       matchesAnyHint(text, [...contract.candidateHints, ...dynamicHints]))
   );
-}
-
-function normalizeExactIntent(value: string): string {
-  return value.normalize("NFKC").trim().toLocaleLowerCase("zh-TW");
 }
 
 export function hasDeclarativeArgumentEvidence(

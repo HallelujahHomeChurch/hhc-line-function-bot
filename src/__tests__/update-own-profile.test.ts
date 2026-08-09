@@ -198,7 +198,7 @@ describe("update_own_profile capability", () => {
     });
   });
 
-  it.each(["/profile", "修改個人資料", "修改姓名", "更新姓名"])(
+  it.each(["/profile", "修改個人資料", "修改姓名", "修改姓名！", "更新姓名"])(
     "offers the shared capability for one exact intent: %s",
     (text) => {
       expect(
@@ -215,9 +215,9 @@ describe("update_own_profile capability", () => {
 
   it.each([
     "profile",
-    "修改姓名！",
     "修改 姓名",
     "不要修改姓名",
+    "不要登入，修改姓名",
     "請先修改姓名再下載週報",
     "他說修改姓名",
     "修改姓名或更新帳戶"

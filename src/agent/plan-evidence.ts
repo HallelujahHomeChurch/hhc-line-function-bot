@@ -106,6 +106,25 @@ export function unnegatedIntentClauses(text: string): string[] {
     );
 }
 
+export function matchExactWholeMessageIntent(
+  text: string,
+  intents: readonly string[]
+): string | undefined {
+  const clauses = unnegatedIntentClauses(text);
+  if (clauses.length !== 1) return undefined;
+  const normalized = normalizeExactNaturalLanguagePhrase(clauses[0]);
+  return intents.find((intent) => normalized === normalizeExactNaturalLanguagePhrase(intent));
+}
+
+function normalizeExactNaturalLanguagePhrase(text: string): string {
+  return text
+    .normalize("NFKC")
+    .trim()
+    .replace(/[!！。.?？]+$/gu, "")
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase("zh-TW");
+}
+
 export function hasActiveEntityTextEvidence(
   text: string,
   contract: AgentCapabilityContract,

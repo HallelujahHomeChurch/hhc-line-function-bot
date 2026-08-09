@@ -1,5 +1,5 @@
 import { getFunctionDefinitions } from "../functions/definitions.js";
-import { unnegatedIntentClauses } from "../agent/plan-evidence.js";
+import { matchExactWholeMessageIntent } from "../agent/plan-evidence.js";
 import {
   FUNCTION_NAMES,
   type ActionName,
@@ -203,23 +203,9 @@ export function getActionDefinition(name: ActionName): ActionDefinition | undefi
 }
 
 export function matchNaturalLanguageSystemActionHint(text: string): SystemActionName | undefined {
-  const clauses = unnegatedIntentClauses(text);
-  if (clauses.length !== 1) return undefined;
-  const normalized = normalizeExactNaturalLanguagePhrase(clauses[0]);
   return systemActions.find((definition) =>
-    definition.naturalLanguageHints?.some(
-      (hint) => normalized === normalizeExactNaturalLanguagePhrase(hint)
-    )
+    matchExactWholeMessageIntent(text, definition.naturalLanguageHints ?? [])
   )?.name;
-}
-
-function normalizeExactNaturalLanguagePhrase(text: string): string {
-  return text
-    .normalize("NFKC")
-    .trim()
-    .replace(/[!！。.?？]+$/gu, "")
-    .replace(/\s+/gu, " ")
-    .toLocaleLowerCase("zh-TW");
 }
 
 export function getNaturalLanguageAdminActions(): ActionDefinition<AdminActionName>[] {

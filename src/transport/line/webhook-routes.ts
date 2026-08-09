@@ -12,6 +12,7 @@ import type { RegistrationInviteCodeStore } from "../../access/registration-invi
 import { memoryCommandFunctionName, type AgentRuntime } from "../../agent/agent-runtime.js";
 import type { ControlledAgentRouter } from "../../agent/controlled-agent-router.js";
 import { applyActiveTaskTransition } from "../../agent/active-task-transition.js";
+import { matchExactWholeMessageIntent } from "../../agent/plan-evidence.js";
 import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
 import type { AgentJobStore } from "../../agent/jobs.js";
 import {
@@ -1512,15 +1513,14 @@ function isConfiguredExactFunctionCommand(
   sourceType: LineEvent["source"]["type"]
 ): boolean {
   if (!text || (sourceType !== "user" && sourceType !== "group")) return false;
-  const normalizedText = text.normalize("NFKC").trim().toLowerCase();
   return profile.enabledFunctions.some((name) => {
     const definition = getFunctionDefinition(name);
     return Boolean(
       definition?.allowedSources.includes(sourceType) &&
       definition.agentCapability?.exactIntents === true &&
-      definition.agentCapability.intents.some(
-        (intent) =>
-          intent.startsWith("/") && intent.normalize("NFKC").trim().toLowerCase() === normalizedText
+      matchExactWholeMessageIntent(
+        text,
+        definition.agentCapability.intents.filter((intent) => intent.trim().startsWith("/"))
       )
     );
   });
