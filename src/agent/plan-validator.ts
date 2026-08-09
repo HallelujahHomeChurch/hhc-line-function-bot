@@ -14,6 +14,7 @@ import type { AgentPlanDisposition, FunctionName, JsonRecord } from "../types.js
 import { isFunctionName } from "../types.js";
 import type { ActiveTaskContext } from "./active-task.js";
 import {
+  hasExplicitWriteIntent,
   hasUnnegatedDeclarativeArgumentEvidence,
   type CapabilityCandidateReason
 } from "./capability-candidates.js";
@@ -24,7 +25,7 @@ import {
   liveActiveTask
 } from "./plan-evidence.js";
 import { findMissingRequiredSlot } from "./slot-clarification.js";
-import { hasWriteIntent, isTaskShapedText } from "./knowledge-evidence-guard.js";
+import { isTaskShapedText } from "./knowledge-evidence-guard.js";
 
 export interface AgentPlanValidationCandidate {
   capability: FunctionName;
@@ -539,8 +540,7 @@ function revalidatedExplicitCandidates(input: ValidateAgentPlanInput): FunctionN
       (definition.sideEffectLevel === "read"
         ? hasUnnegatedIntentEvidence(input.text, definition.agentCapability.intents) ||
           hasUnnegatedDeclarativeArgumentEvidence(definition, input.text)
-        : hasWriteIntent(input.text) &&
-          definition.agentCapability.intents.some((intent) => textContains(input.text, intent)))
+        : hasExplicitWriteIntent(definition, input.text))
     );
   });
 }
@@ -555,10 +555,7 @@ function revalidatedDisabledExplicitCandidates(input: ValidateAgentPlanInput): F
       (definition.sideEffectLevel === "read"
         ? hasUnnegatedIntentEvidence(input.text, definition.agentCapability?.intents ?? []) ||
           hasUnnegatedDeclarativeArgumentEvidence(definition, input.text)
-        : hasWriteIntent(input.text) &&
-          Boolean(
-            definition.agentCapability?.intents.some((intent) => textContains(input.text, intent))
-          ))
+        : hasExplicitWriteIntent(definition, input.text))
   ).map(({ name }) => name);
 }
 
@@ -627,16 +624,4 @@ function sourceAllowed(definition: FunctionDefinition, sourceType: string): bool
 
 function validConfidence(value: number): boolean {
   return Number.isFinite(value) && value >= 0 && value <= 1;
-}
-
-function textContains(text: string, term: string): boolean {
-  const normalizedTerm = normalize(term);
-  return normalizedTerm.length > 0 && normalize(text).includes(normalizedTerm);
-}
-
-function normalize(value: string): string {
-  return value
-    .normalize("NFKC")
-    .toLocaleLowerCase("zh-TW")
-    .replace(/[\p{P}\p{S}\s]+/gu, "");
 }

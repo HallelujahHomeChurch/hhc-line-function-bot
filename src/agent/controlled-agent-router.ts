@@ -21,6 +21,9 @@ export interface ControlledAgentRouterInput {
   profileName: string;
   text: string;
   enabledFunctions: readonly FunctionName[];
+  configuredFunctions?: readonly FunctionName[];
+  permissionRequiredFunctions?: readonly FunctionName[];
+  authorizeCandidates?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
   sourceType: string;
   sourceId?: string;
   requesterUserId?: string;
@@ -61,9 +64,17 @@ export function createControlledAgentRouter(options: {
         input,
         source
       );
-      const candidates = buildCapabilityCandidates({
+      const candidateFunctions = Array.from(
+        new Set(
+          input.configuredFunctions ?? [
+            ...input.enabledFunctions,
+            ...(input.permissionRequiredFunctions ?? [])
+          ]
+        )
+      );
+      const builtCandidates = buildCapabilityCandidates({
         text: input.text,
-        enabledFunctions: input.enabledFunctions,
+        enabledFunctions: candidateFunctions,
         activeTask: input.activeTask,
         knowledgeSources,
         retrievalEvidence: retrievalEvidence.matched,
@@ -71,6 +82,10 @@ export function createControlledAgentRouter(options: {
         maxCandidates: input.maxCandidates,
         source
       });
+      const authorization = await authorizeUnavailableCandidates(input, builtCandidates);
+      const candidates = builtCandidates.filter(({ capability }) =>
+        authorization.enabledFunctions.includes(capability)
+      );
       emitDiagnostic(observe, {
         phase: "capability_candidates",
         candidates: candidates.map(({ capability }) => capability),
@@ -85,6 +100,15 @@ export function createControlledAgentRouter(options: {
         });
         return { disposition: "clarify", reasonCode: "retrieval_unavailable" };
       }
+      if (builtCandidates.length > 0 && candidates.length === 0) {
+        emitDiagnostic(observe, {
+          phase: "plan_validation",
+          outcome: "denied",
+          disposition: "deny",
+          validatorReason: "function_disabled"
+        });
+        return { disposition: "deny", reasonCode: "function_disabled" };
+      }
       const proposal = await proposeOrNoPlan(options.planner, {
         profileName: input.profileName,
         text: input.text,
@@ -95,7 +119,7 @@ export function createControlledAgentRouter(options: {
 
       const validatedPlan = validateAgentPlan({
         text: input.text,
-        enabledFunctions: input.enabledFunctions,
+        enabledFunctions: authorization.enabledFunctions,
         candidates,
         proposal,
         activeTask: input.activeTask,
@@ -126,6 +150,40 @@ export function createControlledAgentRouter(options: {
       });
       return plan;
     }
+  };
+}
+
+async function authorizeUnavailableCandidates(
+  input: ControlledAgentRouterInput,
+  candidates: readonly { capability: FunctionName }[]
+): Promise<{ enabledFunctions: readonly FunctionName[] }> {
+  const restricted = new Set(input.permissionRequiredFunctions ?? []);
+  const effective = new Set(input.enabledFunctions);
+  const requested = Array.from(
+    new Set(
+      candidates
+        .map(({ capability }) => capability)
+        .filter((capability) => restricted.has(capability) || !effective.has(capability))
+    )
+  );
+  const publicFunctions = input.enabledFunctions.filter(
+    (capability) => !restricted.has(capability)
+  );
+  if (requested.length === 0) {
+    return { enabledFunctions: publicFunctions };
+  }
+  let allowed: readonly FunctionName[] = [];
+  try {
+    allowed = (await input.authorizeCandidates?.(requested)) ?? [];
+  } catch {
+    // Restricted functions fail closed while public candidates remain available.
+  }
+  const allowedSet = new Set(allowed);
+  return {
+    enabledFunctions: [
+      ...publicFunctions,
+      ...requested.filter((capability) => allowedSet.has(capability))
+    ]
   };
 }
 

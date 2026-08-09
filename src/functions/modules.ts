@@ -13,6 +13,7 @@ import {
   createFindPptSlidesTextMessageHandler
 } from "./find-ppt-slides.js";
 import {
+  createExternalSheetMusicImportTextMessageHandler,
   createFindPopSheetMusicHandler,
   createFindPopSheetMusicPostbackHandler,
   createFindPopSheetMusicTextMessageHandler
@@ -31,11 +32,13 @@ import {
 } from "./query-knowledge.js";
 import { createSaveScheduleHandler } from "./schedule-memory.js";
 import { downloadWeeklyPaperModule } from "../capabilities/download-weekly-paper.js";
+import { updateOwnProfileModule } from "../capabilities/update-own-profile/module.js";
 
 export type { FunctionModule, FunctionModuleContext, FunctionModuleRegistrations, RouterEvalCase };
 
 export const FUNCTION_MODULES: FunctionModule[] = [
   downloadWeeklyPaperModule,
+  updateOwnProfileModule,
   {
     name: "find_ppt_slides",
     definition: requiredDefinition("find_ppt_slides"),
@@ -109,11 +112,14 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           })
         },
         postbacks: {
-          select_ppt: createFindPptSlidesPostbackHandler({
-            graph: clients.graph,
-            sessionStore: clients.sessionStore,
-            now: clients.now
-          })
+          select_ppt: {
+            capability: "find_ppt_slides",
+            handle: createFindPptSlidesPostbackHandler({
+              graph: clients.graph,
+              sessionStore: clients.sessionStore,
+              now: clients.now
+            })
+          }
         },
         textMessages: {
           ppt_numeric_selection: createFindPptSlidesTextMessageHandler({
@@ -194,14 +200,17 @@ export const FUNCTION_MODULES: FunctionModule[] = [
               })
             },
             postbacks: {
-              select_knowledge_source: createQueryKnowledgePostbackHandler({
-                store: clients.knowledgeStore,
-                embedding: clients.embedding,
-                textGenerator: clients.knowledgeTextGenerator,
-                sessionStore: clients.sessionStore,
-                now: clients.now,
-                requestIdFactory: clients.requestIdFactory
-              })
+              select_knowledge_source: {
+                capability: "query_knowledge",
+                handle: createQueryKnowledgePostbackHandler({
+                  store: clients.knowledgeStore,
+                  embedding: clients.embedding,
+                  textGenerator: clients.knowledgeTextGenerator,
+                  sessionStore: clients.sessionStore,
+                  now: clients.now,
+                  requestIdFactory: clients.requestIdFactory
+                })
+              }
             },
             textMessages: {
               knowledge_numeric_selection: createQueryKnowledgeTextMessageHandler({
@@ -362,13 +371,32 @@ export const FUNCTION_MODULES: FunctionModule[] = [
           })
         },
         postbacks: {
-          select_sheet_music: createFindPopSheetMusicPostbackHandler({
-            graph: clients.graph,
-            sessionStore: clients.sessionStore,
-            now: clients.now
-          })
+          select_sheet_music: {
+            capability: "find_sheet_music",
+            handle: createFindPopSheetMusicPostbackHandler({
+              graph: clients.graph,
+              sessionStore: clients.sessionStore,
+              now: clients.now
+            })
+          }
         },
         textMessages: {
+          external_sheet_music_import: createExternalSheetMusicImportTextMessageHandler({
+            graph: clients.graph,
+            sessionStore: clients.sessionStore,
+            catalog: clients.catalog,
+            agentJobStore: clients.agentJobStore,
+            scanQueue: clients.attachmentScanQueue,
+            scanWorkStore: clients.attachmentScanWorkStore,
+            externalSearch:
+              clients.webSearch && clients.sheetMusicExternalSearchSummarizer
+                ? {
+                    webSearch: clients.webSearch,
+                    summarize: clients.sheetMusicExternalSearchSummarizer
+                  }
+                : undefined,
+            now: clients.now
+          }),
           sheet_music_numeric_selection: createFindPopSheetMusicTextMessageHandler({
             graph: clients.graph,
             sessionStore: clients.sessionStore,

@@ -1,9 +1,11 @@
 import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
 import type { AgentJobScope, AgentJobStore } from "../../agent/jobs.js";
+import { getFunctionDefinition } from "../../functions/definitions.js";
 import { buildPostbackQuickReply } from "../../line-reply.js";
 import { messages } from "../../messages.js";
 import type {
   BotProfileConfig,
+  FunctionName,
   FunctionExecutionResult,
   LineEvent,
   PostbackHandlerRegistry,
@@ -13,6 +15,8 @@ import type {
 export interface HandledPostbackEvent {
   result: FunctionExecutionResult;
   completionEligible: boolean;
+  capability?: FunctionName;
+  profile?: BotProfileConfig;
 }
 
 export async function handlePostbackEvent(
@@ -21,7 +25,9 @@ export async function handlePostbackEvent(
   postbackHandlers: PostbackHandlerRegistry,
   requestId: string,
   requesterDisplayName: string | undefined,
-  agentJobStore: AgentJobStore
+  agentJobStore: AgentJobStore,
+  configuredFunctions: readonly FunctionName[] = profile.enabledFunctions,
+  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>
 ): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
@@ -32,20 +38,53 @@ export async function handlePostbackEvent(
   }
   if (request.action === "agent_job_result") {
     return {
-      result: await handleAgentJobResultPostback(request, profile, event, agentJobStore),
+      result: await handleAgentJobResultPostback(
+        request,
+        profile,
+        event,
+        agentJobStore,
+        configuredFunctions,
+        authorizeFunctions
+      ),
       completionEligible: false
     };
   }
-  const handler = postbackHandlers[request.action];
-  if (!handler) {
+  const registration = postbackHandlers[request.action];
+  if (!registration) {
     return {
       result: { ok: true, replyText: messages.postbackUnsupported },
       completionEligible: false
     };
   }
+  if (
+    !(await postbackCapabilityAllowed(
+      profile,
+      configuredFunctions,
+      registration.capability,
+      authorizeFunctions
+    ))
+  ) {
+    return {
+      result: { ok: true, replyText: messages.permissionDenied },
+      completionEligible: false
+    };
+  }
+  const authorizedProfile = profile.enabledFunctions.includes(registration.capability)
+    ? profile
+    : {
+        ...profile,
+        enabledFunctions: [...profile.enabledFunctions, registration.capability]
+      };
   return {
-    result: await handler(request, { profile, event, requestId, requesterDisplayName }),
-    completionEligible: true
+    result: await registration.handle(request, {
+      profile: authorizedProfile,
+      event,
+      requestId,
+      requesterDisplayName
+    }),
+    completionEligible: true,
+    capability: registration.capability,
+    profile: authorizedProfile
   };
 }
 
@@ -57,17 +96,23 @@ export async function handleAgentTextTurnWithLongJob(input: {
   requestId: string;
   requesterDisplayName?: string;
   requesterIsAdmin?: boolean;
+  configuredFunctions?: readonly FunctionName[];
   engagement?: string;
   allowRouting: boolean;
+  authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  accountAdministrator?(): boolean;
 }): Promise<FunctionExecutionResult | undefined> {
   const turnPromise = input.runtime.handleTextTurn({
     profile: input.profile,
+    configuredFunctions: input.configuredFunctions,
     event: input.event,
     requestId: input.requestId,
     requesterDisplayName: input.requesterDisplayName,
     requesterIsAdmin: input.requesterIsAdmin,
     engagement: input.engagement,
-    allowRouting: input.allowRouting
+    allowRouting: input.allowRouting,
+    authorizeFunctions: input.authorizeFunctions,
+    accountAdministrator: input.accountAdministrator
   });
   const config = input.profile.longRunningJobs;
   if (!config?.enabled || config.inlineReplyTimeoutMs <= 0) {
@@ -86,12 +131,13 @@ export async function handleAgentTextTurnWithLongJob(input: {
       ttlMs: config.resultTtlMinutes * 60_000
     });
     turnPromise
-      .then((result) =>
-        input.jobStore.complete(
-          job.id,
-          result ?? { ok: true, replyText: "這次沒有需要回覆的結果。" }
-        )
-      )
+      .then(async (result) => {
+        if (!result?.executedAction) {
+          await input.jobStore.fail(job.id, "missing_capability_owner");
+          return;
+        }
+        await input.jobStore.complete(job.id, result, result.executedAction);
+      })
       .catch((error: unknown) =>
         input.jobStore.fail(job.id, error instanceof Error ? error.message : String(error))
       );
@@ -131,7 +177,9 @@ async function handleAgentJobResultPostback(
   request: PostbackRequest,
   profile: BotProfileConfig,
   event: LineEvent,
-  jobStore: AgentJobStore
+  jobStore: AgentJobStore,
+  configuredFunctions: readonly FunctionName[],
+  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>
 ): Promise<FunctionExecutionResult> {
   const jobId = request.params.jobId;
   const scope = buildAgentJobScope(profile, event);
@@ -152,7 +200,40 @@ async function handleAgentJobResultPostback(
   if (job.status === "failed") {
     return { ok: true, replyText: "剛剛處理時遇到問題，請再問一次。" };
   }
+  if (!job.capability) {
+    return { ok: true, replyText: messages.permissionDenied };
+  }
+  if (
+    job.capability &&
+    !(await postbackCapabilityAllowed(
+      profile,
+      configuredFunctions,
+      job.capability,
+      authorizeFunctions
+    ))
+  ) {
+    return { ok: true, replyText: messages.permissionDenied };
+  }
   return job.result ?? { ok: true, replyText: "這筆任務沒有可顯示的結果。" };
+}
+
+async function postbackCapabilityAllowed(
+  profile: BotProfileConfig,
+  configuredFunctions: readonly FunctionName[],
+  capability: FunctionName,
+  authorizeFunctions:
+    ((functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>) | undefined
+): Promise<boolean> {
+  if (!configuredFunctions.includes(capability)) return false;
+  const needsAccount =
+    profile.permissionRequiredFunctions.includes(capability) ||
+    getFunctionDefinition(capability)?.sideEffectLevel !== "read";
+  if (!needsAccount) return profile.enabledFunctions.includes(capability);
+  try {
+    return (await authorizeFunctions?.([capability]))?.includes(capability) === true;
+  } catch {
+    return false;
+  }
 }
 
 function buildAgentJobQuickReply(jobId: string) {

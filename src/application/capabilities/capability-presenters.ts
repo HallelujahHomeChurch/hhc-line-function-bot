@@ -8,27 +8,16 @@ import type {
 export function renderCapabilityHelp(
   projection: EffectiveCapabilityProjection,
   mode: "help" | "introduction",
-  profile?: Pick<BotProfileConfig, "identityLine" | "allowedProviders">
+  profile?: Pick<BotProfileConfig, "identityLine" | "allowedProviders" | "registration">,
+  account?: AccountSurfacePresentation,
+  commandContext?: { sourceType: "user" | "group" | "room"; authorized: boolean }
 ): FunctionExecutionResult {
   const identityLine = profile?.identityLine ?? "我是小哈，家教會的小幫手。";
   const heading =
     mode === "introduction" ? [identityLine, "", "我目前可以協助："] : ["我目前可以協助："];
-  const sections = [
-    ...capabilitySections(projection),
-    ...(projection.accountLoginAvailable ? ["帳戶\n- 登入 HHC 帳戶：連結你的 HHC 帳戶。"] : [])
-  ];
-  const providerFree = profile?.allowedProviders?.length === 0;
-  const commandSection =
-    mode === "help" && !providerFree
-      ? [
-          "",
-          "常用指令",
-          "- /registry <code>：使用邀請碼開通",
-          "- /whoami：查看目前身分與來源",
-          "- /memories：查看已保存的文字記憶",
-          "- /forget-memory <id>：刪除指定的文字記憶"
-        ]
-      : [];
+  const accountSection = renderHelpAccountSection(projection, account);
+  const sections = [...capabilitySections(projection), ...(accountSection ? [accountSection] : [])];
+  const commandSection = renderHelpCommandSection(projection, mode, profile, commandContext);
 
   return {
     ok: true,
@@ -38,18 +27,115 @@ export function renderCapabilityHelp(
       ...(sections.length > 0 ? sections : ["目前還沒有開放可使用的項目。"]),
       ...commandSection
     ].join("\n"),
-    quickReplies: helpQuickReplies(projection)
+    quickReplies: helpQuickReplies(projection, account)
   };
 }
 
-function helpQuickReplies(projection: EffectiveCapabilityProjection): QuickReplyItem[] {
+function renderHelpCommandSection(
+  projection: EffectiveCapabilityProjection,
+  mode: "help" | "introduction",
+  profile: Pick<BotProfileConfig, "allowedProviders" | "registration"> | undefined,
+  context: { sourceType: "user" | "group" | "room"; authorized: boolean } | undefined
+): string[] {
+  if (mode !== "help" || profile?.allowedProviders?.length === 0 || !context) return [];
+  const commands = [
+    ...(profile?.registration?.enabled ? ["- /registry <code>：使用邀請碼開通"] : []),
+    ...(context.sourceType === "user" ? ["- /whoami：查看 HHC 帳戶資訊"] : []),
+    ...(context.authorized &&
+    projection.reads.some(({ functionName }) => functionName === "retrieve_memory")
+      ? ["- /memories：查看已保存的文字記憶"]
+      : []),
+    ...(context.authorized &&
+    projection.writes.some(({ functionName }) => functionName === "save_memory")
+      ? ["- /forget-memory <id>：刪除指定的文字記憶"]
+      : [])
+  ];
+  return commands.length > 0 ? ["", "常用指令", ...commands] : [];
+}
+
+export interface AccountSurfacePresentation {
+  status: "disabled" | "unbound" | "active" | "inactive" | "unavailable";
+  account?: {
+    displayName: string;
+    maskedEmail: string;
+    roles: Array<"user" | "admin">;
+  };
+}
+
+export function renderAccountIdentity(
+  account: AccountSurfacePresentation,
+  allowedProjection: EffectiveCapabilityProjection
+): FunctionExecutionResult {
+  if (account.status === "disabled") {
+    return { ok: true, replyText: "這個 bot 目前沒有開放 HHC 帳戶登入。" };
+  }
+  if (account.status === "unavailable") {
+    return { ok: true, replyText: "目前無法確認帳戶狀態，請稍後再試。" };
+  }
+  if (account.status === "inactive") {
+    return { ok: true, replyText: "你的 HHC 帳戶目前無法使用，請聯絡管理同工協助。" };
+  }
+  if (account.status === "unbound" || !account.account) {
+    return {
+      ok: true,
+      replyText: "你尚未連結 HHC 帳戶。\n傳送「登入」開始連結。",
+      quickReplies: [accountLoginQuickReply()]
+    };
+  }
+  const functionNames = [...allowedProjection.reads, ...allowedProjection.writes].map(
+    ({ displayName }) => `- ${displayName}`
+  );
+  return {
+    ok: true,
+    replyText: [
+      "HHC 帳戶",
+      `名稱：${account.account.displayName}`,
+      `Email：${account.account.maskedEmail}`,
+      `身分：${account.account.roles.join("、")}`,
+      ...(functionNames.length > 0 ? ["", "已授權功能", ...functionNames] : [])
+    ].join("\n")
+  };
+}
+
+function renderHelpAccountSection(
+  projection: EffectiveCapabilityProjection,
+  account: AccountSurfacePresentation | undefined
+): string | undefined {
+  if (!account) {
+    return projection.accountLoginAvailable
+      ? "帳戶\n- 登入 HHC 帳戶：連結你的 HHC 帳戶。"
+      : undefined;
+  }
+  if (account.status === "unbound" && projection.accountLoginAvailable) {
+    return "帳戶\n- 登入 HHC 帳戶：連結你的 HHC 帳戶。";
+  }
+  if (account.status === "active" && account.account) {
+    return `帳戶\n- 已連結 ${account.account.displayName}（${account.account.maskedEmail}）`;
+  }
+  if (account.status === "inactive") {
+    return "帳戶\n- HHC 帳戶目前無法使用，請聯絡管理同工協助。";
+  }
+  if (account.status === "unavailable") {
+    return "帳戶\n- 目前無法確認帳戶狀態，請稍後再試。";
+  }
+  return undefined;
+}
+
+function helpQuickReplies(
+  projection: EffectiveCapabilityProjection,
+  account?: AccountSurfacePresentation
+): QuickReplyItem[] {
   const capabilityReplies = projection.onboarding.map((presentation) => presentation.quickReply);
-  if (!projection.accountLoginAvailable) return capabilityReplies.slice(0, 3);
-  const loginReply: QuickReplyItem = {
+  if (!projection.accountLoginAvailable || (account && account.status !== "unbound"))
+    return capabilityReplies.slice(0, 3);
+  return [...capabilityReplies.slice(0, 2), accountLoginQuickReply()];
+}
+
+function accountLoginQuickReply(): QuickReplyItem {
+  return {
     label: "登入 HHC 帳戶",
     action: { type: "message", label: "登入 HHC 帳戶", text: "登入 HHC 帳戶" }
   };
-  return [...capabilityReplies.slice(0, 2), loginReply];
 }
 
 export function renderRegistrationCompletion(

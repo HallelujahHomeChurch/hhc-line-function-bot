@@ -37,6 +37,7 @@ export function createPendingAttachmentTextMessageHandler(
 
   return {
     turnStage: "attachment",
+    capability: "save_resource",
     matches: async (_request, context) =>
       Boolean(
         await options.sessionStore.findPendingAttachment({
@@ -192,6 +193,7 @@ async function enqueueAttachmentScan(input: {
     try {
       const job = await input.options.agentJobStore.createPending({
         scope,
+        capability: "save_resource",
         label: "保存檔案",
         ttlMs
       });

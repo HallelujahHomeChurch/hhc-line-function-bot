@@ -30,7 +30,8 @@ function context(
       groupRequireWakeWord: true,
       wakeKeywords: ["小哈"],
       acceptMention: true,
-      enabledFunctions: ["query_schedule", "save_schedule"]
+      enabledFunctions: ["query_schedule", "save_schedule"],
+      permissionRequiredFunctions: []
     } satisfies BotProfileConfig,
     event: {
       type: "message",

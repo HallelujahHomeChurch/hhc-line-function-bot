@@ -36,6 +36,7 @@ export type {
 
 export const FUNCTION_NAMES = [
   "download_weekly_paper",
+  "update_own_profile",
   "find_ppt_slides",
   "query_schedule",
   "query_knowledge",
@@ -50,7 +51,13 @@ export const FUNCTION_NAMES = [
 
 export type FunctionName = (typeof FUNCTION_NAMES)[number];
 
-export const SYSTEM_ACTION_NAMES = ["introduce_bot", "small_talk", "account_login"] as const;
+export const SYSTEM_ACTION_NAMES = [
+  "introduce_bot",
+  "small_talk",
+  "show_help",
+  "account_login",
+  "show_account"
+] as const;
 
 export type SystemActionName = (typeof SYSTEM_ACTION_NAMES)[number];
 
@@ -265,7 +272,24 @@ export interface AgentRuntimeConfig {
   taskFrameSeconds: number;
 }
 
-export interface BotProfileConfig {
+export interface RawAccountLinkPresentation {
+  displayName: string;
+  lineIdEnv: string;
+  providerIdEnv: string;
+}
+
+export interface AccountLinkPresentation {
+  displayName: string;
+  lineId: string;
+  providerId: string;
+}
+
+export interface ProfileFunctionPolicy {
+  enabledFunctions: FunctionName[];
+  permissionRequiredFunctions: FunctionName[];
+}
+
+export interface BotProfileConfig extends ProfileFunctionPolicy {
   name: string;
   identityLine?: string;
   webhookPath: string;
@@ -277,7 +301,7 @@ export interface BotProfileConfig {
   groupRequireWakeWord: boolean;
   wakeKeywords: string[];
   acceptMention: boolean;
-  enabledFunctions: FunctionName[];
+  accountLink?: AccountLinkPresentation;
   /** @deprecated Test fixtures only. Production profile parsing rejects this field. */
   adminUserId?: string;
   adminDirectOnly?: boolean;

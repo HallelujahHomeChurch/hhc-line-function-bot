@@ -123,6 +123,7 @@ export function createKernelLocalLiveConfig(
         wakeKeywords: [],
         acceptMention: true,
         enabledFunctions: ["query_schedule", "query_knowledge", "save_resource"],
+        permissionRequiredFunctions: [],
         directAccessPolicy: "managed",
         groupAccessPolicy: "managed",
         registration: { enabled: true },

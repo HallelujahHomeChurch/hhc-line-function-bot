@@ -212,6 +212,7 @@ function handlerContext(): FunctionHandlerContext {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["query_schedule"],
+    permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: {

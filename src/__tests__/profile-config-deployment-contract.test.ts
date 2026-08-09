@@ -17,6 +17,20 @@ function projectFileExists(path: string): boolean {
 }
 
 describe("production profile configuration deployment contract", () => {
+  it("requires a manual LINE Provider checkpoint and the bounded Account preflight", () => {
+    const workflow = readProjectFile(".github/workflows/release.yml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const assurance = readProjectFile("scripts/release-assurance.sh");
+
+    expect(workflow).toContain(
+      "LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}"
+    );
+    expect(deployment).toContain("LINE_PROVIDER_CONSOLE_VERIFIED_ID");
+    expect(`${deployment}\n${assurance}`).toContain(
+      "dist/tools/run-account-deployment-preflight.js"
+    );
+  });
+
   it("hosts SearXNG as an internal always-on ACA app without office-network routes", () => {
     const searxng = readProjectFile("aca.searxng.containerapp.yaml");
     const bot = readProjectFile("aca.containerapp.yaml");
@@ -261,6 +275,12 @@ describe("production profile configuration deployment contract", () => {
       name: string;
       allowedMessageTypes: string[];
       enabledFunctions: string[];
+      permissionRequiredFunctions?: string[];
+      accountLink?: {
+        displayName: string;
+        lineIdEnv: string;
+        providerIdEnv: string;
+      };
       controlledAgent?: {
         enabled: boolean;
         shadow: boolean;
@@ -343,9 +363,26 @@ describe("production profile configuration deployment contract", () => {
     });
     expect(main).toMatchObject({
       allowedMessageTypes: ["text"],
-      enabledFunctions: ["download_weekly_paper"],
+      enabledFunctions: ["download_weekly_paper", "update_own_profile"],
       controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 }
     });
+    expect(helper).toMatchObject({
+      permissionRequiredFunctions: [],
+      accountLink: {
+        displayName: "小哈",
+        lineIdEnv: "LINE_HELPER_ACCOUNT_ID",
+        providerIdEnv: "LINE_ACCOUNT_PROVIDER_ID"
+      }
+    });
+    expect(main).toMatchObject({
+      permissionRequiredFunctions: ["update_own_profile"],
+      accountLink: {
+        displayName: "哈利路亞家教會官方 LINE",
+        lineIdEnv: "LINE_MAIN_ACCOUNT_ID",
+        providerIdEnv: "LINE_ACCOUNT_PROVIDER_ID"
+      }
+    });
+    expect(helper?.enabledFunctions).not.toContain("update_own_profile");
     expect(main?.providerPolicy).toEqual({});
     expect(readProjectFile("README.md")).toContain("sole complete");
     expect(readProjectFile("README.md")).not.toContain("Example shape:");
@@ -384,6 +421,63 @@ describe("production profile configuration deployment contract", () => {
     for (const path of jobPaths.filter((path) => path !== "aca.release-probe-job.yaml")) {
       expect(readProjectFile(path)).not.toContain("LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE");
     }
+  });
+
+  it("injects account presentation identifiers into the bot container only", () => {
+    const bot = readProjectFile("aca.containerapp.yaml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const accountEnvNames = [
+      "LINE_HELPER_ACCOUNT_ID",
+      "LINE_MAIN_ACCOUNT_ID",
+      "LINE_ACCOUNT_PROVIDER_ID"
+    ];
+
+    for (const name of accountEnvNames) {
+      expect(bot).toContain(`name: ${name}`);
+      expect(bot).toContain(`value: PLACEHOLDER_${name}`);
+      expect(deployment).toContain(`"${name}"`);
+      expect(readProjectFile(".env.example")).toContain(`${name}=PLACEHOLDER_${name}`);
+      for (const path of [
+        "aca.attachment-scan-job.yaml",
+        "aca.catalog-sync-job.yaml",
+        "aca.clamav-signature-refresh-job.yaml",
+        "aca.periodic-assurance-job.yaml",
+        "aca.release-probe-job.yaml",
+        "scripts/release-assurance.sh"
+      ]) {
+        expect(readProjectFile(path)).not.toContain(name);
+      }
+    }
+    expect(deployment).not.toMatch(/echo[^\n]*LINE_(?:HELPER|MAIN|ACCOUNT)_/u);
+    expect(readProjectFile(".github/workflows/release.yml")).toContain(
+      "path: artifacts/release-assurance/report.json"
+    );
+  });
+
+  it("keeps the normalized permission policy required in the runtime profile type", () => {
+    const types = readProjectFile("src/types.ts");
+    const runtimeProfile = types.slice(
+      types.indexOf("export interface BotProfileConfig"),
+      types.indexOf("export interface AppConfig")
+    );
+
+    expect(runtimeProfile).toContain(
+      "export interface BotProfileConfig extends ProfileFunctionPolicy"
+    );
+    expect(runtimeProfile).not.toMatch(/permissionRequiredFunctions\s*\?:/u);
+  });
+
+  it("validates account presentation values before snapshot and every production write", () => {
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const validation = deployment.indexOf("required_account_presentation_env_names");
+    const snapshot = deployment.indexOf("capture_known_good_state");
+    const mutationMark = deployment.indexOf("mark_release_mutated");
+    const firstProductionWrite = deployment.indexOf("az containerapp secret set");
+
+    expect(validation).toBeGreaterThanOrEqual(0);
+    expect(validation).toBeLessThan(snapshot);
+    expect(validation).toBeLessThan(mutationMark);
+    expect(validation).toBeLessThan(firstProductionWrite);
   });
 
   it("validates pull requests before a separate main-only production release", () => {

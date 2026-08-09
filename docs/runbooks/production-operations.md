@@ -191,6 +191,33 @@ revision/image identities, check name/status/time/code, `failureCode`, and
 rollback status/revision/image. The normal success attestation includes
 `providerRequests: { deepseek: 0, embedding: 0 }`.
 
+Before dispatching a release, a human must verify in LINE Developers Console
+that the Account LINE Login channel plus every participating Messaging API
+channel belong to the same Provider. Record only that verified Provider ID in
+the protected repository variable `LINE_PROVIDER_CONSOLE_VERIFIED_ID`; do not
+store screenshots, channel secrets, or IDs in release artifacts. The deploy
+stops before its known-good snapshot if this checkpoint is missing or differs
+from ACA profile configuration.
+
+Once the target revision is ready, the `account_preflight` release check runs
+inside the bot revision and calls Account through Dapr. A pass requires every
+production `permissionRequiredFunctions` name to have its exact derived Account
+RBAC record, a disposable identity lookup to be unbound, and an unknown binding
+challenge to be rejected. Missing permission records block the release and are
+never auto-created or granted. Output and reports are limited to function names
+and outcomes; never add raw permissions, roles, UIDs, account data, emails,
+nonces, URLs, or secrets. Failure enters the normal rollback transaction.
+
+After repository, release, and gateway checks pass, complete real-device
+acceptance separately with designated disposable test accounts: verify public
+`/help`, `登入 HHC 帳戶`, linked and unlinked `/whoami`, successful own-profile
+preview/confirmation, denied function behavior, and denial immediately after a
+direct or role grant is revoked. Confirm the Account link returns to the same
+official account on both participating profiles. Do not use release automation
+to mutate real identities or permissions. This manual pass proves LINE Console
+ownership, delivery, reply-token behavior, and device UX that automated probes
+explicitly do not prove.
+
 The release probe sends separately signed empty `events: []` requests through
 the public gateway and records `gateway_helper_signed_empty_webhook` and
 `gateway_main_signed_empty_webhook`. Together, they verify the Gateway→Dapr→

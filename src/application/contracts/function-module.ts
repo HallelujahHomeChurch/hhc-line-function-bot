@@ -1,4 +1,5 @@
 import type { AgentJobStore } from "../../agent/jobs.js";
+import type { AccountAdminClient } from "../../account/account-admin-client.js";
 import type { AgentMemoryStore } from "../../agent/memory-store.js";
 import type { AttachmentScanQueue } from "../../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../../attachments/scan-work-store.js";
@@ -63,6 +64,7 @@ export interface RouterEvalCase {
 export interface FunctionModuleContext {
   config: AppConfig;
   clients: {
+    accountAdminClient?: AccountAdminClient;
     graph?: GraphDriveClient;
     notion?: NotionDatabaseClient;
     sessionStore: SessionStore;

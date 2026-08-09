@@ -17,6 +17,7 @@ function profile(): BotProfileConfig {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["find_ppt_slides"],
+    permissionRequiredFunctions: [],
     adminUserId: "Uroot",
     adminDirectOnly: true,
     directAccessPolicy: "managed",
@@ -26,7 +27,7 @@ function profile(): BotProfileConfig {
 }
 
 describe("action policy", () => {
-  it("defines account login as an exact direct public security action", async () => {
+  it("normalizes exact shared help, login, and whoami aliases without matching embedded or negated text", async () => {
     expect(getActionDefinition("account_login")).toMatchObject({
       kind: "system_action",
       auth: "public",
@@ -34,9 +35,32 @@ describe("action policy", () => {
       sideEffect: "security_change",
       naturalLanguage: true
     });
-    expect(matchNaturalLanguageSystemActionHint("  登入 HHC 帳戶  ")).toBe("account_login");
-    expect(matchNaturalLanguageSystemActionHint("login")).toBe("account_login");
-    expect(matchNaturalLanguageSystemActionHint("我想登入帳戶看看")).toBeUndefined();
+    for (const text of [
+      "登入",
+      "登入帳戶！",
+      "登入 ＨＨＣ 帳戶？",
+      "連結帳戶",
+      "綁定帳戶",
+      "LOGIN."
+    ]) {
+      expect(matchNaturalLanguageSystemActionHint(text)).toBe("account_login");
+    }
+    for (const text of ["/help", "幫助！", "說明", "功能", "可以做什麼？"]) {
+      expect(matchNaturalLanguageSystemActionHint(text)).toBe("show_help");
+    }
+    for (const text of ["/whoami", "我是誰？", "我的帳戶", "帳戶資訊", "我的身分！"]) {
+      expect(matchNaturalLanguageSystemActionHint(text)).toBe("show_account");
+    }
+    for (const text of [
+      "我想登入帳戶看看",
+      "不要登入",
+      "先不要幫助",
+      "不用說明",
+      "不要查我的帳戶",
+      "你是誰"
+    ]) {
+      expect(matchNaturalLanguageSystemActionHint(text)).toBeUndefined();
+    }
 
     await expect(
       evaluateActionPolicy({

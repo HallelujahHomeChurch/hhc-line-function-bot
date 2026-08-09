@@ -9,11 +9,7 @@ import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createControlledCompletionObserver } from "../application/turn/completion-observer.js";
-import {
-  createLineSdkAccountLinkClient,
-  createLineSdkIdentityClient,
-  createLineSdkReplyClient
-} from "../clients/line.js";
+import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createStaticAppDiagnostics } from "../diagnostics/dependencies.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import { InMemoryWebhookEventStore } from "../idempotency/webhook-event-store.js";
@@ -59,10 +55,22 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
   const functionRegistry = overrides.functionRegistry ?? {};
   const textMessageHandlers = overrides.textMessageHandlers ?? {};
   const firstSuccessStore = overrides.firstSuccessStore ?? new InMemoryFirstSuccessStore();
-  const accountAdminClient = overrides.accountAdminClient ?? {
+  const defaultAccountAdminClient: AppDependencies["accountAdminClient"] = {
     async authorizeAdministrator(lineUserId: string) {
       const allowed = config.profiles.some((profile) => profile.adminUserId === lineUserId);
       return { bound: allowed, allowed };
+    },
+    async authorizeFunctions({ lineUserId, functionNames }) {
+      const administrator = config.profiles.some((profile) => profile.adminUserId === lineUserId);
+      return {
+        bound: administrator,
+        active: administrator,
+        administrator,
+        allowedFunctions: administrator ? functionNames : []
+      };
+    },
+    async verifyFunctionPermissions({ functionNames }) {
+      return functionNames;
     },
     async createBinding() {
       return {
@@ -72,7 +80,29 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     },
     async finalizeBinding() {
       return { status: "completed" as const };
+    },
+    async updateOwnProfile({ firstName, lastName }) {
+      return { firstName, lastName };
     }
+  };
+  const suppliedAccountAdminClient = overrides.accountAdminClient;
+  const accountAdminClient: AppDependencies["accountAdminClient"] = {
+    ...defaultAccountAdminClient,
+    ...suppliedAccountAdminClient,
+    authorizeFunctions:
+      suppliedAccountAdminClient?.authorizeFunctions ??
+      (async ({ lineUserId, functionNames }) => {
+        const legacy = await (
+          suppliedAccountAdminClient?.authorizeAdministrator ??
+          defaultAccountAdminClient.authorizeAdministrator
+        )(lineUserId);
+        return {
+          bound: legacy.bound,
+          active: legacy.allowed,
+          administrator: legacy.allowed,
+          allowedFunctions: legacy.allowed ? functionNames : []
+        };
+      })
   };
   const completionObserver =
     overrides.completionObserver ??
@@ -121,8 +151,6 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     postbackHandlers: overrides.postbackHandlers ?? {},
     textMessageHandlers,
     adminHandlers: overrides.adminHandlers ?? {},
-    createLineAccountLinkClient:
-      overrides.createLineAccountLinkClient ?? createLineSdkAccountLinkClient,
     createLineReplyClient: overrides.createLineReplyClient ?? createLineSdkReplyClient,
     createLineIdentityClient: overrides.createLineIdentityClient ?? createLineSdkIdentityClient,
     routeObserver: overrides.routeObserver,

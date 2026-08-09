@@ -20,6 +20,7 @@ import {
 import {
   hasActiveEntityTextEvidence,
   hasUnnegatedIntentEvidence,
+  matchExactWholeMessageIntent,
   unnegatedIntentClauses
 } from "./plan-evidence.js";
 import { projectRetrievalQuery } from "./retrieval-query.js";
@@ -147,9 +148,7 @@ function strongestReason(
 ): CapabilityCandidateReason | undefined {
   const contract = definition.agentCapability!;
   if (definition.sideEffectLevel !== "read") {
-    return hasWriteIntent(input.text) &&
-      (matchesAnyExact(input.text, contract.intents) ||
-        matchesAnyHint(input.text, [...contract.candidateHints, ...dynamicHints]))
+    return hasExplicitWriteIntent(definition, input.text, dynamicHints)
       ? "explicit_intent"
       : undefined;
   }
@@ -190,6 +189,24 @@ function strongestReason(
     return "capability_hint";
   }
   return undefined;
+}
+
+export function hasExplicitWriteIntent(
+  definition: FunctionDefinition,
+  text: string,
+  dynamicHints: readonly string[] = []
+): boolean {
+  const contract = definition.agentCapability;
+  if (!contract || definition.sideEffectLevel === "read") return false;
+  if (contract.exactIntents) {
+    const matchedIntent = matchExactWholeMessageIntent(text, contract.intents);
+    return Boolean(matchedIntent && (matchedIntent.trim().startsWith("/") || hasWriteIntent(text)));
+  }
+  return (
+    hasWriteIntent(text) &&
+    (matchesAnyExact(text, contract.intents) ||
+      matchesAnyHint(text, [...contract.candidateHints, ...dynamicHints]))
+  );
 }
 
 export function hasDeclarativeArgumentEvidence(
@@ -416,6 +433,7 @@ function cloneContract(
 ): AgentCapabilityContract {
   return {
     intents: [...contract.intents],
+    ...(contract.exactIntents ? { exactIntents: true } : {}),
     candidateHints: [...new Set([...contract.candidateHints, ...dynamicHints])],
     semanticDescription: contract.semanticDescription,
     ...(contract.arguments

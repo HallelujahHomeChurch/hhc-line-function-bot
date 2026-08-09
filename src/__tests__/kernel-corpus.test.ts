@@ -12,13 +12,16 @@ import { REMOTE_RUNTIME_KERNEL_CASES } from "../evals/kernel/cases/remote-runtim
 import { SCHEDULE_KERNEL_CASES } from "../evals/kernel/cases/schedule.js";
 import { messages } from "../messages.js";
 
-const R41_PRODUCT_EXPERIENCE_CASE_IDS = [
+const PRODUCT_EXPERIENCE_CASE_IDS = [
   "kernel-v1/product_experience/effective-discovery-direct@1",
-  "kernel-v1/product_experience/effective-discovery-group@1",
-  "kernel-v1/product_experience/effective-discovery-granted-user@1",
+  "kernel-v1/product_experience/effective-discovery-group-local-grant-ignored@1",
+  "kernel-v1/product_experience/effective-discovery-user-local-grant-ignored@1",
   "kernel-v1/product_experience/effective-discovery-admin@1",
   "kernel-v1/product_experience/registration-first-read@1",
   "kernel-v1/product_experience/provider-free-weekly-read@1",
+  "kernel-v1/product_experience/provider-free-own-profile-confirmation@1",
+  "kernel-v1/product_experience/own-profile-live-authority@1",
+  "kernel-v1/product_experience/own-profile-scope-and-disabled-profile@1",
   "kernel-v1/product_experience/result-guidance-classes@1",
   "kernel-v1/product_experience/branch-group-isolation@1"
 ] as const;
@@ -84,6 +87,7 @@ describe("Kernel v1 versioned acceptance corpus", () => {
         "kernel-v1/memory/explicit-save-retrieve@1",
         "kernel-v1/write/bare-confirmation-precedence@1",
         "kernel-v1/write/unauthorized-save-denied@1",
+        "kernel-v1/write/account-admin-outside-read-projection@1",
         "kernel-v1/write/scan-unavailable-fails-closed@1",
         "kernel-v1/write/group-attachment-without-intent-silent@1",
         "kernel-v1/write/group-requester-cannot-complete-other-upload@1",
@@ -142,9 +146,9 @@ describe("Kernel v1 versioned acceptance corpus", () => {
     const corpusIds = KERNEL_ACCEPTANCE_CASES.map(({ id }) => id);
     const productExperienceIds = PRODUCT_EXPERIENCE_KERNEL_CASES.map(({ id }) => id);
 
-    expect(productExperienceIds).toEqual(R41_PRODUCT_EXPERIENCE_CASE_IDS);
-    expect(corpusIds.filter((id) => R41_PRODUCT_EXPERIENCE_CASE_IDS.includes(id as never))).toEqual(
-      R41_PRODUCT_EXPERIENCE_CASE_IDS
+    expect(productExperienceIds).toEqual(PRODUCT_EXPERIENCE_CASE_IDS);
+    expect(corpusIds.filter((id) => PRODUCT_EXPERIENCE_CASE_IDS.includes(id as never))).toEqual(
+      PRODUCT_EXPERIENCE_CASE_IDS
     );
   });
 
@@ -156,7 +160,7 @@ describe("Kernel v1 versioned acceptance corpus", () => {
     );
 
     expect(observations.map(({ caseId, passed }) => ({ caseId, passed }))).toEqual(
-      R41_PRODUCT_EXPERIENCE_CASE_IDS.map((caseId) => ({ caseId, passed: true }))
+      PRODUCT_EXPERIENCE_CASE_IDS.map((caseId) => ({ caseId, passed: true }))
     );
     expect(observations.find(({ caseId }) => caseId.endsWith("registration-first-read@1"))).toEqual(
       expect.objectContaining({ boundary: "entrance_access", coreJourneySucceeded: true })

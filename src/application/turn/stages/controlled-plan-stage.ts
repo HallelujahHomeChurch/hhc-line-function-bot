@@ -7,7 +7,9 @@ import type { BotProfileConfig, FunctionName, LineEvent, LineSource } from "../.
 
 interface ControlledPlanInput {
   profile: BotProfileConfig;
+  configuredFunctions?: readonly FunctionName[];
   event: LineEvent;
+  authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
 }
 
 export async function resolveControlledPlan(
@@ -24,6 +26,9 @@ export async function resolveControlledPlan(
       profileName: input.profile.name,
       text,
       enabledFunctions: enabledFunctions ?? input.profile.enabledFunctions,
+      configuredFunctions: input.configuredFunctions,
+      permissionRequiredFunctions: input.profile.permissionRequiredFunctions,
+      authorizeCandidates: input.authorizeFunctions,
       sourceType: input.event.source.type,
       sourceId: controlledSourceId(input.event.source),
       requesterUserId: input.event.source.userId,

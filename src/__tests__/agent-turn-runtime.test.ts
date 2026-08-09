@@ -6,11 +6,12 @@ import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import type { ControlledCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
-import type { AgentPlanner } from "../agent/planner.js";
+import { createAgentPlanner, type AgentPlanner } from "../agent/planner.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
 import { createFindResourceHandler } from "../functions/find-resource.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
+import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
 import type { FirstSuccessStore } from "../observability/first-success-store.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
@@ -42,6 +43,7 @@ function profile(
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions,
+    permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
@@ -60,6 +62,15 @@ function event(text: string, userId = "U1"): LineEvent {
     type: "message",
     replyToken: "reply-token",
     source: { type: "group", groupId: "C1", userId },
+    message: { type: "text", text }
+  };
+}
+
+function directEvent(text: string, userId = "U1"): LineEvent {
+  return {
+    type: "message",
+    replyToken: "reply-token",
+    source: { type: "user", userId },
     message: { type: "text", text }
   };
 }
@@ -423,6 +434,30 @@ describe("AgentTurnRuntime controlled path", () => {
     expect(result?.quickReplies).toBeUndefined();
   });
 
+  it("keeps helper no-match chat on its existing reassurance reply", async () => {
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: {
+        resolve: vi.fn().mockResolvedValue({ disposition: "chat" })
+      },
+      now
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile([]),
+      event: event("我想知道這是什麼"),
+      requestId: "helper-no-match-chat"
+    });
+
+    expect(result?.replyText).toBe(
+      "不會啦，我比較適合安靜地幫忙查資料。有明確歌名或聚會範圍時，我會比較快幫上忙。"
+    );
+  });
+
   it("fails closed with a clarification when the controlled planner is unavailable", async () => {
     const runtime = createAgentTurnRuntime({
       functionRegistry: {},
@@ -749,6 +784,196 @@ describe("AgentTurnRuntime controlled path", () => {
     );
   });
 
+  it("reauthorizes own-profile confirmation and leaves no task state after one commit", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const conversationWindowStore = new InMemoryConversationWindowStore({ now });
+    const updateOwnProfile = vi.fn().mockResolvedValue({ firstName: "Ray", lastName: "Self" });
+    const handler = createUpdateOwnProfileHandler({
+      accountClient: { updateOwnProfile },
+      sessionStore,
+      now,
+      requestIdFactory: () => "profile-confirmation"
+    });
+    const completeJson = vi.fn();
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { update_own_profile: handler },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { update_own_profile: handler }
+        })
+      },
+      sessionStore,
+      conversationWindowStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: createControlledAgentRouter({
+        planner: createAgentPlanner({
+          primary: { providerName: "deepseek", completeJson },
+          providersEnabledForProfile: () => false
+        }),
+        now
+      }),
+      now
+    });
+    const restrictedProfile: BotProfileConfig = {
+      ...profile([]),
+      name: "main",
+      webhookPath: "/api/line/webhook/main",
+      groupRequireWakeWord: false,
+      wakeKeywords: [],
+      acceptMention: false,
+      permissionRequiredFunctions: ["update_own_profile"],
+      allowedProviders: []
+    };
+    const authorizeFunctions = vi.fn(async (requested: readonly string[]) => requested);
+    const turn = (text: string, requestId: string, userId = "U1") =>
+      runtime.handleTextTurn({
+        profile: restrictedProfile,
+        configuredFunctions: ["download_weekly_paper", "update_own_profile"],
+        event: directEvent(text, userId),
+        requestId,
+        authorizeFunctions
+      });
+
+    await expect(turn("/profile", "profile-1")).resolves.toMatchObject({
+      replyText: expect.stringContaining("名字")
+    });
+    await expect(turn("Ray", "profile-2")).resolves.toMatchObject({
+      replyText: expect.stringContaining("姓氏")
+    });
+    await expect(turn("Self", "profile-3")).resolves.toMatchObject({
+      writePhase: "preview",
+      replyText: expect.stringContaining("Ray Self")
+    });
+    expect(updateOwnProfile).not.toHaveBeenCalled();
+    await expect(turn("確認", "profile-4")).resolves.toMatchObject({
+      writePhase: "commit",
+      replyText: "姓名已更新：Ray Self"
+    });
+    expect(updateOwnProfile).toHaveBeenCalledOnce();
+    await expect(turn("確認", "profile-5")).resolves.not.toMatchObject({
+      writePhase: "commit"
+    });
+    expect(updateOwnProfile).toHaveBeenCalledOnce();
+    await expect(
+      conversationWindowStore.activeTask({
+        profileName: "main",
+        sourceKey: "user:U1",
+        requesterUserId: "U1"
+      })
+    ).resolves.toBeUndefined();
+    expect(completeJson).not.toHaveBeenCalled();
+  });
+
+  it("fails a revoked own-profile confirmation closed and isolates another direct requester", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const updateOwnProfile = vi.fn();
+    const completeJson = vi.fn();
+    const handler = createUpdateOwnProfileHandler({
+      accountClient: { updateOwnProfile },
+      sessionStore,
+      now,
+      requestIdFactory: () => "profile-revocation"
+    });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { update_own_profile: handler },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { update_own_profile: handler }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: createControlledAgentRouter({
+        planner: createAgentPlanner({
+          primary: { providerName: "deepseek", completeJson },
+          providersEnabledForProfile: () => false
+        }),
+        now
+      }),
+      now
+    });
+    const restrictedProfile: BotProfileConfig = {
+      ...profile([]),
+      name: "main",
+      webhookPath: "/api/line/webhook/main",
+      permissionRequiredFunctions: ["update_own_profile"],
+      allowedProviders: []
+    };
+    let allowed = true;
+    const authorizeFunctions = vi.fn(async (requested: readonly string[]) =>
+      allowed ? requested : []
+    );
+    const turn = (text: string, requestId: string, userId = "U1") =>
+      runtime.handleTextTurn({
+        profile: restrictedProfile,
+        configuredFunctions: ["update_own_profile"],
+        event: directEvent(text, userId),
+        requestId,
+        authorizeFunctions
+      });
+
+    await turn("/profile", "revoked-1");
+    await expect(turn("Ray", "other-user", "U2")).resolves.not.toMatchObject({
+      replyText: expect.stringContaining("姓氏")
+    });
+    await turn("Ray", "revoked-2");
+    await turn("Self", "revoked-3");
+    allowed = false;
+    await expect(turn("確認", "revoked-4")).resolves.not.toMatchObject({
+      writePhase: "commit"
+    });
+    expect(updateOwnProfile).not.toHaveBeenCalled();
+    expect(completeJson).not.toHaveBeenCalled();
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
+  it("does not collect own-profile fields when the authority recheck denies the plan", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: createControlledAgentRouter({
+        planner: createAgentPlanner({
+          primary: { providerName: "deepseek", completeJson: vi.fn() },
+          providersEnabledForProfile: () => false
+        }),
+        now
+      }),
+      now
+    });
+    const authorizeFunctions = vi
+      .fn()
+      .mockResolvedValueOnce(["update_own_profile"])
+      .mockResolvedValueOnce([]);
+
+    const result = await runtime.handleTextTurn({
+      profile: {
+        ...profile([]),
+        name: "main",
+        webhookPath: "/api/line/webhook/main",
+        permissionRequiredFunctions: ["update_own_profile"],
+        allowedProviders: []
+      },
+      configuredFunctions: ["update_own_profile"],
+      event: directEvent("/profile"),
+      requestId: "profile-denied-recheck",
+      authorizeFunctions
+    });
+
+    expect(result?.replyText).not.toContain("名字");
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
   it("stores and resumes a cross-capability choice through the controlled router", async () => {
     const sessionStore = new InMemorySessionStore({ now });
     const querySchedule = vi.fn<FunctionHandler>().mockResolvedValue({
@@ -815,6 +1040,226 @@ describe("AgentTurnRuntime controlled path", () => {
     expect(second?.replyText).toBe("晨更家族：中平家族");
   });
 
+  it("authorizes a protected pending capability choice before resuming it", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    await sessionStore.set({
+      id: "pending-protected-capability",
+      type: "pending_capability_resolution",
+      version: 1,
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      originalText: "幫我記住主日音控是小明",
+      candidates: [
+        { capability: "save_memory", label: "記住資訊" },
+        { capability: "query_schedule", label: "查服事表" }
+      ],
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi.fn().mockResolvedValue(["save_memory"]);
+    const resolve = vi.fn().mockResolvedValue({
+      disposition: "deny",
+      reasonCode: "test_stop"
+    });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: { resolve },
+      now
+    });
+    const effectiveProfile = profile(["query_schedule"]);
+    effectiveProfile.permissionRequiredFunctions = ["save_memory"];
+
+    await runtime.handleTextTurn({
+      profile: effectiveProfile,
+      event: event("1"),
+      requestId: "protected-capability-allowed",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory"]);
+    expect(resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "幫我記住主日音控是小明",
+        enabledFunctions: ["save_memory"]
+      })
+    );
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
+  it.each([
+    { label: "denied", authorize: vi.fn().mockResolvedValue([]) },
+    { label: "Account unavailable", authorize: vi.fn().mockRejectedValue(new Error("offline")) }
+  ])("preserves a $label protected capability choice", async ({ authorize }) => {
+    const sessionStore = new InMemorySessionStore({ now });
+    await sessionStore.set({
+      id: "pending-protected-capability-denied",
+      type: "pending_capability_resolution",
+      version: 1,
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      originalText: "幫我記住主日音控是小明",
+      candidates: [
+        { capability: "save_memory", label: "記住資訊" },
+        { capability: "query_schedule", label: "查服事表" }
+      ],
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const resolve = vi.fn();
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: { resolve },
+      now
+    });
+    const effectiveProfile = profile(["query_schedule"]);
+    effectiveProfile.permissionRequiredFunctions = ["save_memory"];
+
+    const result = await runtime.handleTextTurn({
+      profile: effectiveProfile,
+      event: event("1"),
+      requestId: "protected-capability-denied",
+      authorizeFunctions: authorize
+    });
+
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(authorize).toHaveBeenCalledWith(["save_memory"]);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(result?.replyText).toContain("沒有開放");
+    await expect(sessionStore.summary()).resolves.toMatchObject({
+      total: 1,
+      byType: { pending_capability_resolution: 1 }
+    });
+  });
+
+  it("keeps a public selection local without looking up its protected alternative", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    await sessionStore.set({
+      id: "pending-public-capability-switch",
+      type: "pending_capability_resolution",
+      version: 1,
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      originalText: "主日音控是誰",
+      candidates: [
+        { capability: "save_memory", label: "記住資訊" },
+        { capability: "query_schedule", label: "查服事表" }
+      ],
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi.fn().mockRejectedValue(new Error("public choices stay local"));
+    const resolve = vi.fn().mockResolvedValue({
+      disposition: "deny",
+      reasonCode: "test_stop"
+    });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {},
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: { resolve },
+      now
+    });
+    const effectiveProfile = profile(["query_schedule"]);
+    effectiveProfile.permissionRequiredFunctions = ["save_memory"];
+
+    await runtime.handleTextTurn({
+      profile: effectiveProfile,
+      event: event("2"),
+      requestId: "public-capability-switch",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "主日音控是誰",
+        enabledFunctions: ["query_schedule"]
+      })
+    );
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
+  it("authorizes an explicit protected-function switch alongside the pending function", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const saveMemory = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "wrong pending function"
+    });
+    const saveResource = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "resource flow"
+    });
+    await sessionStore.set({
+      id: "pending-before-protected-switch",
+      type: "pending_function",
+      action: "save_memory",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      arguments: {},
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi
+      .fn()
+      .mockImplementation(async (requested: readonly string[]) => requested);
+    const resolve = vi.fn().mockResolvedValue({
+      disposition: "execute",
+      capability: "save_resource",
+      arguments: {
+        mode: "external_url_import",
+        url: "https://example.test/resource.pdf",
+        resourceType: "ppt_slide",
+        title: "測試檔案"
+      },
+      reasonCode: "deterministic_explicit_intent"
+    });
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { save_memory: saveMemory, save_resource: saveResource },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_memory: saveMemory, save_resource: saveResource }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      controlledAgentRouter: { resolve },
+      now
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile([]),
+      configuredFunctions: ["save_memory", "save_resource"],
+      event: event("保存檔案"),
+      requestId: "protected-capability-switch",
+      authorizeFunctions,
+      accountAdministrator: () => true
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory", "save_resource"]);
+    expect(saveMemory).not.toHaveBeenCalled();
+    expect(saveResource).toHaveBeenCalledOnce();
+    expect(result?.replyText).toBe("resource flow");
+    await expect(sessionStore.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
   it("invokes the shared completion boundary exactly once for direct execution", async () => {
     const complete = vi.fn<ControlledCompletionObserver["complete"]>(async ({ result }) => result);
     const runtime = createAgentTurnRuntime({
@@ -841,12 +1286,13 @@ describe("AgentTurnRuntime controlled path", () => {
       now
     });
 
-    await runtime.handleTextTurn({
+    const result = await runtime.handleTextTurn({
       profile: profile(),
       event: event("下一場服事"),
       requestId: "direct-completion"
     });
 
+    expect(result?.executedAction).toBe("query_schedule");
     expect(complete).toHaveBeenCalledOnce();
     expect(complete).toHaveBeenCalledWith(
       expect.objectContaining({ action: "query_schedule", durationMs: expect.any(Number) })
@@ -887,5 +1333,261 @@ describe("AgentTurnRuntime controlled path", () => {
     expect(complete).toHaveBeenCalledWith(
       expect.objectContaining({ action: "save_memory", durationMs: expect.any(Number) })
     );
+  });
+
+  it("reauthorizes a restricted pending function before its continuation handler", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const saveMemory = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "已保存"
+    });
+    await sessionStore.set({
+      id: "pending-restricted",
+      type: "pending_function",
+      action: "save_memory",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      arguments: { content: "測試" },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi.fn().mockResolvedValue([]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { save_memory: saveMemory },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_memory: saveMemory }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+    const restrictedProfile = profile(["save_memory"]);
+    restrictedProfile.permissionRequiredFunctions = ["save_memory"];
+
+    const result = await runtime.handleTextTurn({
+      profile: restrictedProfile,
+      event: event("保存"),
+      requestId: "restricted-continuation",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory"]);
+    expect(saveMemory).not.toHaveBeenCalled();
+    expect(result?.replyText).not.toBe("已保存");
+  });
+
+  it("restores an allowed restricted pending function into the continuation profile", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const saveMemory = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "已保存"
+    });
+    await sessionStore.set({
+      id: "pending-restricted-allowed",
+      type: "pending_function",
+      action: "save_memory",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      arguments: { content: "測試" },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi.fn().mockResolvedValue(["save_memory"]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { save_memory: saveMemory },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_memory: saveMemory }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+    const restrictedEffectiveProfile = profile([]);
+    restrictedEffectiveProfile.permissionRequiredFunctions = ["save_memory"];
+
+    const result = await runtime.handleTextTurn({
+      profile: restrictedEffectiveProfile,
+      event: event("保存"),
+      requestId: "restricted-continuation-allowed",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory"]);
+    expect(saveMemory).toHaveBeenCalledOnce();
+    expect(result?.replyText).toBe("已保存");
+  });
+
+  it("reauthorizes an unlisted configured write continuation and propagates Account admin authority", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const saveMemory = vi.fn<FunctionHandler>().mockImplementation(async (_arguments, context) => ({
+      ok: true,
+      replyText: context.requesterIsAdmin ? "admin saved" : "missing admin"
+    }));
+    await sessionStore.set({
+      id: "pending-unlisted-admin-write",
+      type: "pending_function",
+      action: "save_memory",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      arguments: { content: "測試", confirm: true },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi.fn().mockResolvedValue(["save_memory"]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { save_memory: saveMemory },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_memory: saveMemory }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+
+    const effectiveProfile = profile([]);
+    effectiveProfile.permissionRequiredFunctions = [];
+    const result = await runtime.handleTextTurn({
+      profile: effectiveProfile,
+      configuredFunctions: ["query_schedule", "save_memory"],
+      event: event("保存"),
+      requestId: "unlisted-admin-write-continuation",
+      authorizeFunctions,
+      accountAdministrator: () => true
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory"]);
+    expect(saveMemory).toHaveBeenCalledOnce();
+    expect(result?.replyText).toBe("admin saved");
+  });
+
+  it("keeps an unlisted configured write continuation closed when Account denies it", async () => {
+    const sessionStore = new InMemorySessionStore({ now });
+    const saveMemory = vi.fn<FunctionHandler>().mockResolvedValue({
+      ok: true,
+      replyText: "unsafe"
+    });
+    await sessionStore.set({
+      id: "pending-unlisted-denied-write",
+      type: "pending_function",
+      action: "save_memory",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      arguments: { content: "測試", confirm: true },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const authorizeFunctions = vi.fn().mockResolvedValue([]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: { save_memory: saveMemory },
+      textMessageHandlers: {
+        pending_function: createPendingFunctionTextMessageHandler({
+          sessionStore,
+          functions: { save_memory: saveMemory }
+        })
+      },
+      sessionStore,
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+
+    const effectiveProfile = profile([]);
+    effectiveProfile.permissionRequiredFunctions = [];
+    await runtime.handleTextTurn({
+      profile: effectiveProfile,
+      configuredFunctions: ["query_schedule", "save_memory"],
+      event: event("保存"),
+      requestId: "unlisted-denied-write-continuation",
+      authorizeFunctions,
+      accountAdministrator: () => false
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_memory"]);
+    expect(saveMemory).not.toHaveBeenCalled();
+  });
+
+  it("authorizes a capability-owned text entrance before matching its handler", async () => {
+    const activation = vi.fn().mockResolvedValue({ ok: true, replyText: "請上傳檔案" });
+    const authorizeFunctions = vi.fn().mockResolvedValue(["save_resource"]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {
+        upload_activation: {
+          turnStage: "attachment",
+          capability: "save_resource",
+          matches: (_request, context) =>
+            context.profile.enabledFunctions.includes("save_resource"),
+          handle: activation
+        }
+      },
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+    const restrictedEffectiveProfile = profile([]);
+    restrictedEffectiveProfile.permissionRequiredFunctions = ["save_resource"];
+
+    const result = await runtime.handleTextTurn({
+      profile: restrictedEffectiveProfile,
+      event: event("小哈我要上傳檔案"),
+      requestId: "restricted-text-entrance",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_resource"]);
+    expect(activation).toHaveBeenCalledOnce();
+    expect(result?.replyText).toBe("請上傳檔案");
+  });
+
+  it("fails a denied capability-owned text entrance closed", async () => {
+    const activation = vi.fn().mockResolvedValue({ ok: true, replyText: "請上傳檔案" });
+    const authorizeFunctions = vi.fn().mockResolvedValue([]);
+    const runtime = createAgentTurnRuntime({
+      functionRegistry: {},
+      textMessageHandlers: {
+        upload_activation: {
+          turnStage: "attachment",
+          capability: "save_resource",
+          matches: (_request, context) =>
+            context.profile.enabledFunctions.includes("save_resource"),
+          handle: activation
+        }
+      },
+      inFlightStore: new MemoryInFlightStore(),
+      lastErrorStore: new InMemoryLastErrorStore(10),
+      lastRouteStore: new InMemoryLastRouteStore(10),
+      now
+    });
+    const restrictedEffectiveProfile = profile([]);
+    restrictedEffectiveProfile.permissionRequiredFunctions = ["save_resource"];
+
+    await runtime.handleTextTurn({
+      profile: restrictedEffectiveProfile,
+      event: event("小哈我要上傳檔案"),
+      requestId: "restricted-text-entrance-denied",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledWith(["save_resource"]);
+    expect(activation).not.toHaveBeenCalled();
   });
 });

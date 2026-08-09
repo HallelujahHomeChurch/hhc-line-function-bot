@@ -399,6 +399,7 @@ function kernelProfile(): BotProfileConfig {
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions: ["save_resource"],
+    permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },

@@ -1,4 +1,7 @@
-import { renderCapabilityHelp } from "./application/capabilities/capability-presenters.js";
+import {
+  type AccountSurfacePresentation,
+  renderCapabilityHelp
+} from "./application/capabilities/capability-presenters.js";
 import type { EffectiveCapabilityProjection } from "./application/capabilities/effective-capability-projection.js";
 import type { FunctionExecutionResult } from "./types.js";
 import type { BotProfileConfig } from "./types.js";
@@ -9,6 +12,7 @@ interface IntroReplyOptions {
   force?: boolean;
   variant?: IntroVariant;
   profile?: Pick<BotProfileConfig, "identityLine" | "allowedProviders">;
+  account?: AccountSurfacePresentation;
 }
 
 const identityTriggers = ["小哈", "小哈?", "小哈？", "小哈是誰", "小哈你是誰", "你是誰"];
@@ -33,9 +37,7 @@ export function createIntroReply(
   rawText: string,
   options: IntroReplyOptions = {}
 ): FunctionExecutionResult | undefined {
-  const normalized = normalizeIntroText(rawText);
-  const addressed = stripWakeAddress(normalized);
-  const variant = options.variant ?? introVariantFor(normalized) ?? introVariantFor(addressed);
+  const variant = options.variant ?? introVariantForText(rawText);
   if (!options.force && !variant) {
     return undefined;
   }
@@ -47,7 +49,12 @@ export function createIntroReply(
       replyText: options.profile?.identityLine ?? "我是小哈，家教會的小幫手。"
     };
   }
-  return renderCapabilityHelp(projection, "introduction", options.profile);
+  return renderCapabilityHelp(projection, "introduction", options.profile, options.account);
+}
+
+export function introVariantForText(rawText: string): IntroVariant | undefined {
+  const normalized = normalizeIntroText(rawText);
+  return introVariantFor(normalized) ?? introVariantFor(stripWakeAddress(normalized));
 }
 
 function introVariantFor(normalized: string): IntroVariant | undefined {

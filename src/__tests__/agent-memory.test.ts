@@ -24,7 +24,8 @@ function profile(): BotProfileConfig {
     groupRequireWakeWord: true,
     wakeKeywords: ["小哈"],
     acceptMention: true,
-    enabledFunctions: ["find_ppt_slides", "find_sheet_music", "save_memory", "retrieve_memory"]
+    enabledFunctions: ["find_ppt_slides", "find_sheet_music", "save_memory", "retrieve_memory"],
+    permissionRequiredFunctions: []
   };
 }
 
@@ -502,10 +503,16 @@ describe("agent memory", () => {
     });
   });
 
-  it("lists and forgets external resource memories through memory commands", async () => {
+  it("keeps text-memory commands isolated from resource and schedule records", async () => {
     const now = new Date("2026-07-08T00:00:00.000Z");
     const store = new InMemoryAgentMemoryStore({ now: () => now });
     const runtime = createAgentRuntime({ memoryStore: store, now: () => now });
+    const textMemory = await store.saveTextMemory({
+      profileName: "helper",
+      source: context().event.source,
+      createdBy: "U1",
+      content: "主日導播是知樂"
+    });
     const resource = await store.recordResource({
       profileName: "helper",
       source: { type: "group", groupId: "C1", userId: "U1" },
@@ -516,17 +523,32 @@ describe("agent memory", () => {
       storage: { provider: "external_link", url: "https://example.com/youth" },
       expiresAt: "2026-08-08T00:00:00.000Z"
     });
+    const schedule = await store.saveScheduleMemory({
+      profileName: "helper",
+      source: context().event.source,
+      createdBy: "U1",
+      scheduleType: "morning_prayer_family",
+      title: "晨更家族服事表",
+      originalText: "7/21 黃弘家族1",
+      entries: [
+        {
+          serviceDate: "2026-07-21",
+          meetingName: "晨更",
+          role: "服事家族",
+          assignee: "黃弘家族1"
+        }
+      ]
+    });
 
-    await expect(
-      runtime.handleCommand({ text: "/memories", context: context(), isAdmin: false })
-    ).resolves.toMatchObject({
-      replyText: expect.stringContaining("青年聚會投影片")
+    const listed = await runtime.handleCommand({
+      text: "/memories",
+      context: context(),
+      isAdmin: false
     });
-    await expect(
-      runtime.handleCommand({ text: "/memory-status", context: context(), isAdmin: true })
-    ).resolves.toMatchObject({
-      replyText: expect.stringContaining("externalResources: 1")
-    });
+    expect(listed?.replyText).toContain("主日導播是知樂");
+    expect(listed?.replyText).not.toContain("青年聚會投影片");
+    expect(listed?.replyText).not.toContain("黃弘家族1");
+
     await expect(
       runtime.handleCommand({
         text: `/forget-memory ${resource.id}`,
@@ -534,8 +556,44 @@ describe("agent memory", () => {
         isAdmin: false
       })
     ).resolves.toMatchObject({
-      replyText: "已移除這段記憶。"
+      replyText: "找不到這段記憶。"
     });
+    await expect(
+      store.searchResources({
+        profileName: "helper",
+        source: context().event.source,
+        requesterUserId: "U1",
+        resourceTypes: ["ppt_slide"]
+      })
+    ).resolves.toMatchObject([{ id: resource.id }]);
+
+    await expect(
+      runtime.handleCommand({
+        text: `/forget-memory ${schedule.id}`,
+        context: context(),
+        isAdmin: false
+      })
+    ).resolves.toMatchObject({
+      replyText: "找不到這段記憶。"
+    });
+    await expect(store.listScheduleMemories({ profileName: "helper" })).resolves.toMatchObject([
+      { id: schedule.id }
+    ]);
+
+    await expect(
+      runtime.handleCommand({
+        text: `/forget-memory ${textMemory.id}`,
+        context: context(),
+        isAdmin: false
+      })
+    ).resolves.toMatchObject({ replyText: "已移除這段記憶。" });
+    await expect(
+      store.listTextMemories({
+        profileName: "helper",
+        source: context().event.source,
+        requesterUserId: "U1"
+      })
+    ).resolves.toEqual([]);
   });
 
   it("maps external link resources from the Postgres memory store", async () => {

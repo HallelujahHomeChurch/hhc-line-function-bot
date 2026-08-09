@@ -77,12 +77,150 @@ export const SECURITY_AND_STATE_KERNEL_CASES: KernelAcceptanceCase[] = [
     "write_safety_bypass",
     accountLoginDirectPolicy
   ),
+  accountPermissionCandidateCase(),
+  accountAdminWriteOutsideReadProjectionCase(),
   safetyCase(
     "kernel-v1/state/replica-scope-key-stable@1",
     "replica_state_divergence",
     stableRequesterScope
   )
 ];
+
+function accountAdminWriteOutsideReadProjectionCase(): KernelAcceptanceCase {
+  const id = "kernel-v1/write/account-admin-outside-read-projection@1";
+  const recurrenceFamily: RecurrenceFamily = "write_safety_bypass";
+  return {
+    id,
+    version: 1,
+    journey: "write",
+    recurrenceFamily,
+    boundary: "candidate_generation",
+    async run(context) {
+      let authorizationCalls = 0;
+      let authorizedResponse: readonly FunctionName[] | undefined;
+      let plannerCalls = 0;
+      let executions = 0;
+      const harness = createKernelRuntimeHarness({
+        now: context.now,
+        profile: kernelProfile(["query_schedule"]),
+        configuredFunctions: ["query_schedule", "save_memory"],
+        functionRegistry: {
+          save_memory: async () => {
+            executions += 1;
+            return {
+              ok: true,
+              replyText: "已保存",
+              agentResult: { status: "success", replyText: "已保存" }
+            };
+          }
+        },
+        planner: {
+          propose: async () => {
+            plannerCalls += 1;
+            return {
+              status: "proposed",
+              version: 1,
+              disposition: "execute",
+              capability: "save_memory",
+              arguments: { content: "主日音控是小明" },
+              confidence: 0.99,
+              provider: "deepseek",
+              attempts: []
+            };
+          }
+        },
+        authorizeFunctions: async (requested) => {
+          if (!authorizedResponse) {
+            authorizationCalls += 1;
+            authorizedResponse = requested.includes("save_memory") ? ["save_memory"] : [];
+          }
+          return authorizedResponse.filter((functionName) => requested.includes(functionName));
+        },
+        accountAdministrator: () => true
+      });
+      const [result] = await harness.runTurns([
+        {
+          text: "幫我記住主日音控是小明",
+          requesterUserId: "U_SYNTHETIC_ADMIN",
+          requestId: id
+        }
+      ]);
+      const passed =
+        authorizationCalls === 1 &&
+        plannerCalls === 1 &&
+        executions === 1 &&
+        result?.resultStatus === "success";
+      return {
+        ...observation(id, recurrenceFamily, passed, result?.elapsedMs ?? 9_000),
+        boundary: "candidate_generation",
+        failureCode: passed ? undefined : "account_admin_write_outside_read_projection",
+        securityViolations: passed ? [] : ["unauthorized_write"]
+      };
+    }
+  };
+}
+
+function accountPermissionCandidateCase(): KernelAcceptanceCase {
+  const id = "kernel-v1/write/account-permission-before-planner@1";
+  const recurrenceFamily: RecurrenceFamily = "write_safety_bypass";
+  return {
+    id,
+    version: 1,
+    journey: "write",
+    recurrenceFamily,
+    boundary: "candidate_generation",
+    async run(context) {
+      let authorizationCalls = 0;
+      let plannerCalls = 0;
+      let executions = 0;
+      const profile = kernelProfile(["query_schedule"]);
+      profile.permissionRequiredFunctions = ["query_schedule"];
+      const harness = createKernelRuntimeHarness({
+        now: context.now,
+        profile,
+        functionRegistry: {
+          query_schedule: async () => {
+            executions += 1;
+            return { ok: true, replyText: "unsafe" };
+          }
+        },
+        planner: {
+          propose: async () => {
+            plannerCalls += 1;
+            return {
+              status: "proposed",
+              version: 1,
+              disposition: "execute",
+              capability: "query_schedule",
+              arguments: { query: "查主日服事" },
+              confidence: 0.99,
+              provider: "deepseek",
+              attempts: []
+            };
+          }
+        },
+        authorizeFunctions: async () => {
+          authorizationCalls += 1;
+          return [];
+        }
+      });
+      const [result] = await harness.runTurns([
+        {
+          text: "查主日服事",
+          requesterUserId: "U_SYNTHETIC_1",
+          requestId: id
+        }
+      ]);
+      const passed =
+        authorizationCalls === 1 && plannerCalls === 0 && executions === 0 && result !== undefined;
+      return {
+        ...observation(id, recurrenceFamily, passed, result?.elapsedMs ?? 9_000),
+        boundary: "candidate_generation",
+        securityViolations: passed ? [] : ["unauthorized_read"]
+      };
+    }
+  };
+}
 
 async function accountLoginDirectPolicy(): Promise<boolean> {
   const profile = kernelProfile([]);
@@ -426,6 +564,7 @@ function kernelProfile(enabledFunctions: FunctionName[]): BotProfileConfig {
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions,
+    permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
     controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },

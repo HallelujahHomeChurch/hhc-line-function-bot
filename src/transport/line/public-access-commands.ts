@@ -2,12 +2,15 @@ import type { RegistrationInviteCodeStore } from "../../access/registration-invi
 import type { AccessStore } from "../../access/types.js";
 import type { EffectiveAccessContext } from "../../application/access/effective-access.js";
 import {
+  type AccountSurfacePresentation,
+  renderAccountIdentity,
   renderCapabilityHelp,
   renderRegistrationCompletion
 } from "../../application/capabilities/capability-presenters.js";
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import { messages } from "../../messages.js";
 import { emitProductEvent } from "../../observability/product-events.js";
+import { matchNaturalLanguageSystemActionHint } from "../../actions/catalog.js";
 import type {
   AdminHandlerRegistry,
   BotProfileConfig,
@@ -58,19 +61,20 @@ export async function handlePublicAccessCommand(input: {
   event: LineEvent;
   accessStore: AccessStore;
   registrationInviteCodeStore: RegistrationInviteCodeStore;
-  lineIdentity: LineIdentityClient;
+  lineIdentity?: LineIdentityClient;
   adminHandlers: AdminHandlerRegistry;
   productContext: ProductEventContext;
   requesterIsAdmin: boolean;
+  account?: AccountSurfacePresentation;
+  accountAllowedFunctions?: BotProfileConfig["enabledFunctions"];
+  startAccountLogin?(): Promise<{ bindingUrl: string }>;
   policies: PublicAccessCommandPolicies;
   resolveCurrentAccess(): Promise<EffectiveAccessContext>;
 }): Promise<FunctionExecutionResult | undefined> {
   const parsed = input.policies.parseCommand(input.text);
-  if (!parsed) {
-    return undefined;
-  }
-  if (parsed.command === "help") {
-    if (parsed.args[0]?.toLowerCase() === "admin") {
+  const systemAction = matchNaturalLanguageSystemActionHint(input.text);
+  if (systemAction === "show_help" || parsed?.command === "help") {
+    if (parsed?.args[0]?.toLowerCase() === "admin") {
       if (
         !(await input.policies.adminAllowed(
           input.profile,
@@ -87,13 +91,27 @@ export async function handlePublicAccessCommand(input: {
       };
     }
     const context = await input.resolveCurrentAccess();
+    const help = renderCapabilityHelp(
+      projectEffectiveCapabilities({ context }),
+      "help",
+      input.profile,
+      input.event.source.type === "user" ? input.account : undefined,
+      { sourceType: context.sourceType, authorized: context.authorized }
+    );
     return context.authorized
-      ? renderCapabilityHelp(projectEffectiveCapabilities({ context }), "help", input.profile)
-      : { ok: true, replyText: registrationPrompt(input.profile, input.event) };
+      ? help
+      : {
+          ...help,
+          replyText: [registrationPrompt(input.profile, input.event), "", help.replyText].join("\n")
+        };
   }
-  if (parsed.command === "whoami") {
+  if (systemAction === "show_account" || parsed?.command === "whoami") {
     return handleWhoamiCommand(input);
   }
+  if (systemAction === "account_login") {
+    return handleLoginCommand(input);
+  }
+  if (!parsed) return undefined;
   if (parsed.command !== "registry") {
     return undefined;
   }
@@ -103,23 +121,50 @@ export async function handlePublicAccessCommand(input: {
 async function handleWhoamiCommand(
   input: Parameters<typeof handlePublicAccessCommand>[0]
 ): Promise<FunctionExecutionResult> {
-  const userId = input.event.source.userId ?? "(none)";
-  const groupId = input.event.source.groupId ?? "(none)";
-  return {
-    ok: true,
-    replyText: [
-      "Who am I",
-      `profile: ${input.profile.name}`,
-      `source: ${input.event.source.type}`,
-      `userId: ${userId}`,
-      `groupId: ${groupId}`,
-      `directPolicy: ${input.policies.directAccessPolicy(input.profile)}`,
-      `groupPolicy: ${input.policies.groupAccessPolicy(input.profile)}`,
-      `admin: ${input.requesterIsAdmin}`,
-      `userAllowed: ${await input.policies.isDirectUserAllowed(input.profile, input.event.source.userId, input.accessStore, input.requesterIsAdmin)}`,
-      `groupAllowed: ${await input.policies.isGroupAllowed(input.profile, input.event.source.groupId, input.accessStore)}`
-    ].join("\n")
-  };
+  if (input.event.source.type !== "user") {
+    return { ok: true, replyText: "請在 1 對 1 對話中查看 HHC 帳戶資訊。" };
+  }
+  const account = input.account ?? { status: "disabled" as const };
+  const context = await input.resolveCurrentAccess();
+  return renderAccountIdentity(
+    account,
+    projectEffectiveCapabilities({
+      context: {
+        ...context,
+        authorized: true,
+        profile: { ...context.profile, enabledFunctions: input.accountAllowedFunctions ?? [] }
+      }
+    })
+  );
+}
+
+async function handleLoginCommand(
+  input: Parameters<typeof handlePublicAccessCommand>[0]
+): Promise<FunctionExecutionResult> {
+  if (input.event.source.type !== "user") {
+    return { ok: true, replyText: "請在 1 對 1 對話中登入 HHC 帳戶。" };
+  }
+  switch (input.account?.status) {
+    case "active":
+      return { ok: true, replyText: "你的 HHC 帳戶已連結。傳送「我是誰」查看帳戶資訊。" };
+    case "inactive":
+      return { ok: true, replyText: "你的 HHC 帳戶目前無法使用，請聯絡管理同工協助。" };
+    case "unavailable":
+      return { ok: true, replyText: "目前無法確認帳戶狀態，請稍後再試。" };
+    case "disabled":
+    case undefined:
+      return { ok: true, replyText: "這個 bot 目前沒有開放 HHC 帳戶登入。" };
+    case "unbound":
+      break;
+  }
+  try {
+    const binding = await input.startAccountLogin?.();
+    return binding
+      ? { ok: true, replyText: `登入／綁定 HHC 帳戶：\n${binding.bindingUrl}` }
+      : { ok: false, replyText: "目前無法開始帳戶登入／綁定，請稍後再試。" };
+  } catch {
+    return { ok: false, replyText: "目前無法開始帳戶登入／綁定，請稍後再試。" };
+  }
 }
 
 async function handleRegistryCommand(
@@ -247,9 +292,10 @@ export function registrationPrompt(profile: BotProfileConfig, event: LineEvent):
 }
 
 async function resolveUserRegistrationDisplayName(
-  lineIdentity: LineIdentityClient,
+  lineIdentity: LineIdentityClient | undefined,
   userId: string
 ): Promise<string | undefined> {
+  if (!lineIdentity) return undefined;
   try {
     return nonBlank(await lineIdentity.getUserDisplayName(userId));
   } catch {
@@ -258,9 +304,10 @@ async function resolveUserRegistrationDisplayName(
 }
 
 async function resolveGroupRegistrationDisplayName(
-  lineIdentity: LineIdentityClient,
+  lineIdentity: LineIdentityClient | undefined,
   groupId: string
 ): Promise<string | undefined> {
+  if (!lineIdentity) return undefined;
   try {
     return nonBlank(await lineIdentity.getGroupDisplayName(groupId));
   } catch {

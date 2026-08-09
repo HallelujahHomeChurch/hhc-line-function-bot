@@ -19,6 +19,7 @@ function profile(registrationEnabled = true): BotProfileConfig {
     wakeKeywords: ["小哈"],
     acceptMention: true,
     enabledFunctions: ["find_ppt_slides"],
+    permissionRequiredFunctions: [],
     adminUserId: "Uroot",
     adminDirectOnly: true,
     directAccessPolicy: "managed",
@@ -121,7 +122,7 @@ describe("admin action registry", () => {
     expect(result.replyText).toContain("/registry ADMINCODE");
   });
 
-  it("grants and revokes current-group function scopes from routed arguments", async () => {
+  it("rejects retired current-group function scope actions", async () => {
     const accessStore = new InMemoryAccessStore();
     const registry = createAdminActionRegistry({
       accessStore,
@@ -155,26 +156,13 @@ describe("admin action registry", () => {
     });
 
     await expect(accessStore.listGroupFunctionGrants("helper", "Cmain")).resolves.toEqual([]);
-    expect(grant.replyText).toContain("find_sheet_music");
-    expect(list.replyText).toContain("group-grants: find_sheet_music");
-    expect(revoke.replyText).toContain("find_sheet_music");
-    expect(accessStore.audit).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          action: "access.function.grant",
-          targetId: "Cmain",
-          metadata: { functionName: "find_sheet_music" }
-        }),
-        expect.objectContaining({
-          action: "access.function.revoke",
-          targetId: "Cmain",
-          metadata: { functionName: "find_sheet_music" }
-        })
-      ])
-    );
+    expect(grant.replyText).toContain("HHC 帳戶統一管理");
+    expect(list.replyText).toContain("HHC 帳戶統一管理");
+    expect(revoke.replyText).toContain("HHC 帳戶統一管理");
+    expect(accessStore.audit).toEqual([]);
   });
 
-  it("grants and revokes user function scopes from routed arguments", async () => {
+  it("rejects retired user function scope actions", async () => {
     const accessStore = new InMemoryAccessStore();
     const registry = createAdminActionRegistry({
       accessStore,
@@ -217,30 +205,14 @@ describe("admin action registry", () => {
     });
 
     await expect(accessStore.listUserFunctionGrants("helper", "Uwriter")).resolves.toEqual([]);
-    expect(grant.replyText).toContain("save_schedule");
-    expect(grant.replyText).toContain("user: Uwriter");
-    expect(list.replyText).toContain("user-grants: save_schedule");
-    expect(revoke.replyText).toContain("save_schedule");
-    expect(accessStore.audit).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          action: "access.function.user.grant",
-          targetType: "user",
-          targetId: "Uwriter",
-          metadata: { functionName: "save_schedule" }
-        }),
-        expect.objectContaining({
-          action: "access.function.user.revoke",
-          targetType: "user",
-          targetId: "Uwriter",
-          metadata: { functionName: "save_schedule" }
-        })
-      ])
-    );
+    expect(grant.replyText).toContain("HHC 帳戶統一管理");
+    expect(list.replyText).toContain("HHC 帳戶統一管理");
+    expect(revoke.replyText).toContain("HHC 帳戶統一管理");
+    expect(accessStore.audit).toEqual([]);
   });
 
   it.each(["save_schedule", "save_memory"])(
-    "rejects a group-wide grant for user-scoped write function %s",
+    "rejects retired group-wide grant action for %s",
     async (functionName) => {
       const accessStore = new InMemoryAccessStore();
       const registry = createAdminActionRegistry({
@@ -260,7 +232,7 @@ describe("admin action registry", () => {
         arguments: { functionName }
       });
 
-      expect(result.replyText).toContain("只能開放給指定使用者");
+      expect(result.replyText).toContain("HHC 帳戶統一管理");
       await expect(accessStore.listGroupFunctionGrants("helper", "Cmain")).resolves.toEqual([]);
       expect(accessStore.audit).toEqual([]);
     }

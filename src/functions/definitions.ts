@@ -13,6 +13,7 @@ import {
 } from "../function-arguments.js";
 import { downloadWeeklyPaperDefinition } from "../capabilities/download-weekly-paper.js";
 import { queryScheduleDefinition } from "../capabilities/query-schedule/definition.js";
+import { updateOwnProfileDefinition } from "../capabilities/update-own-profile/definition.js";
 import type { AgentResourceType, FunctionName } from "../types.js";
 
 export type FunctionSideEffectLevel = "read" | "write" | "admin" | "destructive";
@@ -80,6 +81,7 @@ export interface AgentCapabilityHandoff {
 
 export interface AgentCapabilityContract {
   intents: string[];
+  exactIntents?: boolean;
   candidateHints: string[];
   semanticDescription: string;
   arguments?: Record<string, AgentArgumentContract>;
@@ -140,6 +142,7 @@ export interface FunctionDefinition {
 
 export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
   downloadWeeklyPaperDefinition,
+  updateOwnProfileDefinition,
   {
     name: "find_ppt_slides",
     displayName: "查投影片",

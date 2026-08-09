@@ -36,6 +36,176 @@ function createRouter(planner: AgentPlanner, knowledgeMetadata?: DynamicKnowledg
 }
 
 describe("ControlledAgentRouter", () => {
+  it("collects an authorized exact own-profile intent provider-free", async () => {
+    const completeJson = vi.fn();
+    const authorizeCandidates = vi.fn().mockResolvedValue(["update_own_profile"]);
+    const planner = createAgentPlanner({
+      primary: { providerName: "deepseek", completeJson },
+      providersEnabledForProfile: () => false
+    });
+
+    await expect(
+      createRouter(planner).resolve({
+        profileName: "main",
+        text: "/profile",
+        enabledFunctions: ["download_weekly_paper"],
+        permissionRequiredFunctions: ["update_own_profile"],
+        authorizeCandidates,
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toEqual({
+      disposition: "collect",
+      capability: "update_own_profile",
+      arguments: {},
+      missingSlot: "firstName",
+      reasonCode: "missing_required_slot"
+    });
+    expect(authorizeCandidates).toHaveBeenCalledWith(["update_own_profile"]);
+    expect(completeJson).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["denied", "user" as const, vi.fn().mockResolvedValue([])],
+    ["group", "group" as const, vi.fn().mockResolvedValue(["update_own_profile"])]
+  ])(
+    "does not collect own-profile fields when %s",
+    async (_case, sourceType, authorizeCandidates) => {
+      const completeJson = vi.fn();
+      const planner = createAgentPlanner({
+        primary: { providerName: "deepseek", completeJson },
+        providersEnabledForProfile: () => false
+      });
+
+      const result = await createRouter(planner).resolve({
+        profileName: "main",
+        text: "/profile",
+        enabledFunctions: ["download_weekly_paper"],
+        permissionRequiredFunctions: ["update_own_profile"],
+        authorizeCandidates,
+        sourceType,
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      });
+
+      expect(result).not.toMatchObject({
+        disposition: "collect",
+        capability: "update_own_profile"
+      });
+      expect(completeJson).not.toHaveBeenCalled();
+    }
+  );
+
+  it("removes denied permission-required candidates before planner input", async () => {
+    const propose = vi.fn<AgentPlanner["propose"]>();
+    const authorizeCandidates = vi.fn().mockResolvedValue([]);
+
+    await expect(
+      createRouter({ propose }).resolve({
+        profileName: "main",
+        text: "查主日服事",
+        enabledFunctions: ["query_schedule"],
+        permissionRequiredFunctions: ["query_schedule"],
+        authorizeCandidates,
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toEqual({ disposition: "deny", reasonCode: "function_disabled" });
+    expect(authorizeCandidates).toHaveBeenCalledWith(["query_schedule"]);
+    expect(propose).not.toHaveBeenCalled();
+  });
+
+  it("does not authorize unrelated public candidates", async () => {
+    const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+      status: "no_plan",
+      reasonCode: "providers_disabled",
+      attempts: []
+    });
+    const authorizeCandidates = vi.fn();
+
+    await createRouter({ propose }).resolve({
+      profileName: "main",
+      text: "下載第 1733 期週報",
+      enabledFunctions: ["download_weekly_paper", "query_schedule"],
+      permissionRequiredFunctions: ["query_schedule"],
+      authorizeCandidates,
+      sourceType: "user",
+      maxCandidates: 3,
+      minPlannerConfidence: 0.65
+    });
+
+    expect(authorizeCandidates).not.toHaveBeenCalled();
+  });
+
+  it("discovers and authorizes a permission-required write outside the public read projection", async () => {
+    const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+      status: "proposed",
+      version: 1,
+      disposition: "execute",
+      capability: "save_memory",
+      arguments: { content: "集合時間是下午兩點半" },
+      confidence: 0.96,
+      provider: "deepseek",
+      attempts: []
+    });
+    const authorizeCandidates = vi.fn().mockResolvedValue(["save_memory"]);
+
+    await expect(
+      createRouter({ propose }).resolve({
+        profileName: "helper",
+        text: "幫我記住集合時間是下午兩點半",
+        enabledFunctions: ["query_schedule"],
+        permissionRequiredFunctions: ["save_memory"],
+        authorizeCandidates,
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toMatchObject({
+      disposition: "execute",
+      capability: "save_memory",
+      arguments: { content: "集合時間是下午兩點半" }
+    });
+    expect(authorizeCandidates).toHaveBeenCalledWith(["save_memory"]);
+    expect(propose).toHaveBeenCalledOnce();
+  });
+
+  it("discovers an unlisted configured write outside the public read projection and authorizes it before planning", async () => {
+    const propose = vi.fn<AgentPlanner["propose"]>().mockResolvedValue({
+      status: "proposed",
+      version: 1,
+      disposition: "execute",
+      capability: "save_memory",
+      arguments: { content: "集合時間是下午兩點半" },
+      confidence: 0.96,
+      provider: "deepseek",
+      attempts: []
+    });
+    const authorizeCandidates = vi.fn().mockResolvedValue(["save_memory"]);
+
+    await expect(
+      createRouter({ propose }).resolve({
+        profileName: "helper",
+        text: "幫我記住集合時間是下午兩點半",
+        enabledFunctions: ["query_schedule"],
+        configuredFunctions: ["query_schedule", "save_memory"],
+        permissionRequiredFunctions: [],
+        authorizeCandidates,
+        sourceType: "user",
+        maxCandidates: 3,
+        minPlannerConfidence: 0.65
+      })
+    ).resolves.toMatchObject({
+      disposition: "execute",
+      capability: "save_memory",
+      arguments: { content: "集合時間是下午兩點半" }
+    });
+    expect(authorizeCandidates).toHaveBeenCalledWith(["save_memory"]);
+    expect(propose).toHaveBeenCalledOnce();
+  });
+
   it("emits bounded candidate, planner, and validator diagnostics", async () => {
     const diagnostics: unknown[] = [];
     const planner: AgentPlanner = {

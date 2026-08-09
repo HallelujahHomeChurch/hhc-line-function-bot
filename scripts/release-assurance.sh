@@ -436,6 +436,7 @@ run_release_gates() {
   : "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME:?RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME is required}"
 
   release_wait_for_target || return
+  release_check_account_preflight || return
   release_check_searxng || return
   release_check_job_definition \
     "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" Schedule 900 1 schedule \
@@ -463,6 +464,73 @@ run_release_gates() {
     attachment_scan_job attachment_bootstrap_failed attachment_queue_failed || return
   release_check_recent_catalog_success || return
   release_run_probe || return
+}
+
+release_check_account_preflight() {
+  local command_output
+  local result_json
+  if ! command_output="$(
+    timeout 60s script -q -e -c \
+      "az containerapp exec --resource-group \"${RESOURCE_GROUP}\" --name \"${CONTAINER_APP_NAME}\" --revision \"${RELEASE_TARGET_REVISION}\" --command \"/nodejs/bin/node dist/tools/run-account-deployment-preflight.js\"" \
+      /dev/null 2>&1
+  )"; then
+    fail_release_check account_preflight account_preflight_unavailable network_failed
+    return
+  fi
+  command_output="${command_output//$'\r'/}"
+  result_json="$(
+    printf '%s\n' "${command_output}" |
+      sed -n 's/^ACCOUNT_PREFLIGHT_RESULT=//p' |
+      tail -n 1
+  )"
+  if [[ -z "${result_json}" ]]; then
+    fail_release_check account_preflight account_preflight_malformed malformed_json
+    return
+  fi
+  if ! ACCOUNT_PREFLIGHT_JSON="${result_json}" python3 - <<'PY'
+import json
+import os
+import re
+
+value = json.loads(os.environ["ACCOUNT_PREFLIGHT_JSON"])
+if set(value) != {"status", "functions", "outcomes"}:
+    raise SystemExit(1)
+functions = value["functions"]
+if not isinstance(functions, list) or not functions:
+    raise SystemExit(1)
+names = set()
+for item in functions:
+    if (
+        not isinstance(item, dict)
+        or set(item) != {"name", "outcome"}
+        or not isinstance(item["name"], str)
+        or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item["name"]) is None
+        or item["name"] in names
+        or item["outcome"] not in {"configured", "missing"}
+    ):
+        raise SystemExit(1)
+    names.add(item["name"])
+outcomes = value["outcomes"]
+if (
+    not isinstance(outcomes, dict)
+    or set(outcomes) != {"identityLookup", "binding"}
+    or outcomes["identityLookup"] not in {"unbound", "failed"}
+    or outcomes["binding"] not in {"rejected", "failed"}
+):
+    raise SystemExit(1)
+if (
+    value["status"] != "passed"
+    or any(item["outcome"] != "configured" for item in functions)
+    or outcomes != {"identityLookup": "unbound", "binding": "rejected"}
+):
+    raise SystemExit(2)
+PY
+  then
+    fail_release_check account_preflight account_preflight_failed http_mismatch
+    return
+  fi
+  printf 'ACCOUNT_PREFLIGHT_RESULT=%s\n' "${result_json}"
+  record_release_check account_preflight passed none
 }
 
 release_wait_for_target() {
@@ -1503,6 +1571,9 @@ failure_map = {
     "target_traffic_mismatch": "http_mismatch",
     "bot_ingress_mismatch": "http_mismatch",
     "bot_dapr_mismatch": "http_mismatch",
+    "account_preflight_unavailable": "network_failed",
+    "account_preflight_malformed": "malformed_json",
+    "account_preflight_failed": "http_mismatch",
     "malformed_target_state": "malformed_json",
     "searxng_definition_mismatch": "http_mismatch",
     "refresh_definition_mismatch": "http_mismatch",
@@ -1539,6 +1610,7 @@ check_names = {
     "target_traffic",
     "bot_ingress",
     "bot_dapr",
+    "account_preflight",
     "searxng_deployment",
     "release_probe",
     "catalog_job",

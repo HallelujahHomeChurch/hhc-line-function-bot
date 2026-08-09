@@ -31,12 +31,12 @@ Read these first when starting work:
 - Each profile has its own LINE credential references, access policy, wake-word behavior, enabled functions, and bootstrap `adminUserId`.
 - The intended split is:
   - `helper`: managed direct users, managed groups, registration enabled.
-  - future `main`: public direct users, groups blocked, registration disabled.
+  - `main`: public direct users, groups blocked, registration disabled, provider-free, with public Weekly Paper download and Account-authorized own-profile updates.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
 - `adminUserId` is the single bootstrap superadmin. Legacy `adminUserIds`, `allowedUserIds`, and `allowedGroupIds` should not be reintroduced.
 - Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv`, `channelAccessTokenEnv`, and `adminUserIdEnv`; do not put real LINE credentials or bootstrap user IDs in the file.
 - The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`; use API keys from ACA/local secrets for remote providers.
-- Remote API providers such as `deepseek` are profile-scoped; future `main` official profiles should define their own provider allowlist.
+- Remote API providers such as `deepseek` are profile-scoped; `main` intentionally keeps an empty provider allowlist.
 - Small-talk prompt behavior is profile config, not code personality. Production LLM profiles require `smallTalk.prompting.personaPrompt`, `conversationRulesPrompt`, `safetyRulesPrompt`, and `formatRulesPrompt`; do not add helper persona/safety fallback prompts in code. Keep house-church quote/golden-sentence behavior out of small talk; it should become a separate function if needed.
 
 ## Function Surface
@@ -50,9 +50,10 @@ The first-class functions are:
 - `query_wikipedia`: query Wikipedia for supported factual lookups.
 - `query_knowledge`: query admin-registered, profile-shared Notion knowledge through PostgreSQL full-text plus pgvector retrieval and a grounded LLM answer; do not create travel/SOP-specific variants.
 - `save_schedule`: preview and manage profile-shared structured service schedules with one-year retention.
-- `save_resource`: controlled LINE image/file attachment intake with purpose, validation, ClamAV scanning, confirmation, OneDrive publication, catalog upsert, and audit. It is enabled on `helper`, but write-function policy keeps it admin/explicit-grant only.
-- `save_memory`: explicit 30-day text memory with preview/confirmation. It is enabled on `helper`, but only admins or explicit user grants can write; a granted requester may explicitly create group-visible memory in a registered group.
+- `save_resource`: controlled LINE image/file attachment intake with purpose, validation, ClamAV scanning, confirmation, OneDrive publication, catalog upsert, and audit. It is enabled on `helper`, but write-function policy keeps it Account-admin/permission only.
+- `save_memory`: explicit 30-day text memory with preview/confirmation. It is enabled on `helper`, but only Account-authorized requesters can write and explicitly create group-visible memory in a registered group.
 - `retrieve_memory`: query visible explicit text memories in the current LINE source. It is enabled as a profile-global read function on `helper`.
+- `update_own_profile`: direct-only first/last-name update for the linked caller, using exact intents, generic slot collection, preview, live Account permission recheck, and explicit confirmation. It is enabled only on provider-free `main` and never creates task or memory state.
 - Intro/help behavior is not a normal function execution path; keep it friendly and do not expose implementation details such as OneDrive or Notion to ordinary users.
 - User functions, admin actions, and system actions are separate action kinds. Do not add management behavior to `enabledFunctions`.
 - Admin natural language is direct-chat only. It may route to selected admin actions, currently invite-code creation, after admin identity and source policy checks.
@@ -153,15 +154,10 @@ routers.
 ## Function Scoping
 
 - `profile.enabledFunctions` means profile-global functions for that profile only, not service-global functions.
-- Direct users receive profile-global read functions plus DB-managed `profileName/userId/functionName` grants.
-- Groups receive profile-global read functions plus DB-managed `profileName/groupId/functionName` grants and `profileName/userId/functionName` grants for the requester.
-- User and group grants are additive when the function definition allows that principal type. To make a read function group-only, remove it from `enabledFunctions` and grant it to selected groups with `/function-grant`.
-- Write functions are admin-only by default even when present in `profile.enabledFunctions`. `save_schedule` and `save_memory` are user-grant-only; grant them with `/function-user-grant`. Do not open them through group grants or group role capabilities.
-- A `save_schedule` user grant permits schedule replacement and entry addition from direct chat or a registered group; update/delete operations remain admin-only.
-- A `save_memory` user grant permits private memory and explicitly confirmed group-visible memory in the current registered group. It never records ordinary group chat automatically.
-- Use `/function-grant <functionName> [groupId]`, `/function-revoke <functionName> [groupId]`, and `/function-scopes [groupId]` for group function scope management.
-- Use `/function-user-grant <functionName> <userId>`, `/function-user-revoke <functionName> <userId>`, and `/function-user-scopes <userId>` for user function scope management.
-- In a group, admins can omit `groupId` for those function-scope commands. In direct chat, admins must provide `groupId`.
+- Ordinary requesters receive profile-global read functions not listed in `permissionRequiredFunctions`.
+- Account authorization is the only per-user function expansion. Batch only bounded permission-required candidates and recheck restricted active-task/collection/preview/confirmation continuations before execution.
+- Historical user/group grants and role-capability bindings remain stored for rollback but never expand effective functions.
+- Hide or reject `/function-grant`, `/function-user-grant`, their revoke/list variants, and matching natural-language admin actions. Do not drop the legacy tables.
 
 ## Function Module Contract
 

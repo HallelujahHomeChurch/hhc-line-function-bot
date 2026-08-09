@@ -16,6 +16,8 @@ import {
 import { createControlledCompletionObserver } from "../../../application/turn/completion-observer.js";
 import { InMemoryCatalogStore } from "../../../catalog/store.js";
 import { getFunctionDefinition } from "../../../functions/definitions.js";
+import { createPendingFunctionTextMessageHandler } from "../../../functions/pending-function.js";
+import { createUpdateOwnProfileHandler } from "../../../capabilities/update-own-profile/handler.js";
 import { InMemoryKnowledgeStore } from "../../../knowledge/store.js";
 import { InMemoryScheduleStore } from "../../../schedules/store.js";
 import { InMemorySessionStore } from "../../../state/session-store.js";
@@ -38,7 +40,8 @@ import type {
   KernelBoundary,
   KernelCaseObservation,
   KernelJourney,
-  RecurrenceFamily
+  RecurrenceFamily,
+  SecurityViolation
 } from "../contracts.js";
 import { createKernelRuntimeHarness } from "../runtime-harness.js";
 
@@ -58,11 +61,14 @@ const PROFILE_FUNCTIONS: FunctionName[] = [
 
 export const PRODUCT_EXPERIENCE_KERNEL_CASES: KernelAcceptanceCase[] = [
   discoveryCase("effective-discovery-direct", "direct"),
-  discoveryCase("effective-discovery-group", "group"),
-  discoveryCase("effective-discovery-granted-user", "granted_user"),
+  discoveryCase("effective-discovery-group-local-grant-ignored", "group"),
+  discoveryCase("effective-discovery-user-local-grant-ignored", "granted_user"),
   discoveryCase("effective-discovery-admin", "admin"),
   registrationFirstReadCase(),
   providerFreeWeeklyCase(),
+  providerFreeOwnProfileCase(),
+  ownProfileAuthorityCase(),
+  ownProfileIsolationCase(),
   resultGuidanceClassesCase(),
   branchGroupIsolationCase()
 ];
@@ -108,11 +114,17 @@ function providerFreeWeeklyCase(): KernelAcceptanceCase {
           providersEnabledForProfile: () => false
         })
       });
-      const [result] = await harness.runTurns([
+      const [result, fallback] = await harness.runTurns([
         {
           text: "第1733期週報",
           requesterUserId: REQUESTER,
           requestId: `${id}-turn`,
+          source: { type: "user", userId: REQUESTER }
+        },
+        {
+          text: "我想知道這是什麼",
+          requesterUserId: REQUESTER,
+          requestId: `${id}-fallback`,
           source: { type: "user", userId: REQUESTER }
         }
       ]);
@@ -120,7 +132,8 @@ function providerFreeWeeklyCase(): KernelAcceptanceCase {
         providerCalls === 0 &&
         executions === 1 &&
         result?.resultStatus === "success" &&
-        result.replyText === "第 1733 期週報已準備好。";
+        result.replyText === "第 1733 期週報已準備好。" &&
+        fallback.replyText === "輸入「幫助」查看我可以協助的項目。";
       return observation({
         id,
         boundary: "deterministic_validation",
@@ -131,6 +144,305 @@ function providerFreeWeeklyCase(): KernelAcceptanceCase {
       });
     }
   );
+}
+
+function providerFreeOwnProfileCase(): KernelAcceptanceCase {
+  const id = `${PRODUCT_PREFIX}/provider-free-own-profile-confirmation@1`;
+  return acceptanceCase(
+    id,
+    "write",
+    "pending_write_confirmation_escape",
+    "write_workflow",
+    async (context) => {
+      const sessionStore = new InMemorySessionStore({ now: context.now });
+      const conversations = new InMemoryConversationWindowStore({ now: context.now });
+      let providerCalls = 0;
+      const updates: Array<{
+        lineUserId: string;
+        profileName: string;
+        firstName: string;
+        lastName: string;
+      }> = [];
+      const handler = createUpdateOwnProfileHandler({
+        accountClient: {
+          updateOwnProfile: async (input) => {
+            updates.push(input);
+            return { firstName: input.firstName, lastName: input.lastName };
+          }
+        },
+        sessionStore,
+        now: context.now,
+        requestIdFactory: () => `${id}-confirmation`
+      });
+      const harness = createKernelRuntimeHarness({
+        now: context.now,
+        profile: ownProfileProfile(),
+        configuredFunctions: ["download_weekly_paper", "update_own_profile"],
+        functionRegistry: { update_own_profile: handler },
+        textMessageHandlers: {
+          pending_function: createPendingFunctionTextMessageHandler({
+            sessionStore,
+            functions: { update_own_profile: handler }
+          })
+        },
+        sessionStore,
+        conversationWindowStore: conversations,
+        authorizeFunctions: async (functionNames) => functionNames,
+        planner: createAgentPlanner({
+          primary: {
+            providerName: "deepseek",
+            completeJson: async () => {
+              providerCalls += 1;
+              return "{}";
+            }
+          },
+          providersEnabledForProfile: () => false
+        })
+      });
+      const source = { type: "user" as const, userId: REQUESTER };
+      const results = await harness.runTurns(
+        ["/profile", "Ray", "Self", "確認", "確認"].map((text, index) => ({
+          text,
+          requesterUserId: REQUESTER,
+          requestId: `${id}-${index + 1}`,
+          source
+        }))
+      );
+      const task = await conversations.activeTask({
+        profileName: "main",
+        sourceKey: `user:${REQUESTER}`,
+        requesterUserId: REQUESTER
+      });
+      const traceText = JSON.stringify(results.flatMap(({ trace }) => trace));
+      const passed =
+        providerCalls === 0 &&
+        results[0]?.replyText?.includes("名字") === true &&
+        results[1]?.replyText?.includes("姓氏") === true &&
+        results[2]?.replyText?.includes("Ray Self") === true &&
+        results[2]?.quickReplyLabels.join(",") === "確認,取消" &&
+        results[3]?.replyText === "姓名已更新：Ray Self" &&
+        updates.length === 1 &&
+        updates[0]?.lineUserId === REQUESTER &&
+        updates[0]?.profileName === "main" &&
+        updates[0]?.firstName === "Ray" &&
+        updates[0]?.lastName === "Self" &&
+        task === undefined &&
+        !traceText.includes("Ray") &&
+        !traceText.includes("Self");
+      return observation({
+        id,
+        boundary: "write_workflow",
+        recurrenceFamily: "pending_write_confirmation_escape",
+        passed,
+        failureCode: passed ? undefined : "provider_free_own_profile_contract",
+        securityViolations: updates.length > 1 ? ["confirmation_bypass"] : []
+      });
+    }
+  );
+}
+
+function ownProfileAuthorityCase(): KernelAcceptanceCase {
+  const id = `${PRODUCT_PREFIX}/own-profile-live-authority@1`;
+  return acceptanceCase(id, "write", "write_safety_bypass", "entrance_access", async (context) => {
+    const denied = await runOwnProfileAuthorityScenario(context.now, "denied");
+    const revoked = await runOwnProfileAuthorityScenario(context.now, "revoked");
+    const passed = denied && revoked;
+    return observation({
+      id,
+      boundary: "entrance_access",
+      recurrenceFamily: "write_safety_bypass",
+      passed,
+      failureCode: passed ? undefined : "own_profile_authority_contract",
+      securityViolations: passed ? [] : ["unauthorized_write"]
+    });
+  });
+}
+
+async function runOwnProfileAuthorityScenario(
+  now: () => Date,
+  mode: "denied" | "revoked"
+): Promise<boolean> {
+  const sessionStore = new InMemorySessionStore({ now });
+  let providerCalls = 0;
+  let authorityCalls = 0;
+  let updates = 0;
+  const handler = createUpdateOwnProfileHandler({
+    accountClient: {
+      updateOwnProfile: async (input) => {
+        updates += 1;
+        return { firstName: input.firstName, lastName: input.lastName };
+      }
+    },
+    sessionStore,
+    now,
+    requestIdFactory: () => `authority-${mode}`
+  });
+  const harness = createKernelRuntimeHarness({
+    now,
+    profile: ownProfileProfile(),
+    configuredFunctions: ["update_own_profile"],
+    functionRegistry: { update_own_profile: handler },
+    textMessageHandlers: {
+      pending_function: createPendingFunctionTextMessageHandler({
+        sessionStore,
+        functions: { update_own_profile: handler }
+      })
+    },
+    sessionStore,
+    authorizeFunctions: async (functionNames) => {
+      authorityCalls += 1;
+      if (mode === "denied" || authorityCalls > 4) return [];
+      return functionNames;
+    },
+    planner: createAgentPlanner({
+      primary: {
+        providerName: "deepseek",
+        completeJson: async () => {
+          providerCalls += 1;
+          return "{}";
+        }
+      },
+      providersEnabledForProfile: () => false
+    })
+  });
+  const texts = mode === "denied" ? ["/profile"] : ["/profile", "Ray", "Self", "確認"];
+  const results = await harness.runTurns(
+    texts.map((text, index) => ({
+      text,
+      requesterUserId: REQUESTER,
+      requestId: `authority-${mode}-${index}`,
+      source: { type: "user" as const, userId: REQUESTER }
+    }))
+  );
+  return (
+    providerCalls === 0 &&
+    updates === 0 &&
+    (mode === "denied"
+      ? !results[0]?.replyText?.includes("名字")
+      : !results.at(-1)?.replyText?.includes("姓名已更新"))
+  );
+}
+
+function ownProfileIsolationCase(): KernelAcceptanceCase {
+  const id = `${PRODUCT_PREFIX}/own-profile-scope-and-disabled-profile@1`;
+  return acceptanceCase(
+    id,
+    "write",
+    "group_requester_scope_leak",
+    "write_workflow",
+    async (context) => {
+      const sessionStore = new InMemorySessionStore({ now: context.now });
+      let providerCalls = 0;
+      let updates = 0;
+      const handler = createUpdateOwnProfileHandler({
+        accountClient: {
+          updateOwnProfile: async (input) => {
+            updates += 1;
+            return { firstName: input.firstName, lastName: input.lastName };
+          }
+        },
+        sessionStore,
+        now: context.now,
+        requestIdFactory: () => `${id}-pending`
+      });
+      const planner = createAgentPlanner({
+        primary: {
+          providerName: "deepseek",
+          completeJson: async () => {
+            providerCalls += 1;
+            return "{}";
+          }
+        },
+        providersEnabledForProfile: () => false
+      });
+      const mainHarness = createKernelRuntimeHarness({
+        now: context.now,
+        profile: ownProfileProfile(),
+        configuredFunctions: ["update_own_profile"],
+        functionRegistry: { update_own_profile: handler },
+        textMessageHandlers: {
+          pending_function: createPendingFunctionTextMessageHandler({
+            sessionStore,
+            functions: { update_own_profile: handler }
+          })
+        },
+        sessionStore,
+        authorizeFunctions: async (functionNames) => functionNames,
+        planner
+      });
+      const [owner, other, group] = await mainHarness.runTurns([
+        {
+          text: "/profile",
+          requesterUserId: REQUESTER,
+          requestId: `${id}-owner`,
+          source: { type: "user", userId: REQUESTER }
+        },
+        {
+          text: "Ray",
+          requesterUserId: OTHER_REQUESTER,
+          requestId: `${id}-other`,
+          source: { type: "user", userId: OTHER_REQUESTER }
+        },
+        {
+          text: "/profile",
+          requesterUserId: REQUESTER,
+          requestId: `${id}-group`,
+          source: { type: "group", groupId: GROUP_ALPHA, userId: REQUESTER }
+        }
+      ]);
+      const ownerPending = await sessionStore.findPendingFunction({
+        profileName: "main",
+        source: { type: "user", userId: REQUESTER },
+        requesterUserId: REQUESTER,
+        action: "update_own_profile"
+      });
+      const helperHarness = createKernelRuntimeHarness({
+        now: context.now,
+        profile: { ...profile([]), allowedProviders: [], providerPolicy: {} },
+        functionRegistry: {},
+        planner
+      });
+      const [helper] = await helperHarness.runTurns([
+        {
+          text: "/profile",
+          requesterUserId: REQUESTER,
+          requestId: `${id}-helper`,
+          source: { type: "user", userId: REQUESTER }
+        }
+      ]);
+      const passed =
+        providerCalls === 0 &&
+        updates === 0 &&
+        owner?.replyText?.includes("名字") === true &&
+        !other?.replyText?.includes("姓氏") &&
+        !group?.replyText?.includes("名字") &&
+        !helper?.replyText?.includes("名字") &&
+        Boolean(ownerPending);
+      return observation({
+        id,
+        boundary: "write_workflow",
+        recurrenceFamily: "group_requester_scope_leak",
+        passed,
+        failureCode: passed ? undefined : "own_profile_scope_contract",
+        securityViolations: passed ? [] : ["scope_leak"]
+      });
+    }
+  );
+}
+
+function ownProfileProfile(): BotProfileConfig {
+  return {
+    ...profile([]),
+    name: "main",
+    webhookPath: "/api/line/webhook/main",
+    directAccessPolicy: "public",
+    groupAccessPolicy: "blocked",
+    registration: { enabled: false },
+    permissionRequiredFunctions: ["update_own_profile"],
+    allowedProviders: [],
+    providerPolicy: {},
+    generalAgent: { enabled: false, conversationWindowSeconds: 60 }
+  };
 }
 
 type DiscoveryKind = "direct" | "group" | "granted_user" | "admin";
@@ -152,18 +464,18 @@ const expectedDiscovery: Record<DiscoveryKind, ExpectedDiscovery> = {
     omitted: ["查投影片", "記住資訊", "保存檔案"]
   },
   group: {
-    effective: ["find_sheet_music", "query_schedule", "find_ppt_slides"],
-    reads: ["find_ppt_slides", "query_schedule", "find_sheet_music"],
+    effective: ["find_sheet_music", "query_schedule"],
+    reads: ["query_schedule", "find_sheet_music"],
     writes: [],
-    displayed: ["查投影片", "查服事表", "查歌譜"],
-    omitted: ["記住資訊", "保存檔案"]
+    displayed: ["查服事表", "查歌譜"],
+    omitted: ["查投影片", "記住資訊", "保存檔案"]
   },
   granted_user: {
-    effective: ["find_sheet_music", "query_schedule", "save_memory"],
+    effective: ["find_sheet_music", "query_schedule"],
     reads: ["query_schedule", "find_sheet_music"],
-    writes: ["save_memory"],
-    displayed: ["查服事表", "查歌譜", "記住資訊"],
-    omitted: ["查投影片", "保存檔案"]
+    writes: [],
+    displayed: ["查服事表", "查歌譜"],
+    omitted: ["查投影片", "記住資訊", "保存檔案"]
   },
   admin: {
     effective: PROFILE_FUNCTIONS,
@@ -184,11 +496,17 @@ function discoveryCase(slug: string, kind: DiscoveryKind): KernelAcceptanceCase 
       accessStore: fixture.store,
       requesterIsAdmin: kind === "admin"
     });
+    const discoveryProfile = profile(PROFILE_FUNCTIONS);
     const projection = projectEffectiveCapabilities({ context: access });
-    const help = renderCapabilityHelp(projection, "help");
-    const introduction = renderCapabilityHelp(projection, "introduction");
+    const help = renderCapabilityHelp(projection, "help", discoveryProfile, undefined, {
+      sourceType: fixture.event.source.type === "user" ? "user" : "group",
+      authorized: access.authorized
+    });
+    const introduction = renderCapabilityHelp(projection, "introduction", discoveryProfile);
     const expected = expectedDiscovery[kind];
     const publicCommands = ["/registry", "/whoami", "/memories", "/forget-memory"];
+    const expectedCommands =
+      kind === "group" ? [] : kind === "admin" ? ["/whoami", "/forget-memory"] : ["/whoami"];
     const passed =
       access.authorized &&
       sameValues(access.profile.enabledFunctions, expected.effective) &&
@@ -202,9 +520,11 @@ function discoveryCase(slug: string, kind: DiscoveryKind): KernelAcceptanceCase 
       ) &&
       expected.displayed.every((label) => help.replyText.includes(`- ${label}：`)) &&
       expected.omitted.every((label) => !help.replyText.includes(`- ${label}：`)) &&
-      publicCommands.every(
-        (command) => help.replyText.includes(command) && !introduction.replyText.includes(command)
-      ) &&
+      expectedCommands.every((command) => help.replyText.includes(command)) &&
+      publicCommands
+        .filter((command) => !expectedCommands.includes(command))
+        .every((command) => !help.replyText.includes(command)) &&
+      publicCommands.every((command) => !introduction.replyText.includes(command)) &&
       (help.quickReplies?.length ?? 0) <= 3 &&
       sameQuickReplies(help.quickReplies, introduction.quickReplies) &&
       expected.writes.length > 0 === help.replyText.includes("可以保存或更新");
@@ -1128,7 +1448,7 @@ function observation(input: {
   unavailableEligible?: boolean;
   unavailableMisclassified?: boolean;
   failureCode?: string;
-  securityViolations?: Array<"scope_leak">;
+  securityViolations?: SecurityViolation[];
 }): KernelCaseObservation {
   return {
     caseId: input.id,
@@ -1163,6 +1483,7 @@ function profile(enabledFunctions: FunctionName[]): BotProfileConfig {
     wakeKeywords: [],
     acceptMention: true,
     enabledFunctions,
+    permissionRequiredFunctions: [],
     adminUserId: "U_SYNTHETIC_ADMIN",
     adminDirectOnly: true,
     directAccessPolicy: "managed",

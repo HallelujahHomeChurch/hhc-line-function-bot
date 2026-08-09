@@ -16,6 +16,30 @@ export const downloadWeeklyPaperArgumentsSchema = z
     issueNumber: z.number().int().min(1).max(2_147_483_647).optional()
   })
   .strip();
+
+const profileNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .superRefine((value, context) => {
+    if (Array.from(value).length > 255 || /\p{Cc}|[\uD800-\uDFFF]/u.test(value)) {
+      context.addIssue({ code: "custom", message: "invalid profile name" });
+    }
+  });
+
+export type UpdateOwnProfileArgs = {
+  firstName?: string;
+  lastName?: string;
+};
+
+export const updateOwnProfileArgumentsSchema = z
+  .object({
+    firstName: profileNameSchema.optional(),
+    lastName: profileNameSchema.optional(),
+    confirm: z.boolean().optional(),
+    cancel: z.boolean().optional()
+  })
+  .strip();
 export const scheduleTypeSchema = z
   .string()
   .trim()
@@ -251,6 +275,7 @@ export const queryScheduleMemoryArgumentsSchema = z
 
 export type FindPptSlidesArguments = z.infer<typeof findPptSlidesArgumentsSchema>;
 export type DownloadWeeklyPaperArguments = z.infer<typeof downloadWeeklyPaperArgumentsSchema>;
+export type UpdateOwnProfileFunctionArguments = z.infer<typeof updateOwnProfileArgumentsSchema>;
 export type QueryServiceScheduleArguments = z.infer<typeof queryServiceScheduleArgumentsSchema>;
 export type QueryScheduleArguments = z.infer<typeof queryScheduleArgumentsSchema>;
 export type FindPopSheetMusicArguments = z.infer<typeof findPopSheetMusicArgumentsSchema>;
@@ -270,6 +295,7 @@ export function parseFunctionArguments(
 ): JsonRecord | undefined {
   const schema = {
     download_weekly_paper: downloadWeeklyPaperArgumentsSchema,
+    update_own_profile: updateOwnProfileArgumentsSchema,
     find_ppt_slides: findPptSlidesArgumentsSchema,
     query_schedule: queryScheduleArgumentsSchema,
     query_knowledge: queryKnowledgeArgumentsSchema,

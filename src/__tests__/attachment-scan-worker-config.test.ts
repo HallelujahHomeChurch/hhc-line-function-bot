@@ -51,7 +51,12 @@ describe("attachment scan worker config", () => {
         {
           name: "helper",
           channelAccessTokenEnv: "LINE_HELPER_CHANNEL_ACCESS_TOKEN",
-          enabledFunctions: ["save_resource"]
+          enabledFunctions: ["save_resource"],
+          accountLink: {
+            displayName: "小哈",
+            lineIdEnv: "LINE_HELPER_ACCOUNT_ID",
+            providerIdEnv: "LINE_ACCOUNT_PROVIDER_ID"
+          }
         },
         {
           name: "main",
@@ -68,6 +73,7 @@ describe("attachment scan worker config", () => {
         expect(config.profiles).toEqual([
           { name: "helper", channelAccessToken: "line-access-token" }
         ]);
+        expect(JSON.stringify(config)).not.toMatch(/account|providerId|lineId/iu);
       }
     );
   });

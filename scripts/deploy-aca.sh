@@ -22,6 +22,7 @@ required_release_environment=(
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
   ATTACHMENT_SCAN_QUEUE_NAME
   ASSET_API_AUDIENCE
+  LINE_PROVIDER_CONSOLE_VERIFIED_ID
   CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME
   CLAMAV_SIGNATURE_FILE_SHARE_NAME
 )
@@ -227,6 +228,63 @@ if [[ -z "${azure_openai_embedding_endpoint}" \
   exit 1
 fi
 
+bot_env_json="$(az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CONTAINER_APP_NAME}" \
+  --query "properties.template.containers[0].env" \
+  --output json)"
+required_account_presentation_env_names=(
+  LINE_HELPER_ACCOUNT_ID
+  LINE_MAIN_ACCOUNT_ID
+  LINE_ACCOUNT_PROVIDER_ID
+)
+if ! missing_account_presentation_env_names="$(
+  BOT_ENV_JSON="${bot_env_json}" python3 - "${required_account_presentation_env_names[@]}" <<'PY'
+import json
+import os
+import sys
+
+values = {
+    item.get("name"): item.get("value")
+    for item in json.loads(os.environ["BOT_ENV_JSON"])
+    if isinstance(item, dict) and item.get("name")
+}
+for name in sys.argv[1:]:
+    value = values.get(name)
+    if not isinstance(value, str) or not value.strip():
+        print(name)
+PY
+)"; then
+  set_release_failure preflight_failed
+  echo "Could not validate required ACA environment references" >&2
+  exit 1
+fi
+if [[ -n "${missing_account_presentation_env_names}" ]]; then
+  set_release_failure preflight_failed
+  echo "Required ACA environment reference is unavailable: ${missing_account_presentation_env_names%%$'\n'*}" >&2
+  exit 1
+fi
+if ! BOT_ENV_JSON="${bot_env_json}" \
+  LINE_PROVIDER_CONSOLE_VERIFIED_ID="${LINE_PROVIDER_CONSOLE_VERIFIED_ID}" \
+  python3 - <<'PY'
+import json
+import os
+
+values = {
+    item.get("name"): item.get("value")
+    for item in json.loads(os.environ["BOT_ENV_JSON"])
+    if isinstance(item, dict) and item.get("name")
+}
+expected = os.environ["LINE_PROVIDER_CONSOLE_VERIFIED_ID"].strip()
+if not expected or values.get("LINE_ACCOUNT_PROVIDER_ID") != expected:
+    raise SystemExit(1)
+PY
+then
+  set_release_failure preflight_failed
+  echo "LINE Provider Console checkpoint is unavailable or does not match" >&2
+  exit 1
+fi
+
 # Capture every traffic-serving and finite-workload identity before the first
 # production write. Compatible secret/storage reconciliation is inside the
 # same failure boundary even though rollback ownership is workload-scoped.
@@ -251,11 +309,6 @@ az containerapp secret set \
   --output none
 unset azure_openai_embedding_key
 
-bot_env_json="$(az containerapp show \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${CONTAINER_APP_NAME}" \
-  --query "properties.template.containers[0].env" \
-  --output json)"
 bot_secret_names_json="$(az containerapp secret list \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
@@ -462,6 +515,9 @@ env_values = {
     if item.get("name")
 }
 source_env_names = [
+    "LINE_HELPER_ACCOUNT_ID",
+    "LINE_MAIN_ACCOUNT_ID",
+    "LINE_ACCOUNT_PROVIDER_ID",
     "GRAPH_TENANT_ID",
     "GRAPH_CLIENT_ID",
     "GRAPH_DRIVE_ID",

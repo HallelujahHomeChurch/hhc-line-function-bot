@@ -32,7 +32,8 @@ export function projectEffectiveCapabilities(input: {
   context: EffectiveAccessContext;
   definitions?: readonly FunctionDefinition[];
 }): EffectiveCapabilityProjection {
-  const accountLoginAvailable = input.context.sourceType === "user";
+  const accountLoginAvailable =
+    input.context.sourceType === "user" && Boolean(input.context.profile.accountLink);
   if (!input.context.authorized) {
     return emptyProjection(accountLoginAvailable);
   }

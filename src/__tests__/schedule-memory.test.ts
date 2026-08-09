@@ -52,7 +52,8 @@ function profile(): BotProfileConfig {
     groupRequireWakeWord: true,
     wakeKeywords: ["小哈"],
     acceptMention: true,
-    enabledFunctions: ["save_schedule", "query_schedule"]
+    enabledFunctions: ["save_schedule", "query_schedule"],
+    permissionRequiredFunctions: []
   };
 }
 

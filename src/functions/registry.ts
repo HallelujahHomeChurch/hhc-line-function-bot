@@ -1,4 +1,5 @@
 import type { AgentJobStore } from "../agent/jobs.js";
+import type { AccountAdminClient } from "../account/account-admin-client.js";
 import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import type { WikipediaClient } from "../wikipedia/client.js";
@@ -31,6 +32,7 @@ import { createPendingFunctionTextMessageHandler } from "./pending-function.js";
 import { createPendingResolutionTextMessageHandler } from "./pending-resolution.js";
 
 export interface RegistryClients {
+  accountAdminClient?: AccountAdminClient;
   graph?: GraphDriveClient;
   notion?: NotionDatabaseClient;
   sessionStore: SessionStore;
@@ -78,6 +80,7 @@ export function createFunctionRegistries(
   const moduleContext = {
     config,
     clients: {
+      accountAdminClient: clients.accountAdminClient,
       graph: clients.graph,
       notion: clients.notion,
       wikipedia: clients.wikipedia,

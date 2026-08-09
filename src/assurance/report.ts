@@ -37,6 +37,7 @@ export type ReleaseCheckName =
   | "target_traffic"
   | "bot_ingress"
   | "bot_dapr"
+  | "account_preflight"
   | "searxng_deployment"
   | "release_probe"
   | "catalog_job"
@@ -134,6 +135,7 @@ const releaseChecks = new Set<ReleaseCheckName>([
   "target_traffic",
   "bot_ingress",
   "bot_dapr",
+  "account_preflight",
   "searxng_deployment",
   "release_probe",
   "catalog_job",

@@ -78,6 +78,9 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
   }
 
   async execute(input: AdminActionExecutionInput): Promise<FunctionExecutionResult> {
+    if (isRetiredFunctionScopeAction(input.action)) {
+      return retiredFunctionScopeReply();
+    }
     const policy = await evaluateActionPolicy({
       action: input.action,
       profile: input.profile,
@@ -611,6 +614,21 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
       metadata
     });
   }
+}
+
+function isRetiredFunctionScopeAction(action: AdminActionName): boolean {
+  return (
+    action === "function_scope_grant" ||
+    action === "function_scope_revoke" ||
+    action === "function_scope_list"
+  );
+}
+
+function retiredFunctionScopeReply(): FunctionExecutionResult {
+  return {
+    ok: true,
+    replyText: "功能權限已改由 HHC 帳戶統一管理，LINE bot 不再提供本地授權操作。"
+  };
 }
 
 function knowledgeSourceKey(args: JsonRecord | undefined): string | undefined {

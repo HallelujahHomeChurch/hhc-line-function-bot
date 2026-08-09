@@ -396,25 +396,16 @@ export function createFindPopSheetMusicTextMessageHandler(
 
   return {
     turnStage: "resolution",
+    capability: "find_sheet_music",
     matches: async (request, context) =>
       sheetMusicFunctionEnabled(context.profile.enabledFunctions) &&
       (Boolean(
         numericSelectionToIndex(request.text) !== undefined &&
         (await findSheetMusicSelection(options.sessionStore, context))
       ) ||
-        Boolean(await findSheetMusicExternalSearchConsent(options.sessionStore, context)) ||
-        Boolean(await findExternalSheetMusicImport(options.sessionStore, context))),
+        Boolean(await findSheetMusicExternalSearchConsent(options.sessionStore, context))),
 
     handle: async (request, context) => {
-      const externalImport = await findExternalSheetMusicImport(options.sessionStore, context);
-      if (externalImport) {
-        return continueExternalSheetMusicImport({
-          options,
-          session: externalImport,
-          text: request.text,
-          context
-        });
-      }
       const selectedIndex = numericSelectionToIndex(request.text);
       if (selectedIndex !== undefined) {
         const session = await findSheetMusicSelection(options.sessionStore, context);
@@ -459,6 +450,23 @@ export function createFindPopSheetMusicTextMessageHandler(
         requestId: externalSearchConsent.id,
         requestedKind: inferRequestedSheetKind(externalSearchConsent.query)
       });
+    }
+  };
+}
+
+export function createExternalSheetMusicImportTextMessageHandler(
+  options: FindPopSheetMusicTextMessageOptions
+): TextMessageHandler {
+  return {
+    turnStage: "resolution",
+    capability: "save_resource",
+    matches: async (_request, context) =>
+      context.profile.enabledFunctions.includes("save_resource") &&
+      Boolean(await findExternalSheetMusicImport(options.sessionStore, context)),
+    handle: async (request, context) => {
+      const session = await findExternalSheetMusicImport(options.sessionStore, context);
+      if (!session) return undefined;
+      return continueExternalSheetMusicImport({ options, session, text: request.text, context });
     }
   };
 }
@@ -1050,7 +1058,12 @@ async function enqueueExternalSheetMusicImport(input: {
   );
   let jobId: string | undefined;
   try {
-    const job = await agentJobStore.createPending({ scope, label: "匯入歌譜", ttlMs });
+    const job = await agentJobStore.createPending({
+      scope,
+      capability: "save_resource",
+      label: "匯入歌譜",
+      ttlMs
+    });
     jobId = job.id;
     const work = await scanWorkStore.create({
       jobId,

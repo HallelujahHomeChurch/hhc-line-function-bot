@@ -12,9 +12,9 @@ const ADMIN_ACTION_EVAL_CASES: AdminActionEvalCase[] = [
   { text: "幫我產生邀請碼", action: "invite_code_create" },
   { text: "建立一組註冊碼", action: "invite_code_create" },
   { text: "create an invite code", action: "invite_code_create" },
-  { text: "enable function find_ppt_slides for this group", action: "function_scope_grant" },
-  { text: "disable function find_ppt_slides for this group", action: "function_scope_revoke" },
-  { text: "這個群組能用哪些功能", action: "function_scope_list" },
+  { text: "enable function find_ppt_slides for this group", action: "deny" },
+  { text: "disable function find_ppt_slides for this group", action: "deny" },
+  { text: "這個群組能用哪些功能", action: "deny" },
   {
     text: "加入知識來源 https://www.notion.so/example 名稱聚會SOP",
     action: "knowledge_source_add"

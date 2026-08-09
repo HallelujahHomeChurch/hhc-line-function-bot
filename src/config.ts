@@ -40,6 +40,19 @@ const smallTalkPromptingSchema = z.object({
   formatRulesPrompt: z.string().trim().min(1).max(2000).optional()
 });
 
+const environmentReferenceSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Z][A-Z0-9_]*$/u, "Environment reference must be an uppercase variable name");
+
+const accountLinkPresentationSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(80),
+    lineIdEnv: environmentReferenceSchema,
+    providerIdEnv: environmentReferenceSchema
+  })
+  .strict();
+
 const timeOfDaySchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u);
 const meetingWindowSchema = z
   .object({
@@ -165,6 +178,8 @@ const profileSchema = z.object({
   wakeKeywords: z.array(z.string()).default([]),
   acceptMention: z.boolean().default(true),
   enabledFunctions: z.array(z.enum(FUNCTION_NAMES)).default([]),
+  permissionRequiredFunctions: z.array(z.enum(FUNCTION_NAMES)).optional(),
+  accountLink: accountLinkPresentationSchema.optional(),
   adminDirectOnly: z.boolean().default(true),
   directAccessPolicy: z.enum(["managed", "public", "blocked"]).optional(),
   groupAccessPolicy: z.enum(["managed", "blocked"]).optional(),
@@ -234,6 +249,7 @@ export function loadCatalogSyncConfigFromEnv(env: NodeJS.ProcessEnv): CatalogSyn
   }
   assertNoLegacyProfileFields(parsedProfiles);
   const profiles = z.array(profileSchema).min(1).parse(parsedProfiles);
+  assertProfileFunctionPolicy(profiles);
   for (const profile of profiles) {
     assertCanonicalWebhookPath(profile.name, profile.webhookPath);
   }
@@ -264,6 +280,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   }
   assertNoLegacyProfileFields(parsedProfiles);
   const profiles = z.array(profileSchema).min(1).parse(parsedProfiles);
+  assertProfileFunctionPolicy(profiles);
   if (env.NODE_ENV === "production") {
     assertProductionSafeProfiles(profiles);
   }
@@ -278,6 +295,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   assertCompleteGroup(env, notionRequiredKeys, "Incomplete Notion configuration");
   const llmProvider = readModelProvider(env.LLM_PROVIDER, "deepseek");
   const normalizedProfiles = profiles.map((profile) => normalizeProfile(profile, env));
+  assertSharedAccountLinkProvider(normalizedProfiles);
   validateProviderPolicy(normalizedProfiles, llmProvider);
   validateAccessConfig(normalizedProfiles, env);
   const attachmentScanQueueUrl = readAttachmentScanQueueUrl(env);
@@ -418,6 +436,8 @@ type NormalizedProfile = Omit<
   | "channelSecretEnv"
   | "channelAccessToken"
   | "channelAccessTokenEnv"
+  | "accountLink"
+  | "permissionRequiredFunctions"
   | "smallTalk"
 > & {
   channelSecret: string;
@@ -426,31 +446,37 @@ type NormalizedProfile = Omit<
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
   providerPolicy: ProviderPolicy;
+  permissionRequiredFunctions: FunctionName[];
+  accountLink?: {
+    displayName: string;
+    lineId: string;
+    providerId: string;
+  };
 };
 
 function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): NormalizedProfile {
+  const { accountLink, channelSecretEnv, channelAccessTokenEnv, ...profileConfig } = profile;
   const allowedProviders = uniqueProviders(profile.allowedProviders ?? ["deepseek"]);
   const channelSecret = resolveRequiredProfileValue(
     profile.name,
     "channelSecret",
     profile.channelSecret,
-    profile.channelSecretEnv,
+    channelSecretEnv,
     env
   );
   const channelAccessToken = resolveRequiredProfileValue(
     profile.name,
     "channelAccessToken",
     profile.channelAccessToken,
-    profile.channelAccessTokenEnv,
+    channelAccessTokenEnv,
     env
   );
-  const profileConfig = { ...profile };
-  delete profileConfig.channelSecretEnv;
-  delete profileConfig.channelAccessTokenEnv;
   return {
     ...profileConfig,
     channelSecret,
     channelAccessToken,
+    permissionRequiredFunctions: profile.permissionRequiredFunctions ?? [],
+    ...(accountLink ? { accountLink: normalizeAccountLinkPresentation(profile, env) } : {}),
     smallTalk: normalizeSmallTalkConfig(profile.smallTalk),
     allowedProviders,
     providerPolicy: normalizeProviderPolicy({
@@ -462,6 +488,45 @@ function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): Norma
       profile.directAccessPolicy ?? (profile.allowDirectUser ? "managed" : "blocked"),
     groupAccessPolicy: profile.groupAccessPolicy ?? "blocked"
   };
+}
+
+function normalizeAccountLinkPresentation(
+  profile: ParsedProfile,
+  env: NodeJS.ProcessEnv
+): NonNullable<NormalizedProfile["accountLink"]> {
+  const accountLink = profile.accountLink!;
+  const lineId = resolveRequiredProfileValue(
+    profile.name,
+    "accountLink.lineId",
+    undefined,
+    accountLink.lineIdEnv,
+    env
+  );
+  if (!/^@[A-Za-z0-9._-]{1,32}$/u.test(lineId)) {
+    throw new Error(
+      `Profile ${profile.name} environment reference ${accountLink.lineIdEnv} must be a canonical @ LINE ID`
+    );
+  }
+  return {
+    displayName: accountLink.displayName,
+    lineId,
+    providerId: resolveRequiredProfileValue(
+      profile.name,
+      "accountLink.providerId",
+      undefined,
+      accountLink.providerIdEnv,
+      env
+    )
+  };
+}
+
+function assertSharedAccountLinkProvider(profiles: NormalizedProfile[]): void {
+  const providerIds = new Set(
+    profiles.flatMap((profile) => (profile.accountLink ? [profile.accountLink.providerId] : []))
+  );
+  if (providerIds.size > 1) {
+    throw new Error("Account-link-enabled profiles must use the same LINE provider");
+  }
 }
 
 function resolveRequiredProfileValue(
@@ -741,8 +806,33 @@ function assertNoLegacyProfileFields(parsedProfiles: unknown): void {
   }
 }
 
+function assertProfileFunctionPolicy(profiles: ParsedProfile[]): void {
+  for (const profile of profiles) {
+    const permissionRequiredFunctions = profile.permissionRequiredFunctions ?? [];
+    if (new Set(permissionRequiredFunctions).size !== permissionRequiredFunctions.length) {
+      throw new Error(
+        `Profile ${profile.name} permissionRequiredFunctions must contain unique functions`
+      );
+    }
+    if (
+      permissionRequiredFunctions.some(
+        (functionName) => !profile.enabledFunctions.includes(functionName)
+      )
+    ) {
+      throw new Error(
+        `Profile ${profile.name} permissionRequiredFunctions must be a subset of enabledFunctions`
+      );
+    }
+  }
+}
+
 function assertProductionSafeProfiles(profiles: ParsedProfile[]): void {
   for (const profile of profiles) {
+    if (!profile.permissionRequiredFunctions) {
+      throw new Error(
+        `Production profile ${profile.name} must declare permissionRequiredFunctions`
+      );
+    }
     if (profile.channelSecret) {
       throw new Error(
         `Production profile ${profile.name} must use channelSecretEnv instead of channelSecret`
@@ -771,7 +861,10 @@ function assertProductionSafeProfiles(profiles: ParsedProfile[]): void {
   }
 }
 
-function validateAccessConfig(profiles: ParsedProfile[], env: NodeJS.ProcessEnv): void {
+function validateAccessConfig(
+  profiles: Array<Pick<ParsedProfile, "registration">>,
+  env: NodeJS.ProcessEnv
+): void {
   const registrationProfiles = profiles.filter((profile) => profile.registration.enabled);
   if (registrationProfiles.length === 0) {
     return;

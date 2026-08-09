@@ -61,6 +61,12 @@ export function normalizeFunctionArguments(
       return normalizeSaveMemoryArguments(args, input);
     case "save_resource":
       return normalizeSaveResourceArguments(args);
+    case "update_own_profile":
+      return {
+        ...args,
+        ...(typeof args.firstName === "string" ? { firstName: args.firstName.trim() } : {}),
+        ...(typeof args.lastName === "string" ? { lastName: args.lastName.trim() } : {})
+      };
     default:
       return args;
   }
