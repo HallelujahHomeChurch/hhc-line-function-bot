@@ -172,3 +172,37 @@ Local image build and `nginx -t` could not run because the local Docker API retu
 - API Gateway: `cfebed8` (`test: prove private Account routes stay unreachable`)
 - LINE bot implementation: `4dcc764` (`feat: gate releases on shared Account boundaries`)
 - This report is committed separately on the same LINE bot branch so the implementation SHA remains stable evidence.
+
+## Fix Round 1: Complete Private Account Route Rejection
+
+Review identified that the first Gateway proof covered the generic `/priv/`
+prefix and the private authorization endpoint, but a future exact
+`/priv/account/` location could outrank that prefix while the tests stayed
+green.
+
+Gateway commit `550f270` fixes only this Important finding:
+
+- `scripts/test-auth-routing.sh` now fails if any file under `conf.d` contains
+  a literal `/priv/account/` route. This prevents an exact or otherwise more
+  specific private Account location from entering public Gateway config.
+- `scripts/runtime-smoke.sh` now sends the same forged caller header to the
+  exact private permission-preflight endpoint and requires `404`.
+- No production Nginx config changed because the existing generic rejection is
+  sufficient once more-specific literal routes are prohibited.
+
+RED evidence: after adding the contract assertion first,
+`./scripts/test-auth-routing.sh` exited `1` because runtime smoke did not contain
+the exact permission-preflight probe.
+
+GREEN evidence:
+
+- `./scripts/test-auth-routing.sh` — pass.
+- `sh -n scripts/runtime-smoke.sh` — pass.
+- `./scripts/test-release-policy.sh` — pass.
+- `git diff --check` — pass.
+
+Mutation evidence: a temporary exact private permission-preflight `location`
+fixture made `./scripts/test-auth-routing.sh` exit `1` with the expected literal
+private-route rejection. The fixture was removed, and the focused suite passed
+again. The review's Minor exact-revision assertion remains intentionally
+deferred to final review and was not changed in this round.
