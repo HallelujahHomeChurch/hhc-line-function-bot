@@ -16,6 +16,11 @@ export interface AuthorizeLineFunctionsInput {
   functionNames: FunctionName[];
 }
 
+export interface VerifyLineFunctionPermissionsInput {
+  profileName: string;
+  functionNames: FunctionName[];
+}
+
 export interface UpdateOwnProfileInput {
   lineUserId: string;
   profileName: string;
@@ -47,6 +52,7 @@ export interface FinalizeLineBindingInput {
 export interface AccountAdminClient {
   authorizeAdministrator(lineUserId: string): Promise<{ bound: boolean; allowed: boolean }>;
   authorizeFunctions(input: AuthorizeLineFunctionsInput): Promise<LineFunctionAuthorization>;
+  verifyFunctionPermissions(input: VerifyLineFunctionPermissionsInput): Promise<FunctionName[]>;
   updateOwnProfile(input: UpdateOwnProfileInput): Promise<{ firstName: string; lastName: string }>;
   createBinding(input: CreateLineBindingInput): Promise<{ bindingUrl: string; expiresAt: string }>;
   finalizeBinding(input: FinalizeLineBindingInput): Promise<{ status: LineBindingTerminalStatus }>;
@@ -119,6 +125,20 @@ export function createAccountAdminClient(options: {
         throw new AccountApiError("account_api_invalid_function_authorization", false);
       }
       return authorization;
+    },
+    async verifyFunctionPermissions(input) {
+      const payload = await post("/priv/account/v1/line/permissions/verify", {
+        profile_name: input.profileName,
+        function_names: input.functionNames
+      });
+      if (
+        !isExactRecord(payload, ["configured_functions"]) ||
+        !Array.isArray(payload.configured_functions) ||
+        !isCanonicalAllowedFunctions(payload.configured_functions, input.functionNames)
+      ) {
+        throw new AccountApiError("account_api_invalid_permission_verification", false);
+      }
+      return payload.configured_functions;
     },
     async updateOwnProfile(input) {
       const payload = await post("/priv/account/v1/line/profile", {

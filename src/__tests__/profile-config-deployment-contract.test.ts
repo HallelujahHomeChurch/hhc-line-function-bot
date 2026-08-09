@@ -17,6 +17,20 @@ function projectFileExists(path: string): boolean {
 }
 
 describe("production profile configuration deployment contract", () => {
+  it("requires a manual LINE Provider checkpoint and the bounded Account preflight", () => {
+    const workflow = readProjectFile(".github/workflows/release.yml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const assurance = readProjectFile("scripts/release-assurance.sh");
+
+    expect(workflow).toContain(
+      "LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}"
+    );
+    expect(deployment).toContain("LINE_PROVIDER_CONSOLE_VERIFIED_ID");
+    expect(`${deployment}\n${assurance}`).toContain(
+      "dist/tools/run-account-deployment-preflight.js"
+    );
+  });
+
   it("hosts SearXNG as an internal always-on ACA app without office-network routes", () => {
     const searxng = readProjectFile("aca.searxng.containerapp.yaml");
     const bot = readProjectFile("aca.containerapp.yaml");

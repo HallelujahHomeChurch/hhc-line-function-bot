@@ -732,6 +732,22 @@ the clean scan and downloaded bytes, then revokes and owner-verifies the exact
 soft-delete in cleanup. Cleanup failure fails the assurance; the check exposes
 no public URL and does not call LINE, Graph, or the catalog.
 
+The production boundary adds two fail-closed checks without a second assurance
+system. Before mutation, `scripts/deploy-aca.sh` compares the human-confirmed
+LINE Developers Provider checkpoint with the single provider ID enforced by
+profile configuration. Repository data cannot prove Console ownership. After
+the new bot revision is ready, `account_preflight` runs inside that revision so
+its Dapr sidecar supplies the verified `hhc-line-function-bot` workload
+identity. Account's private preflight accepts only profile and function names,
+checks exact derived permission-record existence, and never provisions RBAC.
+The same probe uses disposable values to require an unbound identity result and
+an expired/unknown binding rejection. Its allowlisted output contains only
+function names and outcomes. API Gateway independently rejects `/priv/*` with
+`404`, strips caller identity headers, and exercises a forged-header negative
+probe; Account ACA itself must continue to have no ingress. Together these
+checks prove only those routing, workload identity, lookup, binding, and RBAC
+record boundaries—not LINE delivery, Console configuration, or real-device UI.
+
 The accepted baseline is production release
 [30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171),
 which deployed revision `hhc-line-function-bot--0000149` with all 15 checks

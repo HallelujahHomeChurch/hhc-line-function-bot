@@ -532,6 +532,19 @@ R4.1 production verification is complete. R5.0 production acceptance is complete
 
 `Production Release` records its provider-free deployment transaction in `artifacts/release-assurance/report.json`. The `hhc-line-bot-release-probe` sends separately signed empty `events: []` webhooks through the public gateway to `helper` and `main`. It records the explicit `gateway_helper_signed_empty_webhook` and `gateway_main_signed_empty_webhook` checks, while the report attests `providerRequests: { deepseek: 0, embedding: 0 }`. These checks prove the Gateway→Dapr→selected-profile route, configured signature acceptance, and empty-batch early return. They do not prove LINE platform delivery, LINE Console secret correctness, reply-token behavior, or provider availability during normal turns; the provider count is an attestation for this provider-free release path, not runtime telemetry. The weekly `hhc-line-bot-periodic-assurance` job writes `artifacts/release-assurance/periodic-report.json` with dependency evidence independent of release acceptance. Its Asset check uses a fixed tiny clean-text payload with a unique assurance owner and restricted visibility, grants only service read, verifies downloaded bytes, and always revokes and owner-verifies the exact soft-delete. Cleanup failure fails the assurance. It does not publish a public URL or touch LINE, Graph, or the catalog.
 
+Before the first production write, release requires the human-recorded
+`LINE_PROVIDER_CONSOLE_VERIFIED_ID` to equal the provider ID already configured
+for every account-link-enabled profile. This is a checkpoint, not repository
+proof of LINE Console ownership. After the target revision is ready, the
+`account_preflight` gate calls Account through the bot's Dapr sidecar. It checks
+that every `permissionRequiredFunctions` entry has its exact derived RBAC
+record, that a disposable identity remains unbound, and that an unknown binding
+challenge is rejected. The gate never creates a permission or binding and its
+output contains function names and bounded outcomes only. Failure uses the
+existing known-good revision-copy rollback. Public forged-caller rejection is
+owned by API Gateway smoke; neither check proves LINE delivery or a real-device
+reply.
+
 The accepted baseline is production release [30237001171](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237001171), which deployed revision `hhc-line-function-bot--0000149` with all 15 release checks passing, and weekly assurance [30237568728](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/30237568728), whose seven dependency checks passed. Both reports attest zero DeepSeek and zero embedding requests.
 
 ## Verification

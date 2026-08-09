@@ -22,6 +22,7 @@ required_release_environment=(
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
   ATTACHMENT_SCAN_QUEUE_NAME
   ASSET_API_AUDIENCE
+  LINE_PROVIDER_CONSOLE_VERIFIED_ID
   CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME
   CLAMAV_SIGNATURE_FILE_SHARE_NAME
 )
@@ -261,6 +262,26 @@ fi
 if [[ -n "${missing_account_presentation_env_names}" ]]; then
   set_release_failure preflight_failed
   echo "Required ACA environment reference is unavailable: ${missing_account_presentation_env_names%%$'\n'*}" >&2
+  exit 1
+fi
+if ! BOT_ENV_JSON="${bot_env_json}" \
+  LINE_PROVIDER_CONSOLE_VERIFIED_ID="${LINE_PROVIDER_CONSOLE_VERIFIED_ID}" \
+  python3 - <<'PY'
+import json
+import os
+
+values = {
+    item.get("name"): item.get("value")
+    for item in json.loads(os.environ["BOT_ENV_JSON"])
+    if isinstance(item, dict) and item.get("name")
+}
+expected = os.environ["LINE_PROVIDER_CONSOLE_VERIFIED_ID"].strip()
+if not expected or values.get("LINE_ACCOUNT_PROVIDER_ID") != expected:
+    raise SystemExit(1)
+PY
+then
+  set_release_failure preflight_failed
+  echo "LINE Provider Console checkpoint is unavailable or does not match" >&2
   exit 1
 fi
 

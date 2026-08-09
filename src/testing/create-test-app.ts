@@ -69,6 +69,9 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
         allowedFunctions: administrator ? functionNames : []
       };
     },
+    async verifyFunctionPermissions({ functionNames }) {
+      return functionNames;
+    },
     async createBinding() {
       return {
         bindingUrl: "https://account.alive.org.tw/line/bind#token=test",

@@ -24,6 +24,28 @@ const finalizeInput = {
 };
 
 describe("account admin client", () => {
+  it("verifies configured Account RBAC functions without accepting permission strings", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ configured_functions: ["update_own_profile"] }));
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(
+      client.verifyFunctionPermissions({
+        profileName: "main",
+        functionNames: ["update_own_profile", "find_resource"]
+      })
+    ).resolves.toEqual(["update_own_profile"]);
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
+      profile_name: "main",
+      function_names: ["update_own_profile", "find_resource"]
+    });
+  });
+
   it("updates only the signed LINE caller's bounded profile names", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

@@ -70,6 +70,20 @@ describe("release assurance shell transaction", () => {
     );
   });
 
+  it("fails a mismatched manual LINE Provider checkpoint before snapshot or external writes", async () => {
+    const fixture = await createDeployFixture("provider_console_mismatch");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const flattened = calls.map((args) => args.join(" ")).join("\n");
+
+    expect(result.status, diagnostic(result, calls)).not.toBe(0);
+    expect(result.stderr).toContain("LINE Provider Console checkpoint");
+    expect(flattened).not.toContain("properties.latestReadyRevisionName");
+    expect(flattened).not.toMatch(
+      /containerapp (?:secret set|update|create|revision copy)|containerapp env storage set|containerapp job (?:update|create)/u
+    );
+  });
+
   it.each([
     ["missing helper", ["release_probe", "gateway_main_signed_empty_webhook"], true],
     ["missing main", ["release_probe", "gateway_helper_signed_empty_webhook"], true],
@@ -151,6 +165,7 @@ describe("release assurance shell transaction", () => {
     expect(reportText).not.toContain("registry.example");
     expect(reportText).not.toContain(MAIN_EMPTY_WEBHOOK_SIGNATURE);
     expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
+    expect(calls.some((args) => args.slice(0, 2).join(" ") === "containerapp exec")).toBe(true);
     expect(calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")).toBe(
       false
     );
@@ -166,6 +181,20 @@ describe("release assurance shell transaction", () => {
     );
     expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
     expectForbiddenCallsAbsent(calls);
+  }, 15_000);
+
+  it("rolls back when the bounded Account preflight fails", async () => {
+    const fixture = await createFixture("account_preflight_failure");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    expect(report.failureCode).toBe("http_mismatch");
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({ name: "account_preflight", status: "failed" })
+    );
+    expect(report.rollback.status).toBe("restored");
   }, 15_000);
 
   it.each(["release_probe_replica_gone", "release_probe_logs_missing"])(
@@ -619,7 +648,11 @@ async function createDeployFixture(scenario: string) {
       path.join(scriptsDirectory, "release-assurance.sh")
     )
   ]);
-  if (scenario === "known_good_capture_failure" || scenario === "missing_account_presentation") {
+  if (
+    scenario === "known_good_capture_failure" ||
+    scenario === "missing_account_presentation" ||
+    scenario === "provider_console_mismatch"
+  ) {
     await mkdir(path.join(directory, "infra/searxng"), { recursive: true });
     await Promise.all(
       [
@@ -639,8 +672,8 @@ async function createDeployFixture(scenario: string) {
   }
   await writeFile(
     path.join(binDirectory, "az"),
-    scenario === "missing_account_presentation"
-      ? missingAccountPresentationAz(callLogPath)
+    scenario === "missing_account_presentation" || scenario === "provider_console_mismatch"
+      ? accountPresentationAz(callLogPath, scenario === "missing_account_presentation")
       : `#!/usr/bin/env bash
 printf '%s\n' "$*" >> "${toBashPath(callLogPath)}"
 exit 61
@@ -669,6 +702,7 @@ export ATTACHMENT_SCAN_QUEUE_NAME="fixture-queue"
 export CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME="fixture-clamav"
 export CLAMAV_SIGNATURE_FILE_SHARE_NAME="fixture-share"
 export ASSET_API_AUDIENCE="api://fixture-asset"
+export LINE_PROVIDER_CONSOLE_VERIFIED_ID="${scenario === "provider_console_mismatch" ? "provider-2" : "provider-1"}"
 export RELEASE_REPORT_PATH="${toBashPath(reportPath)}"
 export RELEASE_ID="fixture-early-failure"
 export RELEASE_COMMIT_SHA="${"a".repeat(40)}"
@@ -691,7 +725,7 @@ exec bash "${toBashPath(path.join(scriptsDirectory, "deploy-aca.sh"))}"
   };
 }
 
-function missingAccountPresentationAz(callLogPath: string): string {
+function accountPresentationAz(callLogPath: string, missingMain: boolean): string {
   return `#!/usr/bin/env node
 const { appendFileSync } = require("node:fs");
 const args = process.argv.slice(2);
@@ -718,7 +752,7 @@ else if (command("cognitiveservices", "account", "show")) output("https://embedd
 else if (command("cognitiveservices", "account", "deployment", "list")) output({ properties: { provisioningState: "Succeeded", model: { name: "text-embedding-3-small" } } });
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "properties.template.containers[0].env") output([
   { name: "LINE_HELPER_ACCOUNT_ID", value: "@helper" },
-  { name: "LINE_MAIN_ACCOUNT_ID", value: "   " },
+  { name: "LINE_MAIN_ACCOUNT_ID", value: ${JSON.stringify(missingMain ? "   " : "@main")} },
   { name: "LINE_ACCOUNT_PROVIDER_ID", value: "provider-1" }
 ]);
 else process.exit(90);
@@ -814,6 +848,28 @@ exec /mnt/c/nvm4w/nodejs/node.exe "\${script_path}" \
   await writeFile(
     path.join(binDirectory, "sleep"),
     '#!/usr/bin/env bash\nprintf \'["sleep","%s"]\\n\' "$1" >> "${FAKE_AZ_LOG}"\n',
+    { mode: 0o700 }
+  );
+  await writeFile(
+    path.join(binDirectory, "script"),
+    `#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "-c" ]]; then
+    shift
+    exec bash -c "$1"
+  fi
+  shift
+done
+exit 2
+`,
+    { mode: 0o700 }
+  );
+  await writeFile(
+    path.join(binDirectory, "timeout"),
+    `#!/usr/bin/env bash
+shift
+exec "$@"
+`,
     { mode: 0o700 }
   );
   await writeFile(
@@ -984,6 +1040,21 @@ const targetImages = {
   "hhc-line-bot-release-probe": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
   "hhc-line-bot-periodic-assurance": "registry.example/fixture-secret/scan@sha256:${"8".repeat(64)}"
 };
+
+if (command("containerapp", "exec")) {
+  const failed = scenario === "account_preflight_failure";
+  output(
+    "ACCOUNT_PREFLIGHT_RESULT=" +
+      JSON.stringify({
+        status: failed ? "failed" : "passed",
+        functions: [
+          { name: "update_own_profile", outcome: failed ? "missing" : "configured" }
+        ],
+        outcomes: { identityLookup: "unbound", binding: "rejected" }
+      })
+  );
+  process.exit(0);
+}
 
 if (command("containerapp", "list")) {
   if (scenario === "searxng_list_failure") process.exit(105);
