@@ -1047,9 +1047,7 @@ if (command("containerapp", "exec")) {
     "ACCOUNT_PREFLIGHT_RESULT=" +
       JSON.stringify({
         status: failed ? "failed" : "passed",
-        functions: [
-          { name: "update_own_profile", outcome: failed ? "missing" : "configured" }
-        ],
+        functions: failed ? [{ name: "update_own_profile", outcome: "missing" }] : [],
         outcomes: { identityLookup: "unbound", binding: "rejected" }
       })
   );

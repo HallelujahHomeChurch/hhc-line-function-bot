@@ -36,6 +36,7 @@ export async function runAccountDeploymentPreflight(
   let permissionChecksPassed = true;
 
   for (const requirement of requirements) {
+    if (requirement.functionNames.length === 0) continue;
     try {
       const configured = await client.verifyFunctionPermissions(
         requirement satisfies VerifyLineFunctionPermissionsInput

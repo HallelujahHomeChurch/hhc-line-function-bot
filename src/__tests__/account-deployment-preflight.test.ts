@@ -4,6 +4,32 @@ import { AccountApiError } from "../account/account-admin-client.js";
 import { runAccountDeploymentPreflight } from "../assurance/account-deployment-preflight.js";
 
 describe("account deployment preflight", () => {
+  it("keeps identity and binding checks when no function requires RBAC", async () => {
+    const verifyFunctionPermissions = vi.fn();
+    const result = await runAccountDeploymentPreflight(
+      [{ profileName: "main", functionNames: [] }],
+      {
+        verifyFunctionPermissions,
+        authorizeFunctions: vi.fn().mockResolvedValue({
+          bound: false,
+          active: false,
+          administrator: false,
+          allowedFunctions: []
+        }),
+        finalizeBinding: vi
+          .fn()
+          .mockRejectedValue(new AccountApiError("account_api_http_410", false))
+      }
+    );
+
+    expect(result).toEqual({
+      status: "passed",
+      functions: [],
+      outcomes: { identityLookup: "unbound", binding: "rejected" }
+    });
+    expect(verifyFunctionPermissions).not.toHaveBeenCalled();
+  });
+
   it("reports only function names and bounded outcomes", async () => {
     const result = await runAccountDeploymentPreflight(
       [{ profileName: "main", functionNames: ["update_own_profile"] }],
