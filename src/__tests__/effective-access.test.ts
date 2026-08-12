@@ -229,6 +229,36 @@ describe("effective access context", () => {
 
   it("exposes only read functions as ordinary profile defaults", () => {
     expect(isDefaultUserFunctionAvailable("query_schedule")).toBe(true);
+    expect(isDefaultUserFunctionAvailable("update_own_profile")).toBe(false);
     expect(isDefaultUserFunctionAvailable("save_memory")).toBe(false);
+  });
+
+  it("exposes main own-profile self service to a public direct user", async () => {
+    const context = await resolveEffectiveAccessContext({
+      profile: profile({
+        name: "main",
+        directAccessPolicy: "public",
+        groupAccessPolicy: "blocked",
+        enabledFunctions: ["download_weekly_paper", "update_own_profile"],
+        permissionRequiredFunctions: []
+      }),
+      event: directEvent("Uguest"),
+      accessStore: new InMemoryAccessStore()
+    });
+
+    expect(context.profile.enabledFunctions).toEqual([
+      "download_weekly_paper",
+      "update_own_profile"
+    ]);
+
+    const helperContext = await resolveEffectiveAccessContext({
+      profile: profile({
+        directAccessPolicy: "public",
+        enabledFunctions: ["query_schedule", "update_own_profile"]
+      }),
+      event: directEvent("Uguest"),
+      accessStore: new InMemoryAccessStore()
+    });
+    expect(helperContext.profile.enabledFunctions).toEqual(["query_schedule"]);
   });
 });

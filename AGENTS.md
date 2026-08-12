@@ -53,7 +53,7 @@ The first-class functions are:
 - `save_resource`: controlled LINE image/file attachment intake with purpose, validation, ClamAV scanning, confirmation, OneDrive publication, catalog upsert, and audit. It is enabled on `helper`, but write-function policy keeps it Account-admin/permission only.
 - `save_memory`: explicit 30-day text memory with preview/confirmation. It is enabled on `helper`, but only Account-authorized requesters can write and explicitly create group-visible memory in a registered group.
 - `retrieve_memory`: query visible explicit text memories in the current LINE source. It is enabled as a profile-global read function on `helper`.
-- `update_own_profile`: direct-only first/last-name update for the linked caller, using exact intents, generic slot collection, preview, live Account permission recheck, and explicit confirmation. It is enabled only on provider-free `main` and never creates task or memory state.
+- `update_own_profile`: direct-only first/last-name update for the linked active caller, using exact intents, generic slot collection, preview, a live Account binding check, and explicit confirmation. It is self-service only on provider-free `main` and never creates task or memory state.
 - Intro/help behavior is not a normal function execution path; keep it friendly and do not expose implementation details such as OneDrive or Notion to ordinary users.
 - User functions, admin actions, and system actions are separate action kinds. Do not add management behavior to `enabledFunctions`.
 - Admin natural language is direct-chat only. It may route to selected admin actions, currently invite-code creation, after admin identity and source policy checks.

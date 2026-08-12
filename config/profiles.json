@@ -140,7 +140,7 @@
     "wakeKeywords": [],
     "acceptMention": false,
     "enabledFunctions": ["download_weekly_paper", "update_own_profile"],
-    "permissionRequiredFunctions": ["update_own_profile"],
+    "permissionRequiredFunctions": [],
     "adminDirectOnly": true,
     "directAccessPolicy": "public",
     "groupAccessPolicy": "blocked",
