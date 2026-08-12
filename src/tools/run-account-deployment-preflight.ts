@@ -13,12 +13,10 @@ const failedResult: AccountDeploymentPreflightResult = {
 
 try {
   const config = loadConfigFromEnv(process.env);
-  const requirements = config.profiles
-    .filter((profile) => profile.permissionRequiredFunctions.length > 0)
-    .map((profile) => ({
-      profileName: profile.name,
-      functionNames: profile.permissionRequiredFunctions
-    }));
+  const requirements = config.profiles.map((profile) => ({
+    profileName: profile.name,
+    functionNames: profile.permissionRequiredFunctions
+  }));
   const result = await runAccountDeploymentPreflight(
     requirements,
     createAccountAdminClient({

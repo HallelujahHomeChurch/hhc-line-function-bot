@@ -496,7 +496,7 @@ value = json.loads(os.environ["ACCOUNT_PREFLIGHT_JSON"])
 if set(value) != {"status", "functions", "outcomes"}:
     raise SystemExit(1)
 functions = value["functions"]
-if not isinstance(functions, list) or not functions:
+if not isinstance(functions, list):
     raise SystemExit(1)
 names = set()
 for item in functions:
