@@ -172,6 +172,7 @@ Function toggles are profile-scoped:
 - `enabledFunctions` means profile-global functions for that bot profile only.
 - Ordinary users receive profile-global read functions that do not require Account permission.
 - `permissionRequiredFunctions` is the explicitly Account-granted subset of `enabledFunctions`; Account must return its names in `allowedFunctions` even for administrators. A configured write omitted from the public effective projection is available only when the same Account response reports `administrator: true`. Only bounded candidates or current requester-scoped continuation capabilities are sent to Account API, and denied/unavailable permissions fail closed before planner or handler execution.
+- `main/update_own_profile` is the single self-service exception: Account resolves the caller's bound LINE identity and active state at confirmation, and accepts only first/last-name updates. It is not an RBAC permission.
 - Access principals and group registration still authorize the LINE source. Historical user/group grant and role-capability tables remain for rollback compatibility but do not add functions.
 - The retired `/function-grant`, `/function-user-grant`, revoke/list variants, and matching natural-language actions are hidden or rejected. Function permissions are managed by HHC Account.
 - Admin actions are not `enabledFunctions` and cannot be granted to groups. They are gated separately by admin identity, source policy, and audit rules.

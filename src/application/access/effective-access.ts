@@ -74,7 +74,11 @@ function resolveEffectiveFunctions(input: {
 }): FunctionName[] {
   return input.requesterIsAdmin
     ? input.profile.enabledFunctions
-    : input.profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
+    : input.profile.enabledFunctions.filter(
+        (functionName) =>
+          isDefaultUserFunctionAvailable(functionName) ||
+          (input.profile.name === "main" && functionName === "update_own_profile")
+      );
 }
 
 function effectiveSourceType(event: LineEvent): EffectiveAccessContext["sourceType"] {

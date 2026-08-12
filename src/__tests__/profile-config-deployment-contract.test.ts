@@ -375,7 +375,7 @@ describe("production profile configuration deployment contract", () => {
       }
     });
     expect(main).toMatchObject({
-      permissionRequiredFunctions: ["update_own_profile"],
+      permissionRequiredFunctions: [],
       accountLink: {
         displayName: "哈利路亞家教會官方 LINE",
         lineIdEnv: "LINE_MAIN_ACCOUNT_ID",
