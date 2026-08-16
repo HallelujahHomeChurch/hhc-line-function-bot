@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { AccountApiError } from "../account/account-admin-client.js";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
-import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
+import {
+  InMemoryRegistrationInviteCodeStore,
+  RedisRegistrationInviteCodeStore
+} from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
@@ -17,6 +22,7 @@ import { createPendingFunctionTextMessageHandler } from "../functions/pending-fu
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
 import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import { signLineBody } from "../line-signature.js";
+import { runMediaSyncMigrations } from "../media-sync/migrations.js";
 import { PostgresMediaSyncStore } from "../media-sync/store.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
@@ -31,7 +37,8 @@ import type {
   PostbackHandlerRegistry,
   TextGenerationProvider
 } from "../types.js";
-import type { Pool } from "pg";
+import { Pool } from "pg";
+import { createClient } from "redis";
 
 function testConfig(): AppConfig {
   return {
@@ -7768,6 +7775,179 @@ describe("LINE entrance", () => {
     );
     expect(replyText).toHaveBeenCalledTimes(1);
   });
+});
+
+describe.runIf(
+  Boolean(process.env.KERNEL_POSTGRES_URL?.trim() && process.env.KERNEL_REDIS_URL?.trim())
+)("media sync slice local acceptance", () => {
+  it("keeps an unregistered code valid through registry, independent binding, and signed intake", async () => {
+    const databaseUrl = process.env.KERNEL_POSTGRES_URL!.trim();
+    const schemaName = `media_sync_acceptance_${randomUUID().replaceAll("-", "")}`;
+    const owner = new Pool({ connectionString: databaseUrl, max: 1 });
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      max: 4,
+      options: `-c search_path=${schemaName},public`
+    });
+    const redis = createClient({ url: process.env.KERNEL_REDIS_URL!.trim() });
+    let app: ReturnType<typeof createApp> | undefined;
+    try {
+      await owner.query(`create schema "${schemaName}"`);
+      await runMediaSyncMigrations(pool);
+      await redis.connect();
+      const bindingCodes = ["BIND-GROUP-ONE", "BIND-GROUP-TWO"];
+      const mediaSyncStore = new PostgresMediaSyncStore(pool, {
+        codeFactory: () => bindingCodes.shift()!
+      });
+      const registrationCodes = ["REGISTER-GROUP-ONE", "REGISTER-GROUP-TWO"];
+      const registrationInviteCodeStore = new RedisRegistrationInviteCodeStore({
+        client: redis,
+        keyPrefix: `media-sync-acceptance:${randomUUID()}`,
+        codeFactory: () => registrationCodes.shift()!
+      });
+      for (let index = 0; index < 2; index += 1) {
+        await registrationInviteCodeStore.create({
+          profileName: "helper",
+          createdBy: "manager",
+          ttlMinutes: 1
+        });
+      }
+      for (const [collectionId, idempotencyKey] of [
+        ["collection-one", "issue-one"],
+        ["collection-two", "issue-two"]
+      ]) {
+        await expect(
+          mediaSyncStore.createBindingCode({
+            profileName: "helper",
+            collectionId,
+            createdByHhcUserId: "manager",
+            idempotencyKey
+          })
+        ).resolves.toMatchObject({ status: "issued" });
+      }
+      const accessStore = new InMemoryAccessStore();
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      app = createApp(accessConfig(), {
+        accessStore,
+        registrationInviteCodeStore,
+        mediaSyncStore,
+        createLineReplyClient: () => ({ replyText }),
+        createLineIdentityClient: () => ({
+          getUserDisplayName: vi.fn(),
+          getGroupDisplayName: vi.fn(async (groupId) => `Group ${groupId}`)
+        })
+      });
+      const deliver = (groupId: string, replyToken: string, message: Record<string, unknown>) => {
+        const body = lineBody({
+          type: "message",
+          webhookEventId: `event-${replyToken}`,
+          replyToken,
+          source: { type: "group", groupId, userId: "line-user" },
+          message
+        });
+        return app!.inject({
+          method: "POST",
+          url: "/api/line/webhook/helper",
+          headers: signedHeaders(body, "helper-secret"),
+          payload: body
+        });
+      };
+
+      const rejected = await deliver("group-one", "unregistered", {
+        type: "text",
+        text: "/media-sync BIND-GROUP-ONE"
+      });
+      expect(rejected.statusCode).toBe(200);
+      expect(replyText).toHaveBeenLastCalledWith(
+        "unregistered",
+        expect.stringContaining("尚未開通"),
+        undefined
+      );
+      await expect(
+        pool.query<{ consumed_at: Date | null }>(
+          "select consumed_at from media_sync_binding_codes where collection_id='collection-one'"
+        )
+      ).resolves.toMatchObject({ rows: [{ consumed_at: null }] });
+      await expect(
+        deliver("group-one", "registry-one", {
+          type: "text",
+          text: "/registry REGISTER-GROUP-ONE"
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+      const repliesAfterRegistry = replyText.mock.calls.length;
+      await expect(
+        deliver("group-one", "unbound-media", {
+          id: "message-before-binding",
+          type: "image",
+          contentProvider: { type: "line" }
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+      expect(replyText).toHaveBeenCalledTimes(repliesAfterRegistry);
+      await expect(pool.query("select 1 from media_sync_ingests")).resolves.toMatchObject({
+        rowCount: 0
+      });
+      await expect(
+        deliver("group-one", "bind-one", {
+          type: "text",
+          text: "/media-sync BIND-GROUP-ONE"
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+      await expect(
+        deliver("group-two", "registry-two", {
+          type: "text",
+          text: "/registry REGISTER-GROUP-TWO"
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+      await expect(
+        deliver("group-two", "bind-two", {
+          type: "text",
+          text: "/media-sync BIND-GROUP-TWO"
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+
+      for (const kind of ["image", "video", "audio", "file"] as const) {
+        const response = await deliver("group-one", `media-${kind}`, {
+          id: `message-${kind}`,
+          type: kind,
+          contentProvider: { type: "line" },
+          ...(kind === "file" ? { fileName: "slides.pptx", fileSize: 1024 } : {})
+        });
+        expect(response.statusCode, kind).toBe(200);
+      }
+
+      await expect(
+        mediaSyncStore.findActiveBinding({ profileName: "helper", groupId: "group-one" })
+      ).resolves.toMatchObject({ collectionId: "collection-one" });
+      await expect(
+        mediaSyncStore.findActiveBinding({ profileName: "helper", groupId: "group-two" })
+      ).resolves.toMatchObject({ collectionId: "collection-two" });
+      const ingests = await pool.query<{ media_kind: string; collection_id: string }>(
+        "select media_kind, collection_id from media_sync_ingests order by media_kind"
+      );
+      expect(ingests.rows).toEqual([
+        { media_kind: "audio", collection_id: "collection-one" },
+        { media_kind: "file", collection_id: "collection-one" },
+        { media_kind: "image", collection_id: "collection-one" },
+        { media_kind: "video", collection_id: "collection-one" }
+      ]);
+      const persistedCodes = await pool.query<{ code_hash: string }>(
+        "select code_hash from media_sync_binding_codes order by collection_id"
+      );
+      expect(persistedCodes.rows.map(({ code_hash }) => code_hash)).toEqual([
+        expect.stringMatching(/^[0-9a-f]{64}$/u),
+        expect.stringMatching(/^[0-9a-f]{64}$/u)
+      ]);
+      expect(
+        JSON.stringify([persistedCodes.rows, accessStore.audit, replyText.mock.calls])
+      ).not.toMatch(/BIND-GROUP|REGISTER-GROUP/u);
+    } finally {
+      await app?.close();
+      if (redis.isOpen) await redis.quit();
+      await pool.end();
+      await owner.query(`drop schema if exists "${schemaName}" cascade`);
+      await owner.end();
+    }
+  }, 15_000);
 });
 
 function createDeferred<T>() {
