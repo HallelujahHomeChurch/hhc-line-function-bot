@@ -51,16 +51,11 @@ export async function prepareMediaSyncIntake(input: {
       pendingAttachment(input.profile, input.event, message, sourceKey, input.now)
     );
     if (promotion) {
-      try {
-        manual = await input.store.attachManualIntent({
-          sourceKey,
-          destinationId: promotion.pending.id,
-          requesterUserId: promotion.pending.requesterUserId!
-        });
-      } catch (error) {
-        await input.sessionStore.restoreUploadIntentPromotion(promotion);
-        throw error;
-      }
+      manual = await input.store.attachManualIntent({
+        sourceKey,
+        destinationId: promotion.pending.id,
+        requesterUserId: promotion.pending.requesterUserId!
+      });
       if (!manual) await input.sessionStore.restoreUploadIntentPromotion(promotion);
     }
   }

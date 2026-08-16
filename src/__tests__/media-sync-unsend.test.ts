@@ -248,7 +248,156 @@ describe("LINE media-sync lifecycle", () => {
       ).resolves.toMatchObject({ id: `intent-${messageType}` });
     }
   );
+
+  it("keeps the deterministic pending attachment when manual publication is ambiguous", async () => {
+    const replyText = vi.fn().mockResolvedValue(undefined);
+    const { deliver, sessions, source } = await manualMediaHarness(
+      "ambiguous-manual",
+      vi.fn().mockRejectedValue(new Error("postgres unavailable")),
+      replyText
+    );
+
+    const response = await deliver("event-ambiguous-manual", "reply-ambiguous-manual");
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "media_sync_intake_unavailable" });
+    expect(replyText).not.toHaveBeenCalled();
+    await expect(
+      sessions.findPendingAttachment({
+        profileName: "helper",
+        source,
+        requesterUserId: source.userId
+      })
+    ).resolves.toMatchObject({ attachment: { messageId: "message-ambiguous-manual" } });
+  });
+
+  it("lets a serialized retry attach and prompt after the promotion owner gets an ambiguous error", async () => {
+    const firstIsWaiting = deferred();
+    const firstMayFail = deferred();
+    const secondIsWaiting = deferred();
+    const secondMayAttach = deferred();
+    let attachCalls = 0;
+    let manualAttached = false;
+    const attachManualIntent = vi.fn(async () => {
+      attachCalls += 1;
+      if (attachCalls === 1) {
+        firstIsWaiting.resolve();
+        await firstMayFail.promise;
+        throw new Error("ambiguous commit result");
+      }
+      secondIsWaiting.resolve();
+      await secondMayAttach.promise;
+      manualAttached = true;
+      return true;
+    });
+    let pendingAtPrompt = false;
+    const replyText = vi.fn(async () => {
+      pendingAtPrompt = Boolean(
+        await sessions.findPendingAttachment({
+          profileName: "helper",
+          source,
+          requesterUserId: source.userId
+        })
+      );
+    });
+    const { deliver, sessions, source } = await manualMediaHarness(
+      "concurrent-manual",
+      attachManualIntent,
+      replyText
+    );
+
+    const firstResponse = deliver("event-concurrent-manual-a", "reply-concurrent-manual-a");
+    await firstIsWaiting.promise;
+    const secondResponse = deliver("event-concurrent-manual-b", "reply-concurrent-manual-b");
+    await secondIsWaiting.promise;
+    firstMayFail.resolve();
+    const first = await firstResponse;
+    secondMayAttach.resolve();
+    const second = await secondResponse;
+
+    expect(first.statusCode).toBe(503);
+    expect(second.statusCode).toBe(200);
+    expect(attachManualIntent).toHaveBeenCalledTimes(2);
+    expect(manualAttached).toBe(true);
+    expect(replyText).toHaveBeenCalledOnce();
+    expect(pendingAtPrompt).toBe(true);
+    await expect(
+      sessions.findPendingAttachment({
+        profileName: "helper",
+        source,
+        requesterUserId: source.userId
+      })
+    ).resolves.toMatchObject({ attachment: { messageId: "message-concurrent-manual" } });
+  });
 });
+
+async function manualMediaHarness(
+  suffix: string,
+  attachManualIntent: PostgresMediaSyncStore["attachManualIntent"],
+  replyText: ReturnType<typeof vi.fn>
+) {
+  const appConfig = config();
+  appConfig.profiles[0]!.enabledFunctions = ["save_resource"];
+  const source = {
+    type: "group" as const,
+    groupId: `G-${suffix}`,
+    userId: `U-${suffix}`
+  };
+  const sessions = new InMemorySessionStore();
+  await sessions.set({
+    id: `intent-${suffix}`,
+    type: "upload_intent",
+    profileName: "helper",
+    requesterUserId: source.userId,
+    source,
+    expiresAt: new Date(Date.now() + 60_000).toISOString()
+  });
+  const app = createTestApp(appConfig, {
+    accessStore: new InMemoryAccessStore({
+      principals: [
+        {
+          id: `group-${suffix}`,
+          profileName: "helper",
+          type: "group",
+          principalId: source.groupId,
+          createdAt: "2026-08-16T00:00:00.000Z",
+          createdBy: "test"
+        }
+      ]
+    }),
+    sessionStore: sessions,
+    mediaSyncStore: {
+      findActiveBinding: vi.fn().mockResolvedValue({ collectionId: "collection-1" }),
+      createIngest: vi.fn().mockResolvedValue({ created: true, ingest: { workId: "work-1" } }),
+      attachManualIntent
+    } as unknown as PostgresMediaSyncStore,
+    createLineReplyClient: () => ({ replyText })
+  });
+  return {
+    sessions,
+    source,
+    deliver: (eventId: string, replyToken: string) =>
+      inject(app, "/api/line/webhook/helper", "helper-secret", {
+        type: "message",
+        webhookEventId: eventId,
+        replyToken,
+        source,
+        message: {
+          id: `message-${suffix}`,
+          type: "video",
+          contentProvider: { type: "line" }
+        }
+      })
+  };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 
 function config(): AppConfig {
   const profile = (name: "helper" | "main", secret: string) => ({
