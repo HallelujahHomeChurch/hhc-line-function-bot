@@ -127,7 +127,7 @@ async function handleMediaSyncCommand(
 ): Promise<FunctionExecutionResult> {
   const groupId = input.event.source.type === "group" ? input.event.source.groupId : undefined;
   const userId = input.event.source.type === "group" ? input.event.source.userId : undefined;
-  if (input.profile.name !== "helper" || !groupId || !userId || !input.mediaSyncStore) {
+  if (input.profile.name !== "helper" || !groupId || !input.mediaSyncStore) {
     return { ok: true, replyText: "此指令只能在已開通的小哈群組中使用。" };
   }
   if (args.length !== 1 || !args[0]?.trim()) {

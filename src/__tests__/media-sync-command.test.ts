@@ -10,15 +10,17 @@ describe("media sync command boundary", () => {
     const profiles = JSON.parse(
       await readFile(new URL("../../config/profiles.json", import.meta.url), "utf8")
     ) as Array<{ enabledFunctions?: string[]; permissionRequiredFunctions?: string[] }>;
-    expect(FUNCTION_NAMES).not.toContain("media_sync");
-    expect(
-      getFunctionDefinitions([...FUNCTION_NAMES]).map((definition) => definition.name)
-    ).not.toContain("media_sync");
-    expect(
-      profiles.flatMap((profile) => [
-        ...(profile.enabledFunctions ?? []),
-        ...(profile.permissionRequiredFunctions ?? [])
-      ])
-    ).not.toContain("media_sync");
+    for (const name of ["media-sync", "media_sync"]) {
+      expect(FUNCTION_NAMES).not.toContain(name);
+      expect(
+        getFunctionDefinitions([...FUNCTION_NAMES]).map((definition) => definition.name)
+      ).not.toContain(name);
+      expect(
+        profiles.flatMap((profile) => [
+          ...(profile.enabledFunctions ?? []),
+          ...(profile.permissionRequiredFunctions ?? [])
+        ])
+      ).not.toContain(name);
+    }
   });
 });

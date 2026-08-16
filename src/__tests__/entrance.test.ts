@@ -3671,7 +3671,6 @@ describe("LINE entrance", () => {
         groupId: "Cmedia",
         collectionId: "collection-1",
         groupDisplayName: "影音同工群",
-        boundByLineUserId: "Umedia",
         bindingCodeCreatedByHhcUserId: "manager-1",
         boundAt: "2026-08-16T00:00:00.000Z"
       }
@@ -3690,7 +3689,7 @@ describe("LINE entrance", () => {
     const body = lineBody({
       type: "message",
       replyToken: "reply-media",
-      source: { type: "group", groupId: "Cmedia", userId: "Umedia" },
+      source: { type: "group", groupId: "Cmedia" },
       message: { type: "text", text: "/media-sync BIND-CODE" }
     });
 
@@ -3710,7 +3709,7 @@ describe("LINE entrance", () => {
       code: "BIND-CODE",
       groupId: "Cmedia",
       groupDisplayName: "影音同工群",
-      boundByLineUserId: "Umedia"
+      boundByLineUserId: undefined
     });
     expect(replyText).toHaveBeenCalledWith(
       "reply-media",
