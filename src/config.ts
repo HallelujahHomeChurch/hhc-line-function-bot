@@ -395,6 +395,18 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     account: {
       baseUrl: readAccountApiBaseUrl(env),
       timeoutMs: readInt(env.ACCOUNT_API_TIMEOUT_MS, 3000)
+    },
+    asset: {
+      baseUrl: readAssetApiBaseUrl(env),
+      timeoutMs: readInt(env.ASSET_API_TIMEOUT_MS, 3000)
+    },
+    mediaSync: {
+      gatewayCallerAppId: readDaprAppId(
+        env.MEDIA_SYNC_GATEWAY_CALLER_APP_ID,
+        "api-gateway",
+        "MEDIA_SYNC_GATEWAY_CALLER_APP_ID"
+      ),
+      appApiToken: env.APP_API_TOKEN ?? ""
     }
   };
 }
@@ -413,6 +425,27 @@ function readAccountApiBaseUrl(env: NodeJS.ProcessEnv): string {
     throw new Error("ACCOUNT_API_APP_ID is invalid");
   }
   return `http://127.0.0.1:${readInt(env.DAPR_HTTP_PORT, 3500)}/v1.0/invoke/${appId}/method`;
+}
+
+function readAssetApiBaseUrl(env: NodeJS.ProcessEnv): string {
+  const explicit = env.ASSET_API_BASE_URL?.trim();
+  if (explicit) {
+    const url = new URL(explicit);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("ASSET_API_BASE_URL must use HTTP or HTTPS");
+    }
+    return explicit.replace(/\/+$/u, "");
+  }
+  const appId = readDaprAppId(env.ASSET_API_APP_ID, "asset-api", "ASSET_API_APP_ID");
+  return `http://127.0.0.1:${readInt(env.DAPR_HTTP_PORT, 3500)}/v1.0/invoke/${appId}/method`;
+}
+
+function readDaprAppId(value: string | undefined, fallback: string, field: string): string {
+  const appId = value?.trim() || fallback;
+  if (!/^[a-z0-9][a-z0-9-]*$/u.test(appId)) {
+    throw new Error(`${field} is invalid`);
+  }
+  return appId;
 }
 
 function readAttachmentScanQueueUrl(env: NodeJS.ProcessEnv): string | undefined {

@@ -21,7 +21,81 @@ export interface AssetUploadTarget {
   headers: Record<string, string>;
 }
 
+export type CollectionSubjectType = "user" | "role";
+
+export interface CollectionRecord {
+  id: string;
+  namespace: "line.group.media-sync";
+  name: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+export interface CollectionAclRecord {
+  id: string;
+  collectionId: string;
+  subjectType: CollectionSubjectType;
+  subjectId: string;
+  permission: "read";
+  createdAt: string;
+  revokedAt?: string;
+}
+
+export interface ManagedCollection {
+  collection: CollectionRecord;
+  acls: CollectionAclRecord[];
+}
+
+export interface ManagedCollectionPage {
+  collections: ManagedCollection[];
+  cursor?: string;
+  hasMore: boolean;
+}
+
+export interface CollectionAclMutation {
+  collection: CollectionRecord;
+  acl: CollectionAclRecord;
+}
+
 export interface AssetApiClient {
+  listManagedCollections(
+    input?: { cursor?: string; limit?: number },
+    options?: AssetApiRequestOptions
+  ): Promise<ManagedCollectionPage>;
+  getManagedCollection(
+    collectionId: string,
+    options?: AssetApiRequestOptions
+  ): Promise<ManagedCollection>;
+  createCollection(
+    name: string,
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<CollectionRecord>;
+  renameCollection(
+    collectionId: string,
+    name: string,
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<CollectionRecord>;
+  deleteCollection(
+    collectionId: string,
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<CollectionRecord>;
+  addCollectionAcl(
+    collectionId: string,
+    input: { subjectType: CollectionSubjectType; subjectId: string },
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<CollectionAclMutation>;
+  revokeCollectionAcl(
+    collectionId: string,
+    aclId: string,
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<CollectionAclMutation>;
   createUpload(
     input: {
       idempotencyKey: string;
@@ -60,6 +134,7 @@ export interface AssetApiClient {
 
 export interface AssetApiRequestOptions {
   signal?: AbortSignal;
+  requestId?: string;
 }
 
 class AssetApiRequestError extends Error {
@@ -92,7 +167,8 @@ export function assetAccessTokenScope(audience: string): string {
 
 export function createAssetApiClient(options: {
   baseUrl: string;
-  getAccessToken: (signal?: AbortSignal) => Promise<string>;
+  getAccessToken?: (signal?: AbortSignal) => Promise<string>;
+  timeoutMs?: number;
   fetcher?: typeof fetch;
 }): AssetApiClient {
   const fetcher = options.fetcher ?? fetch;
@@ -102,15 +178,22 @@ export function createAssetApiClient(options: {
     init: RequestInit = {},
     requestOptions?: AssetApiRequestOptions
   ): Promise<Response> => {
-    let token: string;
     let response: Response;
     try {
-      token = await options.getAccessToken(requestOptions?.signal);
-      if (!token.trim()) throw new Error("empty_token");
+      const signal =
+        requestOptions?.signal ??
+        (options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs));
+      const token = options.getAccessToken ? await options.getAccessToken(signal) : undefined;
+      if (token !== undefined && !token.trim()) throw new Error("empty_token");
       response = await fetcher(`${baseUrl}${path}`, {
         ...init,
-        signal: requestOptions?.signal,
-        headers: { authorization: `Bearer ${token}`, ...toHeaders(init.headers) }
+        signal,
+        redirect: "manual",
+        headers: {
+          ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+          ...toHeaders(init.headers),
+          ...(requestOptions?.requestId ? { "x-hhc-request-id": requestOptions.requestId } : {})
+        }
       });
     } catch {
       throw new AssetApiRequestError("asset_api_unavailable", true);
@@ -125,6 +208,90 @@ export function createAssetApiClient(options: {
   };
 
   return {
+    async listManagedCollections(input = {}, requestOptions) {
+      const query = new URLSearchParams();
+      if (input.cursor !== undefined) query.set("cursor", input.cursor);
+      if (input.limit !== undefined) query.set("limit", String(input.limit));
+      const response = await request(
+        `/priv/assets/collections${query.size ? `?${query.toString()}` : ""}`,
+        {},
+        requestOptions
+      );
+      const page = parseManagedCollectionPage(await readJson(response));
+      if (!page) throw new AssetApiRequestError("asset_api_invalid_response", false);
+      return page;
+    },
+    async getManagedCollection(collectionId, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}`,
+        {},
+        requestOptions
+      );
+      const collection = parseManagedCollection(await readJson(response));
+      if (!collection) throw new AssetApiRequestError("asset_api_invalid_response", false);
+      return collection;
+    },
+    async createCollection(name, idempotencyKey, requestOptions) {
+      const response = await request(
+        "/priv/assets/collections",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify({ namespace: "line.group.media-sync", name })
+        },
+        requestOptions
+      );
+      return requireCollection(await readJson(response));
+    },
+    async renameCollection(collectionId, name, idempotencyKey, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify({ name })
+        },
+        requestOptions
+      );
+      return requireCollection(await readJson(response));
+    },
+    async deleteCollection(collectionId, idempotencyKey, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}`,
+        { method: "DELETE", headers: { "idempotency-key": idempotencyKey } },
+        requestOptions
+      );
+      return requireCollection(await readJson(response));
+    },
+    async addCollectionAcl(collectionId, input, idempotencyKey, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify({ ...input, permission: "read" })
+        },
+        requestOptions
+      );
+      return requireCollectionAclMutation(await readJson(response));
+    },
+    async revokeCollectionAcl(collectionId, aclId, idempotencyKey, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl/${encodeURIComponent(aclId)}`,
+        { method: "DELETE", headers: { "idempotency-key": idempotencyKey } },
+        requestOptions
+      );
+      return requireCollectionAclMutation(await readJson(response));
+    },
     async createUpload(input, requestOptions) {
       const response = await request(
         "/priv/assets/upload-sessions",
@@ -315,6 +482,144 @@ function parseUploadTarget(value: unknown): AssetUploadTarget | undefined {
     return undefined;
   }
   return target as AssetUploadTarget;
+}
+
+function requireCollection(value: unknown): CollectionRecord {
+  const collection = parseCollection(value);
+  if (!collection) throw new AssetApiRequestError("asset_api_invalid_response", false);
+  return collection;
+}
+
+function requireCollectionAclMutation(value: unknown): CollectionAclMutation {
+  if (!isExactRecord(value, ["collection", "acl"])) {
+    throw new AssetApiRequestError("asset_api_invalid_response", false);
+  }
+  const collection = parseCollection(value.collection);
+  const acl = parseCollectionAcl(value.acl);
+  if (!collection || !acl) {
+    throw new AssetApiRequestError("asset_api_invalid_response", false);
+  }
+  return { collection, acl };
+}
+
+function parseManagedCollectionPage(value: unknown): ManagedCollectionPage | undefined {
+  if (
+    !isExactRecord(value, ["collections", "hasMore"], ["cursor"]) ||
+    !Array.isArray(value.collections) ||
+    typeof value.hasMore !== "boolean" ||
+    (value.cursor !== undefined && (typeof value.cursor !== "string" || !value.cursor))
+  ) {
+    return undefined;
+  }
+  const collections = value.collections.map(parseManagedCollection);
+  if (collections.some((entry) => entry === undefined)) return undefined;
+  return {
+    collections: collections as ManagedCollection[],
+    ...(typeof value.cursor === "string" ? { cursor: value.cursor } : {}),
+    hasMore: value.hasMore
+  };
+}
+
+function parseManagedCollection(value: unknown): ManagedCollection | undefined {
+  if (!isExactRecord(value, ["collection", "acls"]) || !Array.isArray(value.acls)) {
+    return undefined;
+  }
+  const collection = parseCollection(value.collection);
+  const acls = value.acls.map(parseCollectionAcl);
+  if (!collection || acls.some((entry) => entry === undefined)) return undefined;
+  return { collection, acls: acls as CollectionAclRecord[] };
+}
+
+function parseCollection(value: unknown): CollectionRecord | undefined {
+  if (
+    !isExactRecord(
+      value,
+      ["id", "namespace", "name", "revision", "createdAt", "updatedAt"],
+      ["deletedAt"]
+    ) ||
+    !validOpaqueId(value.id) ||
+    value.namespace !== "line.group.media-sync" ||
+    typeof value.name !== "string" ||
+    !value.name ||
+    typeof value.revision !== "number" ||
+    !Number.isSafeInteger(value.revision) ||
+    value.revision < 1 ||
+    !validDate(value.createdAt) ||
+    !validDate(value.updatedAt) ||
+    (value.deletedAt !== undefined && !validDate(value.deletedAt))
+  ) {
+    return undefined;
+  }
+  return {
+    id: value.id as string,
+    namespace: "line.group.media-sync",
+    name: value.name,
+    revision: value.revision,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    ...(typeof value.deletedAt === "string" && !isZeroTime(value.deletedAt)
+      ? { deletedAt: value.deletedAt }
+      : {})
+  };
+}
+
+function parseCollectionAcl(value: unknown): CollectionAclRecord | undefined {
+  if (
+    !isExactRecord(
+      value,
+      ["id", "collectionId", "subjectType", "subjectId", "permission", "createdAt"],
+      ["revokedAt"]
+    ) ||
+    !validOpaqueId(value.id) ||
+    !validOpaqueId(value.collectionId) ||
+    (value.subjectType !== "user" && value.subjectType !== "role") ||
+    typeof value.subjectId !== "string" ||
+    !value.subjectId ||
+    value.permission !== "read" ||
+    !validDate(value.createdAt) ||
+    (value.revokedAt !== undefined && !validDate(value.revokedAt))
+  ) {
+    return undefined;
+  }
+  return {
+    id: value.id as string,
+    collectionId: value.collectionId as string,
+    subjectType: value.subjectType,
+    subjectId: value.subjectId,
+    permission: "read",
+    createdAt: value.createdAt,
+    ...(typeof value.revokedAt === "string" && !isZeroTime(value.revokedAt)
+      ? { revokedAt: value.revokedAt }
+      : {})
+  };
+}
+
+function validOpaqueId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() !== "" &&
+    value.trim() === value &&
+    Buffer.byteLength(value) <= 255
+  );
+}
+
+function validDate(value: unknown): value is string {
+  return typeof value === "string" && value !== "" && Number.isFinite(Date.parse(value));
+}
+
+function isZeroTime(value: string): boolean {
+  return new Date(value).getUTCFullYear() === 1;
+}
+
+function isExactRecord(
+  value: unknown,
+  required: string[],
+  optional: string[] = []
+): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  const allowed = new Set([...required, ...optional]);
+  return required.every((key) => keys.includes(key)) && keys.every((key) => allowed.has(key));
 }
 
 function toHeaders(value: RequestInit["headers"]): Record<string, string> {

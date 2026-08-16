@@ -17,6 +17,16 @@ function projectFileExists(path: string): boolean {
 }
 
 describe("production profile configuration deployment contract", () => {
+  it("pins media-sync management to the exact production Dapr app IDs", () => {
+    const manifest = readProjectFile("aca.containerapp.yaml");
+
+    expect(manifest).toContain("- name: ASSET_API_APP_ID\n            value: asset-api");
+    expect(manifest).toContain(
+      "- name: MEDIA_SYNC_GATEWAY_CALLER_APP_ID\n            value: api-gateway"
+    );
+    expect(manifest).not.toContain("APP_API_TOKEN\n            secretRef:");
+  });
+
   it("requires a manual LINE Provider checkpoint and the bounded Account preflight", () => {
     const workflow = readProjectFile(".github/workflows/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");

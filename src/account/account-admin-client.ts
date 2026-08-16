@@ -49,7 +49,13 @@ export interface FinalizeLineBindingInput {
   webhookEventId: string;
 }
 
+export interface VerifyAccountPermissionInput {
+  userId: string;
+  requestId: string;
+}
+
 export interface AccountAdminClient {
+  verifyPermission(input: VerifyAccountPermissionInput): Promise<boolean>;
   authorizeAdministrator(lineUserId: string): Promise<{ bound: boolean; allowed: boolean }>;
   authorizeFunctions(input: AuthorizeLineFunctionsInput): Promise<LineFunctionAuthorization>;
   verifyFunctionPermissions(input: VerifyLineFunctionPermissionsInput): Promise<FunctionName[]>;
@@ -76,12 +82,16 @@ export function createAccountAdminClient(options: {
   const baseUrl = options.baseUrl.replace(/\/+$/u, "");
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  async function post(path: string, body: object): Promise<unknown> {
+  async function post(
+    path: string,
+    body: object,
+    headers: Record<string, string> = {}
+  ): Promise<unknown> {
     let response: Response;
     try {
       response = await fetchImpl(`${baseUrl}${path}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify(body),
         redirect: "manual",
         signal: AbortSignal.timeout(options.timeoutMs)
@@ -105,6 +115,17 @@ export function createAccountAdminClient(options: {
   }
 
   return {
+    async verifyPermission(input) {
+      const payload = await post(
+        "/priv/account/v1/permissions/verify",
+        { userId: input.userId, permission: "media-sync:manage" },
+        { "x-hhc-request-id": input.requestId }
+      );
+      if (!isExactRecord(payload, ["allowed"]) || typeof payload.allowed !== "boolean") {
+        throw new AccountApiError("account_api_invalid_permission_decision", false);
+      }
+      return payload.allowed;
+    },
     async authorizeAdministrator(lineUserId) {
       const payload = await post("/priv/account/v1/line/authorize", {
         line_user_id: lineUserId

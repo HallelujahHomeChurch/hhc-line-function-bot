@@ -7,6 +7,172 @@ import {
 } from "../clients/asset-api.js";
 
 describe("asset api client", () => {
+  it("uses exact Dapr management paths, request IDs, and idempotency keys", async () => {
+    const collection = {
+      id: "collection-1",
+      namespace: "line.group.media-sync",
+      name: "Media",
+      revision: 1,
+      createdAt: "2026-08-16T00:00:00Z",
+      updatedAt: "2026-08-16T00:00:00Z"
+    };
+    const acl = {
+      id: "acl-1",
+      collectionId: "collection-1",
+      subjectType: "user",
+      subjectId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+      permission: "read",
+      createdAt: "2026-08-16T00:00:00Z"
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ collections: [{ collection, acls: [] }], hasMore: false })
+      )
+      .mockResolvedValueOnce(jsonResponse({ collection, acls: [] }))
+      .mockResolvedValueOnce(jsonResponse(collection, 201))
+      .mockResolvedValueOnce(jsonResponse({ ...collection, name: "Renamed", revision: 2 }))
+      .mockResolvedValueOnce(jsonResponse({ ...collection, deletedAt: "2026-08-16T01:00:00Z" }))
+      .mockResolvedValueOnce(jsonResponse({ collection: { ...collection, revision: 2 }, acl }, 201))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          collection: { ...collection, revision: 3 },
+          acl: { ...acl, revokedAt: "2026-08-16T01:00:00Z" }
+        })
+      );
+    const client = createAssetApiClient({
+      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
+      timeoutMs: 1000,
+      fetcher
+    });
+
+    await client.listManagedCollections({ cursor: "cursor-1", limit: 25 }, { requestId: "req-1" });
+    await client.getManagedCollection("collection-1", { requestId: "req-2" });
+    await client.createCollection("Media", "create-1", { requestId: "req-3" });
+    await client.renameCollection("collection-1", "Renamed", "rename-1", {
+      requestId: "req-4"
+    });
+    await client.deleteCollection("collection-1", "delete-1", { requestId: "req-5" });
+    await client.addCollectionAcl(
+      "collection-1",
+      { subjectType: "user", subjectId: acl.subjectId },
+      "acl-add-1",
+      { requestId: "req-6" }
+    );
+    await client.revokeCollectionAcl("collection-1", "acl-1", "acl-delete-1", {
+      requestId: "req-7"
+    });
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:3500/v1.0/invoke/asset-api/method/priv/assets/collections?cursor=cursor-1&limit=25",
+      "http://127.0.0.1:3500/v1.0/invoke/asset-api/method/priv/assets/collections/collection-1",
+      "http://127.0.0.1:3500/v1.0/invoke/asset-api/method/priv/assets/collections",
+      "http://127.0.0.1:3500/v1.0/invoke/asset-api/method/priv/assets/collections/collection-1",
+      "http://127.0.0.1:3500/v1.0/invoke/asset-api/method/priv/assets/collections/collection-1",
+      "http://127.0.0.1:3500/v1.0/invoke/asset-api/method/priv/assets/collections/collection-1/acl",
+      "http://127.0.0.1:3500/v1.0/invoke/asset-api/method/priv/assets/collections/collection-1/acl/acl-1"
+    ]);
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers)).toEqual(expect.objectContaining({}));
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")).toBeNull();
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("x-hhc-request-id")).toBe("req-1");
+    expect(new Headers(fetcher.mock.calls[2]?.[1]?.headers).get("idempotency-key")).toBe(
+      "create-1"
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toEqual({
+      namespace: "line.group.media-sync",
+      name: "Media"
+    });
+  });
+
+  it("rejects malformed managed collection responses without leaking their body", async () => {
+    const client = createAssetApiClient({
+      baseUrl: "http://asset-api",
+      timeoutMs: 1000,
+      fetcher: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ collections: [], items: [] }))
+    });
+
+    const error = await client.listManagedCollections().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: "asset_api_invalid_response"
+    });
+    expect(String(error)).not.toContain("items");
+  });
+
+  it("times out Dapr management calls with a secret-safe transient error", async () => {
+    const client = createAssetApiClient({
+      baseUrl: "http://asset-api",
+      timeoutMs: 1,
+      fetcher: vi.fn<typeof fetch>().mockImplementation(
+        (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new Error("upstream secret timeout detail"))
+            );
+          })
+      )
+    });
+
+    const error = await client.listManagedCollections().catch((caught: unknown) => caught);
+
+    expect(isTransientAssetApiError(error)).toBe(true);
+    expect(String(error)).not.toContain("upstream secret");
+  });
+
+  it("normalizes Go zero lifecycle timestamps on live collections and ACLs", async () => {
+    const client = createAssetApiClient({
+      baseUrl: "http://asset-api",
+      timeoutMs: 1000,
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          collection: {
+            id: "collection-1",
+            namespace: "line.group.media-sync",
+            name: "Media",
+            revision: 1,
+            createdAt: "2026-08-16T00:00:00Z",
+            updatedAt: "2026-08-16T00:00:00Z",
+            deletedAt: "0001-01-01T00:00:00Z"
+          },
+          acls: [
+            {
+              id: "acl-1",
+              collectionId: "collection-1",
+              subjectType: "role",
+              subjectId: "media_sync_user",
+              permission: "read",
+              createdAt: "2026-08-16T00:00:00Z",
+              revokedAt: "0001-01-01T00:00:00Z"
+            }
+          ]
+        })
+      )
+    });
+
+    await expect(client.getManagedCollection("collection-1")).resolves.toEqual({
+      collection: {
+        id: "collection-1",
+        namespace: "line.group.media-sync",
+        name: "Media",
+        revision: 1,
+        createdAt: "2026-08-16T00:00:00Z",
+        updatedAt: "2026-08-16T00:00:00Z"
+      },
+      acls: [
+        {
+          id: "acl-1",
+          collectionId: "collection-1",
+          subjectType: "role",
+          subjectId: "media_sync_user",
+          permission: "read",
+          createdAt: "2026-08-16T00:00:00Z"
+        }
+      ]
+    });
+  });
+
   it("uses one workload token and deterministic idempotency keys for the asset lifecycle", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

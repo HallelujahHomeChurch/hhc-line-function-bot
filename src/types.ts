@@ -390,11 +390,23 @@ export interface AppConfig {
   lastErrors?: LastErrorsConfig;
   observability?: ObservabilityConfig;
   account?: AccountServiceConfig;
+  asset?: AssetServiceConfig;
+  mediaSync?: MediaSyncConfig;
 }
 
 export interface AccountServiceConfig {
   baseUrl: string;
   timeoutMs: number;
+}
+
+export interface AssetServiceConfig {
+  baseUrl: string;
+  timeoutMs: number;
+}
+
+export interface MediaSyncConfig {
+  gatewayCallerAppId: string;
+  appApiToken: string;
 }
 
 export interface ObservabilityConfig {

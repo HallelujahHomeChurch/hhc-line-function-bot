@@ -81,6 +81,8 @@ import type {
   TextMessageHandlerRegistry
 } from "../../types.js";
 import { registerHealthRoutes } from "../http/health-routes.js";
+import { registerMediaSyncRoutes } from "../../media-sync/http-routes.js";
+import type { MediaSyncManagementService } from "../../media-sync/service.js";
 import { runAdminCommand } from "./admin-commands.js";
 import {
   handleAgentTextTurnWithLongJob,
@@ -119,6 +121,7 @@ export interface AppDependencies {
   completionObserver: ControlledCompletionObserver;
   accountAdminClient: AccountAdminClient;
   mediaSyncStore?: PostgresMediaSyncStore;
+  mediaSyncManagementService?: MediaSyncManagementService;
 }
 
 interface AllowResult {
@@ -233,6 +236,14 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   });
 
   registerHealthRoutes(app, config, diagnostics);
+  if (deps.mediaSyncManagementService && config.mediaSync) {
+    registerMediaSyncRoutes(app, {
+      ...config.mediaSync,
+      requestIdFactory,
+      accountAdminClient: deps.accountAdminClient,
+      service: deps.mediaSyncManagementService
+    });
+  }
 
   for (const profile of config.profiles) {
     app.post(profile.webhookPath, async (request, reply) => {

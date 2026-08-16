@@ -24,6 +24,58 @@ const finalizeInput = {
 };
 
 describe("account admin client", () => {
+  it("verifies only media-sync:manage with the propagated request ID", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ allowed: true }));
+    const client = createAccountAdminClient({
+      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(
+      client.verifyPermission({
+        userId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+        requestId: "request-1"
+      })
+    ).resolves.toBe(true);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://127.0.0.1:3500/v1.0/invoke/account-api/method/priv/account/v1/permissions/verify",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-hhc-request-id": "request-1"
+        },
+        body: JSON.stringify({
+          userId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+          permission: "media-sync:manage"
+        }),
+        redirect: "manual"
+      })
+    );
+  });
+
+  it.each([{ allowed: true, roles: ["admin"] }, { allowed: "true" }, { denied: true }])(
+    "rejects malformed permission decisions",
+    async (payload) => {
+      const client = createAccountAdminClient({
+        baseUrl: "http://account-api",
+        timeoutMs: 1000,
+        fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload))
+      });
+
+      await expect(
+        client.verifyPermission({
+          userId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+          requestId: "request-1"
+        })
+      ).rejects.toMatchObject({
+        message: "account_api_invalid_permission_decision",
+        retryable: false
+      });
+    }
+  );
+
   it("verifies configured Account RBAC functions without accepting permission strings", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
