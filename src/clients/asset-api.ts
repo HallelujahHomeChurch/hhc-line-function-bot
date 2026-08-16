@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { pipeline } from "node:stream/promises";
@@ -520,10 +521,16 @@ async function streamUploadFile(
     url.protocol === "https:" ? httpsRequest : url.protocol === "http:" ? httpRequest : undefined;
   if (!request) throw new AssetApiRequestError("asset_upload_invalid_target", false);
   try {
+    const file = await stat(filePath);
+    if (!file.isFile()) throw new AssetApiRequestError("asset_upload_invalid_file", false);
     await new Promise<void>((resolve, reject) => {
       const upload = request(
         url,
-        { method: target.method || "PUT", headers: target.headers, signal },
+        {
+          method: target.method || "PUT",
+          headers: { ...target.headers, "content-length": String(file.size) },
+          signal
+        },
         (response) => {
           response.resume();
           response.on("end", () => {

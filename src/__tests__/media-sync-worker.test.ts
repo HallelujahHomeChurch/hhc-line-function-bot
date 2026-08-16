@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MEDIA_SYNC_MAX_BYTES,
   runMediaSyncWorker,
-  runMediaSyncSourceStage,
   safeMediaFileName,
   shouldAcknowledgeMediaSyncResult
 } from "../media-sync/worker.js";
@@ -24,12 +23,11 @@ const pptxBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]);
 
 describe("media sync source stage", () => {
   it("claims only the opaque work ID and loads through the exact lease token", async () => {
-    const fixture = createFixture();
+    const fixture = newUploadFixture();
 
-    await expect(runMediaSyncSourceStage("work-opaque-1", fixture.options)).resolves.toMatchObject({
-      status: "prepared",
-      fileName: "video.mp4",
-      sizeBytes: 5
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "scan_pending"
     });
 
     expect(fixture.store.claimWork).toHaveBeenCalledWith({
@@ -48,21 +46,11 @@ describe("media sync source stage", () => {
     );
   });
 
-  it("does not download when the lease fence no longer owns the work", async () => {
-    const fixture = createFixture();
-    fixture.store.loadClaimedWork.mockResolvedValue(undefined);
-
-    await expect(runMediaSyncSourceStage("work-opaque-1", fixture.options)).resolves.toEqual({
-      status: "contention"
-    });
-    expect(fixture.line.getMessageContentStream).not.toHaveBeenCalled();
-  });
-
   it("reschedules LINE transcoding and never opens a premature stream", async () => {
-    const fixture = createFixture();
+    const fixture = newUploadFixture();
     fixture.line.getMessageContentTranscodingStatus.mockResolvedValue("processing");
 
-    await expect(runMediaSyncSourceStage("work-opaque-1", fixture.options)).resolves.toEqual({
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "rescheduled",
       reason: "transcoding_processing"
     });
@@ -77,10 +65,10 @@ describe("media sync source stage", () => {
   });
 
   it("terminalizes LINE transcoding failure without downloading", async () => {
-    const fixture = createFixture();
+    const fixture = newUploadFixture();
     fixture.line.getMessageContentTranscodingStatus.mockResolvedValue("failed");
 
-    await expect(runMediaSyncSourceStage("work-opaque-1", fixture.options)).resolves.toEqual({
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "permanent_failure",
       reason: "transcoding_failed"
     });
@@ -93,50 +81,59 @@ describe("media sync source stage", () => {
   });
 
   it("streams LINE content once and removes the temporary directory after inspection", async () => {
-    const fixture = createFixture();
+    const fixture = newUploadFixture();
     let temporaryDirectory = "";
-    fixture.inspect = vi.fn().mockImplementation(async (file) => {
-      temporaryDirectory = file.directory;
-      await expect(access(file.path)).resolves.toBeUndefined();
+    fixture.assets.uploadFile.mockImplementation(async (_target, path) => {
+      temporaryDirectory = path.replace(/\/content$/u, "");
+      await expect(access(path)).resolves.toBeUndefined();
     });
-    fixture.options.inspect = fixture.inspect;
 
-    await expect(runMediaSyncSourceStage("work-opaque-1", fixture.options)).resolves.toMatchObject({
-      status: "prepared",
-      sizeBytes: 5,
-      checksumSha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "scan_pending"
     });
 
     expect(fixture.line.getMessageContentStream).toHaveBeenCalledTimes(1);
-    expect(fixture.inspect).toHaveBeenCalledTimes(1);
+    expect(fixture.assets.uploadFile).toHaveBeenCalledTimes(1);
     await expect(readdir(temporaryDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("accepts one byte and the exact 200 MiB policy boundary", async () => {
     expect(MEDIA_SYNC_MAX_BYTES).toBe(209_715_200);
-    const one = createFixture(Readable.from([Buffer.from([1])]));
-    await expect(runMediaSyncSourceStage("work-opaque-1", one.options)).resolves.toMatchObject({
-      status: "prepared",
-      sizeBytes: 1
+    const one = newUploadFixture(Readable.from([Buffer.from([1])]));
+    await expect(runMediaSyncWorker("work-opaque-1", one.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "scan_pending"
     });
+    expect(one.assets.complete).toHaveBeenCalledWith(
+      "asset-1",
+      expect.objectContaining({ sizeBytes: 1 }),
+      { signal: undefined }
+    );
 
     const megabyte = Buffer.alloc(1024 * 1024);
-    const boundary = createFixture(Readable.from(Array.from({ length: 200 }, () => megabyte)));
-    await expect(runMediaSyncSourceStage("work-opaque-1", boundary.options)).resolves.toMatchObject(
-      { status: "prepared", sizeBytes: MEDIA_SYNC_MAX_BYTES }
+    const boundary = newUploadFixture(Readable.from(Array.from({ length: 200 }, () => megabyte)));
+    await expect(runMediaSyncWorker("work-opaque-1", boundary.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "scan_pending"
+    });
+    expect(boundary.assets.complete).toHaveBeenCalledWith(
+      "asset-1",
+      expect.objectContaining({ sizeBytes: MEDIA_SYNC_MAX_BYTES }),
+      { signal: undefined }
     );
   }, 20_000);
 
   it("rejects empty and above-limit content and always cleans up", async () => {
-    const empty = createFixture(Readable.from([]));
-    await expect(runMediaSyncSourceStage("work-opaque-1", empty.options)).resolves.toEqual({
+    const empty = newUploadFixture(Readable.from([]));
+    await expect(runMediaSyncWorker("work-opaque-1", empty.options)).resolves.toEqual({
       status: "permanent_failure",
       reason: "line_content_empty"
     });
 
-    const fixture = createFixture(Readable.from([Buffer.alloc(4), Buffer.alloc(1)]));
+    const fixture = newUploadFixture(Readable.from([Buffer.alloc(4), Buffer.alloc(1)]));
     fixture.options.maxBytes = 4;
-    await expect(runMediaSyncSourceStage("work-opaque-1", fixture.options)).resolves.toEqual({
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "permanent_failure",
       reason: "line_content_too_large"
     });
@@ -145,10 +142,10 @@ describe("media sync source stage", () => {
 
   it("cancels the LINE stream at the deadline and releases the claim for retry", async () => {
     const stream = new Readable({ read() {} });
-    const fixture = createFixture(stream);
+    const fixture = newUploadFixture(stream);
     fixture.options.lineDownloadTimeoutMs = 5;
 
-    await expect(runMediaSyncSourceStage("work-opaque-1", fixture.options)).resolves.toEqual({
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "rescheduled",
       reason: "line_content_timeout"
     });
@@ -158,12 +155,12 @@ describe("media sync source stage", () => {
 
   it("honors caller cancellation and removes the partial file", async () => {
     const stream = new Readable({ read() {} });
-    const fixture = createFixture(stream);
+    const fixture = newUploadFixture(stream);
     const controller = new AbortController();
     fixture.options.signal = controller.signal;
     setImmediate(() => controller.abort());
 
-    await expect(runMediaSyncSourceStage("work-opaque-1", fixture.options)).resolves.toEqual({
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "rescheduled",
       reason: "line_content_cancelled"
     });
@@ -220,6 +217,19 @@ describe("media sync Asset and collection stage", () => {
     expect(fixture.line.getMessageContentStream).toHaveBeenCalledTimes(1);
     expect(fixture.assets.uploadFile).toHaveBeenCalledTimes(1);
     expect(fixture.assets.get).not.toHaveBeenCalled();
+    expect(fixture.assets.createUpload).toHaveBeenCalledWith(
+      {
+        namespace: "line.group.media-sync",
+        idempotencyKey: expect.stringMatching(/^media-sync-upload:/u),
+        ownerType: "media_sync_ingest",
+        ownerId: "work-opaque-1",
+        purpose: "media-sync",
+        fileName: "video.mp4",
+        mimeType: "video/mp4",
+        maxSizeBytes: 5
+      },
+      { signal: undefined }
+    );
     expect(fixture.store.loadClaimedWork).toHaveBeenCalledTimes(5);
     expect(fixture.store.persistCompletedAsset).toHaveBeenCalledWith({
       workId: "work-opaque-1",
@@ -259,6 +269,78 @@ describe("media sync Asset and collection stage", () => {
     }
   );
 
+  it.each([
+    ["inactive binding", "binding_inactive"],
+    ["infected Asset", "scan_infected"]
+  ] as const)(
+    "compensates every persisted owner before terminalizing an %s",
+    async (scenario, reason) => {
+      const fixture = cleanAssetFixture();
+      fixture.work.publications[0]!.state = "published";
+      fixture.work.publications[0]!.targetId = "occurrence-actual-1";
+      fixture.work.publications.push({
+        ...manualPublication(),
+        state: "published",
+        targetId: "resource-actual-1"
+      });
+      if (scenario === "inactive binding") {
+        fixture.store.findActiveBinding.mockResolvedValue(undefined);
+      } else {
+        fixture.assets.get.mockResolvedValue(asset({ scanStatus: "infected" }));
+      }
+
+      await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+        status: "permanent_failure",
+        reason
+      });
+      expect(fixture.assets.softDelete).toHaveBeenCalledWith("asset-1");
+      expect(fixture.assets.deleteCollectionItem).toHaveBeenCalledWith(
+        "collection-1",
+        "occurrence-actual-1",
+        expect.stringMatching(/^media-sync-collection-compensate:/u)
+      );
+      expect(fixture.publisher.tombstonePublishedResource).toHaveBeenCalledWith(
+        "resource-actual-1",
+        new Date("2026-08-16T00:00:00.000Z")
+      );
+      expect(fixture.store.failClaimedWork).toHaveBeenCalledWith(
+        expect.objectContaining({ failureCategory: reason })
+      );
+    }
+  );
+
+  it("durably remembers failed terminal compensation before completing intake failure", async () => {
+    const fixture = cleanAssetFixture();
+    fixture.work.publications[0]!.state = "published";
+    fixture.work.publications[0]!.targetId = "occurrence-actual-1";
+    fixture.assets.get.mockResolvedValue(asset({ scanStatus: "infected" }));
+    fixture.assets.softDelete.mockRejectedValue(new Error("asset unavailable"));
+    fixture.assets.deleteCollectionItem.mockRejectedValue(new Error("asset unavailable"));
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "permanent_failure",
+      reason: "scan_infected"
+    });
+    expect(fixture.store.rememberOwnedAsset).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      assetId: "asset-1",
+      assetEtag: "etag-1"
+    });
+    expect(fixture.store.rememberExternalHandle).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      publicationType: "collection",
+      destinationId: "collection-1",
+      targetId: "occurrence-actual-1"
+    });
+    expect(fixture.store.failClaimedWork).toHaveBeenCalledOnce();
+    expect(fixture.store.rememberOwnedAsset.mock.invocationCallOrder[0]).toBeLessThan(
+      fixture.store.failClaimedWork.mock.invocationCallOrder[0]!
+    );
+    expect(fixture.store.rememberExternalHandle.mock.invocationCallOrder[0]).toBeLessThan(
+      fixture.store.failClaimedWork.mock.invocationCallOrder[0]!
+    );
+  });
+
   it("publishes only a clean ready Asset and persists the actual returned occurrence ID", async () => {
     const fixture = cleanAssetFixture();
 
@@ -271,7 +353,7 @@ describe("media sync Asset and collection stage", () => {
       "collection-1",
       {
         assetId: "asset-1",
-        remoteItemId: "line:helper:message-1",
+        remoteItemId: "work-opaque-1",
         displayName: "video.mp4",
         sourceRevision: "a".repeat(64)
       },
@@ -311,6 +393,31 @@ describe("media sync Asset and collection stage", () => {
       );
     }
   );
+
+  it.each(["missing", "terminal"] as const)(
+    "acknowledges %s queue work without loading or downloading",
+    async (status) => {
+      const fixture = createAssetFixture();
+      fixture.store.claimWork.mockResolvedValue(status);
+
+      await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+        status
+      });
+      expect(fixture.store.loadClaimedWork).not.toHaveBeenCalled();
+      expect(fixture.line.getMessageContentStream).not.toHaveBeenCalled();
+      expect(shouldAcknowledgeMediaSyncResult({ status })).toBe(true);
+    }
+  );
+
+  it("keeps busy queue work unacknowledged", async () => {
+    const fixture = createAssetFixture();
+    fixture.store.claimWork.mockResolvedValue("busy");
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "contention"
+    });
+    expect(shouldAcknowledgeMediaSyncResult({ status: "contention" })).toBe(false);
+  });
 
   it("terminalizes a permanent Asset policy rejection", async () => {
     const fixture = createAssetFixture();
@@ -744,48 +851,17 @@ function asset(overrides: Partial<AssetRecord>): AssetRecord {
   };
 }
 
-function createFixture(stream: Readable = Readable.from([Buffer.from("hello")])) {
-  const claim = {
-    workId: "work-opaque-1",
-    sourceKey: "line:helper:message-1",
-    operation: "intake" as const,
-    attempts: 1,
-    availableAt: "2026-08-16T00:00:00.000Z",
-    claimedUntil: "2099-08-16T00:10:00.000Z",
-    dispatchedAt: "2026-08-16T00:00:00.000Z"
-  };
-  const work = createWork();
-  const store = {
-    claimWork: vi.fn().mockResolvedValue(claim),
-    loadClaimedWork: vi.fn().mockResolvedValue(work),
-    retryOutbox: vi.fn().mockResolvedValue(true),
-    failClaimedWork: vi.fn().mockResolvedValue(true)
-  };
-  const line = {
-    getMessageContent: vi.fn(),
-    getMessageContentStream: vi.fn().mockResolvedValue({ stream, contentType: "video/mp4" }),
-    getMessageContentTranscodingStatus: vi.fn().mockResolvedValue("succeeded")
-  };
-  const inspect = vi.fn().mockResolvedValue(undefined);
-  return {
-    claim,
-    work,
-    store,
-    line,
-    inspect,
-    options: {
-      store: store as never,
-      lineContent: line as unknown as LineContentClient,
-      profiles: [{ name: "helper", channelAccessToken: "token" }],
-      workerLeaseMs: 600_000,
-      retryDelayMs: 30_000,
-      lineDownloadTimeoutMs: 1_000,
-      maxBytes: MEDIA_SYNC_MAX_BYTES,
-      signal: undefined as AbortSignal | undefined,
-      now: () => new Date("2026-08-16T00:00:00.000Z"),
-      inspect
-    }
-  };
+function newUploadFixture(stream: Readable = Readable.from([Buffer.from("hello")])) {
+  const fixture = createAssetFixture();
+  fixture.line.getMessageContentStream.mockResolvedValue({ stream, contentType: "video/mp4" });
+  fixture.assets.createUpload.mockResolvedValue({
+    asset: asset({ uploadStatus: "created", scanStatus: "pending" }),
+    uploadTarget: { url: "https://blob.invalid/opaque", method: "PUT", headers: {} }
+  });
+  fixture.assets.complete.mockResolvedValue(
+    asset({ uploadStatus: "completed", scanStatus: "pending", processingStatus: "pending" })
+  );
+  return fixture;
 }
 
 function createWork(): MediaSyncWork {

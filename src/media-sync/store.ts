@@ -16,7 +16,8 @@ import type {
   MediaSyncPublication,
   MediaSyncPublicationState,
   MediaSyncPublicationType,
-  MediaSyncWork
+  MediaSyncWork,
+  MediaSyncWorkClaim
 } from "./types.js";
 
 type StoreOptions = {
@@ -382,7 +383,7 @@ export class PostgresMediaSyncStore {
            and (outbox.claimed_until is null or outbox.claimed_until <= $1)
            and (
              (outbox.operation='intake' and ingest.state<>'tombstoned')
-             or (outbox.operation='delete' and ingest.state='tombstoned')
+             or outbox.operation='delete'
            )
          order by outbox.available_at, outbox.source_key, outbox.operation
          for update of outbox skip locked
@@ -419,7 +420,7 @@ export class PostgresMediaSyncStore {
            and (outbox.claimed_until is null or outbox.claimed_until <= $1)
            and (
              (outbox.operation='intake' and ingest.state<>'tombstoned')
-             or (outbox.operation='delete' and ingest.state='tombstoned')
+             or outbox.operation='delete'
            )
          order by outbox.available_at, outbox.source_key, outbox.operation
          for update of outbox skip locked
@@ -458,7 +459,7 @@ export class PostgresMediaSyncStore {
     operation: MediaSyncOutboxOperation;
     now?: Date;
     leaseMs: number;
-  }): Promise<MediaSyncOutboxItem | undefined> {
+  }): Promise<MediaSyncWorkClaim> {
     assertLease(input.leaseMs);
     const now = input.now ?? this.now();
     const claimedUntil = new Date(now.getTime() + input.leaseMs);
@@ -472,12 +473,36 @@ export class PostgresMediaSyncStore {
          and (outbox.claimed_until is null or outbox.claimed_until <= $3)
          and (
            (outbox.operation='intake' and ingest.state<>'tombstoned')
-           or (outbox.operation='delete' and ingest.state='tombstoned')
+           or outbox.operation='delete'
          )
        returning outbox.*, ingest.work_id`,
       [input.workId, input.operation, now, claimedUntil]
     );
-    return result.rows[0] ? mapOutbox(result.rows[0]) : undefined;
+    if (result.rows[0]) return mapOutbox(result.rows[0]);
+    const disposition = await this.pool.query<{
+      state: MediaSyncIngest["state"];
+      operation: MediaSyncOutboxOperation | null;
+      completed_at: Date | string | null;
+    }>(
+      `select ingest.state, outbox.operation, outbox.completed_at
+       from media_sync_ingests ingest
+       left join media_sync_outbox outbox
+         on outbox.source_key=ingest.source_key and outbox.operation=$2
+       where ingest.work_id=$1`,
+      [input.workId, input.operation]
+    );
+    const existing = disposition.rows[0];
+    if (!existing || !existing.operation) return "missing";
+    if (
+      existing.completed_at ||
+      (input.operation === "intake" &&
+        (existing.state === "ready" ||
+          existing.state === "failed" ||
+          existing.state === "tombstoned"))
+    ) {
+      return "terminal";
+    }
+    return "busy";
   }
 
   async loadClaimedWork(input: {
@@ -495,7 +520,7 @@ export class PostgresMediaSyncStore {
          and outbox.claimed_until > clock_timestamp()
          and (
            (outbox.operation='intake' and ingest.state<>'tombstoned')
-           or (outbox.operation='delete' and ingest.state='tombstoned')
+           or outbox.operation='delete'
          )`,
       [input.workId, input.operation, input.expectedClaimedUntil]
     );
@@ -832,9 +857,7 @@ export class PostgresMediaSyncStore {
           ingest.state === "tombstoned"
         ]
       );
-      if (ingest.state === "tombstoned") {
-        await reopenDeleteOutbox(client, sourceKey);
-      }
+      await reopenDeleteOutbox(client, sourceKey);
       await client.query("commit");
       return Boolean(result.rowCount);
     } catch (error) {
@@ -869,9 +892,7 @@ export class PostgresMediaSyncStore {
          where source_key=$1 returning state`,
         [sourceKey, input.assetId, input.assetEtag ?? null]
       );
-      if (result.rows[0]?.state === "tombstoned") {
-        await reopenDeleteOutbox(client, sourceKey);
-      }
+      if (result.rows[0]) await reopenDeleteOutbox(client, sourceKey);
       await client.query("commit");
       return Boolean(result.rowCount);
     } catch (error) {
@@ -890,7 +911,7 @@ export class PostgresMediaSyncStore {
     lastErrorCategory: string;
   }): Promise<boolean> {
     return this.withLockedIngest(input.sourceKey, async (client, ingest) => {
-      if (!ingest || ingest.state === "tombstoned") return false;
+      if (!ingest || (input.operation === "intake" && ingest.state === "tombstoned")) return false;
       const result = await client.query(
         `update media_sync_outbox
          set available_at=$3, claimed_until=null, last_error_category=$4
@@ -1055,7 +1076,6 @@ function assertSameIngest(row: IngestRow, input: CreateMediaSyncIngestInput): vo
     row.profile_name !== input.profileName ||
     row.message_id !== input.messageId ||
     row.group_id !== input.groupId ||
-    row.collection_id !== input.collectionId ||
     row.media_kind !== input.mediaKind
   ) {
     throw new Error("media_sync_ingest_identity_conflict");

@@ -181,7 +181,10 @@ export async function runAttachmentAssetQueueLease(
 }
 
 function formatMediaSyncJobStatus(result: MediaSyncWorkerResult): Record<string, string> {
-  return result.status === "completed" || result.status === "contention"
+  return result.status === "completed" ||
+    result.status === "contention" ||
+    result.status === "missing" ||
+    result.status === "terminal"
     ? { status: result.status }
     : { status: result.status, reason: result.reason };
 }

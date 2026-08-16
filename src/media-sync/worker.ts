@@ -21,11 +21,6 @@ import { withMediaContentFile, type MediaContentFile } from "./content-file.js";
 
 export const MEDIA_SYNC_MAX_BYTES = 209_715_200;
 
-type SourceStageStore = Pick<
-  PostgresMediaSyncStore,
-  "claimWork" | "loadClaimedWork" | "retryOutbox" | "failClaimedWork"
->;
-
 type AssetStageStore = Pick<
   PostgresMediaSyncStore,
   | "claimWork"
@@ -42,7 +37,7 @@ type AssetStageStore = Pick<
   | "failManualPublication"
 >;
 
-export type MediaSyncSourceStageResult =
+type MediaSyncSourceStageResult =
   | {
       status: "prepared";
       fileName: string;
@@ -66,6 +61,8 @@ export type MediaSyncSourceStageResult =
 
 export type MediaSyncWorkerResult =
   | { status: "completed" }
+  | { status: "missing" }
+  | { status: "terminal" }
   | {
       status: "rescheduled";
       reason:
@@ -95,53 +92,10 @@ export type MediaSyncWorkerResult =
 export function shouldAcknowledgeMediaSyncResult(result: MediaSyncWorkerResult): boolean {
   return (
     result.status === "completed" ||
+    result.status === "missing" ||
+    result.status === "terminal" ||
     result.status === "rescheduled" ||
     result.status === "permanent_failure"
-  );
-}
-
-export async function runMediaSyncSourceStage(
-  workId: string,
-  options: {
-    store: SourceStageStore;
-    lineContent: LineContentClient;
-    profiles: Array<{ name: string; channelAccessToken: string }>;
-    workerLeaseMs: number;
-    retryDelayMs: number;
-    lineDownloadTimeoutMs: number;
-    maxBytes: number;
-    signal?: AbortSignal;
-    now?: () => Date;
-    inspect?: (file: MediaContentFile) => Promise<void>;
-  }
-): Promise<MediaSyncSourceStageResult> {
-  if (
-    !Number.isSafeInteger(options.maxBytes) ||
-    options.maxBytes < 1 ||
-    options.maxBytes > MEDIA_SYNC_MAX_BYTES
-  ) {
-    throw new Error("media_sync_max_bytes_invalid");
-  }
-  const now = options.now?.() ?? new Date();
-  const claim = await options.store.claimWork({
-    workId,
-    operation: "intake",
-    leaseMs: options.workerLeaseMs,
-    now
-  });
-  if (!claim?.claimedUntil) return { status: "contention" };
-  const work = await options.store.loadClaimedWork({
-    workId,
-    operation: "intake",
-    expectedClaimedUntil: claim.claimedUntil
-  });
-  if (!work) return { status: "contention" };
-  return runClaimedSourceStage(
-    workId,
-    claim as MediaSyncOutboxItem & { claimedUntil: string },
-    work,
-    options,
-    now
   );
 }
 
@@ -150,7 +104,7 @@ async function runClaimedSourceStage(
   claim: MediaSyncOutboxItem & { claimedUntil: string },
   work: MediaSyncWork,
   options: {
-    store: SourceStageStore;
+    store: Pick<AssetStageStore, "retryOutbox" | "failClaimedWork">;
     lineContent: LineContentClient;
     profiles: Array<{ name: string; channelAccessToken: string }>;
     retryDelayMs: number;
@@ -276,7 +230,8 @@ export async function runMediaSyncWorker(
     leaseMs: options.workerLeaseMs,
     now
   });
-  if (!claim?.claimedUntil) return { status: "contention" };
+  if (claim === "missing" || claim === "terminal") return { status: claim };
+  if (claim === "busy" || !claim.claimedUntil) return { status: "contention" };
   const loadedWork = await options.store.loadClaimedWork({
     workId,
     operation: "intake",
@@ -285,7 +240,7 @@ export async function runMediaSyncWorker(
   if (!loadedWork) return { status: "contention" };
   let work: MediaSyncWork = loadedWork;
   if (!(await activeBinding(work, options.store))) {
-    return failWorker("binding_inactive", workId, claim.claimedUntil, options.store);
+    return terminalFailure("binding_inactive", workId, claim.claimedUntil, work, now, options);
   }
 
   let asset: AssetRecord;
@@ -295,7 +250,7 @@ export async function runMediaSyncWorker(
       const eligibility = await eligibilityAfterExternal(workId, claim.claimedUntil, options.store);
       if (eligibility === "lease_lost") return { status: "contention" };
       if (eligibility === "binding_inactive") {
-        return failWorker("binding_inactive", workId, claim.claimedUntil, options.store);
+        return terminalFailure("binding_inactive", workId, claim.claimedUntil, work, now, options);
       }
       work = eligibility.work;
     } else {
@@ -318,8 +273,8 @@ export async function runMediaSyncWorker(
               {
                 namespace: "line.group.media-sync",
                 idempotencyKey: idempotencyKey("media-sync-upload", sourceWork.ingest.sourceKey),
-                ownerType: "line_group",
-                ownerId: sourceWork.ingest.groupId,
+                ownerType: "media_sync_ingest",
+                ownerId: sourceWork.ingest.workId,
                 purpose: "media-sync",
                 fileName: safeMediaFileName(sourceWork.ingest),
                 mimeType: file.contentType ?? sourceWork.ingest.expectedMime,
@@ -336,6 +291,7 @@ export async function runMediaSyncWorker(
             let current = created.asset;
             if (current.uploadStatus !== "completed") {
               if (current.uploadStatus !== "created" || !created.uploadTarget) {
+                await compensateOwnedAsset(current, workId, options);
                 throw new PermanentMediaSyncError("asset_policy_rejected");
               }
               await options.assets.uploadFile(created.uploadTarget, file.path, {
@@ -364,6 +320,7 @@ export async function runMediaSyncWorker(
               );
             }
             if (current.uploadStatus !== "completed" || !current.etag?.trim()) {
+              await compensateOwnedAsset(current, workId, options);
               throw new PermanentMediaSyncError("asset_policy_rejected");
             }
             if (
@@ -400,16 +357,23 @@ export async function runMediaSyncWorker(
       !asset.etag?.trim() ||
       (work.ingest.assetEtag !== undefined && work.ingest.assetEtag !== asset.etag)
     ) {
-      return failWorker("asset_policy_rejected", workId, claim.claimedUntil, options.store);
+      return terminalFailure(
+        "asset_policy_rejected",
+        workId,
+        claim.claimedUntil,
+        work,
+        now,
+        options
+      );
     }
     if (asset.scanStatus === "pending" || asset.scanStatus === "scanning") {
       return retryWorker("scan_pending", work.ingest.sourceKey, claim.claimedUntil, now, options);
     }
     if (asset.scanStatus === "infected") {
-      return failWorker("scan_infected", workId, claim.claimedUntil, options.store);
+      return terminalFailure("scan_infected", workId, claim.claimedUntil, work, now, options);
     }
     if (asset.scanStatus === "failed") {
-      return failWorker("scan_failed", workId, claim.claimedUntil, options.store);
+      return terminalFailure("scan_failed", workId, claim.claimedUntil, work, now, options);
     }
     if (asset.processingStatus === "pending") {
       return retryWorker(
@@ -421,28 +385,42 @@ export async function runMediaSyncWorker(
       );
     }
     if (asset.processingStatus === "failed") {
-      return failWorker("processing_failed", workId, claim.claimedUntil, options.store);
+      return terminalFailure("processing_failed", workId, claim.claimedUntil, work, now, options);
     }
     if (asset.scanStatus !== "clean") {
-      return failWorker("scan_failed", workId, claim.claimedUntil, options.store);
+      return terminalFailure("scan_failed", workId, claim.claimedUntil, work, now, options);
     }
 
     const collection = work.publications.find(
       (publication) => publication.publicationType === "collection"
     );
     if (!collection) {
-      return failWorker("asset_policy_rejected", workId, claim.claimedUntil, options.store);
+      return terminalFailure(
+        "asset_policy_rejected",
+        workId,
+        claim.claimedUntil,
+        work,
+        now,
+        options
+      );
     }
     if (!collection.targetId) {
       const sourceRevision = work.ingest.checksumSha256 ?? asset.etag ?? work.ingest.assetEtag;
       if (!sourceRevision) {
-        return failWorker("asset_policy_rejected", workId, claim.claimedUntil, options.store);
+        return terminalFailure(
+          "asset_policy_rejected",
+          workId,
+          claim.claimedUntil,
+          work,
+          now,
+          options
+        );
       }
       const mutation = await options.assets.addCollectionItem(
         work.ingest.collectionId,
         {
           assetId: asset.id,
-          remoteItemId: work.ingest.sourceKey,
+          remoteItemId: work.ingest.workId,
           displayName: safeMediaFileName(work.ingest),
           sourceRevision
         },
@@ -505,11 +483,13 @@ export async function runMediaSyncWorker(
   } catch (error) {
     if (error instanceof LeaseFenceError) return { status: "contention" };
     if (error instanceof PermanentMediaSyncError || isPermanentAssetApiError(error)) {
-      return failWorker(
+      return terminalFailure(
         error instanceof PermanentMediaSyncError ? error.reason : "asset_policy_rejected",
         workId,
         claim.claimedUntil,
-        options.store
+        work,
+        now,
+        options
       );
     }
     return retryWorker(
@@ -798,7 +778,7 @@ async function requireEligibilityOrCompensateAsset(
 }
 
 async function compensateOwnedAsset(
-  asset: AssetRecord,
+  asset: Pick<AssetRecord, "id" | "etag">,
   workId: string,
   options: { store: AssetStageStore; assets: AssetApiClient }
 ): Promise<void> {
@@ -850,6 +830,67 @@ async function retryWorker(
     lastErrorCategory: reason
   });
   return released ? { status: "rescheduled", reason } : { status: "contention" };
+}
+
+async function terminalFailure(
+  reason:
+    | "binding_inactive"
+    | "asset_policy_rejected"
+    | "scan_infected"
+    | "scan_failed"
+    | "processing_failed",
+  workId: string,
+  expectedClaimedUntil: string,
+  work: MediaSyncWork,
+  now: Date,
+  options: {
+    store: AssetStageStore;
+    assets: AssetApiClient;
+    publisher?: ResourceBinaryPublisher;
+  }
+): Promise<MediaSyncWorkerResult> {
+  await compensatePersistedOwners(workId, work, now, options);
+  return failWorker(reason, workId, expectedClaimedUntil, options.store);
+}
+
+async function compensatePersistedOwners(
+  workId: string,
+  work: MediaSyncWork,
+  now: Date,
+  options: {
+    store: AssetStageStore;
+    assets: AssetApiClient;
+    publisher?: ResourceBinaryPublisher;
+  }
+): Promise<void> {
+  if (work.ingest.assetId) {
+    await compensateOwnedAsset(
+      {
+        id: work.ingest.assetId,
+        ...(work.ingest.assetEtag ? { etag: work.ingest.assetEtag } : {})
+      },
+      workId,
+      options
+    );
+  }
+  for (const publication of work.publications) {
+    if (!publication.targetId) continue;
+    if (publication.publicationType === "collection") {
+      await compensateOccurrence(workId, publication.destinationId, publication.targetId, options);
+      continue;
+    }
+    const compensated =
+      options.publisher &&
+      (await options.publisher.tombstonePublishedResource(publication.targetId, now));
+    if (!compensated) {
+      await options.store.rememberExternalHandle({
+        workId,
+        publicationType: "manual",
+        destinationId: publication.destinationId,
+        targetId: publication.targetId
+      });
+    }
+  }
 }
 
 async function failWorker(
@@ -907,7 +948,7 @@ async function retry(
   sourceKey: string,
   expectedClaimedUntil: string,
   availableAt: Date,
-  store: SourceStageStore
+  store: Pick<AssetStageStore, "retryOutbox" | "failClaimedWork">
 ): Promise<MediaSyncSourceStageResult> {
   const released = await store.retryOutbox({
     sourceKey,
@@ -927,7 +968,7 @@ async function fail(
     | "line_content_unavailable",
   workId: string,
   expectedClaimedUntil: string,
-  store: SourceStageStore
+  store: Pick<AssetStageStore, "retryOutbox" | "failClaimedWork">
 ): Promise<MediaSyncSourceStageResult> {
   const terminal = await store.failClaimedWork({
     workId,

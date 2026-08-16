@@ -112,6 +112,35 @@ describe("resource binary publisher", () => {
     expect(outcome.result.replyText).not.toContain("OneDrive");
   });
 
+  it("treats Graph 404 and an already tombstoned catalog owner as idempotent cleanup", async () => {
+    const { graph, publisher } = await setup();
+    const outcome = await publisher.publishVerifiedResource({
+      resource: prepare(),
+      scan: { status: "clean", signatureVersion: "daily-20260724" },
+      now: new Date("2026-07-11T10:00:00.000Z")
+    });
+    if (outcome.status !== "published") throw new Error("expected published resource");
+    graph.deleteItem = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("missing"), { statusCode: 404 }));
+
+    await expect(
+      publisher.tombstonePublishedResource(outcome.resourceId, new Date("2026-07-11T10:01:00.000Z"))
+    ).resolves.toBe(true);
+    await expect(
+      publisher.tombstonePublishedResource(outcome.resourceId, new Date("2026-07-11T10:02:00.000Z"))
+    ).resolves.toBe(true);
+    expect(graph.deleteItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a missing catalog owner as already cleaned", async () => {
+    const { publisher } = await setup();
+
+    await expect(
+      publisher.tombstonePublishedResource("missing-resource", new Date("2026-07-11T10:00:00.000Z"))
+    ).resolves.toBe(true);
+  });
+
   it("uploads and indexes a verified binary exactly once", async () => {
     const { catalog, graph, publisher } = await setup();
 

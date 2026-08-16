@@ -254,15 +254,22 @@ export function createResourceBinaryPublisher(
     },
     async tombstonePublishedResource(resourceId, now) {
       const item = await options.catalog.getItemById(resourceId);
-      if (!item || item.storageRef.provider !== "graph" || !options.graph.deleteItem) {
+      if (!item || item.deletedAt) return true;
+      if (item.storageRef.provider !== "graph" || !options.graph.deleteItem) {
         return false;
       }
       try {
         await options.graph.deleteItem(item.storageRef.driveId, item.storageRef.itemId);
-        return options.catalog.tombstoneItemById(resourceId, now.toISOString());
-      } catch {
-        return false;
+      } catch (error) {
+        if (
+          !error ||
+          typeof error !== "object" ||
+          (error as { statusCode?: unknown }).statusCode !== 404
+        ) {
+          return false;
+        }
       }
+      return options.catalog.tombstoneItemById(resourceId, now.toISOString());
     }
   };
 }

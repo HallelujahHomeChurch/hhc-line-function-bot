@@ -64,7 +64,7 @@ export function pendingAttachmentPrompt(message: LineMessage): {
 
 export function isSupportedAttachment(message: LineMessage | undefined): message is LineMessage & {
   id: string;
-  type: "image" | "video" | "audio" | "file";
+  type: "image" | "file";
 } {
-  return Boolean(message?.id && ["image", "video", "audio", "file"].includes(message.type));
+  return Boolean(message?.id && (message.type === "image" || message.type === "file"));
 }

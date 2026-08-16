@@ -79,6 +79,8 @@ export type MediaSyncOutboxItem = {
   lastErrorCategory?: string;
 };
 
+export type MediaSyncWorkClaim = MediaSyncOutboxItem | "busy" | "terminal" | "missing";
+
 export type MediaSyncPublication = {
   sourceKey: string;
   publicationType: MediaSyncPublicationType;

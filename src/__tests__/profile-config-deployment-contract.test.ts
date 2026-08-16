@@ -363,7 +363,7 @@ describe("production profile configuration deployment contract", () => {
     expect(helper?.enabledFunctions).toEqual(
       expect.arrayContaining(["find_resource", "save_resource", "save_memory", "retrieve_memory"])
     );
-    expect(helper?.allowedMessageTypes).toEqual(["text", "image", "video", "audio", "file"]);
+    expect(helper?.allowedMessageTypes).toEqual(["text", "image", "file"]);
     expect(helper?.controlledAgent).toEqual({
       maxCandidates: 3,
       minPlannerConfidence: 0.65

@@ -7624,6 +7624,65 @@ describe("LINE entrance", () => {
     expect(createIngest).toHaveBeenCalledOnce();
     expect(tryStart).not.toHaveBeenCalled();
   });
+
+  it("admits bound helper video through media sync without widening legacy message types", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "helper-secret",
+      allowedMessageTypes: ["text", "image", "file"],
+      enabledFunctions: []
+    };
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "helper-group-media-video",
+          profileName: "helper",
+          type: "group",
+          principalId: "Gmedia-video",
+          createdAt: "2026-08-16T00:00:00.000Z",
+          createdBy: "test"
+        }
+      ]
+    });
+    const createIngest = vi.fn().mockResolvedValue({
+      created: true,
+      ingest: { workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab" }
+    });
+    const tryStart = vi.fn();
+    const app = createTestApp(config, {
+      accessStore,
+      mediaSyncStore: {
+        findActiveBinding: vi.fn().mockResolvedValue({
+          profileName: "helper",
+          groupId: "Gmedia-video",
+          collectionId: "collection-1"
+        }),
+        createIngest
+      } as unknown as PostgresMediaSyncStore,
+      webhookEventStore: { tryStart }
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "event-media-video-1",
+      source: { type: "group", groupId: "Gmedia-video", userId: "Umedia" },
+      message: { id: "message-media-video-1", type: "video", contentProvider: { type: "line" } }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, allowedEvents: 1 });
+    expect(createIngest).toHaveBeenCalledOnce();
+    expect(tryStart).not.toHaveBeenCalled();
+  });
 });
 
 function createDeferred<T>() {

@@ -6,9 +6,16 @@ import {
   createUploadIntentTextMessageHandler,
   isUploadActivation
 } from "../functions/upload-intent.js";
+import { isSupportedAttachment } from "../functions/pending-attachment.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 
 describe("group upload intent", () => {
+  it("keeps legacy attachment handling limited to images and files", () => {
+    expect(isSupportedAttachment({ type: "image", id: "image-1" })).toBe(true);
+    expect(isSupportedAttachment({ type: "file", id: "file-1" })).toBe(true);
+    expect(isSupportedAttachment({ type: "video", id: "video-1" })).toBe(false);
+    expect(isSupportedAttachment({ type: "audio", id: "audio-1" })).toBe(false);
+  });
   it("accepts only an explicit activation phrase", () => {
     expect(isUploadActivation("小哈我要上傳檔案")).toBe(true);
     expect(isUploadActivation("這張圖片很好看")).toBe(false);

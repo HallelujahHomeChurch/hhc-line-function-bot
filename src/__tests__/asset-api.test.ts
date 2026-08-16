@@ -573,6 +573,7 @@ describe("asset api client", () => {
       request.on("end", () => {
         expect(request.method).toBe("PUT");
         expect(request.headers["x-upload-token"]).toBe("opaque");
+        expect(request.headers["content-length"]).toBe("16");
         response.writeHead(201).end();
       });
     });

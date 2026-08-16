@@ -43,6 +43,7 @@ import {
 } from "../../engagement.js";
 import { getFunctionDefinition } from "../../functions/definitions.js";
 import { handleAttachmentMessage } from "../../functions/attachment-entrance.js";
+import { pendingAttachmentPrompt } from "../../functions/pending-attachment.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
 import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
 import { prepareMediaSyncIntake } from "../../media-sync/intake.js";
@@ -503,9 +504,35 @@ async function handleWebhook(
   }
 
   const allowedEvents: LineEvent[] = [];
+  const mediaSyncOnlyEvents: Array<{ event: LineEvent; manual: boolean }> = [];
 
   for (const event of ordinaryEvents) {
     if (handledAccountChallengeEvents.has(event)) continue;
+    if (
+      mediaSyncStore &&
+      event.source.type === "group" &&
+      event.source.groupId &&
+      (await isGroupAllowed(profile, event.source.groupId, accessStore))
+    ) {
+      try {
+        const intake = await prepareMediaSyncIntake({
+          profile,
+          event,
+          store: mediaSyncStore,
+          sessionStore,
+          now: new Date()
+        });
+        if (
+          intake.eligible &&
+          (event.message?.type === "video" || event.message?.type === "audio")
+        ) {
+          mediaSyncOnlyEvents.push({ event, manual: Boolean(intake.manual) });
+          continue;
+        }
+      } catch {
+        return reply.code(503).send({ ok: false, error: "media_sync_intake_unavailable" });
+      }
+    }
     const allow = structurallyAllowEvent(profile, event);
     if (!allow.allowed) {
       incrementIgnored(ignoredCounts, allow.reason);
@@ -514,7 +541,7 @@ async function handleWebhook(
     allowedEvents.push(event);
   }
 
-  if (allowedEvents.length === 0) {
+  if (allowedEvents.length === 0 && mediaSyncOnlyEvents.length === 0) {
     return reply.send({
       ok: true,
       ignored: true,
@@ -523,30 +550,20 @@ async function handleWebhook(
   }
 
   const line = createReplyClient(profile);
+  for (const { event, manual } of mediaSyncOnlyEvents) {
+    if (manual && event.replyToken && event.message) {
+      const prompt = pendingAttachmentPrompt(event.message);
+      await line.replyText(event.replyToken, prompt.replyText, {
+        quickReplies: prompt.quickReplies
+      });
+    }
+  }
   let lineIdentity: LineIdentityClient | undefined;
   const getLineIdentity = (): LineIdentityClient =>
     (lineIdentity ??= createIdentityClient(profile));
-  let admittedEvents = 0;
+  let admittedEvents = mediaSyncOnlyEvents.length;
   let rejectedAfterStructuralGate = false;
   for (const event of allowedEvents) {
-    if (
-      mediaSyncStore &&
-      event.source.type === "group" &&
-      event.source.groupId &&
-      (await isGroupAllowed(profile, event.source.groupId, accessStore))
-    ) {
-      try {
-        await prepareMediaSyncIntake({
-          profile,
-          event,
-          store: mediaSyncStore,
-          sessionStore,
-          now: new Date()
-        });
-      } catch {
-        return reply.code(503).send({ ok: false, error: "media_sync_intake_unavailable" });
-      }
-    }
     if (
       event.webhookEventId &&
       (await webhookEventStore.tryStart(
