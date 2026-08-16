@@ -21,6 +21,16 @@ describe("media sync migrations", () => {
   });
 });
 
+describe("media sync outbox leases", () => {
+  it.each([0, -1])("rejects a non-positive lease duration (%s)", async (leaseMs) => {
+    const store = new PostgresMediaSyncStore({} as Pool);
+
+    await expect(store.claimOutbox({ limit: 1, leaseMs })).rejects.toThrow(
+      "media_sync_outbox_lease_invalid"
+    );
+  });
+});
+
 const databaseUrl = process.env.KERNEL_POSTGRES_URL?.trim();
 
 describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
@@ -292,6 +302,77 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     expect(leftClaims[0]?.sourceKey).not.toBe(rightClaims[0]?.sourceKey);
   });
 
+  it("fences stale workers after another worker reclaims the lease", async () => {
+    const first = new PostgresMediaSyncStore(left);
+    const second = new PostgresMediaSyncStore(right);
+    const input = ingest("stale-lease");
+    await first.createIngest(input);
+    await completeOtherOutbox(left, input.sourceKey);
+
+    const firstClaim = (await first.claimOutbox({ limit: 1, leaseMs: 20 }))[0];
+    expect(firstClaim?.claimedUntil).toBeDefined();
+    await waitForLeaseExpiry(left, firstClaim!.claimedUntil!);
+    const secondClaim = (await second.claimOutbox({ limit: 1, leaseMs: 60_000 }))[0];
+    expect(secondClaim?.claimedUntil).toBeDefined();
+    expect(secondClaim?.claimedUntil).not.toBe(firstClaim?.claimedUntil);
+
+    await expect(
+      first.retryOutbox({
+        sourceKey: input.sourceKey,
+        operation: "intake",
+        expectedClaimedUntil: firstClaim!.claimedUntil!,
+        availableAt: new Date(Date.now() + 60_000),
+        lastErrorCategory: "stale-owner"
+      })
+    ).resolves.toBe(false);
+    await expect(readOutbox(left, input.sourceKey)).resolves.toMatchObject({
+      claimed_until: new Date(secondClaim!.claimedUntil!),
+      attempts: 2
+    });
+
+    const retryAt = new Date(Date.now() + 120_000);
+    const currentRetry = {
+      sourceKey: input.sourceKey,
+      operation: "intake" as const,
+      expectedClaimedUntil: secondClaim!.claimedUntil!,
+      availableAt: retryAt,
+      lastErrorCategory: "current-owner"
+    };
+    await expect(second.retryOutbox(currentRetry)).resolves.toBe(true);
+    await expect(second.retryOutbox(currentRetry)).resolves.toBe(false);
+    await expect(readOutbox(left, input.sourceKey)).resolves.toMatchObject({
+      claimed_until: null,
+      last_error_category: "current-owner",
+      attempts: 2
+    });
+    await expect(count(left, "media_sync_outbox", input.sourceKey)).resolves.toBe(1);
+  });
+
+  it("rejects an expired lease even before another worker reclaims it", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("expired-lease");
+    await store.createIngest(input);
+    await completeOtherOutbox(left, input.sourceKey);
+    const claim = (await store.claimOutbox({ limit: 1, leaseMs: 20 }))[0];
+    expect(claim?.claimedUntil).toBeDefined();
+    await waitForLeaseExpiry(left, claim!.claimedUntil!);
+
+    await expect(
+      store.retryOutbox({
+        sourceKey: input.sourceKey,
+        operation: "intake",
+        expectedClaimedUntil: claim!.claimedUntil!,
+        availableAt: new Date(Date.now() + 60_000),
+        lastErrorCategory: "expired-owner"
+      })
+    ).resolves.toBe(false);
+    await expect(readOutbox(left, input.sourceKey)).resolves.toMatchObject({
+      claimed_until: new Date(claim!.claimedUntil!),
+      last_error_category: null,
+      attempts: 1
+    });
+  });
+
   it("keeps tombstones terminal across duplicate enqueue, retry, and publication", async () => {
     const store = new PostgresMediaSyncStore(left);
     const input = ingest("tombstone");
@@ -312,6 +393,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       store.retryOutbox({
         sourceKey: input.sourceKey,
         operation: "intake",
+        expectedClaimedUntil: "2099-01-01T00:00:00.000Z",
         availableAt: new Date("2099-01-01T01:00:00.000Z"),
         lastErrorCategory: "temporary"
       })
@@ -377,4 +459,38 @@ async function count(pool: Pool, table: string, sourceKey: string): Promise<numb
     [sourceKey]
   );
   return Number(result.rows[0]?.count);
+}
+
+async function completeOtherOutbox(pool: Pool, sourceKey: string): Promise<void> {
+  await pool.query(
+    "update media_sync_outbox set completed_at=now() where source_key<>$1 and completed_at is null",
+    [sourceKey]
+  );
+}
+
+async function waitForLeaseExpiry(pool: Pool, claimedUntil: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const expired = (
+      await pool.query<{ expired: boolean }>("select now() > $1::timestamptz expired", [
+        claimedUntil
+      ])
+    ).rows[0]?.expired;
+    if (expired) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("media_sync_test_lease_did_not_expire");
+}
+
+async function readOutbox(pool: Pool, sourceKey: string) {
+  return (
+    await pool.query<{
+      claimed_until: Date | null;
+      last_error_category: string | null;
+      attempts: number;
+    }>(
+      `select claimed_until, last_error_category, attempts
+       from media_sync_outbox where source_key=$1 and operation='intake'`,
+      [sourceKey]
+    )
+  ).rows[0];
 }

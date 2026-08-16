@@ -292,6 +292,9 @@ export class PostgresMediaSyncStore {
     now?: Date;
     leaseMs: number;
   }): Promise<MediaSyncOutboxItem[]> {
+    if (!Number.isFinite(input.leaseMs) || input.leaseMs <= 0) {
+      throw new Error("media_sync_outbox_lease_invalid");
+    }
     const now = input.now ?? this.now();
     const claimedUntil = new Date(now.getTime() + input.leaseMs);
     const result = await this.pool.query<OutboxRow>(
@@ -320,6 +323,7 @@ export class PostgresMediaSyncStore {
   async retryOutbox(input: {
     sourceKey: string;
     operation: MediaSyncOutboxOperation;
+    expectedClaimedUntil: string;
     availableAt: Date;
     lastErrorCategory: string;
   }): Promise<boolean> {
@@ -328,8 +332,16 @@ export class PostgresMediaSyncStore {
       const result = await client.query(
         `update media_sync_outbox
          set available_at=$3, claimed_until=null, last_error_category=$4
-         where source_key=$1 and operation=$2 and completed_at is null`,
-        [input.sourceKey, input.operation, input.availableAt, input.lastErrorCategory]
+         where source_key=$1 and operation=$2 and completed_at is null
+           and claimed_until=$5::timestamptz
+           and claimed_until > clock_timestamp()`,
+        [
+          input.sourceKey,
+          input.operation,
+          input.availableAt,
+          input.lastErrorCategory,
+          input.expectedClaimedUntil
+        ]
       );
       return Boolean(result.rowCount);
     });
