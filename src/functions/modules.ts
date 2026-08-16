@@ -707,6 +707,7 @@ export const FUNCTION_MODULES: FunctionModule[] = [
             agentJobStore: clients.agentJobStore,
             scanQueue: clients.attachmentScanQueue,
             scanWorkStore: clients.attachmentScanWorkStore,
+            mediaSyncStore: clients.mediaSyncStore,
             now: clients.now
           })
         };

@@ -1,3 +1,8 @@
+import { createReadStream } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { pipeline } from "node:stream/promises";
+
 export type AssetScanStatus = "pending" | "scanning" | "clean" | "infected" | "failed";
 
 export interface AssetRecord {
@@ -10,6 +15,8 @@ export interface AssetRecord {
   scanStatus: AssetScanStatus;
   scanSignatureVersion?: string;
   scanFailureCategory?: string;
+  etag?: string;
+  processingStatus?: "not_required" | "pending" | "ready" | "failed";
   sizeBytes?: number;
   checksumSha256?: string;
   detectedMimeType?: string;
@@ -59,6 +66,27 @@ export interface CollectionAclMutation {
   acl: CollectionAclRecord;
 }
 
+export interface CollectionItemRecord {
+  id: string;
+  collectionId: string;
+  assetId: string;
+  remoteItemId: string;
+  displayName: string;
+  sourceRevision: string;
+  createdRevision: number;
+  deletedRevision?: number;
+  mimeType?: string;
+  sizeBytes?: number;
+  etag?: string;
+  createdAt: string;
+  deletedAt?: string;
+}
+
+export interface CollectionItemMutation {
+  collection: CollectionRecord;
+  item: CollectionItemRecord;
+}
+
 export interface AssetApiClient {
   listManagedCollections(
     input?: { cursor?: string; limit?: number },
@@ -98,6 +126,7 @@ export interface AssetApiClient {
   ): Promise<CollectionAclMutation>;
   createUpload(
     input: {
+      namespace?: "line.group.file" | "line.group.media-sync";
       idempotencyKey: string;
       ownerType: string;
       ownerId: string;
@@ -111,6 +140,11 @@ export interface AssetApiClient {
   upload(
     target: AssetUploadTarget,
     data: Uint8Array,
+    options?: AssetApiRequestOptions
+  ): Promise<void>;
+  uploadFile(
+    target: AssetUploadTarget,
+    filePath: string,
     options?: AssetApiRequestOptions
   ): Promise<void>;
   complete(
@@ -130,6 +164,23 @@ export interface AssetApiClient {
     options?: AssetApiRequestOptions
   ): Promise<{ data: Uint8Array; contentType?: string }>;
   softDelete(assetId: string, options?: AssetApiRequestOptions): Promise<void>;
+  addCollectionItem(
+    collectionId: string,
+    input: {
+      assetId: string;
+      remoteItemId: string;
+      displayName: string;
+      sourceRevision: string;
+    },
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<CollectionItemMutation>;
+  deleteCollectionItem(
+    collectionId: string,
+    itemId: string,
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<CollectionItemMutation>;
 }
 
 export interface AssetApiRequestOptions {
@@ -302,7 +353,7 @@ export function createAssetApiClient(options: {
             "idempotency-key": input.idempotencyKey
           },
           body: JSON.stringify({
-            namespace: "line.group.file",
+            namespace: input.namespace ?? "line.group.file",
             ownerService: "hhc-line-function-bot",
             ownerType: input.ownerType,
             ownerId: input.ownerId,
@@ -345,6 +396,9 @@ export function createAssetApiClient(options: {
           response.status === 408 || response.status === 429 || response.status >= 500
         );
       }
+    },
+    async uploadFile(target, filePath, requestOptions) {
+      await streamUploadFile(target, filePath, requestOptions?.signal);
     },
     async complete(assetId, input, requestOptions) {
       const response = await request(
@@ -429,8 +483,71 @@ export function createAssetApiClient(options: {
         { method: "DELETE" },
         requestOptions
       );
+    },
+    async addCollectionItem(collectionId, input, idempotencyKey, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/items`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify(input)
+        },
+        requestOptions
+      );
+      return requireCollectionItemMutation(await readJson(response));
+    },
+    async deleteCollectionItem(collectionId, itemId, idempotencyKey, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(itemId)}`,
+        { method: "DELETE", headers: { "idempotency-key": idempotencyKey } },
+        requestOptions
+      );
+      return requireCollectionItemMutation(await readJson(response));
     }
   };
+}
+
+async function streamUploadFile(
+  target: AssetUploadTarget,
+  filePath: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const url = new URL(target.url);
+  const request =
+    url.protocol === "https:" ? httpsRequest : url.protocol === "http:" ? httpRequest : undefined;
+  if (!request) throw new AssetApiRequestError("asset_upload_invalid_target", false);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const upload = request(
+        url,
+        { method: target.method || "PUT", headers: target.headers, signal },
+        (response) => {
+          response.resume();
+          response.on("end", () => {
+            const status = response.statusCode ?? 0;
+            if (status >= 200 && status < 300) {
+              resolve();
+              return;
+            }
+            reject(
+              new AssetApiRequestError(
+                `asset_upload_${status}`,
+                status === 408 || status === 429 || status >= 500
+              )
+            );
+          });
+        }
+      );
+      upload.on("error", reject);
+      void pipeline(createReadStream(filePath), upload).catch(reject);
+    });
+  } catch (error) {
+    if (error instanceof AssetApiRequestError) throw error;
+    throw new AssetApiRequestError("asset_upload_unavailable", true);
+  }
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -456,6 +573,9 @@ function parseAssetRecord(value: unknown): AssetRecord | undefined {
     !["pending", "scanning", "clean", "infected", "failed"].includes(asset.scanStatus ?? "") ||
     (asset.scanSignatureVersion !== undefined && typeof asset.scanSignatureVersion !== "string") ||
     (asset.scanFailureCategory !== undefined && typeof asset.scanFailureCategory !== "string") ||
+    (asset.etag !== undefined && typeof asset.etag !== "string") ||
+    (asset.processingStatus !== undefined &&
+      !["not_required", "pending", "ready", "failed"].includes(asset.processingStatus)) ||
     (asset.sizeBytes !== undefined &&
       (!Number.isSafeInteger(asset.sizeBytes) || asset.sizeBytes < 0)) ||
     (asset.checksumSha256 !== undefined && typeof asset.checksumSha256 !== "string") ||
@@ -464,6 +584,81 @@ function parseAssetRecord(value: unknown): AssetRecord | undefined {
     return undefined;
   }
   return asset as AssetRecord;
+}
+
+function requireCollectionItemMutation(value: unknown): CollectionItemMutation {
+  if (!isExactRecord(value, ["collection", "item"], ["tombstone"])) {
+    throw new AssetApiRequestError("asset_api_invalid_response", false);
+  }
+  const collection = parseCollection(value.collection);
+  const item = parseCollectionItem(value.item);
+  if (!collection || !item || !validOptionalTombstone(value.tombstone)) {
+    throw new AssetApiRequestError("asset_api_invalid_response", false);
+  }
+  return { collection, item };
+}
+
+function parseCollectionItem(value: unknown): CollectionItemRecord | undefined {
+  if (
+    !isExactRecord(
+      value,
+      [
+        "id",
+        "collectionId",
+        "assetId",
+        "remoteItemId",
+        "displayName",
+        "sourceRevision",
+        "createdRevision",
+        "createdAt"
+      ],
+      ["deletedRevision", "mimeType", "sizeBytes", "etag", "deletedAt"]
+    ) ||
+    !validOpaqueId(value.id) ||
+    !validOpaqueId(value.collectionId) ||
+    !validOpaqueId(value.assetId) ||
+    typeof value.remoteItemId !== "string" ||
+    !value.remoteItemId ||
+    typeof value.displayName !== "string" ||
+    !value.displayName ||
+    typeof value.sourceRevision !== "string" ||
+    !value.sourceRevision ||
+    !Number.isSafeInteger(value.createdRevision) ||
+    (value.createdRevision as number) < 1 ||
+    (value.deletedRevision !== undefined &&
+      (!Number.isSafeInteger(value.deletedRevision) || (value.deletedRevision as number) < 1)) ||
+    (value.mimeType !== undefined && typeof value.mimeType !== "string") ||
+    (value.sizeBytes !== undefined &&
+      (!Number.isSafeInteger(value.sizeBytes) || (value.sizeBytes as number) < 0)) ||
+    (value.etag !== undefined && typeof value.etag !== "string") ||
+    !validDate(value.createdAt) ||
+    (value.deletedAt !== undefined && !validDate(value.deletedAt))
+  ) {
+    return undefined;
+  }
+  return value as unknown as CollectionItemRecord;
+}
+
+function validOptionalTombstone(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isExactRecord(value, ["id", "remoteItemId", "deletedRevision", "deletedAt"])) return false;
+  if (
+    value.id === "" &&
+    value.remoteItemId === "" &&
+    value.deletedRevision === 0 &&
+    typeof value.deletedAt === "string" &&
+    isZeroTime(value.deletedAt)
+  ) {
+    return true;
+  }
+  return (
+    validOpaqueId(value.id) &&
+    typeof value.remoteItemId === "string" &&
+    Boolean(value.remoteItemId) &&
+    Number.isSafeInteger(value.deletedRevision) &&
+    (value.deletedRevision as number) >= 1 &&
+    validDate(value.deletedAt)
+  );
 }
 
 function parseUploadTarget(value: unknown): AssetUploadTarget | undefined {

@@ -29,6 +29,7 @@ export interface ResourceBinaryPublisher {
     scan: CleanResourceScanProof;
     now: Date;
   }): Promise<ResourcePublishOutcome>;
+  tombstonePublishedResource(resourceId: string, now: Date): Promise<boolean>;
 }
 
 export interface ResourceBinaryPublisherOptions {
@@ -55,8 +56,8 @@ export type ResourcePreparationResult =
   { ok: true; resource: PreparedResourceBinary } | { ok: false; result: FunctionExecutionResult };
 
 export type ResourcePublishOutcome =
-  | { status: "published"; result: FunctionExecutionResult }
-  | { status: "duplicate"; result: FunctionExecutionResult }
+  | { status: "published"; resourceId: string; result: FunctionExecutionResult }
+  | { status: "duplicate"; resourceId: string; result: FunctionExecutionResult }
   | { status: "failed"; result: FunctionExecutionResult };
 
 export function prepareResourceBinary(input: {
@@ -145,12 +146,14 @@ export function createResourceBinaryPublisher(
       if (conflict?.kind === "same_hash") {
         return {
           status: "duplicate",
+          resourceId: conflict.item.id,
           result: { ok: true, replyText: `已經有相同檔案：${conflict.item.title}` }
         };
       }
       if (conflict?.kind === "same_title") {
         return {
           status: "duplicate",
+          resourceId: conflict.item.id,
           result: { ok: true, replyText: "已經有同名檔案，請換一個名稱後重新上傳。" }
         };
       }
@@ -212,6 +215,7 @@ export function createResourceBinaryPublisher(
       }
       return {
         status: "published",
+        resourceId: catalogItem.id,
         result: {
           ok: true,
           writePhase: "commit",
@@ -247,6 +251,18 @@ export function createResourceBinaryPublisher(
           }
         }
       };
+    },
+    async tombstonePublishedResource(resourceId, now) {
+      const item = await options.catalog.getItemById(resourceId);
+      if (!item || item.storageRef.provider !== "graph" || !options.graph.deleteItem) {
+        return false;
+      }
+      try {
+        await options.graph.deleteItem(item.storageRef.driveId, item.storageRef.itemId);
+        return options.catalog.tombstoneItemById(resourceId, now.toISOString());
+      } catch {
+        return false;
+      }
     }
   };
 }

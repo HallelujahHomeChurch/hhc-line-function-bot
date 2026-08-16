@@ -60,14 +60,24 @@ const migrations = [
   where consumed_at is null
   `,
   `
+  create table if not exists media_sync_source_tombstones (
+    source_key text primary key,
+    tombstoned_at timestamptz not null
+  )
+  `,
+  `
   create table if not exists media_sync_ingests (
     source_key text primary key,
+    work_id uuid not null default gen_random_uuid() unique,
     profile_name text not null,
     message_id text not null,
     group_id text not null,
     collection_id text not null,
     asset_id text,
-    state text not null check (state in ('pending', 'processing', 'ready', 'failed', 'tombstoned')),
+    asset_etag text,
+    state text not null check (
+      state in ('pending', 'processing', 'awaiting_scan', 'ready', 'failed', 'tombstoned')
+    ),
     display_name text not null,
     media_kind text not null check (media_kind in ('image', 'video', 'audio', 'file')),
     expected_mime text not null,
@@ -81,15 +91,61 @@ const migrations = [
     check ((state = 'tombstoned') = (tombstoned_at is not null))
   )
   `,
+  `alter table media_sync_ingests add column if not exists work_id uuid default gen_random_uuid()`,
+  `alter table media_sync_ingests alter column work_id set not null`,
+  `create unique index if not exists media_sync_ingests_work_id_idx on media_sync_ingests(work_id)`,
+  `alter table media_sync_ingests add column if not exists asset_etag text`,
+  `alter table media_sync_ingests drop constraint if exists media_sync_ingests_state_check`,
+  `
+  alter table media_sync_ingests add constraint media_sync_ingests_state_check
+  check (state in ('pending', 'processing', 'awaiting_scan', 'ready', 'failed', 'tombstoned'))
+  `,
   `
   create table if not exists media_sync_publications (
     source_key text not null references media_sync_ingests(source_key) on delete cascade,
     publication_type text not null check (publication_type in ('collection', 'manual')),
-    target_id text not null,
-    state text not null check (state in ('pending', 'published', 'revoked')),
+    destination_id text not null,
+    target_id text,
+    state text not null check (state in ('pending', 'published', 'failed', 'revoked')),
+    failure_category text,
+    requester_user_id text,
+    job_id text,
+    manual_source_key text,
+    manual_item_kind text,
+    manual_domain text,
+    manual_title text,
     updated_at timestamptz not null default now(),
-    primary key (source_key, publication_type, target_id)
+    primary key (source_key, publication_type)
   )
+  `,
+  `alter table media_sync_publications add column if not exists destination_id text`,
+  `
+  update media_sync_publications publication
+  set destination_id=case
+    when publication.publication_type='collection' then ingest.collection_id
+    else publication.target_id
+  end
+  from media_sync_ingests ingest
+  where publication.source_key=ingest.source_key and publication.destination_id is null
+  `,
+  `alter table media_sync_publications alter column destination_id set not null`,
+  `alter table media_sync_publications alter column target_id drop not null`,
+  `alter table media_sync_publications add column if not exists failure_category text`,
+  `alter table media_sync_publications add column if not exists requester_user_id text`,
+  `alter table media_sync_publications add column if not exists job_id text`,
+  `alter table media_sync_publications add column if not exists manual_source_key text`,
+  `alter table media_sync_publications add column if not exists manual_item_kind text`,
+  `alter table media_sync_publications add column if not exists manual_domain text`,
+  `alter table media_sync_publications add column if not exists manual_title text`,
+  `alter table media_sync_publications drop constraint if exists media_sync_publications_state_check`,
+  `
+  alter table media_sync_publications add constraint media_sync_publications_state_check
+  check (state in ('pending', 'published', 'failed', 'revoked'))
+  `,
+  `alter table media_sync_publications drop constraint if exists media_sync_publications_pkey`,
+  `
+  alter table media_sync_publications
+  add constraint media_sync_publications_pkey primary key (source_key, publication_type)
   `,
   `
   create table if not exists media_sync_outbox (
@@ -98,11 +154,13 @@ const migrations = [
     attempts integer not null default 0 check (attempts >= 0),
     available_at timestamptz not null default now(),
     claimed_until timestamptz,
+    dispatched_at timestamptz,
     completed_at timestamptz,
     last_error_category text,
     primary key (source_key, operation)
   )
   `,
+  `alter table media_sync_outbox add column if not exists dispatched_at timestamptz`,
   `
   create index if not exists media_sync_outbox_claim_idx
   on media_sync_outbox (available_at, claimed_until)

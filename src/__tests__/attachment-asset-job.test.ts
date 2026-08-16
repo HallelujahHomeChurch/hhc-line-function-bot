@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   assetAccessTokenScope,
-  readAttachmentAssetJobEnvironment
+  readAttachmentAssetJobEnvironment,
+  runAttachmentAssetQueueLease
 } from "../tools/run-attachment-asset-job.js";
 
 describe("attachment asset job environment", () => {
@@ -41,5 +42,50 @@ describe("attachment asset job environment", () => {
 
   it("uses the application scope required by managed identity", () => {
     expect(assetAccessTokenScope("api://asset-api")).toBe("api://asset-api/.default");
+  });
+
+  it("routes media-sync work to the finite media worker and ACKs a durable retry", async () => {
+    const complete = vi.fn().mockResolvedValue(undefined);
+    const runAttachment = vi.fn();
+    const runMediaSync = vi.fn().mockResolvedValue({
+      status: "rescheduled",
+      reason: "scan_pending"
+    });
+
+    await expect(
+      runAttachmentAssetQueueLease(
+        {
+          kind: "media-sync",
+          workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
+          complete
+        },
+        { runAttachment, runMediaSync }
+      )
+    ).resolves.toEqual({
+      exitCode: 0,
+      status: { status: "rescheduled", reason: "scan_pending" }
+    });
+    expect(runMediaSync).toHaveBeenCalledWith("4c03465b-8a87-45a2-9d0d-54f904f4e6ab");
+    expect(runAttachment).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the queue message unacknowledged after media-sync lease contention", async () => {
+    const complete = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      runAttachmentAssetQueueLease(
+        {
+          kind: "media-sync",
+          workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
+          complete
+        },
+        {
+          runAttachment: vi.fn(),
+          runMediaSync: vi.fn().mockResolvedValue({ status: "contention" })
+        }
+      )
+    ).resolves.toEqual({ exitCode: 1, status: { status: "contention" } });
+    expect(complete).not.toHaveBeenCalled();
   });
 });

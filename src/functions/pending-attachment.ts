@@ -46,7 +46,8 @@ export function pendingAttachmentPrompt(message: LineMessage): {
   replyText: string;
   quickReplies: QuickReplyItem[];
 } {
-  const label = message.type === "image" ? "圖片" : "檔案";
+  const label =
+    { image: "圖片", video: "影片", audio: "音訊", file: "檔案" }[message.type] ?? "檔案";
   const fileName = message.fileName?.trim();
   return {
     replyText: [
@@ -63,7 +64,7 @@ export function pendingAttachmentPrompt(message: LineMessage): {
 
 export function isSupportedAttachment(message: LineMessage | undefined): message is LineMessage & {
   id: string;
-  type: "image" | "file";
+  type: "image" | "video" | "audio" | "file";
 } {
-  return Boolean(message?.id && (message.type === "image" || message.type === "file"));
+  return Boolean(message?.id && ["image", "video", "audio", "file"].includes(message.type));
 }

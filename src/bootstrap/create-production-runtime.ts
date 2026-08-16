@@ -29,7 +29,10 @@ import {
   InMemoryAttachmentScanWorkStore,
   RedisAttachmentScanWorkStore
 } from "../attachments/scan-work-store.js";
-import { startAttachmentScanOutboxDispatcher } from "../attachments/scan-outbox.js";
+import {
+  startAttachmentScanOutboxDispatcher,
+  startMediaSyncOutboxDispatcher
+} from "../attachments/scan-outbox.js";
 import {
   InMemoryConversationWindowStore,
   RedisConversationWindowStore
@@ -282,6 +285,13 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
           queue: attachmentScanQueue
         })
       : undefined;
+  const stopMediaSyncOutbox =
+    attachmentScanQueue && postgres?.mediaSyncStore
+      ? startMediaSyncOutboxDispatcher({
+          store: postgres.mediaSyncStore,
+          queue: attachmentScanQueue
+        })
+      : undefined;
   const conversationWindowStore = redis
     ? new RedisConversationWindowStore({ client: redis.client, keyPrefix: redis.keyPrefix })
     : new InMemoryConversationWindowStore();
@@ -325,6 +335,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       agentJobStore,
       attachmentScanWorkStore,
       attachmentScanQueue,
+      mediaSyncStore: postgres?.mediaSyncStore,
       webSearch,
       sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
         primary: wikipediaSummaryPrimary
@@ -410,6 +421,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       clearInterval(memoryPurgeTimer);
       clearInterval(knowledgePurgeTimer);
       stopAttachmentScanOutbox?.();
+      stopMediaSyncOutbox?.();
       await app.close();
       await redis?.close();
       await postgres?.pool.end();

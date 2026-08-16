@@ -52,10 +52,11 @@ export interface PendingAttachmentSession {
   stage?: "awaiting_opt_in" | "awaiting_purpose" | "awaiting_title" | "awaiting_confirmation";
   profileName: string;
   requesterUserId?: string;
+  mediaSyncSourceKey?: string;
   source: LineSource;
   attachment: {
     messageId: string;
-    messageType: "image" | "file";
+    messageType: "image" | "video" | "audio" | "file";
     fileName?: string;
     fileSize?: number;
   };
@@ -184,6 +185,9 @@ export interface SessionStore {
     lookup: PptSelectionLookup
   ): Promise<PendingCapabilityResolutionSession | undefined>;
   takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined>;
+  promoteUploadIntent(
+    pending: PendingAttachmentSession
+  ): Promise<PendingAttachmentSession | undefined>;
   findExternalSearchConsent(
     lookup: ExternalSearchConsentLookup
   ): Promise<ExternalSearchConsentSession | undefined>;
@@ -364,6 +368,36 @@ export class InMemorySessionStore implements SessionStore {
       )[0];
     if (session) this.sessions.delete(session.id);
     return session;
+  }
+
+  async promoteUploadIntent(
+    pending: PendingAttachmentSession
+  ): Promise<PendingAttachmentSession | undefined> {
+    const current = Array.from(this.sessions.values())
+      .map((candidate) => this.liveSession(candidate))
+      .filter(
+        (candidate): candidate is UploadIntentSession | PendingAttachmentSession =>
+          candidate?.type === "upload_intent" || candidate?.type === "pending_attachment"
+      )
+      .filter((candidate) => candidate.profileName === pending.profileName)
+      .filter((candidate) => sourceMatches(candidate.source, pending.source))
+      .filter((candidate) =>
+        requesterMatchesForSource(
+          pending.source,
+          candidate.requesterUserId,
+          pending.requesterUserId
+        )
+      )
+      .sort(
+        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+      )[0];
+    if (current?.type === "pending_attachment") {
+      return current.attachment.messageId === pending.attachment.messageId ? current : undefined;
+    }
+    if (!current) return undefined;
+    this.sessions.delete(current.id);
+    this.sessions.set(pending.id, pending);
+    return pending;
   }
 
   async findExternalSearchConsent(

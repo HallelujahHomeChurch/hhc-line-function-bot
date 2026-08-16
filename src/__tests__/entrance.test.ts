@@ -7566,6 +7566,64 @@ describe("LINE entrance", () => {
     expect(res.json()).not.toHaveProperty("profiles");
     expect(res.json()).not.toHaveProperty("llm");
   });
+
+  it("does not claim legacy webhook dedupe when bound intake persistence fails", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "helper-secret",
+      allowedMessageTypes: ["text", "image", "video", "audio", "file"],
+      enabledFunctions: []
+    };
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "helper-group-media",
+          profileName: "helper",
+          type: "group",
+          principalId: "Gmedia",
+          createdAt: "2026-08-16T00:00:00.000Z",
+          createdBy: "test"
+        }
+      ]
+    });
+    const createIngest = vi.fn().mockRejectedValue(new Error("postgres unavailable"));
+    const tryStart = vi.fn().mockResolvedValue("started");
+    const mediaSyncStore = {
+      findActiveBinding: vi.fn().mockResolvedValue({
+        profileName: "helper",
+        groupId: "Gmedia",
+        collectionId: "collection-1"
+      }),
+      createIngest
+    } as unknown as PostgresMediaSyncStore;
+    const app = createTestApp(config, {
+      accessStore,
+      mediaSyncStore,
+      webhookEventStore: { tryStart }
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "event-media-1",
+      replyToken: "reply-media-1",
+      source: { type: "group", groupId: "Gmedia", userId: "Umedia" },
+      message: { id: "message-media-1", type: "image", contentProvider: { type: "line" } }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "media_sync_intake_unavailable" });
+    expect(createIngest).toHaveBeenCalledOnce();
+    expect(tryStart).not.toHaveBeenCalled();
+  });
 });
 
 function createDeferred<T>() {

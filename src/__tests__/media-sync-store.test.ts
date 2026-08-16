@@ -19,6 +19,12 @@ describe("media sync migrations", () => {
     expect(sql).toContain("media_sync_binding_codes_request_fence_idx");
     expect(sql).toContain("where disabled_at is null");
     expect(sql).toContain("source_key text primary key");
+    expect(sql).toContain("work_id uuid");
+    expect(sql).toContain("media_sync_source_tombstones");
+    expect(sql).toContain("asset_etag");
+    expect(sql).toContain("awaiting_scan");
+    expect(sql).toContain("dispatched_at");
+    expect(sql).toContain("primary key (source_key, publication_type)");
     expect(sql).toContain("primary key (source_key, operation)");
   });
 });
@@ -30,6 +36,17 @@ describe("media sync outbox leases", () => {
       const store = new PostgresMediaSyncStore({} as Pool);
 
       await expect(store.claimOutbox({ limit: 1, leaseMs })).rejects.toThrow(
+        "media_sync_outbox_lease_invalid"
+      );
+    }
+  );
+
+  it.each([0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects an invalid dispatch lease duration (%s)",
+    async (leaseMs) => {
+      const store = new PostgresMediaSyncStore({} as Pool);
+
+      await expect(store.claimOutboxForDispatch({ limit: 1, leaseMs })).rejects.toThrow(
         "media_sync_outbox_lease_invalid"
       );
     }
@@ -393,8 +410,471 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     expect([first.created, second.created].filter(Boolean)).toHaveLength(1);
     expect(first.ingest.sourceKey).toBe(input.sourceKey);
     expect(second.ingest.sourceKey).toBe(input.sourceKey);
+    expect(first.ingest.workId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(second.ingest.workId).toBe(first.ingest.workId);
     await expect(count(left, "media_sync_ingests", input.sourceKey)).resolves.toBe(1);
     await expect(count(left, "media_sync_outbox", input.sourceKey)).resolves.toBe(1);
+    const publications = await left.query<{
+      publication_type: string;
+      destination_id: string;
+      target_id: string | null;
+    }>(
+      `select publication_type, destination_id, target_id
+       from media_sync_publications where source_key=$1`,
+      [input.sourceKey]
+    );
+    expect(publications.rows).toEqual([
+      {
+        publication_type: "collection",
+        destination_id: input.collectionId,
+        target_id: null
+      }
+    ]);
+  });
+
+  it("keeps an unsend received before intake as a permanent source fence", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("unsend-before-intake");
+
+    await expect(
+      store.tombstoneSource(input.sourceKey, new Date("2099-01-01T00:00:00.000Z"))
+    ).resolves.toBe(true);
+    await expect(store.createIngest(input)).resolves.toEqual({
+      created: false,
+      tombstoned: true
+    });
+    await expect(count(left, "media_sync_ingests", input.sourceKey)).resolves.toBe(0);
+    await expect(count(left, "media_sync_source_tombstones", input.sourceKey)).resolves.toBe(1);
+  });
+
+  it("replaces one pending publication with only the actual external owner handle", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("owner-handle");
+    const created = await store.createIngest(input);
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+
+    await expect(
+      store.recordPublication({
+        sourceKey: input.sourceKey,
+        publicationType: "collection",
+        targetId: "asset-occurrence-1",
+        state: "published"
+      })
+    ).resolves.toBe(true);
+    await expect(
+      store.recordPublication({
+        sourceKey: input.sourceKey,
+        publicationType: "collection",
+        targetId: "asset-occurrence-1",
+        state: "published"
+      })
+    ).resolves.toBe(true);
+    const rows = await left.query<{
+      destination_id: string;
+      target_id: string;
+      state: string;
+    }>(
+      `select destination_id, target_id, state from media_sync_publications
+       where source_key=$1 and publication_type='collection'`,
+      [input.sourceKey]
+    );
+    expect(rows.rows).toEqual([
+      {
+        destination_id: input.collectionId,
+        target_id: "asset-occurrence-1",
+        state: "published"
+      }
+    ]);
+  });
+
+  it("separates dispatch reservation from the exact worker lease", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("dispatch-worker");
+    const created = await store.createIngest(input);
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await completeOtherOutbox(left, input.sourceKey);
+
+    const dispatch = (
+      await store.claimOutboxForDispatch({
+        limit: 1,
+        now: new Date("2099-01-01T00:00:00.000Z"),
+        leaseMs: 60_000
+      })
+    )[0]!;
+    expect(dispatch.workId).toBe(created.ingest.workId);
+    await expect(
+      store.markOutboxDispatched({
+        workId: dispatch.workId,
+        operation: "intake",
+        expectedClaimedUntil: dispatch.claimedUntil!
+      })
+    ).resolves.toBe(true);
+
+    const worker = await store.claimWork({
+      workId: dispatch.workId,
+      operation: "intake",
+      now: new Date("2099-01-01T00:00:01.000Z"),
+      leaseMs: 60_000
+    });
+    expect(worker).toMatchObject({
+      workId: dispatch.workId,
+      sourceKey: input.sourceKey,
+      operation: "intake",
+      attempts: 1
+    });
+    const loaded = await store.loadClaimedWork({
+      workId: dispatch.workId,
+      operation: "intake",
+      expectedClaimedUntil: worker!.claimedUntil!
+    });
+    expect(loaded).toMatchObject({
+      ingest: { workId: dispatch.workId, sourceKey: input.sourceKey },
+      publications: [expect.objectContaining({ publicationType: "collection" })]
+    });
+    expect(loaded?.publications[0]?.targetId).toBeUndefined();
+    await expect(
+      store.loadClaimedWork({
+        workId: dispatch.workId,
+        operation: "intake",
+        expectedClaimedUntil: dispatch.claimedUntil!
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.claimWork({
+        workId: dispatch.workId,
+        operation: "intake",
+        now: new Date("2099-01-01T00:00:02.000Z"),
+        leaseMs: 60_000
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("terminalizes source failure only for the exact unexpired worker lease", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("source-failure-fence");
+    const created = await store.createIngest(input);
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await completeOtherOutbox(left, input.sourceKey);
+    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    await store.markOutboxDispatched({
+      workId: dispatch.workId,
+      operation: "intake",
+      expectedClaimedUntil: dispatch.claimedUntil!
+    });
+    const worker = await store.claimWork({
+      workId: created.ingest.workId,
+      operation: "intake",
+      leaseMs: 60_000
+    });
+
+    await expect(
+      store.failClaimedWork({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: dispatch.claimedUntil!,
+        failureCategory: "stale-worker"
+      })
+    ).resolves.toBe(false);
+    await expect(
+      store.failClaimedWork({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: worker!.claimedUntil!,
+        failureCategory: "line_content_empty"
+      })
+    ).resolves.toBe(true);
+    await expect(readOutbox(left, input.sourceKey)).resolves.toMatchObject({
+      claimed_until: null,
+      last_error_category: "line_content_empty"
+    });
+    const state = await left.query<{ state: string; failure_category: string }>(
+      `select ingest.state, publication.failure_category
+       from media_sync_ingests ingest
+       join media_sync_publications publication using (source_key)
+       where ingest.source_key=$1 and publication.publication_type='collection'`,
+      [input.sourceKey]
+    );
+    expect(state.rows[0]).toEqual({ state: "failed", failure_category: "line_content_empty" });
+  });
+
+  it("fences Asset persistence and stores only the actual collection occurrence", async () => {
+    const store = new PostgresMediaSyncStore(left, { codeFactory: () => "ASSETBIND123" });
+    await bind(store, "collection-asset-stage", "group-asset-stage");
+    const input = {
+      ...ingest("asset-stage"),
+      groupId: "group-asset-stage",
+      collectionId: "collection-asset-stage"
+    };
+    const created = await store.createIngest(input);
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await completeOtherOutbox(left, input.sourceKey);
+    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    await store.markOutboxDispatched({
+      workId: dispatch.workId,
+      operation: "intake",
+      expectedClaimedUntil: dispatch.claimedUntil!
+    });
+    const worker = await store.claimWork({
+      workId: dispatch.workId,
+      operation: "intake",
+      leaseMs: 60_000
+    });
+    const completedAsset = {
+      workId: dispatch.workId,
+      expectedClaimedUntil: worker!.claimedUntil!,
+      assetId: "asset-actual-1",
+      assetEtag: "etag-version-1",
+      sizeBytes: 5,
+      checksumSha256: "a".repeat(64)
+    };
+
+    await expect(
+      store.persistCompletedAsset({
+        ...completedAsset,
+        expectedClaimedUntil: dispatch.claimedUntil!
+      })
+    ).resolves.toBe(false);
+    await expect(store.persistCompletedAsset(completedAsset)).resolves.toBe(true);
+    await expect(
+      store.finalizeCollectionPublication({
+        workId: dispatch.workId,
+        expectedClaimedUntil: worker!.claimedUntil!,
+        collectionId: input.collectionId,
+        occurrenceId: "occurrence-actual-1"
+      })
+    ).resolves.toBe(true);
+    await expect(
+      store.completeClaimedWork({
+        workId: dispatch.workId,
+        expectedClaimedUntil: worker!.claimedUntil!
+      })
+    ).resolves.toBe(true);
+
+    const persisted = await left.query<{
+      asset_id: string;
+      asset_etag: string;
+      state: string;
+      target_id: string;
+      completed_at: Date;
+    }>(
+      `select ingest.asset_id, ingest.asset_etag, ingest.state,
+              publication.target_id, outbox.completed_at
+       from media_sync_ingests ingest
+       join media_sync_publications publication using (source_key)
+       join media_sync_outbox outbox using (source_key)
+       where ingest.source_key=$1 and publication.publication_type='collection'
+         and outbox.operation='intake'`,
+      [input.sourceKey]
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      asset_id: "asset-actual-1",
+      asset_etag: "etag-version-1",
+      state: "ready",
+      target_id: "occurrence-actual-1",
+      completed_at: expect.any(Date)
+    });
+  });
+
+  it("completes automatic publication before late manual confirmation, then reopens exact work", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    await bind(store, "collection-late-manual", "group-late-manual");
+    const input = {
+      ...ingest("late-manual"),
+      groupId: "group-late-manual",
+      collectionId: "collection-late-manual"
+    };
+    const created = await store.createIngest(input, {
+      manualIntent: {
+        destinationId: "pending-late-manual",
+        requesterUserId: "line-user"
+      }
+    });
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await completeOtherOutbox(left, input.sourceKey);
+    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    await store.markOutboxDispatched({
+      workId: dispatch.workId,
+      operation: "intake",
+      expectedClaimedUntil: dispatch.claimedUntil!
+    });
+    const firstLease = await store.claimWork({
+      workId: dispatch.workId,
+      operation: "intake",
+      leaseMs: 60_000
+    });
+    await store.finalizeCollectionPublication({
+      workId: dispatch.workId,
+      expectedClaimedUntil: firstLease!.claimedUntil!,
+      collectionId: input.collectionId,
+      occurrenceId: "occurrence-late-manual"
+    });
+    await expect(
+      store.completeClaimedWork({
+        workId: dispatch.workId,
+        expectedClaimedUntil: firstLease!.claimedUntil!
+      })
+    ).resolves.toBe(true);
+
+    await expect(
+      store.confirmManualPublication({
+        sourceKey: input.sourceKey,
+        destinationId: "pending-late-manual",
+        requesterUserId: "line-user",
+        jobId: "job-late-manual",
+        manualSourceKey: "ppt_slides",
+        manualItemKind: "ppt_slide",
+        manualDomain: "presentation",
+        manualTitle: "SundayDeck"
+      })
+    ).resolves.toBe(true);
+    const reopened = await left.query<{
+      completed_at: Date | null;
+      dispatched_at: Date | null;
+      manual_source_key: string;
+      job_id: string;
+    }>(
+      `select outbox.completed_at, outbox.dispatched_at,
+              publication.manual_source_key, publication.job_id
+       from media_sync_outbox outbox
+       join media_sync_publications publication using (source_key)
+       where outbox.source_key=$1 and outbox.operation='intake'
+         and publication.publication_type='manual'`,
+      [input.sourceKey]
+    );
+    expect(reopened.rows[0]).toEqual({
+      completed_at: null,
+      dispatched_at: null,
+      manual_source_key: "ppt_slides",
+      job_id: "job-late-manual"
+    });
+    await left.query(
+      `update media_sync_outbox set completed_at=clock_timestamp()
+       where source_key=$1 and operation='intake'`,
+      [input.sourceKey]
+    );
+  });
+
+  it("rejects manual finalize after the source tombstone and retains the actual handle for delete", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    await bind(store, "collection-manual-race", "group-manual-race");
+    const input = {
+      ...ingest("manual-race"),
+      groupId: "group-manual-race",
+      collectionId: "collection-manual-race"
+    };
+    const created = await store.createIngest(input, {
+      manualIntent: {
+        destinationId: "pending-manual-race",
+        requesterUserId: "line-user"
+      }
+    });
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await store.confirmManualPublication({
+      sourceKey: input.sourceKey,
+      destinationId: "pending-manual-race",
+      requesterUserId: "line-user",
+      jobId: "job-manual-race",
+      manualSourceKey: "ppt_slides",
+      manualItemKind: "ppt_slide",
+      manualDomain: "presentation",
+      manualTitle: "SundayDeck"
+    });
+    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    await store.markOutboxDispatched({
+      workId: dispatch.workId,
+      operation: "intake",
+      expectedClaimedUntil: dispatch.claimedUntil!
+    });
+    const lease = await store.claimWork({
+      workId: dispatch.workId,
+      operation: "intake",
+      leaseMs: 60_000
+    });
+    await store.tombstoneSource(input.sourceKey);
+
+    await expect(
+      store.finalizeManualPublication({
+        workId: dispatch.workId,
+        expectedClaimedUntil: lease!.claimedUntil!,
+        destinationId: "pending-manual-race",
+        resourceId: "resource-actual-race"
+      })
+    ).resolves.toBe(false);
+    await expect(
+      store.rememberExternalHandle({
+        workId: dispatch.workId,
+        publicationType: "manual",
+        destinationId: "pending-manual-race",
+        targetId: "resource-actual-race"
+      })
+    ).resolves.toBe(true);
+    const retained = await left.query<{
+      target_id: string;
+      state: string;
+      completed_at: Date | null;
+    }>(
+      `select publication.target_id, publication.state, outbox.completed_at
+       from media_sync_publications publication
+       join media_sync_outbox outbox using (source_key)
+       where publication.source_key=$1 and publication.publication_type='manual'
+         and outbox.operation='delete'`,
+      [input.sourceKey]
+    );
+    expect(retained.rows[0]).toEqual({
+      target_id: "resource-actual-race",
+      state: "revoked",
+      completed_at: null
+    });
+  });
+
+  it("retains the actual external handles after a tombstone compensation failure", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("compensation-handle");
+    const created = await store.createIngest(input);
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await store.tombstoneSource(input.sourceKey);
+    await left.query(
+      `update media_sync_outbox set completed_at=clock_timestamp()
+       where source_key=$1 and operation='delete'`,
+      [input.sourceKey]
+    );
+
+    await expect(
+      store.rememberOwnedAsset({
+        workId: created.ingest.workId,
+        assetId: "asset-actual-2",
+        assetEtag: "etag-version-2"
+      })
+    ).resolves.toBe(true);
+    await expect(
+      store.rememberExternalHandle({
+        workId: created.ingest.workId,
+        publicationType: "collection",
+        destinationId: input.collectionId,
+        targetId: "occurrence-actual-2"
+      })
+    ).resolves.toBe(true);
+
+    const handles = await left.query<{
+      asset_id: string;
+      asset_etag: string;
+      target_id: string;
+      state: string;
+      delete_completed_at: Date | null;
+    }>(
+      `select ingest.asset_id, ingest.asset_etag, publication.target_id, publication.state,
+              (select completed_at from media_sync_outbox
+               where source_key=ingest.source_key and operation='delete') delete_completed_at
+       from media_sync_ingests ingest
+       join media_sync_publications publication using (source_key)
+       where ingest.source_key=$1 and publication.publication_type='collection'`,
+      [input.sourceKey]
+    );
+    expect(handles.rows[0]).toEqual({
+      asset_id: "asset-actual-2",
+      asset_etag: "etag-version-2",
+      target_id: "occurrence-actual-2",
+      state: "revoked",
+      delete_completed_at: null
+    });
   });
 
   it("claims distinct ready work through skip-locked leases", async () => {
@@ -535,10 +1015,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     });
     await store.tombstoneSource(input.sourceKey, new Date("2099-01-01T00:00:00.000Z"));
 
-    await expect(store.createIngest(input)).resolves.toMatchObject({
-      created: false,
-      ingest: { state: "tombstoned" }
-    });
+    await expect(store.createIngest(input)).resolves.toEqual({ created: false, tombstoned: true });
     await expect(
       store.retryOutbox({
         sourceKey: input.sourceKey,
@@ -556,10 +1033,20 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
         state: "published"
       })
     ).resolves.toBe(false);
-    await expect(
-      store.claimOutbox({ limit: 10, now: new Date("2099-01-02T00:00:00.000Z"), leaseMs: 60_000 })
-    ).resolves.not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ sourceKey: input.sourceKey })])
+    const claims = await store.claimOutbox({
+      limit: 10,
+      now: new Date("2099-01-02T00:00:00.000Z"),
+      leaseMs: 60_000
+    });
+    expect(claims).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourceKey: input.sourceKey, operation: "intake" })
+      ])
+    );
+    expect(claims).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourceKey: input.sourceKey, operation: "delete" })
+      ])
     );
     const publication = (
       await left.query<{ state: string }>(

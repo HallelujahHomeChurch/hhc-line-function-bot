@@ -35,6 +35,41 @@ describe("group upload intent", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("promotes one upload intent into the same pending attachment idempotently", async () => {
+    const store = new InMemorySessionStore({ now: () => new Date("2026-07-15T10:00:00Z") });
+    await createUploadIntent({
+      sessionStore: store,
+      requestId: "intent-promote",
+      profileName: "helper",
+      source: { type: "group", groupId: "G1", userId: "U1" },
+      now: new Date("2026-07-15T10:00:00Z")
+    });
+    const pending = {
+      id: "pending-media-1",
+      type: "pending_attachment" as const,
+      action: "save_resource" as const,
+      stage: "awaiting_opt_in" as const,
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group" as const, groupId: "G1", userId: "U1" },
+      attachment: { messageId: "message-1", messageType: "video" as const },
+      expiresAt: "2026-07-15T10:10:00.000Z"
+    };
+
+    await expect(store.promoteUploadIntent(pending)).resolves.toEqual(pending);
+    await expect(store.promoteUploadIntent(pending)).resolves.toEqual(pending);
+    await expect(
+      consumeUploadIntent(store, "helper", { type: "group", groupId: "G1", userId: "U1" })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.findPendingAttachment({
+        profileName: "helper",
+        source: pending.source,
+        requesterUserId: "U1"
+      })
+    ).resolves.toEqual(pending);
+  });
+
   it("creates the two-minute intent through the group activation text handler", async () => {
     const store = new InMemorySessionStore({ now: () => new Date("2026-07-15T10:00:00Z") });
     const handler = createUploadIntentTextMessageHandler({

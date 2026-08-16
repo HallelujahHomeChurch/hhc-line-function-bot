@@ -116,6 +116,8 @@ export interface CatalogStore {
     errorCode: string;
   }): Promise<CatalogSourceRecord | undefined>;
   upsertItem(input: CatalogItemInput): Promise<CatalogItemRecord>;
+  getItemById(id: string): Promise<CatalogItemRecord | undefined>;
+  tombstoneItemById(id: string, deletedAt: string): Promise<boolean>;
   tombstoneMissingItems(input: {
     sourceId: string;
     liveStorageIdentities: string[];
@@ -357,6 +359,18 @@ export class InMemoryCatalogStore implements CatalogStore {
       source.syncCursor
     );
     return this.withSource(record);
+  }
+
+  async getItemById(id: string): Promise<CatalogItemRecord | undefined> {
+    const item = this.items.get(id);
+    return item ? this.withSource(item) : undefined;
+  }
+
+  async tombstoneItemById(id: string, deletedAt: string): Promise<boolean> {
+    const item = this.items.get(id);
+    if (!item) return false;
+    this.items.set(id, { ...item, deletedAt });
+    return true;
   }
 
   async tombstoneMissingItems(input: {

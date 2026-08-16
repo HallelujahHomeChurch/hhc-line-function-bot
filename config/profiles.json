@@ -12,7 +12,7 @@
     },
     "allowDirectUser": true,
     "allowRooms": false,
-    "allowedMessageTypes": ["text", "image", "file"],
+    "allowedMessageTypes": ["text", "image", "video", "audio", "file"],
     "groupRequireWakeWord": true,
     "wakeKeywords": ["小哈"],
     "acceptMention": true,

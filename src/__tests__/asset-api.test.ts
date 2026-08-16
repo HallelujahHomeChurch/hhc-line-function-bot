@@ -1,10 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createAssetApiClient,
   isAssetAccessDeniedError,
   isTransientAssetApiError
 } from "../clients/asset-api.js";
+
+const tempDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))
+  );
+});
 
 describe("asset api client", () => {
   it("uses exact Dapr management paths, request IDs, and idempotency keys", async () => {
@@ -425,6 +438,167 @@ describe("asset api client", () => {
     expect(fetcher.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE", signal });
     expect(fetcher.mock.calls[4]?.[1]).toMatchObject({ method: "DELETE", signal });
   });
+
+  it("uses the media-sync namespace and returns the actual collection occurrence", async () => {
+    const collection = liveCollection(2);
+    const item = liveCollectionItem();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            asset: {
+              id: "asset-1",
+              etag: "etag-1",
+              uploadStatus: "created",
+              scanStatus: "pending",
+              processingStatus: "pending"
+            },
+            uploadTarget: {
+              url: "https://blob.invalid/opaque",
+              method: "PUT",
+              headers: { "x-ms-blob-type": "BlockBlob" }
+            }
+          },
+          201
+        )
+      )
+      .mockResolvedValueOnce(jsonResponse({ collection, item }, 201))
+      .mockResolvedValueOnce(jsonResponse({ collection: liveCollection(3), item }));
+    const client = createAssetApiClient({ baseUrl: "https://asset.internal", fetcher });
+
+    const created = await client.createUpload({
+      namespace: "line.group.media-sync",
+      idempotencyKey: "media-sync-upload-1",
+      ownerType: "line_group",
+      ownerId: "group-1",
+      purpose: "media-sync",
+      fileName: "video.mp4",
+      mimeType: "video/mp4",
+      maxSizeBytes: 209_715_200
+    });
+    const mutation = await client.addCollectionItem(
+      "collection-1",
+      {
+        assetId: "asset-1",
+        remoteItemId: "line:helper:message-1",
+        displayName: "video.mp4",
+        sourceRevision: "checksum-1"
+      },
+      "media-sync-membership-1"
+    );
+    await client.deleteCollectionItem(
+      "collection-1",
+      "occurrence-actual-1",
+      "media-sync-membership-delete-1"
+    );
+
+    expect(created.asset).toMatchObject({ etag: "etag-1", processingStatus: "pending" });
+    expect(mutation.item.id).toBe("occurrence-actual-1");
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({
+      namespace: "line.group.media-sync",
+      ownerService: "hhc-line-function-bot",
+      ownerType: "line_group",
+      ownerId: "group-1",
+      purpose: "media-sync"
+    });
+    expect(fetcher.mock.calls[1]?.[0]).toBe(
+      "https://asset.internal/priv/assets/collections/collection-1/items"
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
+      assetId: "asset-1",
+      remoteItemId: "line:helper:message-1",
+      displayName: "video.mp4",
+      sourceRevision: "checksum-1"
+    });
+    expect(fetcher.mock.calls[2]?.[0]).toBe(
+      "https://asset.internal/priv/assets/collections/collection-1/items/occurrence-actual-1"
+    );
+  });
+
+  it("rejects malformed or widened collection item mutation responses", async () => {
+    const malformed = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      fetcher: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ collection: liveCollection(2), item: { id: "alias" } }))
+    });
+    await expect(
+      malformed.addCollectionItem(
+        "collection-1",
+        {
+          assetId: "asset-1",
+          remoteItemId: "line:helper:message-1",
+          displayName: "video.mp4",
+          sourceRevision: "checksum-1"
+        },
+        "key-1"
+      )
+    ).rejects.toThrow("asset_api_invalid_response");
+
+    const widened = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({
+          collection: liveCollection(2),
+          item: liveCollectionItem(),
+          internalBlobKey: "must-not-leak"
+        })
+      )
+    });
+    await expect(
+      widened.addCollectionItem(
+        "collection-1",
+        {
+          assetId: "asset-1",
+          remoteItemId: "line:helper:message-1",
+          displayName: "video.mp4",
+          sourceRevision: "checksum-1"
+        },
+        "key-2"
+      )
+    ).rejects.toThrow("asset_api_invalid_response");
+  });
+
+  it("streams a temporary file to the signed upload target", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hhc-asset-upload-test-"));
+    tempDirectories.push(directory);
+    const filePath = join(directory, "content.bin");
+    await writeFile(filePath, Buffer.from("streamed-content"));
+    let body = Buffer.alloc(0);
+    const server = createServer((request, response) => {
+      request.on("data", (chunk) => {
+        body = Buffer.concat([body, Buffer.from(chunk)]);
+      });
+      request.on("end", () => {
+        expect(request.method).toBe("PUT");
+        expect(request.headers["x-upload-token"]).toBe("opaque");
+        response.writeHead(201).end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test_server_unavailable");
+
+    try {
+      await createAssetApiClient({
+        baseUrl: "https://asset.internal",
+        fetcher: vi.fn<typeof fetch>()
+      }).uploadFile(
+        {
+          url: `http://127.0.0.1:${address.port}/upload`,
+          method: "PUT",
+          headers: { "x-upload-token": "opaque" }
+        },
+        filePath
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
+    expect(body.toString()).toBe("streamed-content");
+  });
 });
 
 function jsonResponse(value: unknown, status = 200): Response {
@@ -432,4 +606,31 @@ function jsonResponse(value: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" }
   });
+}
+
+function liveCollection(revision: number) {
+  return {
+    id: "collection-1",
+    namespace: "line.group.media-sync",
+    name: "Media",
+    revision,
+    createdAt: "2026-08-16T00:00:00Z",
+    updatedAt: "2026-08-16T00:01:00Z"
+  };
+}
+
+function liveCollectionItem() {
+  return {
+    id: "occurrence-actual-1",
+    collectionId: "collection-1",
+    assetId: "asset-1",
+    remoteItemId: "line:helper:message-1",
+    displayName: "video.mp4",
+    sourceRevision: "checksum-1",
+    createdRevision: 2,
+    mimeType: "video/mp4",
+    sizeBytes: 5,
+    etag: "etag-1",
+    createdAt: "2026-08-16T00:01:00Z"
+  };
 }

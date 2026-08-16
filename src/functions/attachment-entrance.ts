@@ -21,6 +21,16 @@ export async function handleAttachmentMessage(input: {
   }
   if (input.event.source.type === "group") {
     if (!input.sessionStore) return undefined;
+    const pending = await input.sessionStore.findPendingAttachment({
+      profileName: input.profile.name,
+      source: input.event.source,
+      requesterUserId: input.event.source.userId
+    });
+    if (pending?.attachment.messageId === input.event.message!.id) {
+      if (!input.profile.enabledFunctions.includes("save_resource")) return undefined;
+      const prompt = pendingAttachmentPrompt(input.event.message!);
+      return { ok: true, replyText: prompt.replyText, quickReplies: prompt.quickReplies };
+    }
     const uploadIntent = await consumeUploadIntent(
       input.sessionStore,
       input.profile.name,

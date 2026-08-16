@@ -3,6 +3,7 @@ import type { Readable } from "node:stream";
 import {
   Client as LineClient,
   HTTPError,
+  LineBotClient,
   messagingApi,
   ReadError,
   RequestError
@@ -84,6 +85,17 @@ export function createLineSdkIdentityClient(profile: BotProfileConfig): LineIden
 
 export function createLineSdkContentClient(): LineContentClient {
   const clients = new Map<string, LineClient>();
+  const mediaClients = new Map<string, LineBotClient>();
+  const mediaClientFor = (profile: Pick<BotProfileConfig, "name" | "channelAccessToken">) => {
+    let client = mediaClients.get(profile.name);
+    if (!client) {
+      client = LineBotClient.fromChannelAccessToken({
+        channelAccessToken: profile.channelAccessToken
+      });
+      mediaClients.set(profile.name, client);
+    }
+    return client!;
+  };
   return {
     async getMessageContent(
       messageId: string,
@@ -100,6 +112,14 @@ export function createLineSdkContentClient(): LineContentClient {
         data: await readableToUint8Array(stream, limits),
         contentType: contentTypeFromLineStream(stream)
       };
+    },
+    async getMessageContentStream(messageId, profile) {
+      const stream = await mediaClientFor(profile).getMessageContent(messageId);
+      return { stream, contentType: contentTypeFromLineStream(stream) };
+    },
+    async getMessageContentTranscodingStatus(messageId, profile) {
+      return (await mediaClientFor(profile).getMessageContentTranscodingByMessageId(messageId))
+        .status;
     }
   };
 }
@@ -123,7 +143,11 @@ function nonBlank(value: string | undefined): string | undefined {
 
 export class LineContentReadError extends Error {
   constructor(
-    public readonly code: "line_content_too_large" | "line_content_timeout" | "line_content_empty"
+    public readonly code:
+      | "line_content_too_large"
+      | "line_content_timeout"
+      | "line_content_cancelled"
+      | "line_content_empty"
   ) {
     super(code);
     this.name = "LineContentReadError";
@@ -134,7 +158,9 @@ export function lineContentFailureDisposition(
   error: unknown
 ): "permanent" | "transient" | undefined {
   if (error instanceof LineContentReadError) {
-    return error.code === "line_content_timeout" ? "transient" : "permanent";
+    return error.code === "line_content_timeout" || error.code === "line_content_cancelled"
+      ? "transient"
+      : "permanent";
   }
   if (error instanceof HTTPError) {
     return error.statusCode === 408 ||

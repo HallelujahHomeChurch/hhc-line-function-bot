@@ -38,9 +38,10 @@ export type BindMediaSyncCodeResult =
   | { status: "collection_already_bound" };
 
 export type MediaSyncMediaKind = "image" | "video" | "audio" | "file";
-export type MediaSyncIngestState = "pending" | "processing" | "ready" | "failed" | "tombstoned";
+export type MediaSyncIngestState =
+  "pending" | "processing" | "awaiting_scan" | "ready" | "failed" | "tombstoned";
 export type MediaSyncPublicationType = "collection" | "manual";
-export type MediaSyncPublicationState = "pending" | "published" | "revoked";
+export type MediaSyncPublicationState = "pending" | "published" | "failed" | "revoked";
 export type MediaSyncOutboxOperation = "intake" | "delete";
 
 export type CreateMediaSyncIngestInput = {
@@ -57,7 +58,9 @@ export type CreateMediaSyncIngestInput = {
 };
 
 export type MediaSyncIngest = CreateMediaSyncIngestInput & {
+  workId: string;
   assetId?: string;
+  assetEtag?: string;
   state: MediaSyncIngestState;
   tombstonedAt?: string;
   createdAt: string;
@@ -65,11 +68,33 @@ export type MediaSyncIngest = CreateMediaSyncIngestInput & {
 };
 
 export type MediaSyncOutboxItem = {
+  workId: string;
   sourceKey: string;
   operation: MediaSyncOutboxOperation;
   attempts: number;
   availableAt: string;
   claimedUntil?: string;
+  dispatchedAt?: string;
   completedAt?: string;
   lastErrorCategory?: string;
+};
+
+export type MediaSyncPublication = {
+  sourceKey: string;
+  publicationType: MediaSyncPublicationType;
+  destinationId: string;
+  targetId?: string;
+  state: MediaSyncPublicationState;
+  failureCategory?: string;
+  requesterUserId?: string;
+  jobId?: string;
+  manualSourceKey?: string;
+  manualItemKind?: string;
+  manualDomain?: string;
+  manualTitle?: string;
+};
+
+export type MediaSyncWork = {
+  ingest: MediaSyncIngest;
+  publications: MediaSyncPublication[];
 };

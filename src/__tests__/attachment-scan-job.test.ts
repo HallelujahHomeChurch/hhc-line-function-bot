@@ -124,12 +124,38 @@ describe("attachment scan job environment", () => {
     const lease = await receiveAttachmentScanWork(client);
 
     expect(lease?.workId).toBe("4c03465b-8a87-45a2-9d0d-54f904f4e6ab");
+    expect(lease?.kind).toBe("attachment");
     expect(client.receiveMessages).toHaveBeenCalledWith({
       numberOfMessages: 1,
-      visibilityTimeout: 1020
+      visibilityTimeout: 1920
     });
     await lease?.complete();
     expect(client.deleteMessage).toHaveBeenCalledWith("opaque-message", "opaque-receipt");
+  });
+
+  it("accepts explicit attachment and media-sync queue kinds without aliases", async () => {
+    for (const kind of ["attachment", "media-sync"] as const) {
+      const client = {
+        receiveMessages: vi.fn().mockResolvedValue({
+          receivedMessageItems: [
+            {
+              messageText: JSON.stringify({
+                kind,
+                workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab"
+              }),
+              messageId: `message-${kind}`,
+              popReceipt: `receipt-${kind}`
+            }
+          ]
+        }),
+        deleteMessage: vi.fn().mockResolvedValue(undefined)
+      };
+
+      await expect(receiveAttachmentScanWork(client)).resolves.toMatchObject({
+        kind,
+        workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab"
+      });
+    }
   });
 
   it("discards malformed queue payloads without exposing their contents", async () => {

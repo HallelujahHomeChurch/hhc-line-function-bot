@@ -45,6 +45,7 @@ import { getFunctionDefinition } from "../../functions/definitions.js";
 import { handleAttachmentMessage } from "../../functions/attachment-entrance.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
 import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
+import { prepareMediaSyncIntake } from "../../media-sync/intake.js";
 import { createIntroReply, introVariantForText } from "../../intro.js";
 import { verifyLineSignature } from "../../line-signature.js";
 import {
@@ -528,6 +529,24 @@ async function handleWebhook(
   let admittedEvents = 0;
   let rejectedAfterStructuralGate = false;
   for (const event of allowedEvents) {
+    if (
+      mediaSyncStore &&
+      event.source.type === "group" &&
+      event.source.groupId &&
+      (await isGroupAllowed(profile, event.source.groupId, accessStore))
+    ) {
+      try {
+        await prepareMediaSyncIntake({
+          profile,
+          event,
+          store: mediaSyncStore,
+          sessionStore,
+          now: new Date()
+        });
+      } catch {
+        return reply.code(503).send({ ok: false, error: "media_sync_intake_unavailable" });
+      }
+    }
     if (
       event.webhookEventId &&
       (await webhookEventStore.tryStart(

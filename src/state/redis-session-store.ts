@@ -56,6 +56,23 @@ end
 return 1
 `;
 
+const PROMOTE_UPLOAD_INTENT_SCRIPT = `
+local currentId = redis.call('GET', KEYS[1])
+if currentId == ARGV[1] then
+  return redis.call('GET', KEYS[2])
+end
+if not currentId then return nil end
+local currentKey = ARGV[4] .. currentId
+local currentValue = redis.call('GET', currentKey)
+if not currentValue then return nil end
+local current = cjson.decode(currentValue)
+if current.type ~= 'upload_intent' then return nil end
+redis.call('PSETEX', KEYS[2], ARGV[3], ARGV[2])
+redis.call('PSETEX', KEYS[1], ARGV[3], ARGV[1])
+redis.call('DEL', currentKey)
+return ARGV[2]
+`;
+
 export interface RedisSessionStoreOptions {
   client: RedisSessionClient;
   keyPrefix: string;
@@ -235,6 +252,43 @@ export class RedisSessionStore implements SessionStore {
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as UploadIntentSession) as
       UploadIntentSession | undefined;
+  }
+
+  async promoteUploadIntent(
+    pending: PendingAttachmentSession
+  ): Promise<PendingAttachmentSession | undefined> {
+    const lookup = {
+      profileName: pending.profileName,
+      source: pending.source,
+      requesterUserId: pending.requesterUserId
+    };
+    const current = await this.indexedInteractiveSession(lookup);
+    if (current?.type === "pending_attachment") {
+      return current.id === pending.id &&
+        current.attachment.messageId === pending.attachment.messageId
+        ? current
+        : undefined;
+    }
+    if (current?.type !== "upload_intent") return undefined;
+    if (!this.options.client.eval) {
+      const consumed = await this.takeUploadIntent(lookup);
+      if (!consumed) return undefined;
+      await this.set(pending);
+      return pending;
+    }
+    const indexKey = this.interactiveIndexKey(lookup);
+    if (!indexKey) return undefined;
+    const ttlMs = Math.max(
+      1,
+      Math.ceil(new Date(pending.expiresAt).getTime() - this.now().getTime())
+    );
+    const raw = await this.options.client.eval(PROMOTE_UPLOAD_INTENT_SCRIPT, {
+      keys: [indexKey, this.key(pending.id)],
+      arguments: [pending.id, JSON.stringify(pending), String(ttlMs), this.key("")]
+    });
+    if (typeof raw !== "string") return undefined;
+    return this.liveSession(JSON.parse(raw) as PendingAttachmentSession) as
+      PendingAttachmentSession | undefined;
   }
 
   async findExternalSearchConsent(
