@@ -377,6 +377,33 @@ export class PostgresMediaSyncStore {
     }
   }
 
+  async attachManualIntent(input: {
+    sourceKey: string;
+    destinationId: string;
+    requesterUserId: string;
+  }): Promise<boolean> {
+    return this.withLockedIngest(input.sourceKey, async (client, ingest) => {
+      if (!ingest || ingest.state === "tombstoned") return false;
+      if (
+        (
+          await client.query("select 1 from media_sync_source_tombstones where source_key=$1", [
+            input.sourceKey
+          ])
+        ).rowCount
+      ) {
+        return false;
+      }
+      await client.query(
+        `insert into media_sync_publications
+          (source_key, publication_type, destination_id, target_id, state, requester_user_id)
+         values ($1, 'manual', $2, null, 'pending', $3)
+         on conflict (source_key, publication_type) do nothing`,
+        [input.sourceKey, input.destinationId, input.requesterUserId]
+      );
+      return true;
+    });
+  }
+
   async claimOutbox(input: {
     limit: number;
     now?: Date;
@@ -1165,6 +1192,7 @@ export class PostgresMediaSyncStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
+      await lockSource(client, sourceKey);
       const ingest = (
         await client.query<IngestRow>(
           "select * from media_sync_ingests where source_key=$1 for update",

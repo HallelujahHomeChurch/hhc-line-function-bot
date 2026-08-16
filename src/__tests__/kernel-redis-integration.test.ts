@@ -220,6 +220,49 @@ describe("kernel Redis integration environment", () => {
     ).toHaveLength(0);
   });
 
+  it("atomically restores only the upload intent replaced by the matching promotion", async () => {
+    environment ??= await createKernelRedisEnvironment();
+    const stores = environment.clients.map(
+      (client) => new RedisSessionStore({ client, keyPrefix: environment!.keyPrefix })
+    );
+    const suffix = Date.now();
+    const source = { type: "group" as const, groupId: `G-restore-${suffix}`, userId: "U-restore" };
+    const original = {
+      id: `intent-restore-${suffix}`,
+      type: "upload_intent" as const,
+      profileName: "helper",
+      requesterUserId: "U-restore",
+      source,
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    };
+    const pending = {
+      id: `pending-restore-${suffix}`,
+      type: "pending_attachment" as const,
+      action: "save_resource" as const,
+      stage: "awaiting_opt_in" as const,
+      profileName: "helper",
+      requesterUserId: "U-restore",
+      source,
+      attachment: { messageId: "message-restore", messageType: "file" as const },
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString()
+    };
+    await stores[0]!.set(original);
+    const promotion = await stores[0]!.promoteUploadIntent(pending);
+    const duplicate = await stores[1]!.promoteUploadIntent(pending);
+
+    expect(promotion).toEqual({ pending, replaced: original });
+    expect(duplicate).toEqual({ pending });
+    await expect(stores[1]!.restoreUploadIntentPromotion(duplicate!)).resolves.toBe(false);
+    await expect(stores[1]!.restoreUploadIntentPromotion(promotion!)).resolves.toBe(true);
+    await expect(
+      stores[0]!.takeUploadIntent({
+        profileName: "helper",
+        source,
+        requesterUserId: "U-restore"
+      })
+    ).resolves.toEqual(original);
+  });
+
   it.each(["upload_intent", "pending_resolution"] as const)(
     "clears the interactive index after the %s side wins replacement",
     async (winner) => {

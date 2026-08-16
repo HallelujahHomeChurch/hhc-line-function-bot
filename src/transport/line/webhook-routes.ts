@@ -543,7 +543,7 @@ async function handleWebhook(
         });
         if (
           intake.eligible &&
-          (event.message?.type === "video" || event.message?.type === "audio")
+          (!intake.workId || event.message?.type === "video" || event.message?.type === "audio")
         ) {
           if (
             event.webhookEventId &&

@@ -500,6 +500,77 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await expect(count(left, "media_sync_source_tombstones", input.sourceKey)).resolves.toBe(1);
   });
 
+  it("attaches manual intent only while the source remains live under its source lock", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const live = ingest("manual-intent-live-fence");
+    const tombstoned = ingest("manual-intent-tombstone-fence");
+    const liveCreated = await store.createIngest(live);
+    const tombstoneCreated = await store.createIngest(tombstoned);
+    if (liveCreated.tombstoned || tombstoneCreated.tombstoned) {
+      throw new Error("unexpected tombstone");
+    }
+    await store.tombstoneSource(tombstoned.sourceKey);
+
+    await expect(
+      store.attachManualIntent({
+        sourceKey: live.sourceKey,
+        destinationId: "pending-live",
+        requesterUserId: "line-user"
+      })
+    ).resolves.toBe(true);
+    await expect(
+      store.attachManualIntent({
+        sourceKey: tombstoned.sourceKey,
+        destinationId: "pending-tombstoned",
+        requesterUserId: "line-user"
+      })
+    ).resolves.toBe(false);
+    const manual = await left.query<{ source_key: string; destination_id: string }>(
+      `select source_key, destination_id from media_sync_publications
+       where source_key in ($1, $2) and publication_type='manual'`,
+      [live.sourceKey, tombstoned.sourceKey]
+    );
+    expect(manual.rows).toEqual([{ source_key: live.sourceKey, destination_id: "pending-live" }]);
+  });
+
+  it("serializes manual intent attachment behind the source tombstone lock", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("manual-intent-advisory-race");
+    const created = await store.createIngest(input);
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    const blocker = await left.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        input.sourceKey
+      ]);
+      let settled = false;
+      const attached = store
+        .attachManualIntent({
+          sourceKey: input.sourceKey,
+          destinationId: "pending-race",
+          requesterUserId: "line-user"
+        })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
+      await blocker.query(
+        `insert into media_sync_source_tombstones (source_key, tombstoned_at)
+         values ($1, clock_timestamp())`,
+        [input.sourceKey]
+      );
+      await blocker.query("commit");
+
+      await expect(attached).resolves.toBe(false);
+    } finally {
+      await blocker.query("rollback").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
   it("replaces one pending publication with only the actual external owner handle", async () => {
     const store = new PostgresMediaSyncStore(left);
     const input = ingest("owner-handle");

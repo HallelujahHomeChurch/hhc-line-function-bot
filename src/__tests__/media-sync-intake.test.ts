@@ -44,6 +44,7 @@ function store(overrides: Partial<PostgresMediaSyncStore> = {}): PostgresMediaSy
       created: true,
       ingest: { workId: "work-1" }
     }),
+    attachManualIntent: vi.fn().mockResolvedValue(true),
     ...overrides
   } as unknown as PostgresMediaSyncStore;
 }
@@ -101,10 +102,10 @@ describe("media sync webhook intake", () => {
         groupId: "group-1",
         collectionId: "collection-1",
         mediaKind: "video"
-      }),
-      expect.objectContaining({
-        manualIntent: expect.objectContaining({ requesterUserId: "user-1" })
       })
+    );
+    expect(mediaStore.attachManualIntent).toHaveBeenCalledWith(
+      expect.objectContaining({ requesterUserId: "user-1" })
     );
     await expect(
       sessions.findPendingAttachment({
@@ -175,5 +176,97 @@ describe("media sync webhook intake", () => {
       })
     ).resolves.toMatchObject({ eligible: true, manual: false });
     expect(mediaStore.createIngest).toHaveBeenCalledOnce();
+  });
+
+  it.each(["image", "file", "video", "audio"] as const)(
+    "preserves the original upload intent when tombstoned %s intake is redelivered",
+    async (messageType) => {
+      const mediaStore = store({
+        createIngest: vi.fn().mockResolvedValue({ created: false, tombstoned: true })
+      });
+      const sessions = new InMemorySessionStore({
+        now: () => new Date("2026-08-16T12:00:00.000Z")
+      });
+      const source = { type: "group" as const, groupId: "group-1", userId: "user-1" };
+      await sessions.set({
+        id: `upload-tombstoned-${messageType}`,
+        type: "upload_intent",
+        profileName: "helper",
+        requesterUserId: "user-1",
+        source,
+        expiresAt: "2026-08-16T12:02:00.000Z"
+      });
+
+      await expect(
+        prepareMediaSyncIntake({
+          profile,
+          event: event({ id: `message-tombstoned-${messageType}`, type: messageType }),
+          store: mediaStore,
+          sessionStore: sessions,
+          now: new Date("2026-08-16T12:00:00.000Z")
+        })
+      ).resolves.toEqual({
+        eligible: true,
+        manual: false,
+        sourceKey: `line:helper:message-tombstoned-${messageType}`
+      });
+      await expect(
+        sessions.findPendingAttachment({
+          profileName: "helper",
+          source,
+          requesterUserId: "user-1"
+        })
+      ).resolves.toBeUndefined();
+      await expect(
+        sessions.takeUploadIntent({
+          profileName: "helper",
+          source,
+          requesterUserId: "user-1"
+        })
+      ).resolves.toMatchObject({ id: `upload-tombstoned-${messageType}` });
+      expect(mediaStore.createIngest).toHaveBeenCalledWith(expect.any(Object));
+    }
+  );
+
+  it("restores the upload intent when a concurrent tombstone wins the manual fence", async () => {
+    const mediaStore = store({
+      attachManualIntent: vi.fn().mockResolvedValue(false)
+    } as Partial<PostgresMediaSyncStore>);
+    const sessions = new InMemorySessionStore({
+      now: () => new Date("2026-08-16T12:00:00.000Z")
+    });
+    const source = { type: "group" as const, groupId: "group-1", userId: "user-1" };
+    await sessions.set({
+      id: "upload-concurrent-tombstone",
+      type: "upload_intent",
+      profileName: "helper",
+      requesterUserId: "user-1",
+      source,
+      expiresAt: "2026-08-16T12:02:00.000Z"
+    });
+
+    await expect(
+      prepareMediaSyncIntake({
+        profile,
+        event: event({ id: "message-concurrent-tombstone", type: "image" }),
+        store: mediaStore,
+        sessionStore: sessions,
+        now: new Date("2026-08-16T12:00:00.000Z")
+      })
+    ).resolves.toMatchObject({ eligible: true, manual: false, workId: "work-1" });
+    await expect(
+      sessions.findPendingAttachment({
+        profileName: "helper",
+        source,
+        requesterUserId: "user-1"
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      sessions.takeUploadIntent({
+        profileName: "helper",
+        source,
+        requesterUserId: "user-1"
+      })
+    ).resolves.toMatchObject({ id: "upload-concurrent-tombstone" });
   });
 });

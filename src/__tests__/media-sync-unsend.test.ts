@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { signLineBody } from "../line-signature.js";
 import type { PostgresMediaSyncStore } from "../media-sync/store.js";
+import { InMemorySessionStore } from "../state/session-store.js";
 import { createTestApp } from "../testing/create-test-app.js";
 import type { AppConfig, FunctionRouterPort } from "../types.js";
 
@@ -169,6 +170,82 @@ describe("LINE media-sync lifecycle", () => {
 
       expect(response.statusCode).toBe(503);
       expect(response.json()).toEqual({ ok: false, error: "media_sync_lifecycle_unavailable" });
+    }
+  );
+
+  it.each(["image", "file", "video", "audio"] as const)(
+    "suppresses the manual prompt and preserves intent for tombstoned %s redelivery",
+    async (messageType) => {
+      const appConfig = config();
+      appConfig.profiles[0]!.enabledFunctions = ["save_resource"];
+      const accessStore = new InMemoryAccessStore({
+        principals: [
+          {
+            id: `group-${messageType}`,
+            profileName: "helper",
+            type: "group",
+            principalId: "G-tombstoned-media",
+            createdAt: "2026-08-16T00:00:00.000Z",
+            createdBy: "test"
+          }
+        ]
+      });
+      const sessions = new InMemorySessionStore();
+      const source = {
+        type: "group" as const,
+        groupId: "G-tombstoned-media",
+        userId: "U-tombstoned-media"
+      };
+      await sessions.set({
+        id: `intent-${messageType}`,
+        type: "upload_intent",
+        profileName: "helper",
+        requesterUserId: source.userId,
+        source,
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      });
+      const attachManualIntent = vi.fn();
+      const replyText = vi.fn().mockResolvedValue(undefined);
+      const app = createTestApp(appConfig, {
+        accessStore,
+        sessionStore: sessions,
+        mediaSyncStore: {
+          findActiveBinding: vi.fn().mockResolvedValue({ collectionId: "collection-1" }),
+          createIngest: vi.fn().mockResolvedValue({ created: false, tombstoned: true }),
+          attachManualIntent
+        } as unknown as PostgresMediaSyncStore,
+        createLineReplyClient: () => ({ replyText })
+      });
+
+      const response = await inject(app, "/api/line/webhook/helper", "helper-secret", {
+        type: "message",
+        webhookEventId: `event-${messageType}`,
+        replyToken: `reply-${messageType}`,
+        source,
+        message: {
+          id: `message-${messageType}`,
+          type: messageType,
+          contentProvider: { type: "line" }
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(replyText).not.toHaveBeenCalled();
+      expect(attachManualIntent).not.toHaveBeenCalled();
+      await expect(
+        sessions.findPendingAttachment({
+          profileName: "helper",
+          source,
+          requesterUserId: source.userId
+        })
+      ).resolves.toBeUndefined();
+      await expect(
+        sessions.takeUploadIntent({
+          profileName: "helper",
+          source,
+          requesterUserId: source.userId
+        })
+      ).resolves.toMatchObject({ id: `intent-${messageType}` });
     }
   );
 });

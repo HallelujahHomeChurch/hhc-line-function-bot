@@ -7712,7 +7712,7 @@ describe("LINE entrance", () => {
     });
     const tryStart = vi.fn().mockResolvedValueOnce("started").mockResolvedValueOnce("duplicate");
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
-    const promoteUploadIntent = vi.fn().mockImplementation(async (pending) => pending);
+    const promoteUploadIntent = vi.fn().mockImplementation(async (pending) => ({ pending }));
     const app = createTestApp(config, {
       accessStore,
       sessionStore: { promoteUploadIntent } as never,
@@ -7722,7 +7722,8 @@ describe("LINE entrance", () => {
           groupId: "Gmedia-redelivery",
           collectionId: "collection-1"
         }),
-        createIngest
+        createIngest,
+        attachManualIntent: vi.fn().mockResolvedValue(true)
       } as unknown as PostgresMediaSyncStore,
       webhookEventStore: { tryStart },
       createLineReplyClient: () => ({ replyText })

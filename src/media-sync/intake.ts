@@ -27,39 +27,48 @@ export async function prepareMediaSyncIntake(input: {
   if (!binding) return { eligible: false };
 
   const sourceKey = mediaSyncSourceKey(input.profile.name, message.id);
-  const pending =
+  const result = await input.store.createIngest({
+    sourceKey,
+    profileName: input.profile.name,
+    messageId: message.id,
+    groupId,
+    collectionId: binding.collectionId,
+    displayName: displayName(message, input.event.timestamp ?? input.now.getTime()),
+    mediaKind: message.type,
+    expectedMime: expectedMime(message)
+  });
+  if (result.tombstoned) {
+    return { eligible: true, manual: false, sourceKey };
+  }
+
+  let manual = false;
+  if (
     input.sessionStore &&
     input.event.source.userId &&
     input.profile.enabledFunctions.includes("save_resource")
-      ? await input.sessionStore.promoteUploadIntent(
-          pendingAttachment(input.profile, input.event, message, sourceKey, input.now)
-        )
-      : undefined;
-  const result = await input.store.createIngest(
-    {
-      sourceKey,
-      profileName: input.profile.name,
-      messageId: message.id,
-      groupId,
-      collectionId: binding.collectionId,
-      displayName: displayName(message, input.event.timestamp ?? input.now.getTime()),
-      mediaKind: message.type,
-      expectedMime: expectedMime(message)
-    },
-    pending
-      ? {
-          manualIntent: {
-            destinationId: pending.id,
-            requesterUserId: pending.requesterUserId!
-          }
-        }
-      : {}
-  );
+  ) {
+    const promotion = await input.sessionStore.promoteUploadIntent(
+      pendingAttachment(input.profile, input.event, message, sourceKey, input.now)
+    );
+    if (promotion) {
+      try {
+        manual = await input.store.attachManualIntent({
+          sourceKey,
+          destinationId: promotion.pending.id,
+          requesterUserId: promotion.pending.requesterUserId!
+        });
+      } catch (error) {
+        await input.sessionStore.restoreUploadIntentPromotion(promotion);
+        throw error;
+      }
+      if (!manual) await input.sessionStore.restoreUploadIntentPromotion(promotion);
+    }
+  }
   return {
     eligible: true,
-    manual: Boolean(pending),
+    manual,
     sourceKey,
-    ...(result.tombstoned ? {} : { workId: result.ingest.workId })
+    workId: result.ingest.workId
   };
 }
 

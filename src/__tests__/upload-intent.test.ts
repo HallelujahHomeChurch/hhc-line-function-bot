@@ -63,11 +63,34 @@ describe("group upload intent", () => {
       expiresAt: "2026-07-15T10:10:00.000Z"
     };
 
-    await expect(store.promoteUploadIntent(pending)).resolves.toEqual(pending);
-    await expect(store.promoteUploadIntent(pending)).resolves.toEqual(pending);
+    const promotion = await store.promoteUploadIntent(pending);
+    expect(promotion).toEqual({
+      pending,
+      replaced: expect.objectContaining({ id: "intent-promote", type: "upload_intent" })
+    });
+    await expect(store.restoreUploadIntentPromotion(promotion!)).resolves.toBe(true);
     await expect(
       consumeUploadIntent(store, "helper", { type: "group", groupId: "G1", userId: "U1" })
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ id: "intent-promote" });
+
+    await store.set({
+      id: "intent-promote-2",
+      type: "upload_intent",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: pending.source,
+      expiresAt: "2026-07-15T10:02:00.000Z"
+    });
+    const owner = await store.promoteUploadIntent(pending);
+    const duplicate = await store.promoteUploadIntent(pending);
+    expect(owner).toMatchObject({ pending, replaced: { id: "intent-promote-2" } });
+    expect(duplicate).toEqual({ pending });
+    await expect(store.restoreUploadIntentPromotion(duplicate!)).resolves.toBe(false);
+    await expect(store.restoreUploadIntentPromotion(owner!)).resolves.toBe(true);
+    await expect(
+      consumeUploadIntent(store, "helper", { type: "group", groupId: "G1", userId: "U1" })
+    ).resolves.toMatchObject({ id: "intent-promote-2" });
+    await store.set(pending);
     await expect(
       store.findPendingAttachment({
         profileName: "helper",
