@@ -4,6 +4,7 @@ import { TextDecoder } from "node:util";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { AccountAdminClient } from "../account/account-admin-client.js";
+import { AccountApiError } from "../account/account-admin-client.js";
 import { MediaSyncManagementError, type MediaSyncManagementService } from "./service.js";
 
 type MediaSyncRouteDependencies = {
@@ -56,6 +57,32 @@ export function registerMediaSyncRoutes(
     if (!query || !hasNoBody(request.body)) return sendError(reply, 400, "invalid_request");
     return run(reply, () => deps.service.listCollections(query, auth.requestId));
   });
+
+  app.get(
+    "/api/line/media-sync/acl-subjects",
+    { preHandler: authorize },
+    async (request, reply) => {
+      const auth = requireAuth(request);
+      const query = parseAclSubjectQuery(request.query);
+      if (!query || !hasNoBody(request.body)) return sendError(reply, 400, "invalid_request");
+      const search = deps.accountAdminClient.searchMediaSyncAclSubjects;
+      if (!search) return sendError(reply, 503, "subject_service_unavailable");
+      try {
+        return reply.send(
+          await search.call(deps.accountAdminClient, {
+            requestingUserId: auth.userId,
+            ...query,
+            requestId: auth.requestId
+          })
+        );
+      } catch (error) {
+        if (error instanceof AccountApiError && error.message === "account_api_http_403") {
+          return sendError(reply, 403, "forbidden");
+        }
+        return sendError(reply, 503, "subject_service_unavailable");
+      }
+    }
+  );
 
   app.post(
     "/api/line/media-sync/collections",
@@ -263,6 +290,40 @@ function parseListQuery(value: unknown): { cursor?: string; limit?: number } | u
     ...(typeof query.cursor === "string" ? { cursor: query.cursor } : {}),
     ...(limit === undefined ? {} : { limit })
   };
+}
+
+function parseAclSubjectQuery(
+  value: unknown
+): { subjectType: "user" | "role"; query: string; page: number; perPage: number } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const query = value as Record<string, unknown>;
+  const keys = Object.keys(query);
+  if (
+    keys.length !== 4 ||
+    !["subjectType", "q", "page", "perPage"].every((key) => keys.includes(key)) ||
+    (query.subjectType !== "user" && query.subjectType !== "role") ||
+    typeof query.q !== "string" ||
+    /\p{Cc}|[\uD800-\uDFFF]/u.test(query.q) ||
+    typeof query.page !== "string" ||
+    !/^[1-9]\d*$/u.test(query.page) ||
+    typeof query.perPage !== "string" ||
+    !/^[1-9]\d*$/u.test(query.perPage)
+  ) {
+    return undefined;
+  }
+  const normalizedQuery = query.q.trim();
+  const page = Number(query.page);
+  const perPage = Number(query.perPage);
+  if (
+    Buffer.byteLength(normalizedQuery, "utf8") > 120 ||
+    !Number.isSafeInteger(page) ||
+    page > 1000 ||
+    !Number.isSafeInteger(perPage) ||
+    perPage > 50
+  ) {
+    return undefined;
+  }
+  return { subjectType: query.subjectType, query: normalizedQuery, page, perPage };
 }
 
 function validName(value: unknown): value is string {

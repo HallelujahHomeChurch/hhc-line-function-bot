@@ -22,6 +22,14 @@ const finalizeInput = {
   channelId: "channel-destination",
   webhookEventId: "01HLINEEVENT"
 };
+const aclSubjectSearchInput = {
+  requestingUserId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+  subjectType: "user" as const,
+  query: "Ada",
+  page: 2,
+  perPage: 20,
+  requestId: "request-1"
+};
 
 describe("account admin client", () => {
   it("verifies only media-sync:manage with the propagated request ID", async () => {
@@ -53,6 +61,159 @@ describe("account admin client", () => {
         redirect: "manual"
       })
     );
+  });
+
+  it("searches ACL subjects through the exact internal Account contract", async () => {
+    const payload = {
+      subjects: [
+        {
+          id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+          type: "user",
+          displayName: "Ada Lovelace"
+        }
+      ],
+      page: 2,
+      perPage: 20,
+      hasMore: false
+    };
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload));
+    const client = createAccountAdminClient({
+      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(client.searchMediaSyncAclSubjects(aclSubjectSearchInput)).resolves.toEqual(
+      payload
+    );
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://127.0.0.1:3500/v1.0/invoke/account-api/method/priv/account/v1/media-sync/acl-subjects/search",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-hhc-request-id": "request-1"
+        },
+        body: JSON.stringify({
+          requestingUserId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+          subjectType: "user",
+          query: "Ada",
+          page: 2,
+          perPage: 20
+        }),
+        redirect: "manual"
+      })
+    );
+  });
+
+  it("accepts the bounded multibyte display name Account can compose from two profile fields", async () => {
+    const displayName = `${"教".repeat(255)} ${"家".repeat(255)}`;
+    const payload = {
+      subjects: [
+        {
+          id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+          type: "user",
+          displayName
+        }
+      ],
+      page: 2,
+      perPage: 20,
+      hasMore: false
+    };
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload))
+    });
+
+    await expect(client.searchMediaSyncAclSubjects(aclSubjectSearchInput)).resolves.toEqual(
+      payload
+    );
+    expect(Buffer.byteLength(displayName, "utf8")).toBe(1531);
+  });
+
+  it.each([
+    ["unknown envelope field", { trace: "secret" }],
+    ["wrong page", { page: 1 }],
+    ["wrong page size", { perPage: 50 }],
+    ["non-boolean continuation", { hasMore: "false" }],
+    [
+      "unknown subject field",
+      {
+        subjects: [
+          {
+            id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+            type: "user",
+            displayName: "Ada Lovelace",
+            email: "ada@example.com"
+          }
+        ]
+      }
+    ],
+    [
+      "mixed subject type",
+      { subjects: [{ id: "admin", type: "role", displayName: "Administrator" }] }
+    ],
+    [
+      "blank subject identifier",
+      { subjects: [{ id: "", type: "user", displayName: "Ada Lovelace" }] }
+    ],
+    [
+      "blank display name",
+      {
+        subjects: [{ id: "018f0c1f-18d0-7e81-9f6f-69c456db7003", type: "user", displayName: "" }]
+      }
+    ],
+    [
+      "oversized subject identifier",
+      { subjects: [{ id: "a".repeat(256), type: "user", displayName: "Ada Lovelace" }] }
+    ],
+    [
+      "oversized multibyte display name",
+      {
+        subjects: [
+          {
+            id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+            type: "user",
+            displayName: "界".repeat(683)
+          }
+        ]
+      }
+    ],
+    [
+      "more subjects than requested",
+      {
+        subjects: Array.from({ length: 21 }, (_, index) => ({
+          id: `role-${index}`,
+          type: "user",
+          displayName: `User ${index}`
+        }))
+      }
+    ]
+  ])("rejects a malformed ACL subject response: %s", async (_label, override) => {
+    const payload = {
+      subjects: [
+        {
+          id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+          type: "user",
+          displayName: "Ada Lovelace"
+        }
+      ],
+      page: 2,
+      perPage: 20,
+      hasMore: false,
+      ...override
+    };
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload))
+    });
+
+    await expect(client.searchMediaSyncAclSubjects(aclSubjectSearchInput)).rejects.toMatchObject({
+      message: "account_api_invalid_acl_subjects",
+      retryable: false
+    });
   });
 
   it.each([{ allowed: true, roles: ["admin"] }, { allowed: "true" }, { denied: true }])(

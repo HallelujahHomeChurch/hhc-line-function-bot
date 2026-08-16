@@ -1,7 +1,7 @@
 import fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AccountAdminClient } from "../account/account-admin-client.js";
+import { AccountApiError, type AccountAdminClient } from "../account/account-admin-client.js";
 import type { AssetApiClient, ManagedCollection } from "../clients/asset-api.js";
 import { registerMediaSyncRoutes } from "../media-sync/http-routes.js";
 import { MediaSyncManagementService } from "../media-sync/service.js";
@@ -21,7 +21,15 @@ const collection: ManagedCollection = {
 };
 
 function account(allowed = true): AccountAdminClient {
-  return { verifyPermission: vi.fn().mockResolvedValue(allowed) } as unknown as AccountAdminClient;
+  return {
+    verifyPermission: vi.fn().mockResolvedValue(allowed),
+    searchMediaSyncAclSubjects: vi.fn().mockResolvedValue({
+      subjects: [{ id: userId, type: "user", displayName: "Ada Lovelace" }],
+      page: 1,
+      perPage: 20,
+      hasMore: false
+    })
+  } as unknown as AccountAdminClient;
 }
 
 function asset(): AssetApiClient {
@@ -107,6 +115,10 @@ const trustedHeaders = {
 
 const routeRequests = [
   { method: "GET", url: "/api/line/media-sync/collections" },
+  {
+    method: "GET",
+    url: "/api/line/media-sync/acl-subjects?subjectType=user&q=&page=1&perPage=20"
+  },
   { method: "POST", url: "/api/line/media-sync/collections", payload: { name: "Media" } },
   {
     method: "PATCH",
@@ -179,7 +191,7 @@ describe("media sync management HTTP", () => {
     ["wrong caller", { ...trustedHeaders, "dapr-caller-app-id": "attacker" }],
     ["missing token", { ...trustedHeaders, "dapr-api-token": undefined }],
     ["wrong token", { ...trustedHeaders, "dapr-api-token": "attacker" }]
-  ])("rejects %s on all eight routes before Account lookup", async (_label, headers) => {
+  ])("rejects %s on all nine routes before Account lookup", async (_label, headers) => {
     const accountClient = account();
     const { instance } = await app({ account: accountClient });
     for (const request of routeRequests) {
@@ -197,7 +209,7 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
-  it("requires normalized user identity on all eight routes before Account lookup", async () => {
+  it("requires normalized user identity on all nine routes before Account lookup", async () => {
     const accountClient = account();
     const { instance } = await app({ account: accountClient });
     for (const request of routeRequests) {
@@ -211,23 +223,121 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
-  it("requires media-sync:manage on all eight routes", async () => {
+  it("requires media-sync:manage on all nine routes", async () => {
     const accountClient = account(false);
     const { instance } = await app({ account: accountClient });
     for (const request of routeRequests) {
       const response = await instance.inject({ ...request, headers: trustedHeaders });
       expect(response.statusCode, `${request.method} ${request.url}`).toBe(403);
     }
-    expect(accountClient.verifyPermission).toHaveBeenCalledTimes(8);
+    expect(accountClient.verifyPermission).toHaveBeenCalledTimes(9);
     await instance.close();
   });
 
   it("requires an idempotency key on every mutation route", async () => {
     const { instance } = await app({});
-    for (const request of routeRequests.slice(1)) {
+    for (const request of routeRequests.slice(2)) {
       const response = await instance.inject({ ...request, headers: trustedHeaders });
       expect(response.statusCode, `${request.method} ${request.url}`).toBe(400);
     }
+    await instance.close();
+  });
+
+  it("proxies bounded ACL subject search with only the authenticated requester", async () => {
+    const accountClient = account();
+    vi.mocked(accountClient.searchMediaSyncAclSubjects).mockResolvedValue({
+      subjects: [{ id: userId, type: "user", displayName: "Ada Lovelace" }],
+      page: 2,
+      perPage: 20,
+      hasMore: false
+    });
+    const { instance } = await app({ account: accountClient });
+    const response = await instance.inject({
+      method: "GET",
+      url: "/api/line/media-sync/acl-subjects?subjectType=user&q=%20Ada%20&page=2&perPage=20",
+      headers: { ...trustedHeaders, "x-hhc-user-id": userId }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["x-hhc-request-id"]).toBe("request-1");
+    expect(response.json()).toEqual({
+      subjects: [{ id: userId, type: "user", displayName: "Ada Lovelace" }],
+      page: 2,
+      perPage: 20,
+      hasMore: false
+    });
+    expect(accountClient.searchMediaSyncAclSubjects).toHaveBeenCalledWith({
+      requestingUserId: userId,
+      subjectType: "user",
+      query: "Ada",
+      page: 2,
+      perPage: 20,
+      requestId: "request-1"
+    });
+    await instance.close();
+  });
+
+  it.each([
+    ["missing subject type", "q=&page=1&perPage=20"],
+    ["unknown subject type", "subjectType=service&q=&page=1&perPage=20"],
+    ["missing query", "subjectType=user&page=1&perPage=20"],
+    ["oversized UTF-8 query", `subjectType=user&q=${"界".repeat(41)}&page=1&perPage=20`],
+    ["control query", "subjectType=user&q=%0A&page=1&perPage=20"],
+    ["Unicode control query", "subjectType=user&q=%C2%85&page=1&perPage=20"],
+    ["zero page", "subjectType=user&q=&page=0&perPage=20"],
+    ["page above bound", "subjectType=user&q=&page=1001&perPage=20"],
+    ["non-canonical page", "subjectType=user&q=&page=01&perPage=20"],
+    ["zero page size", "subjectType=user&q=&page=1&perPage=0"],
+    ["page size above bound", "subjectType=user&q=&page=1&perPage=51"],
+    ["duplicate query", "subjectType=user&q=a&q=b&page=1&perPage=20"],
+    ["requester override", "subjectType=user&q=&page=1&perPage=20&requestingUserId=attacker"]
+  ])("rejects an invalid ACL subject query: %s", async (_label, query) => {
+    const accountClient = account();
+    const { instance } = await app({ account: accountClient });
+    const response = await instance.inject({
+      method: "GET",
+      url: `/api/line/media-sync/acl-subjects?${query}`,
+      headers: trustedHeaders
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(accountClient.searchMediaSyncAclSubjects).not.toHaveBeenCalled();
+    await instance.close();
+  });
+
+  it.each([
+    ["Account denial", new AccountApiError("account_api_http_403", false), 403, "forbidden"],
+    [
+      "Account timeout",
+      new AccountApiError("account_api_transport_error", true),
+      503,
+      "subject_service_unavailable"
+    ],
+    [
+      "Account 5xx",
+      new AccountApiError("account_api_http_503", true),
+      503,
+      "subject_service_unavailable"
+    ],
+    [
+      "malformed response",
+      new AccountApiError("account_api_invalid_acl_subjects", false),
+      503,
+      "subject_service_unavailable"
+    ]
+  ])("maps %s without reflecting Account errors", async (_label, error, status, outwardError) => {
+    const accountClient = account();
+    vi.mocked(accountClient.searchMediaSyncAclSubjects).mockRejectedValue(error);
+    const { instance } = await app({ account: accountClient });
+    const response = await instance.inject({
+      method: "GET",
+      url: "/api/line/media-sync/acl-subjects?subjectType=role&q=&page=1&perPage=20",
+      headers: trustedHeaders
+    });
+
+    expect(response.statusCode).toBe(status);
+    expect(response.json()).toEqual({ ok: false, error: outwardError });
+    expect(response.body).not.toContain("account_api");
     await instance.close();
   });
 
