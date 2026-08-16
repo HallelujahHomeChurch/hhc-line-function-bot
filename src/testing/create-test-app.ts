@@ -180,7 +180,8 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     textFallbackGenerator: overrides.textFallbackGenerator,
     controlledAgentRouter,
     completionObserver,
-    accountAdminClient
+    accountAdminClient,
+    mediaSyncStore: overrides.mediaSyncStore
   });
 }
 

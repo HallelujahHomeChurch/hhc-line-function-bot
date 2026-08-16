@@ -277,7 +277,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         webhookEventStore,
         deps.sessionStore,
         deps.completionObserver,
-        deps.accountAdminClient
+        deps.accountAdminClient,
+        deps.mediaSyncStore
       );
     });
   }
@@ -315,7 +316,8 @@ async function handleWebhook(
   webhookEventStore: WebhookEventStore,
   sessionStore: SessionStore | undefined,
   completionObserver: ControlledCompletionObserver,
-  accountAdminClient: AccountAdminClient
+  accountAdminClient: AccountAdminClient,
+  mediaSyncStore: PostgresMediaSyncStore | undefined
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -1032,7 +1034,8 @@ async function handleWebhook(
           return accountAuthorizationUsed
             ? applyAccountFunctionAuthorization(context, profile, accountState)
             : context;
-        }
+        },
+        mediaSyncStore
       });
       if (accessCommandResult) {
         await line.replyText(

@@ -20,6 +20,13 @@ describe("webhook smoke tool", () => {
     });
   });
 
+  it("does not turn a smoke command into a group media-sync binding request", () => {
+    const body = buildSmokeWebhookPayload({ text: "/media-sync BIND-CODE", userId: "Utest" });
+    const parsed = JSON.parse(body);
+
+    expect(parsed.events[0].source).toEqual({ type: "user", userId: "Utest" });
+  });
+
   it("signs the body with the LINE channel secret", () => {
     const request = createSmokeWebhookRequest({
       text: "小哈",
