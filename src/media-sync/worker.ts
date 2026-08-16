@@ -31,6 +31,7 @@ type AssetStageStore = Pick<
   | "persistCompletedAsset"
   | "finalizeCollectionPublication"
   | "completeClaimedWork"
+  | "completeDeleteWork"
   | "rememberExternalHandle"
   | "rememberOwnedAsset"
   | "tombstoneClaimedWorkForCleanup"
@@ -73,7 +74,8 @@ export type MediaSyncWorkerResult =
         | "scan_pending"
         | "processing_pending"
         | "asset_unavailable"
-        | "manual_pending";
+        | "manual_pending"
+        | "cleanup_unavailable";
     }
   | {
       status: "permanent_failure";
@@ -231,7 +233,8 @@ export async function runMediaSyncWorker(
     leaseMs: options.workerLeaseMs,
     now
   });
-  if (claim === "missing" || claim === "terminal") return { status: claim };
+  if (claim === "missing") return { status: "missing" };
+  if (claim === "terminal") return runDeleteWorker(workId, options, now);
   if (claim === "busy" || !claim.claimedUntil) return { status: "contention" };
   const loadedWork = await options.store.loadClaimedWork({
     workId,
@@ -527,6 +530,144 @@ export async function runMediaSyncWorker(
       options
     );
   }
+}
+
+async function runDeleteWorker(
+  workId: string,
+  options: {
+    store: AssetStageStore;
+    assets: AssetApiClient;
+    retryDelayMs: number;
+    workerLeaseMs: number;
+    publisher?: ResourceBinaryPublisher;
+    signal?: AbortSignal;
+  },
+  now: Date
+): Promise<MediaSyncWorkerResult> {
+  const claim = await options.store.claimWork({
+    workId,
+    operation: "delete",
+    leaseMs: options.workerLeaseMs,
+    now
+  });
+  if (claim === "missing" || claim === "terminal") return { status: claim };
+  if (claim === "busy" || !claim.claimedUntil) return { status: "contention" };
+  const work = await options.store.loadClaimedWork({
+    workId,
+    operation: "delete",
+    expectedClaimedUntil: claim.claimedUntil
+  });
+  if (!work) return { status: "contention" };
+
+  for (const publication of work.publications) {
+    if (!publication.targetId) continue;
+    if (publication.publicationType === "collection") {
+      try {
+        await options.assets.deleteCollectionItem(
+          publication.destinationId,
+          publication.targetId,
+          idempotencyKey("media-sync-delete-collection", workId),
+          { signal: options.signal }
+        );
+      } catch (error) {
+        if (!isAssetAlreadyGone(error)) {
+          return retryDelete(work, claim.claimedUntil, now, options);
+        }
+      }
+    } else {
+      let removed = false;
+      try {
+        removed = Boolean(
+          options.publisher &&
+          (await options.publisher.tombstonePublishedResource(publication.targetId, now))
+        );
+      } catch {
+        // The persisted owner handle remains authoritative for the next durable retry.
+      }
+      if (!removed) {
+        return retryDelete(work, claim.claimedUntil, now, options);
+      }
+    }
+    if (!(await ownsDeleteLease(workId, claim.claimedUntil, options.store))) {
+      return { status: "contention" };
+    }
+  }
+
+  if (work.ingest.assetId) {
+    let ownedAsset: AssetRecord | undefined;
+    try {
+      ownedAsset = await options.assets.get(work.ingest.assetId, { signal: options.signal });
+    } catch (error) {
+      if (!isAssetAlreadyGone(error)) {
+        return retryDelete(work, claim.claimedUntil, now, options);
+      }
+    }
+    if (!(await ownsDeleteLease(workId, claim.claimedUntil, options.store))) {
+      return { status: "contention" };
+    }
+    if (ownedAsset) {
+      if (
+        ownedAsset.ownerService !== "hhc-line-function-bot" ||
+        ownedAsset.ownerType !== "media_sync_ingest" ||
+        ownedAsset.ownerId !== workId
+      ) {
+        return retryDelete(work, claim.claimedUntil, now, options);
+      }
+      try {
+        await options.assets.softDelete(ownedAsset.id, { signal: options.signal });
+      } catch (error) {
+        if (!isAssetAlreadyGone(error)) {
+          return retryDelete(work, claim.claimedUntil, now, options);
+        }
+      }
+      if (!(await ownsDeleteLease(workId, claim.claimedUntil, options.store))) {
+        return { status: "contention" };
+      }
+    }
+  }
+
+  return (await options.store.completeDeleteWork({
+    workId,
+    expectedClaimedUntil: claim.claimedUntil
+  }))
+    ? { status: "completed" }
+    : { status: "contention" };
+}
+
+async function ownsDeleteLease(
+  workId: string,
+  expectedClaimedUntil: string,
+  store: AssetStageStore
+): Promise<boolean> {
+  return Boolean(
+    await store.loadClaimedWork({
+      workId,
+      operation: "delete",
+      expectedClaimedUntil
+    })
+  );
+}
+
+async function retryDelete(
+  work: MediaSyncWork,
+  expectedClaimedUntil: string,
+  now: Date,
+  options: { store: AssetStageStore; retryDelayMs: number }
+): Promise<MediaSyncWorkerResult> {
+  const released = await options.store.retryOutbox({
+    sourceKey: work.ingest.sourceKey,
+    operation: "delete",
+    expectedClaimedUntil,
+    availableAt: new Date(now.getTime() + options.retryDelayMs),
+    lastErrorCategory: "cleanup_unavailable"
+  });
+  return released
+    ? { status: "rescheduled", reason: "cleanup_unavailable" }
+    : { status: "contention" };
+}
+
+function isAssetAlreadyGone(error: unknown): boolean {
+  return error instanceof Error && error.message === "asset_api_404";
 }
 
 async function publishManualResource(input: {

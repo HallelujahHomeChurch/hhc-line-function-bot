@@ -272,6 +272,18 @@ export class PostgresMediaSyncStore {
     return Boolean(result.rowCount);
   }
 
+  async disableBinding(
+    input: { profileName: string; groupId: string },
+    disabledAt: Date = this.now()
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `update media_sync_bindings set disabled_at=$3
+       where profile_name=$1 and group_id=$2 and disabled_at is null`,
+      [input.profileName, input.groupId, disabledAt]
+    );
+    return Boolean(result.rowCount);
+  }
+
   async createIngest(
     input: CreateMediaSyncIngestInput,
     options: {
@@ -899,6 +911,27 @@ export class PostgresMediaSyncStore {
     } finally {
       client.release();
     }
+  }
+
+  async completeDeleteWork(input: {
+    workId: string;
+    expectedClaimedUntil: string;
+  }): Promise<boolean> {
+    const result = await this.pool.query(
+      `update media_sync_outbox outbox
+       set completed_at=clock_timestamp(), claimed_until=null, last_error_category=null
+       from media_sync_ingests ingest
+       where ingest.source_key=outbox.source_key and ingest.work_id=$1
+         and outbox.operation='delete' and outbox.completed_at is null
+         and outbox.claimed_until=$2::timestamptz
+         and outbox.claimed_until > clock_timestamp()
+         and exists (
+           select 1 from media_sync_source_tombstones tombstone
+           where tombstone.source_key=outbox.source_key
+         )`,
+      [input.workId, input.expectedClaimedUntil]
+    );
+    return Boolean(result.rowCount);
   }
 
   async rememberExternalHandle(input: {

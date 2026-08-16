@@ -47,6 +47,7 @@ import { pendingAttachmentPrompt } from "../../functions/pending-attachment.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
 import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
 import { prepareMediaSyncIntake } from "../../media-sync/intake.js";
+import { applyMediaSyncLifecycle, mediaSyncLifecycleAction } from "../../media-sync/unsend.js";
 import { createIntroReply, introVariantForText } from "../../intro.js";
 import { verifyLineSignature } from "../../line-signature.js";
 import {
@@ -337,6 +338,22 @@ async function handleWebhook(
   }
 
   const ignoredCounts = new Map<string, number>();
+  const handledLifecycleEvents = new Set<LineEvent>();
+  for (const event of payload.events) {
+    if (!isOrdinaryLineEvent(event)) continue;
+    const action = mediaSyncLifecycleAction(profile, event);
+    if (!action) continue;
+    if (!mediaSyncStore) {
+      return reply.code(503).send({ ok: false, error: "media_sync_lifecycle_unavailable" });
+    }
+    try {
+      await applyMediaSyncLifecycle(action, mediaSyncStore);
+    } catch {
+      return reply.code(503).send({ ok: false, error: "media_sync_lifecycle_unavailable" });
+    }
+    handledLifecycleEvents.add(event);
+    incrementIgnored(ignoredCounts, `media_sync_${action.type}`);
+  }
   for (const event of payload.events) {
     if (!isAccountLinkEvent(event)) continue;
     const input = accountLinkFinalizeInput(event, payload.destination, profile.name);
@@ -415,7 +432,9 @@ async function handleWebhook(
     incrementIgnored(ignoredCounts, `account_link_${status}`);
   }
 
-  const ordinaryEvents = payload.events.filter(isOrdinaryLineEvent);
+  const ordinaryEvents = payload.events
+    .filter(isOrdinaryLineEvent)
+    .filter((event) => !handledLifecycleEvents.has(event));
   const handledAccountChallengeEvents = new Set<LineEvent>();
   for (const event of ordinaryEvents) {
     const text = event.message?.type === "text" ? event.message.text : undefined;

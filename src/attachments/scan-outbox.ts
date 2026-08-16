@@ -73,7 +73,6 @@ export async function flushMediaSyncOutbox(options: {
   now?: Date;
 }): Promise<{ considered: number; queued: number }> {
   const work = await options.store.claimOutboxForDispatch({
-    operation: "intake",
     limit: options.limit,
     leaseMs: options.leaseMs,
     ...(options.now ? { now: options.now } : {})
@@ -86,7 +85,7 @@ export async function flushMediaSyncOutbox(options: {
       if (
         await options.store.markOutboxDispatched({
           workId: item.workId,
-          operation: "intake",
+          operation: item.operation,
           expectedClaimedUntil: item.claimedUntil
         })
       ) {

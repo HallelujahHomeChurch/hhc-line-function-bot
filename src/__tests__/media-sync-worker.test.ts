@@ -351,7 +351,6 @@ describe("media sync Asset and collection stage", () => {
     await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "completed"
     });
-
     expect(fixture.assets.get).toHaveBeenCalledTimes(1);
     expect(fixture.assets.addCollectionItem).toHaveBeenCalledWith(
       "collection-1",
@@ -730,6 +729,125 @@ describe("media sync Asset and collection stage", () => {
   });
 });
 
+describe("media sync tombstone deletion", () => {
+  it("deletes exact persisted owners and completes only the delete lease", async () => {
+    const fixture = deleteFixture();
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "completed"
+    });
+    expect(fixture.store.claimWork).toHaveBeenNthCalledWith(1, {
+      workId: "work-opaque-1",
+      operation: "intake",
+      leaseMs: 600_000,
+      now: new Date("2026-08-16T00:00:00.000Z")
+    });
+    expect(fixture.store.claimWork).toHaveBeenNthCalledWith(2, {
+      workId: "work-opaque-1",
+      operation: "delete",
+      leaseMs: 600_000,
+      now: new Date("2026-08-16T00:00:00.000Z")
+    });
+    expect(fixture.assets.deleteCollectionItem).toHaveBeenCalledWith(
+      "collection-1",
+      "occurrence-actual-1",
+      expect.stringMatching(/^media-sync-delete-collection:/u),
+      { signal: undefined }
+    );
+    expect(fixture.publisher.tombstonePublishedResource).toHaveBeenCalledWith(
+      "resource-actual-1",
+      new Date("2026-08-16T00:00:00.000Z")
+    );
+    expect(fixture.assets.get).toHaveBeenCalledWith("asset-1", { signal: undefined });
+    expect(fixture.assets.softDelete).toHaveBeenCalledWith("asset-1", { signal: undefined });
+    expect(fixture.store.completeDeleteWork).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      expectedClaimedUntil: fixture.claim.claimedUntil
+    });
+  });
+
+  it("treats already-gone collection and Asset owners as idempotent success", async () => {
+    const fixture = deleteFixture();
+    fixture.assets.deleteCollectionItem.mockRejectedValue(new Error("asset_api_404"));
+    fixture.assets.get.mockRejectedValue(new Error("asset_api_404"));
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "completed"
+    });
+    expect(fixture.assets.softDelete).not.toHaveBeenCalled();
+    expect(fixture.store.completeDeleteWork).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries the tombstoned delete lease after an external failure", async () => {
+    const fixture = deleteFixture();
+    fixture.assets.deleteCollectionItem.mockRejectedValue(new Error("asset_api_503"));
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "cleanup_unavailable"
+    });
+    expect(fixture.store.retryOutbox).toHaveBeenCalledWith({
+      sourceKey: "line:helper:message-1",
+      operation: "delete",
+      expectedClaimedUntil: fixture.claim.claimedUntil,
+      availableAt: new Date("2026-08-16T00:00:30.000Z"),
+      lastErrorCategory: "cleanup_unavailable"
+    });
+    expect(fixture.store.completeDeleteWork).not.toHaveBeenCalled();
+  });
+
+  it("durably retries when catalog owner cleanup throws", async () => {
+    const fixture = deleteFixture();
+    fixture.work.publications = fixture.work.publications.filter(
+      (publication) => publication.publicationType === "manual"
+    );
+    fixture.publisher.tombstonePublishedResource.mockRejectedValue(
+      new Error("catalog unavailable")
+    );
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "cleanup_unavailable"
+    });
+    expect(fixture.store.retryOutbox).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "delete", lastErrorCategory: "cleanup_unavailable" })
+    );
+  });
+
+  it("stops at a late delete lease fence before touching the next owner", async () => {
+    const fixture = deleteFixture();
+    fixture.store.loadClaimedWork
+      .mockResolvedValueOnce(fixture.work)
+      .mockResolvedValueOnce(undefined);
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "contention"
+    });
+    expect(fixture.assets.deleteCollectionItem).toHaveBeenCalledTimes(1);
+    expect(fixture.publisher.tombstonePublishedResource).not.toHaveBeenCalled();
+    expect(fixture.assets.get).not.toHaveBeenCalled();
+    expect(fixture.store.completeDeleteWork).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the Asset is not owned by the exact ingest work", async () => {
+    const fixture = deleteFixture();
+    fixture.work.publications = [];
+    fixture.assets.get.mockResolvedValue(
+      asset({
+        ownerService: "hhc-line-function-bot",
+        ownerType: "media_sync_ingest",
+        ownerId: "different-work"
+      })
+    );
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "cleanup_unavailable"
+    });
+    expect(fixture.assets.softDelete).not.toHaveBeenCalled();
+  });
+});
+
 function cleanAssetFixture() {
   const fixture = createAssetFixture();
   fixture.work.ingest.assetId = "asset-1";
@@ -745,6 +863,89 @@ function cleanAssetFixture() {
     })
   );
   return fixture;
+}
+
+function deleteFixture() {
+  const claim = {
+    workId: "work-opaque-1",
+    sourceKey: "line:helper:message-1",
+    operation: "delete" as const,
+    attempts: 1,
+    availableAt: "2026-08-16T00:00:00.000Z",
+    claimedUntil: "2099-08-16T00:10:00.000Z",
+    dispatchedAt: "2026-08-16T00:00:00.000Z"
+  };
+  const work = createWork();
+  work.ingest.state = "tombstoned";
+  work.ingest.assetId = "asset-1";
+  work.publications = [
+    {
+      sourceKey: work.ingest.sourceKey,
+      publicationType: "collection",
+      destinationId: "collection-1",
+      targetId: "occurrence-actual-1",
+      state: "revoked"
+    },
+    {
+      sourceKey: work.ingest.sourceKey,
+      publicationType: "manual",
+      destinationId: "pending-attachment-1",
+      targetId: "resource-actual-1",
+      state: "revoked"
+    }
+  ];
+  const store = {
+    claimWork: vi
+      .fn()
+      .mockImplementation(async ({ operation }) => (operation === "intake" ? "terminal" : claim)),
+    loadClaimedWork: vi.fn().mockResolvedValue(work),
+    findActiveBinding: vi.fn(),
+    retryOutbox: vi.fn().mockResolvedValue(true),
+    failClaimedWork: vi.fn(),
+    persistCompletedAsset: vi.fn(),
+    finalizeCollectionPublication: vi.fn(),
+    completeClaimedWork: vi.fn(),
+    completeDeleteWork: vi.fn().mockResolvedValue(true),
+    rememberExternalHandle: vi.fn(),
+    rememberOwnedAsset: vi.fn(),
+    tombstoneClaimedWorkForCleanup: vi.fn(),
+    finalizeManualPublication: vi.fn(),
+    failManualPublication: vi.fn()
+  };
+  const assets = {
+    get: vi.fn().mockResolvedValue(
+      asset({
+        ownerService: "hhc-line-function-bot",
+        ownerType: "media_sync_ingest",
+        ownerId: "work-opaque-1"
+      })
+    ),
+    deleteCollectionItem: vi.fn().mockResolvedValue(undefined),
+    softDelete: vi.fn().mockResolvedValue(undefined)
+  };
+  const publisher = {
+    publishVerifiedResource: vi.fn(),
+    tombstonePublishedResource: vi.fn().mockResolvedValue(true)
+  } satisfies ResourceBinaryPublisher;
+  return {
+    claim,
+    work,
+    store,
+    assets,
+    publisher,
+    options: {
+      store: store as never,
+      assets: assets as unknown as AssetApiClient,
+      lineContent: {} as LineContentClient,
+      profiles: [],
+      workerLeaseMs: 600_000,
+      retryDelayMs: 30_000,
+      lineDownloadTimeoutMs: 1_000,
+      maxBytes: MEDIA_SYNC_MAX_BYTES,
+      publisher,
+      now: () => new Date("2026-08-16T00:00:00.000Z")
+    }
+  };
 }
 
 function createAssetFixture() {

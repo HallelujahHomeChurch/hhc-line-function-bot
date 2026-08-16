@@ -509,6 +509,7 @@ export interface LineEvent {
   deliveryContext?: { isRedelivery?: boolean };
   replyToken?: string;
   source: LineSource;
+  unsend?: { messageId?: string };
   message?: LineMessage;
   postback?: LinePostback;
 }

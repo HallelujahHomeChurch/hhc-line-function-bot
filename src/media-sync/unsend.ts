@@ -1,0 +1,51 @@
+import type { PostgresMediaSyncStore } from "./store.js";
+import type { BotProfileConfig, LineEvent } from "../types.js";
+
+export type MediaSyncLifecycleAction =
+  { type: "unsend"; sourceKey: string } | { type: "leave"; profileName: string; groupId: string };
+
+export function mediaSyncLifecycleAction(
+  profile: BotProfileConfig,
+  event: LineEvent
+): MediaSyncLifecycleAction | undefined {
+  if (
+    profile.name !== "helper" ||
+    event.source.type !== "group" ||
+    !boundedOpaque(event.source.groupId)
+  ) {
+    return undefined;
+  }
+  if (event.type === "leave") {
+    return { type: "leave", profileName: profile.name, groupId: event.source.groupId };
+  }
+  if (event.type !== "unsend" || !boundedOpaque(event.unsend?.messageId)) return undefined;
+  return { type: "unsend", sourceKey: mediaSyncSourceKey(profile.name, event.unsend.messageId) };
+}
+
+export async function applyMediaSyncLifecycle(
+  action: MediaSyncLifecycleAction,
+  store: PostgresMediaSyncStore
+): Promise<void> {
+  if (action.type === "unsend") {
+    await store.tombstoneSource(action.sourceKey);
+    return;
+  }
+  await store.disableBinding({ profileName: action.profileName, groupId: action.groupId });
+}
+
+export function mediaSyncSourceKey(profileName: string, messageId: string): string {
+  return `line:${profileName}:${messageId}`;
+}
+
+function boundedOpaque(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value, "utf8") <= 255 &&
+    value.trim() === value &&
+    ![...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 31 || code === 127;
+    })
+  );
+}

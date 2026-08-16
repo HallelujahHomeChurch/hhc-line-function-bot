@@ -34,14 +34,14 @@ async function createPendingWork(store: AttachmentScanWorkStore) {
 }
 
 describe("attachment scan durable outbox", () => {
-  it("dispatches only committed media-sync work by opaque ID and exact reservation lease", async () => {
+  it("dispatches committed media-sync operations by opaque ID and exact reservation lease", async () => {
     const claimedUntil = "2099-01-01T00:00:30.000Z";
     const store = {
       claimOutboxForDispatch: vi.fn().mockResolvedValue([
         {
           workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
           sourceKey: "line:helper:private-message-id",
-          operation: "intake",
+          operation: "delete",
           attempts: 0,
           availableAt: "2099-01-01T00:00:00.000Z",
           claimedUntil
@@ -56,7 +56,6 @@ describe("attachment scan durable outbox", () => {
       flushMediaSyncOutbox({ store: store as never, queue, limit: 1, leaseMs: 30_000, now })
     ).resolves.toEqual({ considered: 1, queued: 1 });
     expect(store.claimOutboxForDispatch).toHaveBeenCalledWith({
-      operation: "intake",
       limit: 1,
       leaseMs: 30_000,
       now
@@ -67,7 +66,7 @@ describe("attachment scan durable outbox", () => {
     );
     expect(store.markOutboxDispatched).toHaveBeenCalledWith({
       workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
-      operation: "intake",
+      operation: "delete",
       expectedClaimedUntil: claimedUntil
     });
     expect(JSON.stringify(queue.enqueue.mock.calls)).not.toContain("private-message-id");

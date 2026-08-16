@@ -5,6 +5,7 @@ import type { PendingAttachmentSession, SessionStore } from "../state/session-st
 import type { BotProfileConfig, LineEvent, LineMessage } from "../types.js";
 import type { PostgresMediaSyncStore } from "./store.js";
 import type { MediaSyncMediaKind } from "./types.js";
+import { mediaSyncSourceKey } from "./unsend.js";
 
 const MANUAL_SESSION_TTL_MS = 10 * 60 * 1000;
 const MEDIA_KINDS = new Set<MediaSyncMediaKind>(["image", "video", "audio", "file"]);
@@ -25,7 +26,7 @@ export async function prepareMediaSyncIntake(input: {
   });
   if (!binding) return { eligible: false };
 
-  const sourceKey = `line:${input.profile.name}:${message.id}`;
+  const sourceKey = mediaSyncSourceKey(input.profile.name, message.id);
   const pending =
     input.sessionStore &&
     input.event.source.userId &&

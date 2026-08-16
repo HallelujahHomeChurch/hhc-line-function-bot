@@ -362,6 +362,36 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     ).resolves.toMatchObject({ status: "bound", binding: { groupId: "group-unique-b" } });
   });
 
+  it("disables only the exact profile and group binding", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    await bind(store, "collection-leave-helper", "group-leave");
+    const mainCode = await store.createBindingCode({
+      profileName: "main",
+      collectionId: "collection-leave-main",
+      createdByHhcUserId: "manager",
+      idempotencyKey: "leave-main"
+    });
+    await store.bindWithCode({
+      profileName: "main",
+      code: issuedCode(mainCode),
+      groupId: "group-leave",
+      groupDisplayName: "Main group"
+    });
+
+    await expect(
+      store.disableBinding({ profileName: "helper", groupId: "group-leave" })
+    ).resolves.toBe(true);
+    await expect(
+      store.disableBinding({ profileName: "helper", groupId: "group-leave" })
+    ).resolves.toBe(false);
+    await expect(
+      store.findActiveBinding({ profileName: "helper", groupId: "group-leave" })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.findActiveBinding({ profileName: "main", groupId: "group-leave" })
+    ).resolves.toMatchObject({ collectionId: "collection-leave-main" });
+  });
+
   it("rolls code consumption back when binding insertion fails", async () => {
     const store = new PostgresMediaSyncStore(left, { codeFactory: () => "ROLLBACK-CODE" });
     const issued = await store.createBindingCode({
@@ -1347,6 +1377,60 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       )
     ).rows[0];
     expect(publication?.state).toBe("revoked");
+  });
+
+  it("completes delete only for the exact live lease on a tombstoned source", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("delete-completion-fence");
+    const created = await store.createIngest(input);
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await store.tombstoneSource(input.sourceKey);
+    await completeOtherOutbox(left, input.sourceKey);
+    const dispatch = (
+      await store.claimOutboxForDispatch({
+        limit: 1,
+        leaseMs: 60_000,
+        now: new Date("2099-01-01T00:00:00.000Z")
+      })
+    )[0]!;
+    await store.markOutboxDispatched({
+      workId: dispatch.workId,
+      operation: "delete",
+      expectedClaimedUntil: dispatch.claimedUntil!
+    });
+    const claim = await store.claimWork({
+      workId: created.ingest.workId,
+      operation: "delete",
+      leaseMs: 60_000,
+      now: new Date("2099-01-01T00:00:01.000Z")
+    });
+    if (typeof claim === "string") throw new Error(`unexpected ${claim}`);
+
+    await expect(
+      store.completeDeleteWork({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: dispatch.claimedUntil!
+      })
+    ).resolves.toBe(false);
+    await expect(
+      store.completeDeleteWork({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: claim.claimedUntil!
+      })
+    ).resolves.toBe(true);
+    await expect(
+      store.completeDeleteWork({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: claim.claimedUntil!
+      })
+    ).resolves.toBe(false);
+    await expect(
+      store.claimWork({
+        workId: created.ingest.workId,
+        operation: "delete",
+        leaseMs: 60_000
+      })
+    ).resolves.toBe("terminal");
   });
 });
 
