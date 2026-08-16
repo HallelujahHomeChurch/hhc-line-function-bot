@@ -383,7 +383,10 @@ export class PostgresMediaSyncStore {
            and (outbox.claimed_until is null or outbox.claimed_until <= $1)
            and (
              (outbox.operation='intake' and ingest.state<>'tombstoned')
-             or outbox.operation='delete'
+             or (outbox.operation='delete' and exists (
+               select 1 from media_sync_source_tombstones tombstone
+               where tombstone.source_key=outbox.source_key
+             ))
            )
          order by outbox.available_at, outbox.source_key, outbox.operation
          for update of outbox skip locked
@@ -420,7 +423,10 @@ export class PostgresMediaSyncStore {
            and (outbox.claimed_until is null or outbox.claimed_until <= $1)
            and (
              (outbox.operation='intake' and ingest.state<>'tombstoned')
-             or outbox.operation='delete'
+             or (outbox.operation='delete' and exists (
+               select 1 from media_sync_source_tombstones tombstone
+               where tombstone.source_key=outbox.source_key
+             ))
            )
          order by outbox.available_at, outbox.source_key, outbox.operation
          for update of outbox skip locked
@@ -448,7 +454,11 @@ export class PostgresMediaSyncStore {
        where ingest.source_key=outbox.source_key and ingest.work_id=$1
          and outbox.operation=$2 and outbox.completed_at is null
          and outbox.claimed_until=$3::timestamptz
-         and outbox.claimed_until > clock_timestamp()`,
+         and outbox.claimed_until > clock_timestamp()
+         and ($2<>'delete' or exists (
+           select 1 from media_sync_source_tombstones tombstone
+           where tombstone.source_key=outbox.source_key
+         ))`,
       [input.workId, input.operation, input.expectedClaimedUntil]
     );
     return Boolean(result.rowCount);
@@ -473,7 +483,10 @@ export class PostgresMediaSyncStore {
          and (outbox.claimed_until is null or outbox.claimed_until <= $3)
          and (
            (outbox.operation='intake' and ingest.state<>'tombstoned')
-           or outbox.operation='delete'
+           or (outbox.operation='delete' and exists (
+             select 1 from media_sync_source_tombstones tombstone
+             where tombstone.source_key=outbox.source_key
+           ))
          )
        returning outbox.*, ingest.work_id`,
       [input.workId, input.operation, now, claimedUntil]
@@ -483,8 +496,13 @@ export class PostgresMediaSyncStore {
       state: MediaSyncIngest["state"];
       operation: MediaSyncOutboxOperation | null;
       completed_at: Date | string | null;
+      tombstoned: boolean;
     }>(
-      `select ingest.state, outbox.operation, outbox.completed_at
+      `select ingest.state, outbox.operation, outbox.completed_at,
+              exists (
+                select 1 from media_sync_source_tombstones tombstone
+                where tombstone.source_key=ingest.source_key
+              ) tombstoned
        from media_sync_ingests ingest
        left join media_sync_outbox outbox
          on outbox.source_key=ingest.source_key and outbox.operation=$2
@@ -498,7 +516,8 @@ export class PostgresMediaSyncStore {
       (input.operation === "intake" &&
         (existing.state === "ready" ||
           existing.state === "failed" ||
-          existing.state === "tombstoned"))
+          existing.state === "tombstoned")) ||
+      (input.operation === "delete" && !existing.tombstoned)
     ) {
       return "terminal";
     }
@@ -520,7 +539,10 @@ export class PostgresMediaSyncStore {
          and outbox.claimed_until > clock_timestamp()
          and (
            (outbox.operation='intake' and ingest.state<>'tombstoned')
-           or outbox.operation='delete'
+           or (outbox.operation='delete' and exists (
+             select 1 from media_sync_source_tombstones tombstone
+             where tombstone.source_key=outbox.source_key
+           ))
          )`,
       [input.workId, input.operation, input.expectedClaimedUntil]
     );
@@ -577,6 +599,71 @@ export class PostgresMediaSyncStore {
          where source_key=$1 and operation='intake'`,
         [sourceKey, input.failureCategory]
       );
+      await client.query("commit");
+      return true;
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async tombstoneClaimedWorkForCleanup(input: {
+    workId: string;
+    expectedClaimedUntil: string;
+  }): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const identity = await client.query<{ source_key: string }>(
+        "select source_key from media_sync_ingests where work_id=$1",
+        [input.workId]
+      );
+      const sourceKey = identity.rows[0]?.source_key;
+      if (!sourceKey) {
+        await client.query("rollback");
+        return false;
+      }
+      await lockSource(client, sourceKey);
+      const owned = await client.query(
+        `select 1
+         from media_sync_ingests ingest
+         join media_sync_outbox outbox on outbox.source_key=ingest.source_key
+         where ingest.work_id=$1 and ingest.state<>'tombstoned'
+           and outbox.operation='intake' and outbox.completed_at is null
+           and outbox.claimed_until=$2::timestamptz
+           and outbox.claimed_until > clock_timestamp()
+         for update of ingest, outbox`,
+        [input.workId, input.expectedClaimedUntil]
+      );
+      if (!owned.rowCount) {
+        await client.query("rollback");
+        return false;
+      }
+      const tombstonedAt = this.now();
+      await client.query(
+        `insert into media_sync_source_tombstones (source_key, tombstoned_at)
+         values ($1, $2) on conflict (source_key) do nothing`,
+        [sourceKey, tombstonedAt]
+      );
+      await client.query(
+        `update media_sync_ingests
+         set state='tombstoned', tombstoned_at=$2, updated_at=$2
+         where source_key=$1`,
+        [sourceKey, tombstonedAt]
+      );
+      await client.query(
+        `update media_sync_publications set state='revoked', updated_at=$2 where source_key=$1`,
+        [sourceKey, tombstonedAt]
+      );
+      await client.query(
+        `update media_sync_outbox
+         set completed_at=$2, claimed_until=null
+         where source_key=$1 and operation='intake'`,
+        [sourceKey, tombstonedAt]
+      );
+      await reopenDeleteOutbox(client, sourceKey);
       await client.query("commit");
       return true;
     } catch (error) {
@@ -843,21 +930,22 @@ export class PostgresMediaSyncStore {
         await client.query("rollback");
         return false;
       }
+      const tombstoned = Boolean(
+        (
+          await client.query("select 1 from media_sync_source_tombstones where source_key=$1", [
+            sourceKey
+          ])
+        ).rowCount
+      );
       const result = await client.query(
         `update media_sync_publications
          set destination_id=$3, target_id=$4,
-             state=case when $5 then 'revoked' else 'published' end,
+             state=case when $5 then 'revoked' else state end,
              updated_at=clock_timestamp()
          where source_key=$1 and publication_type=$2`,
-        [
-          sourceKey,
-          input.publicationType,
-          input.destinationId,
-          input.targetId,
-          ingest.state === "tombstoned"
-        ]
+        [sourceKey, input.publicationType, input.destinationId, input.targetId, tombstoned]
       );
-      await reopenDeleteOutbox(client, sourceKey);
+      if (tombstoned) await reopenDeleteOutbox(client, sourceKey);
       await client.query("commit");
       return Boolean(result.rowCount);
     } catch (error) {
@@ -886,13 +974,20 @@ export class PostgresMediaSyncStore {
         return false;
       }
       await lockSource(client, sourceKey);
-      const result = await client.query<{ state: MediaSyncIngest["state"] }>(
+      const tombstoned = Boolean(
+        (
+          await client.query("select 1 from media_sync_source_tombstones where source_key=$1", [
+            sourceKey
+          ])
+        ).rowCount
+      );
+      const result = await client.query(
         `update media_sync_ingests
          set asset_id=$2, asset_etag=$3, updated_at=clock_timestamp()
-         where source_key=$1 returning state`,
+         where source_key=$1`,
         [sourceKey, input.assetId, input.assetEtag ?? null]
       );
-      if (result.rows[0]) await reopenDeleteOutbox(client, sourceKey);
+      if (result.rowCount && tombstoned) await reopenDeleteOutbox(client, sourceKey);
       await client.query("commit");
       return Boolean(result.rowCount);
     } catch (error) {
@@ -912,6 +1007,16 @@ export class PostgresMediaSyncStore {
   }): Promise<boolean> {
     return this.withLockedIngest(input.sourceKey, async (client, ingest) => {
       if (!ingest || (input.operation === "intake" && ingest.state === "tombstoned")) return false;
+      if (
+        input.operation === "delete" &&
+        !(
+          await client.query("select 1 from media_sync_source_tombstones where source_key=$1", [
+            input.sourceKey
+          ])
+        ).rowCount
+      ) {
+        return false;
+      }
       const result = await client.query(
         `update media_sync_outbox
          set available_at=$3, claimed_until=null, last_error_category=$4

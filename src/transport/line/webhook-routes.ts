@@ -526,6 +526,17 @@ async function handleWebhook(
           intake.eligible &&
           (event.message?.type === "video" || event.message?.type === "audio")
         ) {
+          if (
+            event.webhookEventId &&
+            (await webhookEventStore.tryStart(
+              profile.name,
+              event.webhookEventId,
+              7 * 24 * 60 * 60 * 1000
+            )) === "duplicate"
+          ) {
+            incrementIgnored(ignoredCounts, "duplicate_webhook_event");
+            continue;
+          }
           mediaSyncOnlyEvents.push({ event, manual: Boolean(intake.manual) });
           continue;
         }

@@ -33,6 +33,7 @@ type AssetStageStore = Pick<
   | "completeClaimedWork"
   | "rememberExternalHandle"
   | "rememberOwnedAsset"
+  | "tombstoneClaimedWorkForCleanup"
   | "finalizeManualPublication"
   | "failManualPublication"
 >;
@@ -404,7 +405,19 @@ export async function runMediaSyncWorker(
         options
       );
     }
-    if (!collection.targetId) {
+    if (collection.targetId && collection.state === "pending") {
+      if (
+        !(await options.store.finalizeCollectionPublication({
+          workId,
+          expectedClaimedUntil: claim.claimedUntil,
+          collectionId: work.ingest.collectionId,
+          occurrenceId: collection.targetId
+        }))
+      ) {
+        return { status: "contention" };
+      }
+      collection.state = "published";
+    } else if (!collection.targetId) {
       const sourceRevision = work.ingest.checksumSha256 ?? asset.etag ?? work.ingest.assetEtag;
       if (!sourceRevision) {
         return terminalFailure(
@@ -446,16 +459,30 @@ export async function runMediaSyncWorker(
       (publication) => publication.publicationType === "manual"
     );
     if (manual?.state === "pending" && isConfirmedManualPublication(manual)) {
-      const manualResult = await publishManualResource({
-        workId,
-        work,
-        asset,
-        publication: manual,
-        expectedClaimedUntil: claim.claimedUntil,
-        now,
-        options
-      });
-      if (manualResult) return manualResult;
+      if (manual.targetId) {
+        if (
+          !(await options.store.finalizeManualPublication({
+            workId,
+            expectedClaimedUntil: claim.claimedUntil,
+            destinationId: manual.destinationId,
+            resourceId: manual.targetId
+          }))
+        ) {
+          return { status: "contention" };
+        }
+        manual.state = "published";
+      } else {
+        const manualResult = await publishManualResource({
+          workId,
+          work,
+          asset,
+          publication: manual,
+          expectedClaimedUntil: claim.claimedUntil,
+          now,
+          options
+        });
+        if (manualResult) return manualResult;
+      }
     }
     if (manual?.state === "published" && manual.jobId && options.agentJobStore) {
       try {
@@ -781,15 +808,17 @@ async function compensateOwnedAsset(
   asset: Pick<AssetRecord, "id" | "etag">,
   workId: string,
   options: { store: AssetStageStore; assets: AssetApiClient }
-): Promise<void> {
+): Promise<boolean> {
   try {
     await options.assets.softDelete(asset.id);
+    return true;
   } catch {
     await options.store.rememberOwnedAsset({
       workId,
       assetId: asset.id,
       ...(asset.etag ? { assetEtag: asset.etag } : {})
     });
+    return false;
   }
 }
 
@@ -798,13 +827,14 @@ async function compensateOccurrence(
   collectionId: string,
   occurrenceId: string,
   options: { store: AssetStageStore; assets: AssetApiClient }
-): Promise<void> {
+): Promise<boolean> {
   try {
     await options.assets.deleteCollectionItem(
       collectionId,
       occurrenceId,
       idempotencyKey("media-sync-collection-compensate", workId)
     );
+    return true;
   } catch {
     await options.store.rememberExternalHandle({
       workId,
@@ -812,6 +842,7 @@ async function compensateOccurrence(
       destinationId: collectionId,
       targetId: occurrenceId
     });
+    return false;
   }
 }
 
@@ -849,7 +880,21 @@ async function terminalFailure(
     publisher?: ResourceBinaryPublisher;
   }
 ): Promise<MediaSyncWorkerResult> {
-  await compensatePersistedOwners(workId, work, now, options);
+  const current =
+    (await options.store.loadClaimedWork({
+      workId,
+      operation: "intake",
+      expectedClaimedUntil
+    })) ?? work;
+  const compensated = await compensatePersistedOwners(workId, current, now, options);
+  if (!compensated) {
+    return (await options.store.tombstoneClaimedWorkForCleanup({
+      workId,
+      expectedClaimedUntil
+    }))
+      ? { status: "permanent_failure", reason }
+      : { status: "contention" };
+  }
   return failWorker(reason, workId, expectedClaimedUntil, options.store);
 }
 
@@ -862,35 +907,51 @@ async function compensatePersistedOwners(
     assets: AssetApiClient;
     publisher?: ResourceBinaryPublisher;
   }
-): Promise<void> {
+): Promise<boolean> {
+  let compensated = true;
   if (work.ingest.assetId) {
-    await compensateOwnedAsset(
-      {
-        id: work.ingest.assetId,
-        ...(work.ingest.assetEtag ? { etag: work.ingest.assetEtag } : {})
-      },
-      workId,
-      options
-    );
+    if (
+      !(await compensateOwnedAsset(
+        {
+          id: work.ingest.assetId,
+          ...(work.ingest.assetEtag ? { etag: work.ingest.assetEtag } : {})
+        },
+        workId,
+        options
+      ))
+    ) {
+      compensated = false;
+    }
   }
   for (const publication of work.publications) {
     if (!publication.targetId) continue;
     if (publication.publicationType === "collection") {
-      await compensateOccurrence(workId, publication.destinationId, publication.targetId, options);
+      if (
+        !(await compensateOccurrence(
+          workId,
+          publication.destinationId,
+          publication.targetId,
+          options
+        ))
+      ) {
+        compensated = false;
+      }
       continue;
     }
-    const compensated =
+    const manualCompensated =
       options.publisher &&
       (await options.publisher.tombstonePublishedResource(publication.targetId, now));
-    if (!compensated) {
+    if (!manualCompensated) {
       await options.store.rememberExternalHandle({
         workId,
         publicationType: "manual",
         destinationId: publication.destinationId,
         targetId: publication.targetId
       });
+      compensated = false;
     }
   }
+  return compensated;
 }
 
 async function failWorker(

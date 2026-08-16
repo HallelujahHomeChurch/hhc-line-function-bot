@@ -309,17 +309,17 @@ describe("media sync Asset and collection stage", () => {
     }
   );
 
-  it("durably remembers failed terminal compensation before completing intake failure", async () => {
+  it("atomically tombstones current work after terminal owner compensation fails", async () => {
     const fixture = cleanAssetFixture();
     fixture.work.publications[0]!.state = "published";
     fixture.work.publications[0]!.targetId = "occurrence-actual-1";
-    fixture.assets.get.mockResolvedValue(asset({ scanStatus: "infected" }));
+    fixture.store.findActiveBinding.mockResolvedValue(undefined);
     fixture.assets.softDelete.mockRejectedValue(new Error("asset unavailable"));
     fixture.assets.deleteCollectionItem.mockRejectedValue(new Error("asset unavailable"));
 
     await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "permanent_failure",
-      reason: "scan_infected"
+      reason: "binding_inactive"
     });
     expect(fixture.store.rememberOwnedAsset).toHaveBeenCalledWith({
       workId: "work-opaque-1",
@@ -332,12 +332,16 @@ describe("media sync Asset and collection stage", () => {
       destinationId: "collection-1",
       targetId: "occurrence-actual-1"
     });
-    expect(fixture.store.failClaimedWork).toHaveBeenCalledOnce();
+    expect(fixture.store.tombstoneClaimedWorkForCleanup).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      expectedClaimedUntil: fixture.claim.claimedUntil
+    });
+    expect(fixture.store.failClaimedWork).not.toHaveBeenCalled();
     expect(fixture.store.rememberOwnedAsset.mock.invocationCallOrder[0]).toBeLessThan(
-      fixture.store.failClaimedWork.mock.invocationCallOrder[0]!
+      fixture.store.tombstoneClaimedWorkForCleanup.mock.invocationCallOrder[0]!
     );
     expect(fixture.store.rememberExternalHandle.mock.invocationCallOrder[0]).toBeLessThan(
-      fixture.store.failClaimedWork.mock.invocationCallOrder[0]!
+      fixture.store.tombstoneClaimedWorkForCleanup.mock.invocationCallOrder[0]!
     );
   });
 
@@ -461,6 +465,7 @@ describe("media sync Asset and collection stage", () => {
       destinationId: "collection-1",
       targetId: "occurrence-actual-1"
     });
+    expect(fixture.store.tombstoneClaimedWorkForCleanup).not.toHaveBeenCalled();
   });
 
   it("owner-deletes a completed Asset when its lease is lost, or remembers it for delete retry", async () => {
@@ -492,6 +497,46 @@ describe("media sync Asset and collection stage", () => {
       assetId: "asset-1",
       assetEtag: "etag-1"
     });
+    expect(failedCompensation.store.tombstoneClaimedWorkForCleanup).not.toHaveBeenCalled();
+  });
+
+  it("resumes a remembered collection occurrence under the replacement lease", async () => {
+    const fixture = cleanAssetFixture();
+    fixture.work.publications[0]!.targetId = "occurrence-remembered";
+    fixture.work.publications[0]!.state = "pending";
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "completed"
+    });
+    expect(fixture.assets.addCollectionItem).not.toHaveBeenCalled();
+    expect(fixture.store.finalizeCollectionPublication).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      expectedClaimedUntil: fixture.claim.claimedUntil,
+      collectionId: "collection-1",
+      occurrenceId: "occurrence-remembered"
+    });
+  });
+
+  it("resumes a remembered manual resource without publishing another copy", async () => {
+    const fixture = cleanAssetFixture();
+    makePptxManual(fixture.work);
+    fixture.work.publications.push({
+      ...manualPublication(),
+      targetId: "resource-remembered"
+    });
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "completed"
+    });
+    expect(fixture.assets.download).not.toHaveBeenCalled();
+    expect(fixture.publisher.publishVerifiedResource).not.toHaveBeenCalled();
+    expect(fixture.store.finalizeManualPublication).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      expectedClaimedUntil: fixture.claim.claimedUntil,
+      destinationId: "pending-attachment-1",
+      resourceId: "resource-remembered"
+    });
+    expect(fixture.agentJobs.complete).toHaveBeenCalledOnce();
   });
 
   it("publishes a confirmed manual intent from the same clean Asset and persists its actual resource ID", async () => {
@@ -754,6 +799,7 @@ function createAssetFixture() {
       return true;
     }),
     completeClaimedWork: vi.fn().mockResolvedValue(true),
+    tombstoneClaimedWorkForCleanup: vi.fn().mockResolvedValue(true),
     rememberExternalHandle: vi.fn().mockResolvedValue(true),
     rememberOwnedAsset: vi.fn().mockResolvedValue(true)
   };

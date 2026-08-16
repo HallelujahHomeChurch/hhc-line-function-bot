@@ -647,7 +647,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     expect(state.rows[0]).toEqual({ state: "failed", failure_category: "line_content_empty" });
   });
 
-  it("keeps failed live-owner cleanup and tombstoned delete retries claimable", async () => {
+  it("keeps live compensation handles on intake until the exact lease atomically tombstones cleanup", async () => {
     const store = new PostgresMediaSyncStore(left);
     const live = ingest("live-cleanup-retry");
     const created = await store.createIngest(live);
@@ -659,53 +659,225 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
         assetEtag: "etag-live-cleanup"
       })
     ).resolves.toBe(true);
-    const liveDelete = await left.query<{ completed_at: Date | null }>(
-      `select completed_at from media_sync_outbox where source_key=$1 and operation='delete'`,
+    await expect(
+      store.rememberExternalHandle({
+        workId: created.ingest.workId,
+        publicationType: "collection",
+        destinationId: live.collectionId,
+        targetId: "occurrence-live-cleanup"
+      })
+    ).resolves.toBe(true);
+    const liveState = await left.query<{
+      state: string;
+      target_id: string;
+      delete_count: string;
+      tombstone_count: string;
+    }>(
+      `select publication.state, publication.target_id,
+              (select count(*)::text from media_sync_outbox
+               where source_key=ingest.source_key and operation='delete') delete_count,
+              (select count(*)::text from media_sync_source_tombstones
+               where source_key=ingest.source_key) tombstone_count
+       from media_sync_ingests ingest
+       join media_sync_publications publication using (source_key)
+       where ingest.source_key=$1 and publication.publication_type='collection'`,
       [live.sourceKey]
     );
-    expect(liveDelete.rows).toEqual([{ completed_at: null }]);
-    const claimedLive = (await store.claimOutbox({ limit: 10, leaseMs: 60_000 })).find(
-      (item) => item.sourceKey === live.sourceKey && item.operation === "delete"
-    );
-    expect(claimedLive?.claimedUntil).toBeDefined();
+    expect(liveState.rows[0]).toEqual({
+      state: "pending",
+      target_id: "occurrence-live-cleanup",
+      delete_count: "0",
+      tombstone_count: "0"
+    });
+
+    const dispatch = (
+      await store.claimOutboxForDispatch({
+        limit: 1,
+        operation: "intake",
+        leaseMs: 60_000,
+        now: new Date("2099-01-01T00:00:00.000Z")
+      })
+    )[0]!;
     await expect(
       store.markOutboxDispatched({
         workId: created.ingest.workId,
-        operation: "delete",
-        expectedClaimedUntil: claimedLive!.claimedUntil!
+        operation: "intake",
+        expectedClaimedUntil: dispatch.claimedUntil!
       })
     ).resolves.toBe(true);
     const workerClaim = await store.claimWork({
       workId: created.ingest.workId,
-      operation: "delete",
-      leaseMs: 60_000
+      operation: "intake",
+      leaseMs: 60_000,
+      now: new Date("2099-01-01T00:00:01.000Z")
     });
-    expect(workerClaim).toEqual(expect.objectContaining({ operation: "delete" }));
+    if (typeof workerClaim === "string" || !workerClaim.claimedUntil) {
+      throw new Error("expected worker claim");
+    }
+    await expect(
+      store.tombstoneClaimedWorkForCleanup({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: "2099-01-01T00:00:00.000Z"
+      })
+    ).resolves.toBe(false);
+    await expect(count(left, "media_sync_source_tombstones", live.sourceKey)).resolves.toBe(0);
+    await expect(
+      store.tombstoneClaimedWorkForCleanup({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: workerClaim.claimedUntil
+      })
+    ).resolves.toBe(true);
+    const transitioned = await left.query<{
+      ingest_state: string;
+      publication_state: string;
+      intake_completed_at: Date | null;
+    }>(
+      `select ingest.state ingest_state, publication.state publication_state,
+              intake.completed_at intake_completed_at
+       from media_sync_ingests ingest
+       join media_sync_publications publication using (source_key)
+       join media_sync_outbox intake on intake.source_key=ingest.source_key
+         and intake.operation='intake'
+       where ingest.source_key=$1 and publication.publication_type='collection'`,
+      [live.sourceKey]
+    );
+    expect(transitioned.rows[0]).toMatchObject({
+      ingest_state: "tombstoned",
+      publication_state: "revoked",
+      intake_completed_at: expect.any(Date)
+    });
+    await expect(count(left, "media_sync_source_tombstones", live.sourceKey)).resolves.toBe(1);
+    const claimedDelete = (
+      await store.claimOutbox({
+        limit: 10,
+        leaseMs: 60_000,
+        now: new Date("2099-01-01T00:00:02.000Z")
+      })
+    ).find((item) => item.sourceKey === live.sourceKey && item.operation === "delete");
+    expect(claimedDelete?.claimedUntil).toBeDefined();
+    await expect(
+      store.retryOutbox({
+        sourceKey: live.sourceKey,
+        operation: "delete",
+        expectedClaimedUntil: claimedDelete!.claimedUntil!,
+        availableAt: new Date("2099-01-01T00:01:00.000Z"),
+        lastErrorCategory: "cleanup_unavailable"
+      })
+    ).resolves.toBe(true);
+  });
+
+  it("dispatches and loads delete work only after a durable source tombstone", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const tombstoned = ingest("tombstoned-cleanup-retry");
+    const tombstoneCreated = await store.createIngest(tombstoned);
+    if (tombstoneCreated.tombstoned) throw new Error("unexpected tombstone");
+    await store.tombstoneSource(tombstoned.sourceKey);
+    const dispatch = (
+      await store.claimOutboxForDispatch({
+        limit: 10,
+        operation: "delete",
+        leaseMs: 60_000,
+        now: new Date("2099-01-01T00:00:00.000Z")
+      })
+    ).find((item) => item.sourceKey === tombstoned.sourceKey);
+    expect(dispatch?.claimedUntil).toBeDefined();
+    await expect(
+      store.markOutboxDispatched({
+        workId: tombstoneCreated.ingest.workId,
+        operation: "delete",
+        expectedClaimedUntil: dispatch!.claimedUntil!
+      })
+    ).resolves.toBe(true);
+    const worker = await store.claimWork({
+      workId: tombstoneCreated.ingest.workId,
+      operation: "delete",
+      leaseMs: 60_000,
+      now: new Date("2099-01-01T00:00:01.000Z")
+    });
+    if (typeof worker === "string" || !worker.claimedUntil) {
+      throw new Error("expected delete worker claim");
+    }
+    await expect(
+      store.loadClaimedWork({
+        workId: tombstoneCreated.ingest.workId,
+        operation: "delete",
+        expectedClaimedUntil: worker.claimedUntil
+      })
+    ).resolves.toMatchObject({ ingest: { state: "tombstoned" } });
+  });
+
+  it("never dispatches, claims, loads, or retries stale delete work for a live source", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const live = ingest("stale-live-delete");
+    const created = await store.createIngest(live);
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    const staleClaimedUntil = "2099-01-01T00:01:00.000Z";
+    await left.query(
+      `insert into media_sync_outbox (source_key, operation, claimed_until)
+       values ($1, 'delete', $2)`,
+      [live.sourceKey, staleClaimedUntil]
+    );
+
+    await expect(
+      store.markOutboxDispatched({
+        workId: created.ingest.workId,
+        operation: "delete",
+        expectedClaimedUntil: staleClaimedUntil
+      })
+    ).resolves.toBe(false);
+    await left.query(
+      `update media_sync_outbox set claimed_until=null
+       where source_key=$1 and operation='delete'`,
+      [live.sourceKey]
+    );
+    const dispatch = await store.claimOutboxForDispatch({
+      limit: 10,
+      operation: "delete",
+      leaseMs: 60_000,
+      now: new Date("2099-01-01T00:00:00.000Z")
+    });
+    expect(dispatch).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ sourceKey: live.sourceKey })])
+    );
+    const claims = await store.claimOutbox({
+      limit: 10,
+      leaseMs: 60_000,
+      now: new Date("2099-01-01T00:00:00.000Z")
+    });
+    expect(claims).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourceKey: live.sourceKey, operation: "delete" })
+      ])
+    );
+    await left.query(
+      `update media_sync_outbox
+       set claimed_until=$2, dispatched_at=clock_timestamp()
+       where source_key=$1 and operation='delete'`,
+      [live.sourceKey, staleClaimedUntil]
+    );
     await expect(
       store.claimWork({
         workId: created.ingest.workId,
         operation: "delete",
         leaseMs: 60_000
       })
-    ).resolves.toBe("busy");
-
-    const tombstoned = ingest("tombstoned-cleanup-retry");
-    const tombstoneCreated = await store.createIngest(tombstoned);
-    if (tombstoneCreated.tombstoned) throw new Error("unexpected tombstone");
-    await store.tombstoneSource(tombstoned.sourceKey);
-    const claimedDelete = (await store.claimOutbox({ limit: 10, leaseMs: 60_000 })).find(
-      (item) => item.sourceKey === tombstoned.sourceKey && item.operation === "delete"
-    );
-    expect(claimedDelete?.claimedUntil).toBeDefined();
+    ).resolves.toBe("terminal");
+    await expect(
+      store.loadClaimedWork({
+        workId: created.ingest.workId,
+        operation: "delete",
+        expectedClaimedUntil: staleClaimedUntil
+      })
+    ).resolves.toBeUndefined();
     await expect(
       store.retryOutbox({
-        sourceKey: tombstoned.sourceKey,
+        sourceKey: live.sourceKey,
         operation: "delete",
-        expectedClaimedUntil: claimedDelete!.claimedUntil!,
-        availableAt: new Date("2099-01-01T00:00:00.000Z"),
-        lastErrorCategory: "cleanup_unavailable"
+        expectedClaimedUntil: staleClaimedUntil,
+        availableAt: new Date("2099-01-01T00:02:00.000Z"),
+        lastErrorCategory: "stale-live-delete"
       })
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
   });
 
   it("fences Asset persistence and stores only the actual collection occurrence", async () => {
@@ -719,7 +891,13 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const created = await store.createIngest(input);
     if (created.tombstoned) throw new Error("unexpected tombstone");
     await completeOtherOutbox(left, input.sourceKey);
-    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    const dispatch = (
+      await store.claimOutboxForDispatch({
+        limit: 1,
+        leaseMs: 60_000,
+        now: new Date("2099-01-01T00:00:00.000Z")
+      })
+    )[0]!;
     await store.markOutboxDispatched({
       workId: dispatch.workId,
       operation: "intake",
@@ -728,7 +906,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const worker = await store.claimWork({
       workId: dispatch.workId,
       operation: "intake",
-      leaseMs: 60_000
+      leaseMs: 60_000,
+      now: new Date("2099-01-01T00:00:01.000Z")
     });
     const completedAsset = {
       workId: dispatch.workId,

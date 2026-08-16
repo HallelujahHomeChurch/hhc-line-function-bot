@@ -7651,7 +7651,7 @@ describe("LINE entrance", () => {
       created: true,
       ingest: { workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab" }
     });
-    const tryStart = vi.fn();
+    const tryStart = vi.fn().mockResolvedValue("started");
     const app = createTestApp(config, {
       accessStore,
       mediaSyncStore: {
@@ -7681,7 +7681,91 @@ describe("LINE entrance", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true, allowedEvents: 1 });
     expect(createIngest).toHaveBeenCalledOnce();
-    expect(tryStart).not.toHaveBeenCalled();
+    expect(tryStart).toHaveBeenCalledWith("helper", "event-media-video-1", 7 * 24 * 60 * 60 * 1000);
+  });
+
+  it("deduplicates a signed bound video redelivery after durable intake and before its prompt", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "helper-secret",
+      allowedMessageTypes: ["text", "image", "file"],
+      enabledFunctions: ["save_resource"]
+    };
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "helper-group-media-redelivery",
+          profileName: "helper",
+          type: "group",
+          principalId: "Gmedia-redelivery",
+          createdAt: "2026-08-16T00:00:00.000Z",
+          createdBy: "test"
+        }
+      ]
+    });
+    const createIngest = vi.fn().mockResolvedValue({
+      created: true,
+      ingest: { workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab" }
+    });
+    const tryStart = vi.fn().mockResolvedValueOnce("started").mockResolvedValueOnce("duplicate");
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const promoteUploadIntent = vi.fn().mockImplementation(async (pending) => pending);
+    const app = createTestApp(config, {
+      accessStore,
+      sessionStore: { promoteUploadIntent } as never,
+      mediaSyncStore: {
+        findActiveBinding: vi.fn().mockResolvedValue({
+          profileName: "helper",
+          groupId: "Gmedia-redelivery",
+          collectionId: "collection-1"
+        }),
+        createIngest
+      } as unknown as PostgresMediaSyncStore,
+      webhookEventStore: { tryStart },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "event-media-redelivery-1",
+      replyToken: "reply-media-redelivery-1",
+      source: { type: "group", groupId: "Gmedia-redelivery", userId: "Umedia" },
+      message: {
+        id: "message-media-redelivery-1",
+        type: "video",
+        contentProvider: { type: "line" }
+      }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(duplicate.statusCode).toBe(200);
+    expect(createIngest).toHaveBeenCalledTimes(2);
+    expect(tryStart).toHaveBeenNthCalledWith(
+      1,
+      "helper",
+      "event-media-redelivery-1",
+      7 * 24 * 60 * 60 * 1000
+    );
+    expect(tryStart).toHaveBeenCalledTimes(2);
+    expect(createIngest.mock.invocationCallOrder[0]).toBeLessThan(
+      tryStart.mock.invocationCallOrder[0]!
+    );
+    expect(replyText).toHaveBeenCalledTimes(1);
   });
 });
 
