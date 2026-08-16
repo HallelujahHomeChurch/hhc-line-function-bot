@@ -1,11 +1,12 @@
 import { Readable } from "node:stream";
 
-import { messagingApi } from "@line/bot-sdk";
+import { LineBotClient, messagingApi } from "@line/bot-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   contentTypeFromLineStream,
   createLineSdkAccountLinkClient,
+  createLineSdkContentClient,
   createLineSdkReplyClient,
   readableToUint8Array
 } from "../clients/line.js";
@@ -95,6 +96,40 @@ describe("LINE URI quick replies", () => {
 });
 
 describe("LINE content streaming", () => {
+  it("returns the SDK stream without buffering it for media sync", async () => {
+    const stream = Readable.from([Buffer.from("media")]);
+    Object.assign(stream, { headers: { "content-type": "video/mp4; charset=binary" } });
+    const getMessageContent = vi
+      .spyOn(LineBotClient.prototype, "getMessageContent")
+      .mockResolvedValue(stream);
+
+    const result = await createLineSdkContentClient().getMessageContentStream!("message-1", {
+      name: "helper",
+      channelAccessToken: "token"
+    });
+
+    expect(result).toEqual({ stream, contentType: "video/mp4" });
+    expect(getMessageContent).toHaveBeenCalledWith("message-1");
+    expect(stream.readableEnded).toBe(false);
+  });
+
+  it.each(["processing", "succeeded", "failed"] as const)(
+    "returns the exact %s transcoding state",
+    async (status) => {
+      const getStatus = vi
+        .spyOn(LineBotClient.prototype, "getMessageContentTranscodingByMessageId")
+        .mockResolvedValue({ status });
+
+      await expect(
+        createLineSdkContentClient().getMessageContentTranscodingStatus!("message-1", {
+          name: "helper",
+          channelAccessToken: "token"
+        })
+      ).resolves.toBe(status);
+      expect(getStatus).toHaveBeenCalledWith("message-1");
+    }
+  );
+
   it("retains a safe response content type for worker-side extension validation", () => {
     const stream = Readable.from([]);
     Object.assign(stream, {

@@ -1,5 +1,6 @@
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
 import type { AccessStore } from "../../access/types.js";
+import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
 import type { EffectiveAccessContext } from "../../application/access/effective-access.js";
 import {
   type AccountSurfacePresentation,
@@ -70,6 +71,7 @@ export async function handlePublicAccessCommand(input: {
   startAccountLogin?(): Promise<{ bindingUrl: string }>;
   policies: PublicAccessCommandPolicies;
   resolveCurrentAccess(): Promise<EffectiveAccessContext>;
+  mediaSyncStore?: Pick<PostgresMediaSyncStore, "findActiveBinding" | "bindWithCode">;
 }): Promise<FunctionExecutionResult | undefined> {
   const parsed = input.policies.parseCommand(input.text);
   const systemAction = matchNaturalLanguageSystemActionHint(input.text);
@@ -112,10 +114,52 @@ export async function handlePublicAccessCommand(input: {
     return handleLoginCommand(input);
   }
   if (!parsed) return undefined;
+  if (parsed.command === "media-sync") return handleMediaSyncCommand(parsed.args, input);
   if (parsed.command !== "registry") {
     return undefined;
   }
   return handleRegistryCommand(parsed.args, input);
+}
+
+async function handleMediaSyncCommand(
+  args: string[],
+  input: Parameters<typeof handlePublicAccessCommand>[0]
+): Promise<FunctionExecutionResult> {
+  const groupId = input.event.source.type === "group" ? input.event.source.groupId : undefined;
+  const userId = input.event.source.type === "group" ? input.event.source.userId : undefined;
+  if (input.profile.name !== "helper" || !groupId || !input.mediaSyncStore) {
+    return { ok: true, replyText: "此指令只能在已開通的小哈群組中使用。" };
+  }
+  if (args.length !== 1 || !args[0]?.trim()) {
+    return { ok: true, replyText: "請使用 /media-sync <code>。" };
+  }
+  if (!(await input.policies.isGroupAllowed(input.profile, groupId, input.accessStore))) {
+    return { ok: true, replyText: "這個群組尚未開通小哈，請先使用 /registry <code>。" };
+  }
+  if (await input.mediaSyncStore.findActiveBinding({ profileName: input.profile.name, groupId })) {
+    return { ok: true, replyText: "這個群組已經綁定媒體資料夾。" };
+  }
+  let groupDisplayName: string | undefined;
+  try {
+    groupDisplayName = await input.lineIdentity?.getGroupDisplayName(groupId);
+  } catch {
+    return { ok: false, replyText: "目前無法取得群組名稱，請稍後再試。" };
+  }
+  if (!groupDisplayName?.trim())
+    return { ok: false, replyText: "目前無法取得群組名稱，請稍後再試。" };
+  const result = await input.mediaSyncStore.bindWithCode({
+    profileName: input.profile.name,
+    code: args[0].trim(),
+    groupId,
+    groupDisplayName: groupDisplayName.trim(),
+    boundByLineUserId: userId
+  });
+  if (result.status === "bound") return { ok: true, replyText: "已綁定這個群組的媒體資料夾。" };
+  if (result.status === "group_already_bound")
+    return { ok: true, replyText: "這個群組已經綁定媒體資料夾。" };
+  if (result.status === "collection_already_bound")
+    return { ok: true, replyText: "這個媒體資料夾已綁定其他群組。" };
+  return { ok: true, replyText: "綁定碼無效、已過期或已使用。" };
 }
 
 async function handleWhoamiCommand(

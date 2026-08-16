@@ -34,6 +34,10 @@ properties:
             value: /readyz
           - name: MAX_BODY_BYTES
             value: "262144"
+          - name: ASSET_API_APP_ID
+            value: asset-api
+          - name: MEDIA_SYNC_GATEWAY_CALLER_APP_ID
+            value: api-gateway
           - name: MAX_ATTACHMENT_BYTES
             value: "26214400"
           - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS

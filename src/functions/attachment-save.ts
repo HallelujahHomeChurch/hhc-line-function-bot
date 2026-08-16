@@ -4,6 +4,7 @@ import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { ATTACHMENT_SCAN_TIMING } from "../attachments/scan-timing.js";
 import type { CatalogSourceRecord, CatalogStore } from "../catalog/store.js";
+import type { PostgresMediaSyncStore } from "../media-sync/store.js";
 import type { PendingAttachmentSession, SessionStore } from "../state/session-store.js";
 import type { FunctionExecutionResult, TextMessageHandler } from "../types.js";
 
@@ -27,6 +28,7 @@ export interface PendingAttachmentTextMessageOptions {
   agentJobStore: AgentJobStore;
   scanWorkStore: AttachmentScanWorkStore;
   scanQueue: AttachmentScanQueue;
+  mediaSyncStore?: Pick<PostgresMediaSyncStore, "confirmManualPublication">;
   now?: () => Date;
 }
 
@@ -203,6 +205,32 @@ async function enqueueAttachmentScan(input: {
     }
 
     let workId: string;
+    if (input.pending.mediaSyncSourceKey) {
+      if (!input.options.mediaSyncStore) {
+        await failAgentJobBestEffort(input.options.agentJobStore, jobId);
+        return attachmentScanHandoffFailure();
+      }
+      try {
+        const confirmed = await input.options.mediaSyncStore.confirmManualPublication({
+          sourceKey: input.pending.mediaSyncSourceKey,
+          destinationId: input.pending.id,
+          requesterUserId: scope.requesterUserId,
+          jobId,
+          manualSourceKey: target.sourceKey,
+          manualItemKind: target.itemKind,
+          manualDomain: target.domain,
+          manualTitle: target.title
+        });
+        if (!confirmed) {
+          await failAgentJobBestEffort(input.options.agentJobStore, jobId);
+          return attachmentScanHandoffFailure();
+        }
+        return attachmentScanQueued(jobId);
+      } catch {
+        await failAgentJobBestEffort(input.options.agentJobStore, jobId);
+        return attachmentScanHandoffFailure();
+      }
+    }
     try {
       const work = await input.options.scanWorkStore.create({
         jobId,

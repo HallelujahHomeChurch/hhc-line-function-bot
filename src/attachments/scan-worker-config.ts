@@ -7,6 +7,7 @@ import type {
   GraphConfig,
   RedisConfig
 } from "../types.js";
+import { MEDIA_SYNC_MAX_BYTES } from "../media-sync/worker.js";
 
 export interface AttachmentScanWorkerProfile {
   name: string;
@@ -16,6 +17,7 @@ export interface AttachmentScanWorkerProfile {
 export interface AttachmentScanWorkerConfig {
   profiles: AttachmentScanWorkerProfile[];
   attachments: AttachmentConfig;
+  mediaSyncMaxBytes: number;
   externalResources: ExternalResourceConfig;
   redis: RedisConfig;
   database: DatabaseConfig;
@@ -52,6 +54,14 @@ export function loadAttachmentScanWorkerConfigFromEnv(
   });
 
   const driveId = required(env, "GRAPH_DRIVE_ID");
+  const mediaSyncMaxBytes = positiveInt(
+    env.MEDIA_SYNC_MAX_BYTES,
+    MEDIA_SYNC_MAX_BYTES,
+    "MEDIA_SYNC_MAX_BYTES"
+  );
+  if (mediaSyncMaxBytes > MEDIA_SYNC_MAX_BYTES) {
+    throw new Error("MEDIA_SYNC_MAX_BYTES must not exceed 209715200");
+  }
   return {
     profiles,
     attachments: {
@@ -62,6 +72,7 @@ export function loadAttachmentScanWorkerConfigFromEnv(
         "LINE_CONTENT_DOWNLOAD_TIMEOUT_MS"
       )
     },
+    mediaSyncMaxBytes,
     externalResources: {
       downloadTimeoutMs: positiveInt(
         env.EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS,

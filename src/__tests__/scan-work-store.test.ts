@@ -329,7 +329,7 @@ describe("attachment scan work store", () => {
     await store.markEnqueued(work.id);
 
     await expect(store.claim(work.id)).resolves.toMatchObject({
-      claimExpiresAt: "2026-07-24T04:20:00.000Z"
+      claimExpiresAt: "2026-07-24T04:35:00.000Z"
     });
   });
 

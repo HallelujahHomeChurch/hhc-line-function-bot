@@ -12,6 +12,7 @@ import type { CacheStore } from "../cache/cache-store.js";
 import type { CatalogStore } from "../catalog/store.js";
 import type { EmbeddingClient } from "../clients/embedding.js";
 import type { KnowledgeStore } from "../knowledge/store.js";
+import type { PostgresMediaSyncStore } from "../media-sync/store.js";
 import { createLlmStatusAdminHandler } from "../llm-diagnostics.js";
 import type { ScheduleStore } from "../schedules/store.js";
 import type { SessionStore } from "../state/session-store.js";
@@ -52,6 +53,7 @@ export interface RegistryClients {
   agentJobStore?: AgentJobStore;
   attachmentScanQueue?: AttachmentScanQueue;
   attachmentScanWorkStore?: AttachmentScanWorkStore;
+  mediaSyncStore?: PostgresMediaSyncStore;
   now?: () => Date;
   requestIdFactory?: () => string;
   fetchImpl?: typeof fetch;
@@ -99,6 +101,7 @@ export function createFunctionRegistries(
       agentJobStore: clients.agentJobStore,
       attachmentScanQueue: clients.attachmentScanQueue,
       attachmentScanWorkStore: clients.attachmentScanWorkStore,
+      mediaSyncStore: clients.mediaSyncStore,
       now: clients.now,
       requestIdFactory: clients.requestIdFactory,
       fetchImpl: clients.fetchImpl

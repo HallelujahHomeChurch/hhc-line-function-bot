@@ -130,6 +130,28 @@ describe("config", () => {
     ).toEqual({ baseUrl: "http://localhost:8080", timeoutMs: 1500 });
   });
 
+  it("uses exact media-sync Dapr defaults and reads the runtime app token", () => {
+    expect(loadConfigFromEnv({ ...baseEnv(), APP_API_TOKEN: "runtime-token" })).toMatchObject({
+      asset: {
+        baseUrl: "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
+        timeoutMs: 3000
+      },
+      mediaSync: {
+        gatewayCallerAppId: "api-gateway",
+        appApiToken: "runtime-token"
+      }
+    });
+  });
+
+  it("rejects invalid media-sync Dapr app IDs", () => {
+    expect(() => loadConfigFromEnv({ ...baseEnv(), ASSET_API_APP_ID: "asset/api" })).toThrow(
+      "ASSET_API_APP_ID is invalid"
+    );
+    expect(() =>
+      loadConfigFromEnv({ ...baseEnv(), MEDIA_SYNC_GATEWAY_CALLER_APP_ID: "API Gateway" })
+    ).toThrow("MEDIA_SYNC_GATEWAY_CALLER_APP_ID is invalid");
+  });
+
   it("loads an optional observability HMAC key outside production", () => {
     expect(loadConfigFromEnv(baseEnv()).observability).toEqual({});
     expect(

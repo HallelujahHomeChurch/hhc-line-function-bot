@@ -49,7 +49,38 @@ export interface FinalizeLineBindingInput {
   webhookEventId: string;
 }
 
+export interface VerifyAccountPermissionInput {
+  userId: string;
+  requestId: string;
+}
+
+export type MediaSyncAclSubjectType = "user" | "role";
+
+export interface SearchMediaSyncAclSubjectsInput {
+  requestingUserId: string;
+  subjectType: MediaSyncAclSubjectType;
+  query: string;
+  page: number;
+  perPage: number;
+  requestId: string;
+}
+
+export interface MediaSyncAclSubjectSearchResult {
+  subjects: Array<{
+    id: string;
+    type: MediaSyncAclSubjectType;
+    displayName: string;
+  }>;
+  page: number;
+  perPage: number;
+  hasMore: boolean;
+}
+
 export interface AccountAdminClient {
+  verifyPermission(input: VerifyAccountPermissionInput): Promise<boolean>;
+  searchMediaSyncAclSubjects?(
+    input: SearchMediaSyncAclSubjectsInput
+  ): Promise<MediaSyncAclSubjectSearchResult>;
   authorizeAdministrator(lineUserId: string): Promise<{ bound: boolean; allowed: boolean }>;
   authorizeFunctions(input: AuthorizeLineFunctionsInput): Promise<LineFunctionAuthorization>;
   verifyFunctionPermissions(input: VerifyLineFunctionPermissionsInput): Promise<FunctionName[]>;
@@ -76,12 +107,16 @@ export function createAccountAdminClient(options: {
   const baseUrl = options.baseUrl.replace(/\/+$/u, "");
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  async function post(path: string, body: object): Promise<unknown> {
+  async function post(
+    path: string,
+    body: object,
+    headers: Record<string, string> = {}
+  ): Promise<unknown> {
     let response: Response;
     try {
       response = await fetchImpl(`${baseUrl}${path}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify(body),
         redirect: "manual",
         signal: AbortSignal.timeout(options.timeoutMs)
@@ -105,6 +140,35 @@ export function createAccountAdminClient(options: {
   }
 
   return {
+    async verifyPermission(input) {
+      const payload = await post(
+        "/priv/account/v1/permissions/verify",
+        { userId: input.userId, permission: "media-sync:manage" },
+        { "x-hhc-request-id": input.requestId }
+      );
+      if (!isExactRecord(payload, ["allowed"]) || typeof payload.allowed !== "boolean") {
+        throw new AccountApiError("account_api_invalid_permission_decision", false);
+      }
+      return payload.allowed;
+    },
+    async searchMediaSyncAclSubjects(input) {
+      const payload = await post(
+        "/priv/account/v1/media-sync/acl-subjects/search",
+        {
+          requestingUserId: input.requestingUserId,
+          subjectType: input.subjectType,
+          query: input.query,
+          page: input.page,
+          perPage: input.perPage
+        },
+        { "x-hhc-request-id": input.requestId }
+      );
+      const result = parseMediaSyncAclSubjectSearch(payload, input);
+      if (!result) {
+        throw new AccountApiError("account_api_invalid_acl_subjects", false);
+      }
+      return result;
+    },
     async authorizeAdministrator(lineUserId) {
       const payload = await post("/priv/account/v1/line/authorize", {
         line_user_id: lineUserId
@@ -186,6 +250,47 @@ export function createAccountAdminClient(options: {
       return payload;
     }
   };
+}
+
+function parseMediaSyncAclSubjectSearch(
+  value: unknown,
+  input: SearchMediaSyncAclSubjectsInput
+): MediaSyncAclSubjectSearchResult | undefined {
+  if (!isExactRecord(value, ["subjects", "page", "perPage", "hasMore"])) return undefined;
+  const { subjects, page, perPage, hasMore } = value;
+  if (
+    !Array.isArray(subjects) ||
+    subjects.length > input.perPage ||
+    page !== input.page ||
+    perPage !== input.perPage ||
+    typeof hasMore !== "boolean"
+  ) {
+    return undefined;
+  }
+  const parsed = [] as MediaSyncAclSubjectSearchResult["subjects"];
+  for (const subject of subjects) {
+    if (!isExactRecord(subject, ["id", "type", "displayName"])) return undefined;
+    if (
+      (subject.type !== "user" && subject.type !== "role") ||
+      subject.type !== input.subjectType ||
+      !validAclSubjectText(subject.id, 255) ||
+      !validAclSubjectText(subject.displayName, 2048)
+    ) {
+      return undefined;
+    }
+    parsed.push({ id: subject.id, type: subject.type, displayName: subject.displayName });
+  }
+  return { subjects: parsed, page, perPage, hasMore };
+}
+
+function validAclSubjectText(value: unknown, maxBytes: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value !== "" &&
+    Buffer.byteLength(value, "utf8") <= maxBytes &&
+    !/\p{Cc}|[\uD800-\uDFFF]/u.test(value)
+  );
 }
 
 function parseOwnProfileResult(

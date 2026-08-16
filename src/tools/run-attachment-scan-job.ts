@@ -90,6 +90,7 @@ export interface AttachmentScanQueueReceiver {
 }
 
 export interface AttachmentScanWorkLease {
+  kind: "attachment" | "media-sync";
   workId: string;
   complete(): Promise<void>;
 }
@@ -105,17 +106,22 @@ export async function receiveAttachmentScanWork(
   if (!message) return undefined;
 
   let workId: string | undefined;
+  let kind: "attachment" | "media-sync" | undefined;
   try {
     const value = JSON.parse(message.messageText) as unknown;
-    if (
-      value &&
-      typeof value === "object" &&
-      Object.keys(value).length === 1 &&
-      "workId" in value &&
-      typeof value.workId === "string" &&
-      UUID_PATTERN.test(value.workId)
-    ) {
-      workId = value.workId;
+    if (value && typeof value === "object" && "workId" in value) {
+      const keys = Object.keys(value);
+      const rawKind = "kind" in value ? value.kind : "attachment";
+      if (
+        (keys.length === 1 ||
+          (keys.length === 2 && keys.includes("kind") && keys.includes("workId"))) &&
+        (rawKind === "attachment" || rawKind === "media-sync") &&
+        typeof value.workId === "string" &&
+        UUID_PATTERN.test(value.workId)
+      ) {
+        workId = value.workId;
+        kind = rawKind;
+      }
     }
   } catch {
     // Invalid queue content is acknowledged below without being logged.
@@ -126,6 +132,7 @@ export async function receiveAttachmentScanWork(
   }
 
   return {
+    kind: kind!,
     workId,
     complete: async () => {
       await client.deleteMessage(message.messageId, message.popReceipt);

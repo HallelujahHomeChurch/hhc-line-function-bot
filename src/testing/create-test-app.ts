@@ -56,6 +56,9 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
   const textMessageHandlers = overrides.textMessageHandlers ?? {};
   const firstSuccessStore = overrides.firstSuccessStore ?? new InMemoryFirstSuccessStore();
   const defaultAccountAdminClient: AppDependencies["accountAdminClient"] = {
+    async verifyPermission() {
+      return false;
+    },
     async authorizeAdministrator(lineUserId: string) {
       const allowed = config.profiles.some((profile) => profile.adminUserId === lineUserId);
       return { bound: allowed, allowed };
@@ -177,7 +180,8 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     textFallbackGenerator: overrides.textFallbackGenerator,
     controlledAgentRouter,
     completionObserver,
-    accountAdminClient
+    accountAdminClient,
+    mediaSyncStore: overrides.mediaSyncStore
   });
 }
 

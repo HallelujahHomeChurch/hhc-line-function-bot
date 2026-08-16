@@ -32,6 +32,7 @@ async function setup() {
   const graph: GraphDriveClient = {
     listFolderChildren: vi.fn(),
     createSharingLink: vi.fn(),
+    deleteItem: vi.fn().mockResolvedValue(undefined),
     uploadFile: vi.fn().mockResolvedValue({
       id: "uploaded-ppt",
       driveId: "drive-1",
@@ -111,6 +112,35 @@ describe("resource binary publisher", () => {
     expect(outcome.result.replyText).not.toContain("OneDrive");
   });
 
+  it("treats Graph 404 and an already tombstoned catalog owner as idempotent cleanup", async () => {
+    const { graph, publisher } = await setup();
+    const outcome = await publisher.publishVerifiedResource({
+      resource: prepare(),
+      scan: { status: "clean", signatureVersion: "daily-20260724" },
+      now: new Date("2026-07-11T10:00:00.000Z")
+    });
+    if (outcome.status !== "published") throw new Error("expected published resource");
+    graph.deleteItem = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("missing"), { statusCode: 404 }));
+
+    await expect(
+      publisher.tombstonePublishedResource(outcome.resourceId, new Date("2026-07-11T10:01:00.000Z"))
+    ).resolves.toBe(true);
+    await expect(
+      publisher.tombstonePublishedResource(outcome.resourceId, new Date("2026-07-11T10:02:00.000Z"))
+    ).resolves.toBe(true);
+    expect(graph.deleteItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a missing catalog owner as already cleaned", async () => {
+    const { publisher } = await setup();
+
+    await expect(
+      publisher.tombstonePublishedResource("missing-resource", new Date("2026-07-11T10:00:00.000Z"))
+    ).resolves.toBe(true);
+  });
+
   it("uploads and indexes a verified binary exactly once", async () => {
     const { catalog, graph, publisher } = await setup();
 
@@ -131,5 +161,54 @@ describe("resource binary publisher", () => {
     expect(indexed).toHaveLength(1);
     expect(outcome.result.agentResult?.anchors?.resourceId).toBe(indexed[0].id);
     expect(outcome.result.agentResult?.anchors?.resourceId).not.toBe("uploaded-ppt");
+    expect(outcome.resourceId).toBe(indexed[0].id);
+  });
+
+  it("owner-loads and tombstones an exact resource ID independent of search visibility", async () => {
+    const { catalog, publisher } = await setup();
+    const outcome = await publisher.publishVerifiedResource({
+      resource: prepare(),
+      scan: { status: "clean", signatureVersion: "daily-20260724" },
+      now: new Date("2026-07-11T10:00:00.000Z")
+    });
+    if (outcome.status !== "published") throw new Error("expected publication");
+
+    await catalog.updateSourceEnabled({
+      profileName: "helper",
+      sourceKey: "ppt_slides",
+      enabled: false
+    });
+    await expect(
+      catalog.searchItems({ profileName: "helper", itemIds: [outcome.resourceId] })
+    ).resolves.toEqual([]);
+    await expect(catalog.getItemById(outcome.resourceId)).resolves.toMatchObject({
+      id: outcome.resourceId
+    });
+
+    await expect(
+      publisher.tombstonePublishedResource(outcome.resourceId, new Date("2026-07-11T10:01:00.000Z"))
+    ).resolves.toBe(true);
+    await expect(catalog.getItemById(outcome.resourceId)).resolves.toMatchObject({
+      id: outcome.resourceId,
+      deletedAt: "2026-07-11T10:01:00.000Z"
+    });
+  });
+
+  it("returns the existing actual resource ID for a duplicate", async () => {
+    const { publisher } = await setup();
+    const first = await publisher.publishVerifiedResource({
+      resource: prepare(),
+      scan: { status: "clean", signatureVersion: "daily-20260724" },
+      now: new Date("2026-07-11T10:00:00.000Z")
+    });
+    if (first.status !== "published") throw new Error("expected publication");
+
+    const duplicate = await publisher.publishVerifiedResource({
+      resource: prepare(),
+      scan: { status: "clean", signatureVersion: "daily-20260724" },
+      now: new Date("2026-07-11T10:01:00.000Z")
+    });
+
+    expect(duplicate).toMatchObject({ status: "duplicate", resourceId: first.resourceId });
   });
 });

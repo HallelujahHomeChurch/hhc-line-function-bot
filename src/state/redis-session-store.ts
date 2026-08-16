@@ -14,6 +14,7 @@ import type {
   SelectionSession,
   SessionStore,
   SessionStoreSummary,
+  UploadIntentPromotion,
   UploadIntentSession
 } from "./session-store.js";
 import type { LineSource } from "../types.js";
@@ -51,6 +52,40 @@ const DELETE_INDEXED_SESSION_SCRIPT = `
 redis.call('DEL', KEYS[2])
 local current = redis.call('GET', KEYS[1])
 if current == ARGV[1] then
+  redis.call('DEL', KEYS[1])
+end
+return 1
+`;
+
+const PROMOTE_UPLOAD_INTENT_SCRIPT = `
+local currentId = redis.call('GET', KEYS[1])
+if currentId == ARGV[1] then
+  local pendingValue = redis.call('GET', KEYS[2])
+  if not pendingValue then return nil end
+  return {pendingValue}
+end
+if not currentId then return nil end
+local currentKey = ARGV[4] .. currentId
+local currentValue = redis.call('GET', currentKey)
+if not currentValue then return nil end
+local current = cjson.decode(currentValue)
+if current.type ~= 'upload_intent' then return nil end
+redis.call('PSETEX', KEYS[2], ARGV[3], ARGV[2])
+redis.call('PSETEX', KEYS[1], ARGV[3], ARGV[1])
+redis.call('DEL', currentKey)
+return {ARGV[2], currentValue}
+`;
+
+const RESTORE_UPLOAD_INTENT_SCRIPT = `
+local currentId = redis.call('GET', KEYS[1])
+if currentId ~= ARGV[1] then return 0 end
+if not redis.call('GET', KEYS[2]) then return 0 end
+redis.call('DEL', KEYS[2])
+local ttlMs = tonumber(ARGV[4])
+if ttlMs and ttlMs > 0 then
+  redis.call('PSETEX', KEYS[3], ttlMs, ARGV[3])
+  redis.call('PSETEX', KEYS[1], ttlMs, ARGV[2])
+else
   redis.call('DEL', KEYS[1])
 end
 return 1
@@ -235,6 +270,88 @@ export class RedisSessionStore implements SessionStore {
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as UploadIntentSession) as
       UploadIntentSession | undefined;
+  }
+
+  async promoteUploadIntent(
+    pending: PendingAttachmentSession
+  ): Promise<UploadIntentPromotion | undefined> {
+    const lookup = {
+      profileName: pending.profileName,
+      source: pending.source,
+      requesterUserId: pending.requesterUserId
+    };
+    const current = await this.indexedInteractiveSession(lookup);
+    if (current?.type === "pending_attachment") {
+      return current.id === pending.id &&
+        current.attachment.messageId === pending.attachment.messageId
+        ? { pending: current }
+        : undefined;
+    }
+    if (current?.type !== "upload_intent") return undefined;
+    if (!this.options.client.eval) {
+      const consumed = await this.takeUploadIntent(lookup);
+      if (!consumed) return undefined;
+      try {
+        await this.set(pending);
+      } catch (error) {
+        await this.set(consumed);
+        throw error;
+      }
+      return { pending, replaced: consumed };
+    }
+    const indexKey = this.interactiveIndexKey(lookup);
+    if (!indexKey) return undefined;
+    const ttlMs = Math.max(
+      1,
+      Math.ceil(new Date(pending.expiresAt).getTime() - this.now().getTime())
+    );
+    const raw = await this.options.client.eval(PROMOTE_UPLOAD_INTENT_SCRIPT, {
+      keys: [indexKey, this.key(pending.id)],
+      arguments: [pending.id, JSON.stringify(pending), String(ttlMs), this.key("")]
+    });
+    if (!Array.isArray(raw) || typeof raw[0] !== "string") return undefined;
+    const promoted = this.liveSession(JSON.parse(raw[0]) as PendingAttachmentSession) as
+      PendingAttachmentSession | undefined;
+    if (!promoted) return undefined;
+    const replaced =
+      typeof raw[1] === "string"
+        ? (this.liveSession(JSON.parse(raw[1]) as UploadIntentSession) as
+            UploadIntentSession | undefined)
+        : undefined;
+    return { pending: promoted, ...(replaced ? { replaced } : {}) };
+  }
+
+  async restoreUploadIntentPromotion(promotion: UploadIntentPromotion): Promise<boolean> {
+    if (!promotion.replaced) return false;
+    const lookup = {
+      profileName: promotion.pending.profileName,
+      source: promotion.pending.source,
+      requesterUserId: promotion.pending.requesterUserId
+    };
+    if (!this.options.client.eval) {
+      const current = await this.indexedInteractiveSession(lookup);
+      if (
+        current?.type !== "pending_attachment" ||
+        current.id !== promotion.pending.id ||
+        current.attachment.messageId !== promotion.pending.attachment.messageId
+      ) {
+        return false;
+      }
+      await this.delete(current.id);
+      if (this.liveSession(promotion.replaced)) {
+        await this.set(promotion.replaced);
+      }
+      return true;
+    }
+    const indexKey = this.interactiveIndexKey(lookup);
+    if (!indexKey) return false;
+    const replaced = promotion.replaced;
+    const ttlMs = Math.ceil(new Date(replaced.expiresAt).getTime() - this.now().getTime());
+    const restored = await this.options.client.eval(RESTORE_UPLOAD_INTENT_SCRIPT, {
+      keys: [indexKey, this.key(promotion.pending.id), this.key(replaced.id)],
+      arguments: [promotion.pending.id, replaced.id, JSON.stringify(replaced), String(ttlMs)]
+    });
+    return Number(restored) === 1;
   }
 
   async findExternalSearchConsent(

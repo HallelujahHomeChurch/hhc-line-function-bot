@@ -70,7 +70,7 @@ export const SECURITY_AND_STATE_KERNEL_CASES: KernelAcceptanceCase[] = [
   safetyCase(
     "kernel-v1/write/unsupported-binary-rejected@1",
     "write_safety_bypass",
-    async () => !isSupportedAttachment({ type: "audio", id: "synthetic-audio" })
+    async () => !isSupportedAttachment({ type: "sticker", id: "synthetic-sticker" })
   ),
   safetyCase(
     "kernel-v1/write/account-login-direct-policy@1",

@@ -150,6 +150,10 @@ Users and groups register with the same command:
 
 Admins create one-time invite codes with `/invite-code-create`. The reply includes a standalone `/registry <code>` line that can be copied to a user or group. When the code is used within its TTL, the direct user or current group is opened immediately. Display names are resolved through the LINE SDK; users should not type names into the registration command.
 
+An already registered `helper` group can bind its assigned media collection with the Admin Console's
+one-time code: `/media-sync <code>`. The binding code expires after 60 minutes and is consumed only
+when the atomic group-to-collection binding succeeds.
+
 After registration commits, the bot recomputes the new user or group's effective access and offers up to three deterministic, currently authorized read examples as LINE Quick Replies. The preferred order is the next service schedule, sheet music, then presentation slides; unavailable reads are replaced by the next authorized read. Registration replies never print the LINE user or group ID.
 
 If a managed group has not been opened yet, the bot stays quiet for normal group chatter. When someone addresses the bot with a wake word or mention, it replies with a short registration prompt instead of silently ignoring the request.

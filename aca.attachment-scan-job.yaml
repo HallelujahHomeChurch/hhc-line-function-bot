@@ -12,7 +12,7 @@ properties:
       - server: alive.azurecr.io
         identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
     triggerType: Event
-    replicaTimeout: 900
+    replicaTimeout: 1800
     replicaRetryLimit: 1
     eventTriggerConfig:
       parallelism: 1
@@ -71,6 +71,8 @@ properties:
             value: PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID
           - name: MAX_ATTACHMENT_BYTES
             value: "26214400"
+          - name: MEDIA_SYNC_MAX_BYTES
+            value: "209715200"
           - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS
             value: "30000"
           - name: EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS

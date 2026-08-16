@@ -52,10 +52,11 @@ export interface PendingAttachmentSession {
   stage?: "awaiting_opt_in" | "awaiting_purpose" | "awaiting_title" | "awaiting_confirmation";
   profileName: string;
   requesterUserId?: string;
+  mediaSyncSourceKey?: string;
   source: LineSource;
   attachment: {
     messageId: string;
-    messageType: "image" | "file";
+    messageType: "image" | "video" | "audio" | "file";
     fileName?: string;
     fileSize?: number;
   };
@@ -81,6 +82,11 @@ export interface UploadIntentSession {
   requesterUserId: string;
   source: LineSource;
   expiresAt: string;
+}
+
+export interface UploadIntentPromotion {
+  pending: PendingAttachmentSession;
+  replaced?: UploadIntentSession;
 }
 
 export interface PendingResolutionSession {
@@ -184,6 +190,10 @@ export interface SessionStore {
     lookup: PptSelectionLookup
   ): Promise<PendingCapabilityResolutionSession | undefined>;
   takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined>;
+  promoteUploadIntent(
+    pending: PendingAttachmentSession
+  ): Promise<UploadIntentPromotion | undefined>;
+  restoreUploadIntentPromotion(promotion: UploadIntentPromotion): Promise<boolean>;
   findExternalSearchConsent(
     lookup: ExternalSearchConsentLookup
   ): Promise<ExternalSearchConsentSession | undefined>;
@@ -364,6 +374,54 @@ export class InMemorySessionStore implements SessionStore {
       )[0];
     if (session) this.sessions.delete(session.id);
     return session;
+  }
+
+  async promoteUploadIntent(
+    pending: PendingAttachmentSession
+  ): Promise<UploadIntentPromotion | undefined> {
+    const current = Array.from(this.sessions.values())
+      .map((candidate) => this.liveSession(candidate))
+      .filter(
+        (candidate): candidate is UploadIntentSession | PendingAttachmentSession =>
+          candidate?.type === "upload_intent" || candidate?.type === "pending_attachment"
+      )
+      .filter((candidate) => candidate.profileName === pending.profileName)
+      .filter((candidate) => sourceMatches(candidate.source, pending.source))
+      .filter((candidate) =>
+        requesterMatchesForSource(
+          pending.source,
+          candidate.requesterUserId,
+          pending.requesterUserId
+        )
+      )
+      .sort(
+        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+      )[0];
+    if (current?.type === "pending_attachment") {
+      return current.attachment.messageId === pending.attachment.messageId
+        ? { pending: current }
+        : undefined;
+    }
+    if (!current) return undefined;
+    this.sessions.delete(current.id);
+    this.sessions.set(pending.id, pending);
+    return { pending, replaced: current };
+  }
+
+  async restoreUploadIntentPromotion(promotion: UploadIntentPromotion): Promise<boolean> {
+    if (!promotion.replaced) return false;
+    const current = this.liveSession(this.sessions.get(promotion.pending.id));
+    if (
+      current?.type !== "pending_attachment" ||
+      current.attachment.messageId !== promotion.pending.attachment.messageId
+    ) {
+      return false;
+    }
+    this.sessions.delete(current.id);
+    if (new Date(promotion.replaced.expiresAt).getTime() > this.now().getTime()) {
+      this.sessions.set(promotion.replaced.id, promotion.replaced);
+    }
+    return true;
   }
 
   async findExternalSearchConsent(

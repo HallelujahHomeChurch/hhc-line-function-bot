@@ -705,7 +705,7 @@ describe("find_sheet_music", () => {
     const work = await scanWorkStore.claim(scanQueue.workIds[0]!);
     expect(work).toMatchObject({
       externalUrl: "https://example.org/amazing-grace.pdf",
-      expiresAt: "2026-07-04T11:00:00.000Z",
+      expiresAt: "2026-07-04T11:30:00.000Z",
       target: {
         sourceKey: "pop_sheet_music",
         itemKind: "pop_sheet",

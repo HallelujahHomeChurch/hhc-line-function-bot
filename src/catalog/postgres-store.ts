@@ -460,7 +460,20 @@ export class PostgresCatalogStore implements CatalogStore {
         input.deletedAt ?? null
       ]
     );
-    return this.getItemById(result.rows[0].id);
+    const item = await this.getItemById(result.rows[0].id);
+    if (!item) throw new Error(`catalog_item_not_found:${result.rows[0].id}`);
+    return item;
+  }
+
+  async tombstoneItemById(id: string, deletedAt: string): Promise<boolean> {
+    const result = await this.db.query<{ id: string }>(
+      `update catalog_items
+       set deleted_at=$2::timestamptz, updated_at=now()
+       where id=$1
+       returning id`,
+      [id, deletedAt]
+    );
+    return Boolean(result.rows[0]);
   }
 
   async tombstoneMissingItems(input: {
@@ -578,7 +591,7 @@ export class PostgresCatalogStore implements CatalogStore {
     return result.rows.map(mapItem);
   }
 
-  private async getItemById(id: string): Promise<CatalogItemRecord> {
+  async getItemById(id: string): Promise<CatalogItemRecord | undefined> {
     const result = await this.db.query<CatalogItemRow>(
       `
       select catalog_items.*,
@@ -608,10 +621,7 @@ export class PostgresCatalogStore implements CatalogStore {
       `,
       [id]
     );
-    if (!result.rows[0]) {
-      throw new Error(`catalog_item_not_found:${id}`);
-    }
-    return mapItem(result.rows[0]);
+    return result.rows[0] ? mapItem(result.rows[0]) : undefined;
   }
 }
 

@@ -1,3 +1,5 @@
+import type { Readable } from "node:stream";
+
 import type { LineReplyOptions } from "./application/contracts/function-execution.js";
 
 export type {
@@ -390,11 +392,23 @@ export interface AppConfig {
   lastErrors?: LastErrorsConfig;
   observability?: ObservabilityConfig;
   account?: AccountServiceConfig;
+  asset?: AssetServiceConfig;
+  mediaSync?: MediaSyncConfig;
 }
 
 export interface AccountServiceConfig {
   baseUrl: string;
   timeoutMs: number;
+}
+
+export interface AssetServiceConfig {
+  baseUrl: string;
+  timeoutMs: number;
+}
+
+export interface MediaSyncConfig {
+  gatewayCallerAppId: string;
+  appApiToken: string;
 }
 
 export interface ObservabilityConfig {
@@ -490,10 +504,12 @@ export type LineWebhookEvent = LineEvent | LineAccountLinkEvent;
 
 export interface LineEvent {
   type: string;
+  timestamp?: number;
   webhookEventId?: string;
   deliveryContext?: { isRedelivery?: boolean };
   replyToken?: string;
   source: LineSource;
+  unsend?: { messageId?: string };
   message?: LineMessage;
   postback?: LinePostback;
 }
@@ -528,6 +544,11 @@ export interface LineMessage {
   text?: string;
   fileName?: string;
   fileSize?: number;
+  contentProvider?: {
+    type?: string;
+    originalContentUrl?: string;
+    previewImageUrl?: string;
+  };
   mention?: {
     mentionees?: Array<{
       type?: string;
@@ -637,6 +658,11 @@ export interface LineContent {
   contentType?: string;
 }
 
+export interface LineContentStream {
+  stream: Readable;
+  contentType?: string;
+}
+
 export interface BinaryReadLimits {
   maxBytes: number;
   timeoutMs: number;
@@ -648,6 +674,14 @@ export interface LineContentClient {
     profile: Pick<BotProfileConfig, "name" | "channelAccessToken">,
     limits: BinaryReadLimits
   ): Promise<LineContent>;
+  getMessageContentStream?(
+    messageId: string,
+    profile: Pick<BotProfileConfig, "name" | "channelAccessToken">
+  ): Promise<LineContentStream>;
+  getMessageContentTranscodingStatus?(
+    messageId: string,
+    profile: Pick<BotProfileConfig, "name" | "channelAccessToken">
+  ): Promise<"processing" | "succeeded" | "failed">;
 }
 
 export interface WebSearchInput {

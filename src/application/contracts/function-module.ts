@@ -7,6 +7,7 @@ import type { CacheStore } from "../../cache/cache-store.js";
 import type { CatalogStore } from "../../catalog/store.js";
 import type { EmbeddingClient } from "../../clients/embedding.js";
 import type { KnowledgeStore } from "../../knowledge/store.js";
+import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
 import type { ScheduleStore } from "../../schedules/store.js";
 import type { SheetMusicExternalSearchSummarizer } from "../../search/sheet-music-external-summarizer.js";
 import type { SessionStore } from "../../state/session-store.js";
@@ -83,6 +84,7 @@ export interface FunctionModuleContext {
     agentJobStore?: AgentJobStore;
     attachmentScanQueue?: AttachmentScanQueue;
     attachmentScanWorkStore?: AttachmentScanWorkStore;
+    mediaSyncStore?: PostgresMediaSyncStore;
     now?: () => Date;
     requestIdFactory?: () => string;
     fetchImpl?: typeof fetch;

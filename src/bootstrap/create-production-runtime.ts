@@ -29,7 +29,10 @@ import {
   InMemoryAttachmentScanWorkStore,
   RedisAttachmentScanWorkStore
 } from "../attachments/scan-work-store.js";
-import { startAttachmentScanOutboxDispatcher } from "../attachments/scan-outbox.js";
+import {
+  startAttachmentScanOutboxDispatcher,
+  startMediaSyncOutboxDispatcher
+} from "../attachments/scan-outbox.js";
 import {
   InMemoryConversationWindowStore,
   RedisConversationWindowStore
@@ -39,6 +42,7 @@ import { createCacheStore } from "../cache/create-cache-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
+import { createAssetApiClient } from "../clients/asset-api.js";
 import {
   createLineSdkContentClient,
   createLineSdkIdentityClient,
@@ -50,6 +54,7 @@ import { createSearxngClient } from "../clients/searxng.js";
 import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
 import { createPostgresRuntime } from "../db/postgres.js";
+import { MediaSyncManagementService } from "../media-sync/service.js";
 import { createFunctionRegistries } from "../functions/registry.js";
 import { FUNCTION_MODULES } from "../functions/modules.js";
 import { createQueryScheduleModule } from "../capabilities/query-schedule/module.js";
@@ -93,6 +98,15 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     baseUrl: config.account?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
     timeoutMs: config.account?.timeoutMs ?? 3000
   });
+  const mediaSyncManagementService = postgres?.mediaSyncStore
+    ? new MediaSyncManagementService(
+        createAssetApiClient({
+          baseUrl: config.asset?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
+          timeoutMs: config.asset?.timeoutMs ?? 3000
+        }),
+        postgres.mediaSyncStore
+      )
+    : undefined;
 
   const providers = {
     deepseek: createDeepSeekProvider({
@@ -271,6 +285,13 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
           queue: attachmentScanQueue
         })
       : undefined;
+  const stopMediaSyncOutbox =
+    attachmentScanQueue && postgres?.mediaSyncStore
+      ? startMediaSyncOutboxDispatcher({
+          store: postgres.mediaSyncStore,
+          queue: attachmentScanQueue
+        })
+      : undefined;
   const conversationWindowStore = redis
     ? new RedisConversationWindowStore({ client: redis.client, keyPrefix: redis.keyPrefix })
     : new InMemoryConversationWindowStore();
@@ -314,6 +335,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       agentJobStore,
       attachmentScanWorkStore,
       attachmentScanQueue,
+      mediaSyncStore: postgres?.mediaSyncStore,
       webSearch,
       sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
         primary: wikipediaSummaryPrimary
@@ -388,7 +410,9 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     }),
     routeObserver,
     completionObserver,
-    accountAdminClient
+    accountAdminClient,
+    mediaSyncStore: postgres?.mediaSyncStore,
+    mediaSyncManagementService
   });
 
   return {
@@ -397,6 +421,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       clearInterval(memoryPurgeTimer);
       clearInterval(knowledgePurgeTimer);
       stopAttachmentScanOutbox?.();
+      stopMediaSyncOutbox?.();
       await app.close();
       await redis?.close();
       await postgres?.pool.end();

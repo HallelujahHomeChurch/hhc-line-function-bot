@@ -442,7 +442,7 @@ run_release_gates() {
     "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" Schedule 900 1 schedule \
     "${RELEASE_TARGET_SCAN_IMAGE}" clamav_refresh_job refresh_definition_mismatch false || return
   release_check_job_definition \
-    "${ATTACHMENT_SCAN_JOB_NAME}" Event 900 1 event \
+    "${ATTACHMENT_SCAN_JOB_NAME}" Event 1800 1 event \
     "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_scan_job scan_definition_mismatch false || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
@@ -834,6 +834,11 @@ elif check_name == "attachment_scan_job":
         for entry in (env if isinstance(env, list) else [])
         if isinstance(entry, dict)
     }
+    env_by_name = {
+        entry.get("name"): entry
+        for entry in (env if isinstance(env, list) else [])
+        if isinstance(entry, dict)
+    }
     valid = (
         valid
         and scale.get("minExecutions") == 0
@@ -849,7 +854,11 @@ elif check_name == "attachment_scan_job":
             "ASSET_API_URL",
             "ASSET_API_AUDIENCE",
             "AZURE_CLIENT_ID",
+            "MEDIA_SYNC_MAX_BYTES",
+            "MAX_ATTACHMENT_BYTES",
         }.issubset(env_names)
+        and env_by_name.get("MEDIA_SYNC_MAX_BYTES", {}).get("value") == "209715200"
+        and env_by_name.get("MAX_ATTACHMENT_BYTES", {}).get("value") == "26214400"
         and not any(name and name.startswith("CLAMAV_") for name in env_names)
         and resources == {"cpu": 1, "memory": "2Gi"}
         and not mounts

@@ -54,6 +54,7 @@ async function seedPendingAttachment(
     fileName?: string;
     sizeBytes?: number;
     stage?: "awaiting_opt_in" | "awaiting_purpose" | "awaiting_title" | "awaiting_confirmation";
+    mediaSyncSourceKey?: string;
   } = {}
 ) {
   await sessionStore.set({
@@ -63,6 +64,7 @@ async function seedPendingAttachment(
     stage: input.stage ?? "awaiting_purpose",
     profileName: "helper",
     requesterUserId: "U1",
+    mediaSyncSourceKey: input.mediaSyncSourceKey,
     source: { type: "group", groupId: "C1", userId: "U1" },
     attachment: {
       messageId: "file-1",
@@ -87,6 +89,7 @@ async function setup(
   graph: GraphDriveClient;
   lineContent: LineContentClient;
   handler: TextMessageHandler;
+  mediaSyncStore: { confirmManualPublication: ReturnType<typeof vi.fn> };
 }> {
   const sessionStore = new InMemorySessionStore({
     now: () => new Date("2026-07-11T10:00:00.000Z")
@@ -116,12 +119,16 @@ async function setup(
     now: () => new Date("2026-07-11T10:00:00.000Z")
   });
   const scanQueue = new InMemoryAttachmentScanQueue();
+  const mediaSyncStore = {
+    confirmManualPublication: vi.fn().mockResolvedValue(true)
+  };
   const handler = createPendingAttachmentTextMessageHandler({
     sessionStore,
     catalog,
     agentJobStore,
     scanWorkStore,
     scanQueue,
+    mediaSyncStore: mediaSyncStore as never,
     now: () => new Date("2026-07-11T10:00:00.000Z")
   });
   await catalog.upsertSource({
@@ -178,11 +185,54 @@ async function setup(
     scanQueue,
     graph,
     lineContent,
-    handler
+    handler,
+    mediaSyncStore
   };
 }
 
 describe("attachment save pipeline", () => {
+  it("confirms the existing media-sync work without creating another scan or download", async () => {
+    const { sessionStore, agentJobStore, scanWorkStore, scanQueue, mediaSyncStore, handler } =
+      await setup();
+    const createScanWork = vi.spyOn(scanWorkStore, "create");
+    await seedPendingAttachment(sessionStore, {
+      stage: "awaiting_confirmation",
+      mediaSyncSourceKey: "line:helper:message-1"
+    });
+    const pending = await sessionStore.findPendingAttachment({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      requesterUserId: "U1"
+    });
+    await sessionStore.set({
+      ...pending!,
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "SundayDeck",
+        declaredFileName: "OriginalDeck.pptx"
+      }
+    });
+
+    const result = await handler.handle({ text: "保存" }, context("保存", "req-confirm"));
+
+    expect(result?.replyText).toContain("查看結果");
+    expect(result?.quickReplies).toHaveLength(1);
+    expect(mediaSyncStore.confirmManualPublication).toHaveBeenCalledWith({
+      sourceKey: "line:helper:message-1",
+      destinationId: "pending-attachment-1",
+      requesterUserId: "U1",
+      jobId: agentJobStore.lastCreated!.id,
+      manualSourceKey: "ppt_slides",
+      manualItemKind: "ppt_slide",
+      manualDomain: "presentation",
+      manualTitle: "SundayDeck"
+    });
+    expect(createScanWork).not.toHaveBeenCalled();
+    expect(scanQueue.workIds).toEqual([]);
+  });
+
   it("asks for explicit opt-in before offering the four attachment purposes", async () => {
     const { sessionStore, graph, lineContent, handler } = await setup();
     await seedPendingAttachment(sessionStore, { stage: "awaiting_opt_in" });
@@ -376,7 +426,7 @@ describe("attachment save pipeline", () => {
         itemKind: "ppt_slide",
         title: "SundayDeck"
       },
-      expiresAt: "2026-07-11T11:00:00.000Z"
+      expiresAt: "2026-07-11T11:30:00.000Z"
     });
     await expect(
       agentJobStore.get(agentJobStore.lastCreated!.id, {
@@ -386,7 +436,7 @@ describe("attachment save pipeline", () => {
       })
     ).resolves.toMatchObject({
       status: "pending",
-      expiresAt: "2026-07-11T11:00:00.000Z"
+      expiresAt: "2026-07-11T11:30:00.000Z"
     });
     await expect(
       agentJobStore.get(agentJobStore.lastCreated!.id, {

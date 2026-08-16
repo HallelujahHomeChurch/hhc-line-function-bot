@@ -4,7 +4,10 @@ import { ManagedIdentityCredential } from "@azure/identity";
 import { QueueClient } from "@azure/storage-queue";
 
 import { RedisAgentJobStore } from "../agent/jobs.js";
-import { runAttachmentAssetWorker } from "../attachments/asset-worker.js";
+import {
+  runAttachmentAssetWorker,
+  type AttachmentAssetWorkerResult
+} from "../attachments/asset-worker.js";
 import { ATTACHMENT_SCAN_TIMING } from "../attachments/scan-timing.js";
 import { loadAttachmentScanWorkerConfigFromEnv } from "../attachments/scan-worker-config.js";
 import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
@@ -16,11 +19,17 @@ import { createGraphDriveClient } from "../clients/graph.js";
 import { createLineSdkContentClient } from "../clients/line.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createResourceBinaryPublisher } from "../functions/resource-binary-publisher.js";
+import {
+  runMediaSyncWorker,
+  shouldAcknowledgeMediaSyncResult,
+  type MediaSyncWorkerResult
+} from "../media-sync/worker.js";
 import { createRedisRuntime } from "../redis.js";
 import {
   formatAttachmentScanJobStatus,
   receiveAttachmentScanWork,
-  shouldAcknowledgeAttachmentScanResult
+  shouldAcknowledgeAttachmentScanResult,
+  type AttachmentScanWorkLease
 } from "./run-attachment-scan-job.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -78,54 +87,106 @@ export async function runAttachmentAssetJob(
     redis = await createRedisRuntime(config.redis, { onError: () => undefined });
     postgres = await createPostgresRuntime(config.database);
     if (!redis || !postgres) throw new Error("asset_job_state_unavailable");
+    const postgresRuntime = postgres;
 
+    const agentJobStore = new RedisAgentJobStore({
+      client: redis.client,
+      keyPrefix: redis.keyPrefix
+    });
     const workStore = new RedisAttachmentScanWorkStore({
       client: redis.client,
       keyPrefix: redis.keyPrefix,
-      jobStore: new RedisAgentJobStore({ client: redis.client, keyPrefix: redis.keyPrefix })
+      jobStore: agentJobStore
     });
-    const catalog = await createCatalogStore({ db: postgres.pool });
+    const catalog = await createCatalogStore({ db: postgresRuntime.pool });
     await seedCatalogSources({
       catalog,
       sources: buildCatalogSourceSeedsForProfiles(env, config.profiles)
     });
-    const deadlines = attachmentAssetDeadlines(startedAt);
-    const result = await runAttachmentAssetWorker(queueLease.workId, {
-      workStore,
-      assets: createAssetApiClient({
-        baseUrl: job.assetApiUrl,
-        getAccessToken: async () => {
-          const token = await credential.getToken(assetAccessTokenScope(job.assetApiAudience));
-          if (!token?.token) throw new Error("asset_api_token_unavailable");
-          return token.token;
-        }
-      }),
-      lineContent: createLineSdkContentClient(),
-      externalBinary: createExternalBinaryClient(),
-      profiles: config.profiles,
-      publisher: createResourceBinaryPublisher({
-        catalog,
-        graph: createGraphDriveClient(config.graph)
-      }),
-      maxBytes: config.attachments.maxBytes,
-      lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
-      externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
-      externalMaxRedirects: config.externalResources.maxRedirects,
-      scanDeadline: deadlines.scanDeadline,
-      publicationDeadline: deadlines.publicationDeadline
+    const assets = createAssetApiClient({
+      baseUrl: job.assetApiUrl,
+      getAccessToken: async () => {
+        const token = await credential.getToken(assetAccessTokenScope(job.assetApiAudience));
+        if (!token?.token) throw new Error("asset_api_token_unavailable");
+        return token.token;
+      }
     });
-
-    const acknowledge = shouldAcknowledgeAttachmentScanResult(result);
-    if (acknowledge) await queueLease.complete();
-    return {
-      exitCode: acknowledge ? 0 : 1,
-      status: formatAttachmentScanJobStatus(result)
-    };
+    const lineContent = createLineSdkContentClient();
+    const publisher = createResourceBinaryPublisher({
+      catalog,
+      graph: createGraphDriveClient(config.graph)
+    });
+    const deadlines = attachmentAssetDeadlines(startedAt);
+    return runAttachmentAssetQueueLease(queueLease, {
+      runAttachment: (workId) =>
+        runAttachmentAssetWorker(workId, {
+          workStore,
+          assets,
+          lineContent,
+          externalBinary: createExternalBinaryClient(),
+          profiles: config.profiles,
+          publisher,
+          maxBytes: config.attachments.maxBytes,
+          lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
+          externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
+          externalMaxRedirects: config.externalResources.maxRedirects,
+          scanDeadline: deadlines.scanDeadline,
+          publicationDeadline: deadlines.publicationDeadline
+        }),
+      runMediaSync: (workId) =>
+        runMediaSyncWorker(workId, {
+          store: postgresRuntime.mediaSyncStore,
+          assets,
+          lineContent,
+          profiles: config.profiles,
+          workerLeaseMs: ATTACHMENT_SCAN_TIMING.claimLeaseMs,
+          retryDelayMs: 30_000,
+          lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
+          maxBytes: config.mediaSyncMaxBytes,
+          manualMaxBytes: config.attachments.maxBytes,
+          publisher,
+          agentJobStore
+        })
+    });
   } catch {
     return { exitCode: 1, status: { status: "failed", failureCode: "worker_failed" } };
   } finally {
     await closeRuntime(redis, postgres);
   }
+}
+
+export async function runAttachmentAssetQueueLease(
+  lease: AttachmentScanWorkLease,
+  handlers: {
+    runAttachment(workId: string): Promise<AttachmentAssetWorkerResult>;
+    runMediaSync(workId: string): Promise<MediaSyncWorkerResult>;
+  }
+): Promise<{ exitCode: number; status: Record<string, string> }> {
+  if (lease.kind === "media-sync") {
+    const result = await handlers.runMediaSync(lease.workId);
+    const acknowledge = shouldAcknowledgeMediaSyncResult(result);
+    if (acknowledge) await lease.complete();
+    return {
+      exitCode: acknowledge ? 0 : 1,
+      status: formatMediaSyncJobStatus(result)
+    };
+  }
+  const result = await handlers.runAttachment(lease.workId);
+  const acknowledge = shouldAcknowledgeAttachmentScanResult(result);
+  if (acknowledge) await lease.complete();
+  return {
+    exitCode: acknowledge ? 0 : 1,
+    status: formatAttachmentScanJobStatus(result)
+  };
+}
+
+function formatMediaSyncJobStatus(result: MediaSyncWorkerResult): Record<string, string> {
+  return result.status === "completed" ||
+    result.status === "contention" ||
+    result.status === "missing" ||
+    result.status === "terminal"
+    ? { status: result.status }
+    : { status: result.status, reason: result.reason };
 }
 
 function requiredHttpsUrl(env: NodeJS.ProcessEnv, field: string): string {

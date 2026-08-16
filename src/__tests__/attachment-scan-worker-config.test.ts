@@ -20,6 +20,7 @@ function workerEnv(): NodeJS.ProcessEnv {
     GRAPH_DRIVE_ID: "drive",
     GRAPH_PPT_FOLDER_ITEM_ID: "ppt",
     MAX_ATTACHMENT_BYTES: "26214400",
+    MEDIA_SYNC_MAX_BYTES: "209715200",
     LINE_CONTENT_DOWNLOAD_TIMEOUT_MS: "30000",
     EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS: "15000",
     EXTERNAL_RESOURCE_MAX_REDIRECTS: "3"
@@ -32,6 +33,8 @@ describe("attachment scan worker config", () => {
 
     expect(config.profiles).toEqual([{ name: "helper", channelAccessToken: "line-access-token" }]);
     expect(config).toMatchObject({
+      attachments: { maxBytes: 26_214_400 },
+      mediaSyncMaxBytes: 209_715_200,
       redis: { url: "redis://worker", keyPrefix: "hhc" },
       database: { url: "postgres://worker", ssl: true },
       graph: {
@@ -44,6 +47,15 @@ describe("attachment scan worker config", () => {
       /channelSecret|adminUserId|deepseek|openai|notion/iu
     );
   });
+
+  it.each(["0", "209715201", "1.5", "not-a-number"])(
+    "rejects an invalid media-sync byte limit (%s)",
+    (value) => {
+      expect(() =>
+        loadAttachmentScanWorkerConfigFromEnv({ ...workerEnv(), MEDIA_SYNC_MAX_BYTES: value })
+      ).toThrow("MEDIA_SYNC_MAX_BYTES");
+    }
+  );
 
   it("ignores profiles that do not declare save_resource", async () => {
     await withProfileFile(

@@ -17,6 +17,16 @@ function projectFileExists(path: string): boolean {
 }
 
 describe("production profile configuration deployment contract", () => {
+  it("pins media-sync management to the exact production Dapr app IDs", () => {
+    const manifest = readProjectFile("aca.containerapp.yaml");
+
+    expect(manifest).toContain("- name: ASSET_API_APP_ID\n            value: asset-api");
+    expect(manifest).toContain(
+      "- name: MEDIA_SYNC_GATEWAY_CALLER_APP_ID\n            value: api-gateway"
+    );
+    expect(manifest).not.toContain("APP_API_TOKEN\n            secretRef:");
+  });
+
   it("requires a manual LINE Provider checkpoint and the bounded Account preflight", () => {
     const workflow = readProjectFile(".github/workflows/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
@@ -353,7 +363,7 @@ describe("production profile configuration deployment contract", () => {
     expect(helper?.enabledFunctions).toEqual(
       expect.arrayContaining(["find_resource", "save_resource", "save_memory", "retrieve_memory"])
     );
-    expect(helper?.allowedMessageTypes).toEqual(expect.arrayContaining(["text", "image", "file"]));
+    expect(helper?.allowedMessageTypes).toEqual(["text", "image", "file"]);
     expect(helper?.controlledAgent).toEqual({
       maxCandidates: 3,
       minPlannerConfidence: 0.65
@@ -880,7 +890,7 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).toContain("triggerType: Event");
     expect(scanJob).toContain("eventTriggerConfig:");
     expect(scanJob).toContain("minExecutions: 0");
-    expect(scanJob).toContain("replicaTimeout: 900");
+    expect(scanJob).toContain("replicaTimeout: 1800");
     expect(scanJob).toContain("parallelism: 1");
     expect(scanJob).toContain("replicaCompletionCount: 1");
     expect(scanJob).toContain("type: azure-queue");
@@ -902,6 +912,8 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).toContain("name: ASSET_API_URL");
     expect(scanJob).toContain("name: ASSET_API_AUDIENCE");
     expect(scanJob).toContain("name: AZURE_CLIENT_ID");
+    expect(scanJob).toContain('name: MEDIA_SYNC_MAX_BYTES\n            value: "209715200"');
+    expect(scanJob).toContain('name: MAX_ATTACHMENT_BYTES\n            value: "26214400"');
     expect(scanJob).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot:latest");
     expect(scanJob).toContain("dist/tools/run-attachment-asset-job.js");
     expect(scanJob).toContain("cpu: 1.0");

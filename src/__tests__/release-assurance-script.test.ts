@@ -1300,7 +1300,7 @@ if (command("containerapp", "job", "show")) {
     },
     "hhc-line-bot-attachment-scan": {
       triggerType: "Event",
-      replicaTimeout: 900,
+      replicaTimeout: 1800,
       replicaRetryLimit: 1,
       event: {
         parallelism: 1,
@@ -1322,7 +1322,9 @@ if (command("containerapp", "job", "show")) {
         { name: "ATTACHMENT_SCAN_QUEUE_URL", value: "https://queue.example/scan" },
         { name: "ASSET_API_URL", value: "https://asset.internal.example" },
         { name: "ASSET_API_AUDIENCE", value: "api://asset-api" },
-        { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" }
+        { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" },
+        { name: "MEDIA_SYNC_MAX_BYTES", value: "209715200" },
+        { name: "MAX_ATTACHMENT_BYTES", value: "26214400" }
       ],
       resources: { cpu: 1, memory: "2Gi" },
       volumeMounts: [],

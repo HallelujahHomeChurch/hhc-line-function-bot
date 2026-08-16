@@ -43,7 +43,11 @@ import {
 } from "../../engagement.js";
 import { getFunctionDefinition } from "../../functions/definitions.js";
 import { handleAttachmentMessage } from "../../functions/attachment-entrance.js";
+import { pendingAttachmentPrompt } from "../../functions/pending-attachment.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
+import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
+import { prepareMediaSyncIntake } from "../../media-sync/intake.js";
+import { applyMediaSyncLifecycle, mediaSyncLifecycleAction } from "../../media-sync/unsend.js";
 import { createIntroReply, introVariantForText } from "../../intro.js";
 import { verifyLineSignature } from "../../line-signature.js";
 import {
@@ -80,6 +84,8 @@ import type {
   TextMessageHandlerRegistry
 } from "../../types.js";
 import { registerHealthRoutes } from "../http/health-routes.js";
+import { registerMediaSyncRoutes } from "../../media-sync/http-routes.js";
+import type { MediaSyncManagementService } from "../../media-sync/service.js";
 import { runAdminCommand } from "./admin-commands.js";
 import {
   handleAgentTextTurnWithLongJob,
@@ -117,6 +123,8 @@ export interface AppDependencies {
   controlledAgentRouter?: ControlledAgentRouter;
   completionObserver: ControlledCompletionObserver;
   accountAdminClient: AccountAdminClient;
+  mediaSyncStore?: PostgresMediaSyncStore;
+  mediaSyncManagementService?: MediaSyncManagementService;
 }
 
 interface AllowResult {
@@ -231,6 +239,14 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   });
 
   registerHealthRoutes(app, config, diagnostics);
+  if (deps.mediaSyncManagementService && config.mediaSync) {
+    registerMediaSyncRoutes(app, {
+      ...config.mediaSync,
+      requestIdFactory,
+      accountAdminClient: deps.accountAdminClient,
+      service: deps.mediaSyncManagementService
+    });
+  }
 
   for (const profile of config.profiles) {
     app.post(profile.webhookPath, async (request, reply) => {
@@ -264,7 +280,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         webhookEventStore,
         deps.sessionStore,
         deps.completionObserver,
-        deps.accountAdminClient
+        deps.accountAdminClient,
+        deps.mediaSyncStore
       );
     });
   }
@@ -302,7 +319,8 @@ async function handleWebhook(
   webhookEventStore: WebhookEventStore,
   sessionStore: SessionStore | undefined,
   completionObserver: ControlledCompletionObserver,
-  accountAdminClient: AccountAdminClient
+  accountAdminClient: AccountAdminClient,
+  mediaSyncStore: PostgresMediaSyncStore | undefined
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -320,6 +338,22 @@ async function handleWebhook(
   }
 
   const ignoredCounts = new Map<string, number>();
+  const handledLifecycleEvents = new Set<LineEvent>();
+  for (const event of payload.events) {
+    if (!isOrdinaryLineEvent(event)) continue;
+    const action = mediaSyncLifecycleAction(profile, event);
+    if (!action) continue;
+    if (!mediaSyncStore) {
+      return reply.code(503).send({ ok: false, error: "media_sync_lifecycle_unavailable" });
+    }
+    try {
+      await applyMediaSyncLifecycle(action, mediaSyncStore);
+    } catch {
+      return reply.code(503).send({ ok: false, error: "media_sync_lifecycle_unavailable" });
+    }
+    handledLifecycleEvents.add(event);
+    incrementIgnored(ignoredCounts, `media_sync_${action.type}`);
+  }
   for (const event of payload.events) {
     if (!isAccountLinkEvent(event)) continue;
     const input = accountLinkFinalizeInput(event, payload.destination, profile.name);
@@ -398,7 +432,9 @@ async function handleWebhook(
     incrementIgnored(ignoredCounts, `account_link_${status}`);
   }
 
-  const ordinaryEvents = payload.events.filter(isOrdinaryLineEvent);
+  const ordinaryEvents = payload.events
+    .filter(isOrdinaryLineEvent)
+    .filter((event) => !handledLifecycleEvents.has(event));
   const handledAccountChallengeEvents = new Set<LineEvent>();
   for (const event of ordinaryEvents) {
     const text = event.message?.type === "text" ? event.message.text : undefined;
@@ -487,9 +523,46 @@ async function handleWebhook(
   }
 
   const allowedEvents: LineEvent[] = [];
+  const mediaSyncOnlyEvents: Array<{ event: LineEvent; manual: boolean }> = [];
 
   for (const event of ordinaryEvents) {
     if (handledAccountChallengeEvents.has(event)) continue;
+    if (
+      mediaSyncStore &&
+      event.source.type === "group" &&
+      event.source.groupId &&
+      (await isGroupAllowed(profile, event.source.groupId, accessStore))
+    ) {
+      try {
+        const intake = await prepareMediaSyncIntake({
+          profile,
+          event,
+          store: mediaSyncStore,
+          sessionStore,
+          now: new Date()
+        });
+        if (
+          intake.eligible &&
+          (!intake.workId || event.message?.type === "video" || event.message?.type === "audio")
+        ) {
+          if (
+            event.webhookEventId &&
+            (await webhookEventStore.tryStart(
+              profile.name,
+              event.webhookEventId,
+              7 * 24 * 60 * 60 * 1000
+            )) === "duplicate"
+          ) {
+            incrementIgnored(ignoredCounts, "duplicate_webhook_event");
+            continue;
+          }
+          mediaSyncOnlyEvents.push({ event, manual: Boolean(intake.manual) });
+          continue;
+        }
+      } catch {
+        return reply.code(503).send({ ok: false, error: "media_sync_intake_unavailable" });
+      }
+    }
     const allow = structurallyAllowEvent(profile, event);
     if (!allow.allowed) {
       incrementIgnored(ignoredCounts, allow.reason);
@@ -498,7 +571,7 @@ async function handleWebhook(
     allowedEvents.push(event);
   }
 
-  if (allowedEvents.length === 0) {
+  if (allowedEvents.length === 0 && mediaSyncOnlyEvents.length === 0) {
     return reply.send({
       ok: true,
       ignored: true,
@@ -507,10 +580,18 @@ async function handleWebhook(
   }
 
   const line = createReplyClient(profile);
+  for (const { event, manual } of mediaSyncOnlyEvents) {
+    if (manual && event.replyToken && event.message) {
+      const prompt = pendingAttachmentPrompt(event.message);
+      await line.replyText(event.replyToken, prompt.replyText, {
+        quickReplies: prompt.quickReplies
+      });
+    }
+  }
   let lineIdentity: LineIdentityClient | undefined;
   const getLineIdentity = (): LineIdentityClient =>
     (lineIdentity ??= createIdentityClient(profile));
-  let admittedEvents = 0;
+  let admittedEvents = mediaSyncOnlyEvents.length;
   let rejectedAfterStructuralGate = false;
   for (const event of allowedEvents) {
     if (
@@ -1019,7 +1100,8 @@ async function handleWebhook(
           return accountAuthorizationUsed
             ? applyAccountFunctionAuthorization(context, profile, accountState)
             : context;
-        }
+        },
+        mediaSyncStore
       });
       if (accessCommandResult) {
         await line.replyText(

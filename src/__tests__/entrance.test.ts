@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { AccountApiError } from "../account/account-admin-client.js";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
-import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
+import {
+  InMemoryRegistrationInviteCodeStore,
+  RedisRegistrationInviteCodeStore
+} from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
@@ -17,6 +22,8 @@ import { createPendingFunctionTextMessageHandler } from "../functions/pending-fu
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
 import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import { signLineBody } from "../line-signature.js";
+import { runMediaSyncMigrations } from "../media-sync/migrations.js";
+import { PostgresMediaSyncStore } from "../media-sync/store.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
@@ -30,6 +37,8 @@ import type {
   PostbackHandlerRegistry,
   TextGenerationProvider
 } from "../types.js";
+import { Pool } from "pg";
+import { createClient } from "redis";
 
 function testConfig(): AppConfig {
   return {
@@ -3647,6 +3656,424 @@ describe("LINE entrance", () => {
     await expect(registrationInviteCodeStore.consume("helper", "HHCTEST")).resolves.toBe(false);
   });
 
+  it("binds an active helper group to media sync through the signed webhook only", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const route = vi.fn<FunctionRouterPort["route"]>();
+    const accessStore = new InMemoryAccessStore();
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cmedia",
+      createdBy: "Uroot"
+    });
+    const mediaSyncStore = new PostgresMediaSyncStore({} as Pool);
+    const findActiveBinding = vi
+      .spyOn(mediaSyncStore, "findActiveBinding")
+      .mockResolvedValue(undefined);
+    const bindWithCode = vi.spyOn(mediaSyncStore, "bindWithCode").mockResolvedValue({
+      status: "bound",
+      binding: {
+        id: "binding-1",
+        profileName: "helper",
+        groupId: "Cmedia",
+        collectionId: "collection-1",
+        groupDisplayName: "影音同工群",
+        bindingCodeCreatedByHhcUserId: "manager-1",
+        boundAt: "2026-08-16T00:00:00.000Z"
+      }
+    });
+    const identityClient: LineIdentityClient = {
+      getUserDisplayName: vi.fn(),
+      getGroupDisplayName: vi.fn().mockResolvedValue("影音同工群")
+    };
+    const app = createApp(accessConfig(), {
+      router: { route },
+      accessStore,
+      mediaSyncStore,
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => identityClient
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-media",
+      source: { type: "group", groupId: "Cmedia" },
+      message: { type: "text", text: "/media-sync BIND-CODE" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(identityClient.getGroupDisplayName).toHaveBeenCalledWith("Cmedia");
+    expect(findActiveBinding).toHaveBeenCalledWith({ profileName: "helper", groupId: "Cmedia" });
+    expect(bindWithCode).toHaveBeenCalledWith({
+      profileName: "helper",
+      code: "BIND-CODE",
+      groupId: "Cmedia",
+      groupDisplayName: "影音同工群",
+      boundByLineUserId: undefined
+    });
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-media",
+      "已綁定這個群組的媒體資料夾。",
+      undefined
+    );
+    await app.close();
+  });
+
+  it.each([
+    [
+      "main profile",
+      "/api/line/webhook/main-public",
+      "main-secret",
+      { type: "group", groupId: "Cmedia", userId: "Umedia" },
+      undefined
+    ],
+    [
+      "direct source",
+      "/api/line/webhook/helper",
+      "helper-secret",
+      { type: "user", userId: "Umedia" },
+      "此指令只能在已開通的小哈群組中使用。"
+    ],
+    [
+      "room source",
+      "/api/line/webhook/helper",
+      "helper-secret",
+      { type: "room", roomId: "Rmedia", userId: "Umedia" },
+      undefined
+    ],
+    [
+      "missing code",
+      "/api/line/webhook/helper",
+      "helper-secret",
+      { type: "group", groupId: "Cmedia", userId: "Umedia" },
+      "請使用 /media-sync <code>。"
+    ]
+  ] as const)(
+    "does not bind media sync from %s",
+    async (_caseName, url, secret, source, expectedReply) => {
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const mediaSyncStore = new PostgresMediaSyncStore({} as Pool);
+      const findActiveBinding = vi
+        .spyOn(mediaSyncStore, "findActiveBinding")
+        .mockResolvedValue(undefined);
+      const bindWithCode = vi.spyOn(mediaSyncStore, "bindWithCode").mockResolvedValue({
+        status: "invalid_code"
+      });
+      const app = createApp(accessConfig(), {
+        accessStore: new InMemoryAccessStore(),
+        mediaSyncStore,
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "message",
+        replyToken: "reply-media-rejected",
+        source,
+        message: {
+          type: "text",
+          text: _caseName === "missing code" ? "/media-sync" : "/media-sync BIND-CODE"
+        }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url,
+        headers: signedHeaders(body, secret),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(findActiveBinding).not.toHaveBeenCalled();
+      expect(bindWithCode).not.toHaveBeenCalled();
+      if (expectedReply) {
+        expect(replyText).toHaveBeenCalledWith("reply-media-rejected", expectedReply, undefined);
+      } else {
+        expect(replyText).not.toHaveBeenCalled();
+      }
+      await app.close();
+    }
+  );
+
+  it("requires the existing active helper group registration before a media sync bind", async () => {
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const mediaSyncStore = new PostgresMediaSyncStore({} as Pool);
+    const findActiveBinding = vi
+      .spyOn(mediaSyncStore, "findActiveBinding")
+      .mockResolvedValue(undefined);
+    const bindWithCode = vi.spyOn(mediaSyncStore, "bindWithCode").mockResolvedValue({
+      status: "invalid_code"
+    });
+    const app = createApp(accessConfig(), {
+      accessStore: new InMemoryAccessStore(),
+      mediaSyncStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-media-inactive",
+      source: { type: "group", groupId: "Cinactive", userId: "Umedia" },
+      message: { type: "text", text: "/media-sync BIND-CODE" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(findActiveBinding).not.toHaveBeenCalled();
+    expect(bindWithCode).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-media-inactive",
+      expect.stringContaining("尚未開通"),
+      undefined
+    );
+    await app.close();
+  });
+
+  it("requires exactly one binding code from an active helper group", async () => {
+    const accessStore = new InMemoryAccessStore();
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cmedia",
+      createdBy: "Uroot"
+    });
+    const mediaSyncStore = new PostgresMediaSyncStore({} as Pool);
+    const findActiveBinding = vi
+      .spyOn(mediaSyncStore, "findActiveBinding")
+      .mockResolvedValue(undefined);
+    const bindWithCode = vi.spyOn(mediaSyncStore, "bindWithCode").mockResolvedValue({
+      status: "invalid_code"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(accessConfig(), {
+      accessStore,
+      mediaSyncStore,
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-media-arguments",
+      source: { type: "group", groupId: "Cmedia", userId: "Umedia" },
+      message: { type: "text", text: "/media-sync BIND-CODE extra" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(findActiveBinding).not.toHaveBeenCalled();
+    expect(bindWithCode).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-media-arguments",
+      "請使用 /media-sync <code>。",
+      undefined
+    );
+    await app.close();
+  });
+
+  it("does not consume a code when an active group is already bound or its display-name lookup fails", async () => {
+    const accessStore = new InMemoryAccessStore();
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cmedia",
+      createdBy: "Uroot"
+    });
+    const mediaSyncStore = new PostgresMediaSyncStore({} as Pool);
+    const findActiveBinding = vi.spyOn(mediaSyncStore, "findActiveBinding");
+    const bindWithCode = vi.spyOn(mediaSyncStore, "bindWithCode").mockResolvedValue({
+      status: "invalid_code"
+    });
+    const identityClient: LineIdentityClient = {
+      getUserDisplayName: vi.fn(),
+      getGroupDisplayName: vi.fn()
+    };
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(accessConfig(), {
+      accessStore,
+      mediaSyncStore,
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => identityClient
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-media-existing",
+      source: { type: "group", groupId: "Cmedia", userId: "Umedia" },
+      message: { type: "text", text: "/media-sync BIND-CODE" }
+    });
+
+    findActiveBinding.mockResolvedValueOnce({
+      id: "binding-existing",
+      profileName: "helper",
+      groupId: "Cmedia",
+      collectionId: "collection-existing",
+      groupDisplayName: "Already bound",
+      bindingCodeCreatedByHhcUserId: "manager-1",
+      boundAt: "2026-08-16T00:00:00.000Z"
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+    expect(replyText).toHaveBeenLastCalledWith(
+      "reply-media-existing",
+      "這個群組已經綁定媒體資料夾。",
+      undefined
+    );
+    expect(identityClient.getGroupDisplayName).not.toHaveBeenCalled();
+    expect(bindWithCode).not.toHaveBeenCalled();
+
+    findActiveBinding.mockResolvedValueOnce(undefined);
+    vi.mocked(identityClient.getGroupDisplayName).mockRejectedValueOnce(
+      new Error("line unavailable")
+    );
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+    expect(bindWithCode).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenLastCalledWith(
+      "reply-media-existing",
+      expect.stringContaining("無法取得群組名稱"),
+      undefined
+    );
+    findActiveBinding.mockResolvedValueOnce(undefined);
+    vi.mocked(identityClient.getGroupDisplayName).mockResolvedValueOnce(undefined);
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+    expect(bindWithCode).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("passes two independent active helper groups to the atomic binding boundary", async () => {
+    const accessStore = new InMemoryAccessStore();
+    for (const groupId of ["Cmedia-one", "Cmedia-two"]) {
+      await accessStore.addPrincipal({
+        profileName: "helper",
+        type: "group",
+        principalId: groupId,
+        createdBy: "Uroot"
+      });
+    }
+    const mediaSyncStore = new PostgresMediaSyncStore({} as Pool);
+    vi.spyOn(mediaSyncStore, "findActiveBinding").mockResolvedValue(undefined);
+    const bindWithCode = vi
+      .spyOn(mediaSyncStore, "bindWithCode")
+      .mockImplementation(async (input) => ({
+        status: "bound",
+        binding: {
+          id: `binding-${input.groupId}`,
+          profileName: input.profileName,
+          groupId: input.groupId,
+          collectionId: `collection-${input.groupId}`,
+          groupDisplayName: input.groupDisplayName,
+          boundByLineUserId: input.boundByLineUserId,
+          bindingCodeCreatedByHhcUserId: "manager-1",
+          boundAt: "2026-08-16T00:00:00.000Z"
+        }
+      }));
+    const app = createApp(accessConfig(), {
+      accessStore,
+      mediaSyncStore,
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn(),
+        getGroupDisplayName: vi.fn().mockImplementation(async (groupId) => `群組 ${groupId}`)
+      })
+    });
+    for (const [groupId, code] of [
+      ["Cmedia-one", "BIND-CODE-ONE"],
+      ["Cmedia-two", "BIND-CODE-TWO"]
+    ]) {
+      const body = lineBody({
+        type: "message",
+        replyToken: `reply-${groupId}`,
+        source: { type: "group", groupId, userId: "Umedia" },
+        message: { type: "text", text: `/media-sync ${code}` }
+      });
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/helper",
+        headers: signedHeaders(body, "helper-secret"),
+        payload: body
+      });
+    }
+
+    expect(bindWithCode).toHaveBeenCalledTimes(2);
+    expect(bindWithCode).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ groupId: "Cmedia-one", code: "BIND-CODE-ONE" })
+    );
+    expect(bindWithCode).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ groupId: "Cmedia-two", code: "BIND-CODE-TWO" })
+    );
+    await app.close();
+  });
+
+  it.each([
+    ["invalid_code", "綁定碼無效、已過期或已使用。"],
+    ["group_already_bound", "這個群組已經綁定媒體資料夾。"],
+    ["collection_already_bound", "這個媒體資料夾已綁定其他群組。"]
+  ] as const)("keeps media sync binding conflicts safe (%s)", async (status, reply) => {
+    const accessStore = new InMemoryAccessStore();
+    await accessStore.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "Cmedia",
+      createdBy: "Uroot"
+    });
+    const mediaSyncStore = new PostgresMediaSyncStore({} as Pool);
+    vi.spyOn(mediaSyncStore, "findActiveBinding").mockResolvedValue(undefined);
+    const bindWithCode = vi.spyOn(mediaSyncStore, "bindWithCode").mockResolvedValue({ status });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(accessConfig(), {
+      accessStore,
+      mediaSyncStore,
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn(),
+        getGroupDisplayName: vi.fn().mockResolvedValue("影音同工群")
+      })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-media-conflict",
+      source: { type: "group", groupId: "Cmedia", userId: "Umedia" },
+      message: { type: "text", text: "/media-sync BIND-CODE" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(bindWithCode).toHaveBeenCalledOnce();
+    expect(replyText).toHaveBeenCalledWith("reply-media-conflict", reply, undefined);
+    await app.close();
+  });
+
   it("registers groups immediately with a one-time invite code and LINE group name", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -7146,6 +7573,381 @@ describe("LINE entrance", () => {
     expect(res.json()).not.toHaveProperty("profiles");
     expect(res.json()).not.toHaveProperty("llm");
   });
+
+  it("does not claim legacy webhook dedupe when bound intake persistence fails", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "helper-secret",
+      allowedMessageTypes: ["text", "image", "video", "audio", "file"],
+      enabledFunctions: []
+    };
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "helper-group-media",
+          profileName: "helper",
+          type: "group",
+          principalId: "Gmedia",
+          createdAt: "2026-08-16T00:00:00.000Z",
+          createdBy: "test"
+        }
+      ]
+    });
+    const createIngest = vi.fn().mockRejectedValue(new Error("postgres unavailable"));
+    const tryStart = vi.fn().mockResolvedValue("started");
+    const mediaSyncStore = {
+      findActiveBinding: vi.fn().mockResolvedValue({
+        profileName: "helper",
+        groupId: "Gmedia",
+        collectionId: "collection-1"
+      }),
+      createIngest
+    } as unknown as PostgresMediaSyncStore;
+    const app = createTestApp(config, {
+      accessStore,
+      mediaSyncStore,
+      webhookEventStore: { tryStart }
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "event-media-1",
+      replyToken: "reply-media-1",
+      source: { type: "group", groupId: "Gmedia", userId: "Umedia" },
+      message: { id: "message-media-1", type: "image", contentProvider: { type: "line" } }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "media_sync_intake_unavailable" });
+    expect(createIngest).toHaveBeenCalledOnce();
+    expect(tryStart).not.toHaveBeenCalled();
+  });
+
+  it("admits bound helper video through media sync without widening legacy message types", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "helper-secret",
+      allowedMessageTypes: ["text", "image", "file"],
+      enabledFunctions: []
+    };
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "helper-group-media-video",
+          profileName: "helper",
+          type: "group",
+          principalId: "Gmedia-video",
+          createdAt: "2026-08-16T00:00:00.000Z",
+          createdBy: "test"
+        }
+      ]
+    });
+    const createIngest = vi.fn().mockResolvedValue({
+      created: true,
+      ingest: { workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab" }
+    });
+    const tryStart = vi.fn().mockResolvedValue("started");
+    const app = createTestApp(config, {
+      accessStore,
+      mediaSyncStore: {
+        findActiveBinding: vi.fn().mockResolvedValue({
+          profileName: "helper",
+          groupId: "Gmedia-video",
+          collectionId: "collection-1"
+        }),
+        createIngest
+      } as unknown as PostgresMediaSyncStore,
+      webhookEventStore: { tryStart }
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "event-media-video-1",
+      source: { type: "group", groupId: "Gmedia-video", userId: "Umedia" },
+      message: { id: "message-media-video-1", type: "video", contentProvider: { type: "line" } }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, allowedEvents: 1 });
+    expect(createIngest).toHaveBeenCalledOnce();
+    expect(tryStart).toHaveBeenCalledWith("helper", "event-media-video-1", 7 * 24 * 60 * 60 * 1000);
+  });
+
+  it("deduplicates a signed bound video redelivery after durable intake and before its prompt", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0]!,
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "helper-secret",
+      allowedMessageTypes: ["text", "image", "file"],
+      enabledFunctions: ["save_resource"]
+    };
+    const accessStore = new InMemoryAccessStore({
+      principals: [
+        {
+          id: "helper-group-media-redelivery",
+          profileName: "helper",
+          type: "group",
+          principalId: "Gmedia-redelivery",
+          createdAt: "2026-08-16T00:00:00.000Z",
+          createdBy: "test"
+        }
+      ]
+    });
+    const createIngest = vi.fn().mockResolvedValue({
+      created: true,
+      ingest: { workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab" }
+    });
+    const tryStart = vi.fn().mockResolvedValueOnce("started").mockResolvedValueOnce("duplicate");
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const promoteUploadIntent = vi.fn().mockImplementation(async (pending) => ({ pending }));
+    const app = createTestApp(config, {
+      accessStore,
+      sessionStore: { promoteUploadIntent } as never,
+      mediaSyncStore: {
+        findActiveBinding: vi.fn().mockResolvedValue({
+          profileName: "helper",
+          groupId: "Gmedia-redelivery",
+          collectionId: "collection-1"
+        }),
+        createIngest,
+        attachManualIntent: vi.fn().mockResolvedValue(true)
+      } as unknown as PostgresMediaSyncStore,
+      webhookEventStore: { tryStart },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      webhookEventId: "event-media-redelivery-1",
+      replyToken: "reply-media-redelivery-1",
+      source: { type: "group", groupId: "Gmedia-redelivery", userId: "Umedia" },
+      message: {
+        id: "message-media-redelivery-1",
+        type: "video",
+        contentProvider: { type: "line" }
+      }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: signedHeaders(body, "helper-secret"),
+      payload: body
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(duplicate.statusCode).toBe(200);
+    expect(createIngest).toHaveBeenCalledTimes(2);
+    expect(tryStart).toHaveBeenNthCalledWith(
+      1,
+      "helper",
+      "event-media-redelivery-1",
+      7 * 24 * 60 * 60 * 1000
+    );
+    expect(tryStart).toHaveBeenCalledTimes(2);
+    expect(createIngest.mock.invocationCallOrder[0]).toBeLessThan(
+      tryStart.mock.invocationCallOrder[0]!
+    );
+    expect(replyText).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe.runIf(
+  Boolean(process.env.KERNEL_POSTGRES_URL?.trim() && process.env.KERNEL_REDIS_URL?.trim())
+)("media sync slice local acceptance", () => {
+  it("keeps an unregistered code valid through registry, independent binding, and signed intake", async () => {
+    const databaseUrl = process.env.KERNEL_POSTGRES_URL!.trim();
+    const schemaName = `media_sync_acceptance_${randomUUID().replaceAll("-", "")}`;
+    const owner = new Pool({ connectionString: databaseUrl, max: 1 });
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      max: 4,
+      options: `-c search_path=${schemaName},public`
+    });
+    const redis = createClient({ url: process.env.KERNEL_REDIS_URL!.trim() });
+    let app: ReturnType<typeof createApp> | undefined;
+    try {
+      await owner.query(`create schema "${schemaName}"`);
+      await runMediaSyncMigrations(pool);
+      await redis.connect();
+      const bindingCodes = ["BIND-GROUP-ONE", "BIND-GROUP-TWO"];
+      const mediaSyncStore = new PostgresMediaSyncStore(pool, {
+        codeFactory: () => bindingCodes.shift()!
+      });
+      const registrationCodes = ["REGISTER-GROUP-ONE", "REGISTER-GROUP-TWO"];
+      const registrationInviteCodeStore = new RedisRegistrationInviteCodeStore({
+        client: redis,
+        keyPrefix: `media-sync-acceptance:${randomUUID()}`,
+        codeFactory: () => registrationCodes.shift()!
+      });
+      for (let index = 0; index < 2; index += 1) {
+        await registrationInviteCodeStore.create({
+          profileName: "helper",
+          createdBy: "manager",
+          ttlMinutes: 1
+        });
+      }
+      for (const [collectionId, idempotencyKey] of [
+        ["collection-one", "issue-one"],
+        ["collection-two", "issue-two"]
+      ]) {
+        await expect(
+          mediaSyncStore.createBindingCode({
+            profileName: "helper",
+            collectionId,
+            createdByHhcUserId: "manager",
+            idempotencyKey
+          })
+        ).resolves.toMatchObject({ status: "issued" });
+      }
+      const accessStore = new InMemoryAccessStore();
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      app = createApp(accessConfig(), {
+        accessStore,
+        registrationInviteCodeStore,
+        mediaSyncStore,
+        createLineReplyClient: () => ({ replyText }),
+        createLineIdentityClient: () => ({
+          getUserDisplayName: vi.fn(),
+          getGroupDisplayName: vi.fn(async (groupId) => `Group ${groupId}`)
+        })
+      });
+      const deliver = (groupId: string, replyToken: string, message: Record<string, unknown>) => {
+        const body = lineBody({
+          type: "message",
+          webhookEventId: `event-${replyToken}`,
+          replyToken,
+          source: { type: "group", groupId, userId: "line-user" },
+          message
+        });
+        return app!.inject({
+          method: "POST",
+          url: "/api/line/webhook/helper",
+          headers: signedHeaders(body, "helper-secret"),
+          payload: body
+        });
+      };
+
+      const rejected = await deliver("group-one", "unregistered", {
+        type: "text",
+        text: "/media-sync BIND-GROUP-ONE"
+      });
+      expect(rejected.statusCode).toBe(200);
+      expect(replyText).toHaveBeenLastCalledWith(
+        "unregistered",
+        expect.stringContaining("尚未開通"),
+        undefined
+      );
+      await expect(
+        pool.query<{ consumed_at: Date | null }>(
+          "select consumed_at from media_sync_binding_codes where collection_id='collection-one'"
+        )
+      ).resolves.toMatchObject({ rows: [{ consumed_at: null }] });
+      await expect(
+        deliver("group-one", "registry-one", {
+          type: "text",
+          text: "/registry REGISTER-GROUP-ONE"
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+      const repliesAfterRegistry = replyText.mock.calls.length;
+      await expect(
+        deliver("group-one", "unbound-media", {
+          id: "message-before-binding",
+          type: "image",
+          contentProvider: { type: "line" }
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+      expect(replyText).toHaveBeenCalledTimes(repliesAfterRegistry);
+      await expect(pool.query("select 1 from media_sync_ingests")).resolves.toMatchObject({
+        rowCount: 0
+      });
+      await expect(
+        deliver("group-one", "bind-one", {
+          type: "text",
+          text: "/media-sync BIND-GROUP-ONE"
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+      await expect(
+        deliver("group-two", "registry-two", {
+          type: "text",
+          text: "/registry REGISTER-GROUP-TWO"
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+      await expect(
+        deliver("group-two", "bind-two", {
+          type: "text",
+          text: "/media-sync BIND-GROUP-TWO"
+        })
+      ).resolves.toMatchObject({ statusCode: 200 });
+
+      for (const kind of ["image", "video", "audio", "file"] as const) {
+        const response = await deliver("group-one", `media-${kind}`, {
+          id: `message-${kind}`,
+          type: kind,
+          contentProvider: { type: "line" },
+          ...(kind === "file" ? { fileName: "slides.pptx", fileSize: 1024 } : {})
+        });
+        expect(response.statusCode, kind).toBe(200);
+      }
+
+      await expect(
+        mediaSyncStore.findActiveBinding({ profileName: "helper", groupId: "group-one" })
+      ).resolves.toMatchObject({ collectionId: "collection-one" });
+      await expect(
+        mediaSyncStore.findActiveBinding({ profileName: "helper", groupId: "group-two" })
+      ).resolves.toMatchObject({ collectionId: "collection-two" });
+      const ingests = await pool.query<{ media_kind: string; collection_id: string }>(
+        "select media_kind, collection_id from media_sync_ingests order by media_kind"
+      );
+      expect(ingests.rows).toEqual([
+        { media_kind: "audio", collection_id: "collection-one" },
+        { media_kind: "file", collection_id: "collection-one" },
+        { media_kind: "image", collection_id: "collection-one" },
+        { media_kind: "video", collection_id: "collection-one" }
+      ]);
+      const persistedCodes = await pool.query<{ code_hash: string }>(
+        "select code_hash from media_sync_binding_codes order by collection_id"
+      );
+      expect(persistedCodes.rows.map(({ code_hash }) => code_hash)).toEqual([
+        expect.stringMatching(/^[0-9a-f]{64}$/u),
+        expect.stringMatching(/^[0-9a-f]{64}$/u)
+      ]);
+      expect(
+        JSON.stringify([persistedCodes.rows, accessStore.audit, replyText.mock.calls])
+      ).not.toMatch(/BIND-GROUP|REGISTER-GROUP/u);
+    } finally {
+      await app?.close();
+      if (redis.isOpen) await redis.quit();
+      await pool.end();
+      await owner.query(`drop schema if exists "${schemaName}" cascade`);
+      await owner.end();
+    }
+  }, 15_000);
 });
 
 function createDeferred<T>() {
