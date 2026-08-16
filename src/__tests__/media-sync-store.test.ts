@@ -22,13 +22,16 @@ describe("media sync migrations", () => {
 });
 
 describe("media sync outbox leases", () => {
-  it.each([0, -1])("rejects a non-positive lease duration (%s)", async (leaseMs) => {
-    const store = new PostgresMediaSyncStore({} as Pool);
+  it.each([0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects a non-positive or non-integral lease duration (%s)",
+    async (leaseMs) => {
+      const store = new PostgresMediaSyncStore({} as Pool);
 
-    await expect(store.claimOutbox({ limit: 1, leaseMs })).rejects.toThrow(
-      "media_sync_outbox_lease_invalid"
-    );
-  });
+      await expect(store.claimOutbox({ limit: 1, leaseMs })).rejects.toThrow(
+        "media_sync_outbox_lease_invalid"
+      );
+    }
+  );
 });
 
 const databaseUrl = process.env.KERNEL_POSTGRES_URL?.trim();
@@ -300,6 +303,43 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     expect(leftClaims).toHaveLength(1);
     expect(rightClaims).toHaveLength(1);
     expect(leftClaims[0]?.sourceKey).not.toBe(rightClaims[0]?.sourceKey);
+  });
+
+  it("rejects fractional leases before rounded tokens can collide in PostgreSQL", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const input = ingest("fractional-lease");
+    await store.createIngest(input);
+    await completeOtherOutbox(left, input.sourceKey);
+    const now = new Date("2099-01-01T00:00:00.000Z");
+    let collision:
+      { firstClaimedUntil?: string; secondClaimedUntil?: string; oldRetry: boolean } | undefined;
+
+    try {
+      const first = (await store.claimOutbox({ limit: 1, now, leaseMs: 0.5 }))[0];
+      const second = (await store.claimOutbox({ limit: 1, now, leaseMs: 0.5 }))[0];
+      collision = {
+        firstClaimedUntil: first?.claimedUntil,
+        secondClaimedUntil: second?.claimedUntil,
+        oldRetry: await store.retryOutbox({
+          sourceKey: input.sourceKey,
+          operation: "intake",
+          expectedClaimedUntil: first!.claimedUntil!,
+          availableAt: new Date("2099-01-01T00:01:00.000Z"),
+          lastErrorCategory: "rounded-token"
+        })
+      };
+    } catch (error) {
+      expect(error).toEqual(
+        expect.objectContaining({ message: "media_sync_outbox_lease_invalid" })
+      );
+    }
+
+    expect(collision).toBeUndefined();
+    await expect(readOutbox(left, input.sourceKey)).resolves.toMatchObject({
+      claimed_until: null,
+      last_error_category: null,
+      attempts: 0
+    });
   });
 
   it("fences stale workers after another worker reclaims the lease", async () => {

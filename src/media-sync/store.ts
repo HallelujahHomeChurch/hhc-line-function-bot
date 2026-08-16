@@ -292,7 +292,7 @@ export class PostgresMediaSyncStore {
     now?: Date;
     leaseMs: number;
   }): Promise<MediaSyncOutboxItem[]> {
-    if (!Number.isFinite(input.leaseMs) || input.leaseMs <= 0) {
+    if (!Number.isSafeInteger(input.leaseMs) || input.leaseMs < 1) {
       throw new Error("media_sync_outbox_lease_invalid");
     }
     const now = input.now ?? this.now();
