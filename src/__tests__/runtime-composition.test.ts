@@ -10,6 +10,7 @@ import {
   InMemoryFirstSuccessStore,
   RedisFirstSuccessStore
 } from "../observability/first-success-store.js";
+import { createPostgresRuntime } from "../db/postgres.js";
 import { createTestRuntime } from "../testing/create-test-runtime.js";
 import type { AppConfig } from "../types.js";
 
@@ -54,5 +55,9 @@ describe("runtime composition", () => {
         keyPrefix: "test"
       })
     ).toBeInstanceOf(RedisFirstSuccessStore);
+  });
+
+  it("keeps the media-sync dependency inert without PostgreSQL", async () => {
+    await expect(createPostgresRuntime(undefined)).resolves.toBeUndefined();
   });
 });

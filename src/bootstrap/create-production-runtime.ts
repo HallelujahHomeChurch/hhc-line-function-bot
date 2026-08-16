@@ -388,7 +388,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     }),
     routeObserver,
     completionObserver,
-    accountAdminClient
+    accountAdminClient,
+    mediaSyncStore: postgres?.mediaSyncStore
   });
 
   return {

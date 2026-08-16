@@ -44,6 +44,7 @@ import {
 import { getFunctionDefinition } from "../../functions/definitions.js";
 import { handleAttachmentMessage } from "../../functions/attachment-entrance.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
+import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
 import { createIntroReply, introVariantForText } from "../../intro.js";
 import { verifyLineSignature } from "../../line-signature.js";
 import {
@@ -117,6 +118,7 @@ export interface AppDependencies {
   controlledAgentRouter?: ControlledAgentRouter;
   completionObserver: ControlledCompletionObserver;
   accountAdminClient: AccountAdminClient;
+  mediaSyncStore?: PostgresMediaSyncStore;
 }
 
 interface AllowResult {

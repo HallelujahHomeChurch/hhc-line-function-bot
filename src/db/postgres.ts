@@ -1,9 +1,12 @@
 import pg from "pg";
 
+import { runMediaSyncMigrations } from "../media-sync/migrations.js";
+import { PostgresMediaSyncStore } from "../media-sync/store.js";
 import type { DatabaseConfig } from "../types.js";
 
 export interface PostgresRuntime {
   pool: pg.Pool;
+  mediaSyncStore: PostgresMediaSyncStore;
 }
 
 export async function createPostgresRuntime(
@@ -18,6 +21,12 @@ export async function createPostgresRuntime(
     ssl: config.ssl ? { rejectUnauthorized: false } : undefined
   });
 
-  await pool.query("select 1");
-  return { pool };
+  try {
+    await pool.query("select 1");
+    await runMediaSyncMigrations(pool);
+    return { pool, mediaSyncStore: new PostgresMediaSyncStore(pool) };
+  } catch (error) {
+    await pool.end().catch(() => undefined);
+    throw error;
+  }
 }
