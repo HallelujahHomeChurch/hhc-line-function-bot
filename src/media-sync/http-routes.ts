@@ -173,7 +173,12 @@ export function registerMediaSyncRoutes(
       return run(
         reply,
         () =>
-          deps.service.createBindingCode(request.params.collectionId, auth.userId, auth.requestId),
+          deps.service.createBindingCode(
+            request.params.collectionId,
+            auth.userId,
+            key,
+            auth.requestId
+          ),
         201
       );
     }
@@ -308,6 +313,9 @@ async function run(reply: FastifyReply, operation: () => Promise<unknown>, succe
   try {
     return reply.code(successStatus).send(await operation());
   } catch (error) {
+    if (error instanceof MediaSyncManagementError && error.code === "binding_code_already_issued") {
+      return sendError(reply, 409, "binding_code_already_issued");
+    }
     if (
       error instanceof MediaSyncManagementError ||
       errorMessage(error) === "media_sync_binding_code_active"

@@ -67,6 +67,7 @@ function store(): PostgresMediaSyncStore {
   return {
     findActiveBindingByCollection: vi.fn().mockResolvedValue(undefined),
     createBindingCode: vi.fn().mockResolvedValue({
+      status: "issued",
       code: "PLAIN-CODE",
       expiresAt: "2026-08-16T01:00:00.000Z"
     }),
@@ -397,8 +398,33 @@ describe("media sync management HTTP", () => {
     expect(mediaStore.createBindingCode).toHaveBeenCalledWith({
       profileName: "helper",
       collectionId: "collection-1",
-      createdByHhcUserId: userId
+      createdByHhcUserId: userId,
+      idempotencyKey: "binding-1"
     });
+    await instance.close();
+  });
+
+  it("returns a deterministic non-secret conflict for a same-key binding-code retry", async () => {
+    const mediaStore = store();
+    vi.mocked(mediaStore.createBindingCode).mockResolvedValue({
+      status: "already_issued",
+      expiresAt: "2026-08-16T01:00:00.000Z"
+    });
+    const { instance } = await app({ store: mediaStore });
+
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/line/media-sync/collections/collection-1/binding-code",
+      headers: { ...trustedHeaders, "idempotency-key": "binding-1" },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.headers["x-hhc-request-id"]).toBe("request-1");
+    expect(response.json()).toEqual({ ok: false, error: "binding_code_already_issued" });
+    expect(response.body).not.toContain("command");
+    expect(response.body).not.toContain("PLAIN-CODE");
+    expect(response.body).not.toContain("expiresAt");
     await instance.close();
   });
 
@@ -527,7 +553,7 @@ describe("media sync management HTTP", () => {
       const service = new MediaSyncManagementService(assets, mediaStore);
 
       await expect(
-        service.createBindingCode("collection-1", userId, "request-1")
+        service.createBindingCode("collection-1", userId, "binding-1", "request-1")
       ).rejects.toBeInstanceOf(Error);
       expect(mediaStore.createBindingCode).not.toHaveBeenCalled();
     }

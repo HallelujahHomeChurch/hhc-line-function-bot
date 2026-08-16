@@ -40,6 +40,21 @@ const migrations = [
   )
   `,
   `
+  alter table media_sync_binding_codes
+  add column if not exists request_key_hash text
+  check (request_key_hash is null or request_key_hash ~ '^[0-9a-f]{64}$')
+  `,
+  `
+  create unique index if not exists media_sync_binding_codes_request_fence_idx
+  on media_sync_binding_codes (
+    created_by_hhc_user_id,
+    profile_name,
+    collection_id,
+    request_key_hash
+  )
+  where request_key_hash is not null
+  `,
+  `
   create index if not exists media_sync_binding_codes_collection_idx
   on media_sync_binding_codes (profile_name, collection_id, expires_at)
   where consumed_at is null

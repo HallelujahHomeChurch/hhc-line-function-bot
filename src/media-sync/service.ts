@@ -6,7 +6,9 @@ import type {
 import type { PostgresMediaSyncStore } from "./store.js";
 
 export class MediaSyncManagementError extends Error {
-  constructor(readonly code: "collection_deleted" | "collection_bound") {
+  constructor(
+    readonly code: "collection_deleted" | "collection_bound" | "binding_code_already_issued"
+  ) {
     super(code);
   }
 }
@@ -84,7 +86,12 @@ export class MediaSyncManagementService {
     return this.assets.revokeCollectionAcl(collectionId, aclId, idempotencyKey, { requestId });
   }
 
-  async createBindingCode(collectionId: string, userId: string, requestId: string) {
+  async createBindingCode(
+    collectionId: string,
+    userId: string,
+    idempotencyKey: string,
+    requestId: string
+  ) {
     const managed = await this.assets.getManagedCollection(collectionId, { requestId });
     if (managed.collection.deletedAt) {
       throw new MediaSyncManagementError("collection_deleted");
@@ -95,8 +102,12 @@ export class MediaSyncManagementService {
     const issued = await this.store.createBindingCode({
       profileName: "helper",
       collectionId,
-      createdByHhcUserId: userId
+      createdByHhcUserId: userId,
+      idempotencyKey
     });
+    if (issued.status === "already_issued") {
+      throw new MediaSyncManagementError("binding_code_already_issued");
+    }
     return { command: `/media-sync ${issued.code}`, expiresAt: issued.expiresAt };
   }
 

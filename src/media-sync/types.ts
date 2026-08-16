@@ -14,13 +14,13 @@ export type CreateMediaSyncBindingCodeInput = {
   profileName: string;
   collectionId: string;
   createdByHhcUserId: string;
+  idempotencyKey: string;
   now?: Date;
 };
 
-export type MediaSyncBindingCode = {
-  code: string;
-  expiresAt: string;
-};
+export type CreateMediaSyncBindingCodeResult =
+  | { status: "issued"; code: string; expiresAt: string }
+  | { status: "already_issued"; expiresAt: string };
 
 export type BindMediaSyncCodeInput = {
   profileName: string;

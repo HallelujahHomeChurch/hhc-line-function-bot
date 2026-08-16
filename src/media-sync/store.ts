@@ -7,9 +7,9 @@ import type {
   BindMediaSyncCodeInput,
   BindMediaSyncCodeResult,
   CreateMediaSyncBindingCodeInput,
+  CreateMediaSyncBindingCodeResult,
   CreateMediaSyncIngestInput,
   MediaSyncBinding,
-  MediaSyncBindingCode,
   MediaSyncIngest,
   MediaSyncOutboxItem,
   MediaSyncOutboxOperation,
@@ -80,16 +80,30 @@ export class PostgresMediaSyncStore {
     this.now = options.now ?? (() => new Date());
   }
 
-  async createBindingCode(input: CreateMediaSyncBindingCodeInput): Promise<MediaSyncBindingCode> {
+  async createBindingCode(
+    input: CreateMediaSyncBindingCodeInput
+  ): Promise<CreateMediaSyncBindingCodeResult> {
+    const idempotencyKey = input.idempotencyKey.trim();
+    if (!idempotencyKey) throw new Error("media_sync_binding_code_idempotency_invalid");
+    const requestKeyHash = hashRequestIdentity(input, idempotencyKey);
     const client = await this.pool.connect();
     const now = input.now ?? this.now();
-    const expiresAt = new Date(now.getTime() + 60 * 60 * 1000);
-    const code = this.codeFactory();
     try {
       await client.query("begin");
       await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
         JSON.stringify([input.profileName, input.collectionId])
       ]);
+      const prior = await client.query<{ expires_at: Date | string }>(
+        `select expires_at from media_sync_binding_codes
+         where created_by_hhc_user_id=$1 and profile_name=$2 and collection_id=$3
+           and request_key_hash=$4
+         limit 1`,
+        [input.createdByHhcUserId, input.profileName, input.collectionId, requestKeyHash]
+      );
+      if (prior.rowCount) {
+        await client.query("commit");
+        return { status: "already_issued", expiresAt: timestamp(prior.rows[0]!.expires_at) };
+      }
       const active = await client.query(
         `select 1 from media_sync_binding_codes
          where profile_name=$1 and collection_id=$2
@@ -98,21 +112,25 @@ export class PostgresMediaSyncStore {
         [input.profileName, input.collectionId, now]
       );
       if (active.rowCount) throw new Error("media_sync_binding_code_active");
+      const expiresAt = new Date(now.getTime() + 60 * 60 * 1000);
+      const code = this.codeFactory();
       await client.query(
         `insert into media_sync_binding_codes
-          (id, profile_name, collection_id, code_hash, created_by_hhc_user_id, expires_at)
-         values ($1, $2, $3, $4, $5, $6)`,
+          (id, profile_name, collection_id, code_hash, created_by_hhc_user_id, expires_at,
+           request_key_hash)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
         [
           randomUUID(),
           input.profileName,
           input.collectionId,
           hashCode(code),
           input.createdByHhcUserId,
-          expiresAt
+          expiresAt,
+          requestKeyHash
         ]
       );
       await client.query("commit");
-      return { code, expiresAt: expiresAt.toISOString() };
+      return { status: "issued", code, expiresAt: expiresAt.toISOString() };
     } catch (error) {
       await rollback(client);
       throw error;
@@ -419,6 +437,24 @@ export class PostgresMediaSyncStore {
 
 function hashCode(code: string): string {
   return createHash("sha256").update(code.trim(), "utf8").digest("hex");
+}
+
+function hashRequestIdentity(
+  input: CreateMediaSyncBindingCodeInput,
+  idempotencyKey: string
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        "create_binding_code",
+        input.createdByHhcUserId,
+        input.profileName,
+        input.collectionId,
+        idempotencyKey
+      ]),
+      "utf8"
+    )
+    .digest("hex");
 }
 
 async function rollback(client: PoolClient): Promise<void> {
