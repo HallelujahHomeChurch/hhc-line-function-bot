@@ -112,9 +112,7 @@ export class PostgresMediaSyncStore {
     const now = input.now ?? this.now();
     try {
       await client.query("begin");
-      await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-        JSON.stringify([input.profileName, input.collectionId])
-      ]);
+      await lockBindingCollection(client, input.profileName, input.collectionId);
       const prior = await client.query<{ expires_at: Date | string }>(
         `select expires_at from media_sync_binding_codes
          where created_by_hhc_user_id=$1 and profile_name=$2 and collection_id=$3
@@ -126,14 +124,23 @@ export class PostgresMediaSyncStore {
         await client.query("commit");
         return { status: "already_issued", expiresAt: timestamp(prior.rows[0]!.expires_at) };
       }
-      const active = await client.query(
-        `select 1 from media_sync_binding_codes
-         where profile_name=$1 and collection_id=$2
-           and consumed_at is null and expires_at > $3
+      const binding = await client.query(
+        `select 1 from media_sync_bindings
+         where collection_id=$1 and disabled_at is null
          limit 1`,
+        [input.collectionId]
+      );
+      if (binding.rowCount) {
+        await client.query("commit");
+        return { status: "collection_bound" };
+      }
+      await client.query(
+        `update media_sync_binding_codes
+         set expires_at=$3
+         where profile_name=$1 and collection_id=$2
+           and consumed_at is null and expires_at > $3`,
         [input.profileName, input.collectionId, now]
       );
-      if (active.rowCount) throw new Error("media_sync_binding_code_active");
       const expiresAt = new Date(now.getTime() + 60 * 60 * 1000);
       const code = this.codeFactory();
       await client.query(
@@ -166,13 +173,27 @@ export class PostgresMediaSyncStore {
     const now = input.now ?? this.now();
     try {
       await client.query("begin");
-      const code = await client.query<BindingCodeRow>(
+      const candidate = await client.query<BindingCodeRow>(
         `select id, collection_id, created_by_hhc_user_id
          from media_sync_binding_codes
          where profile_name=$1 and code_hash=$2
            and consumed_at is null and expires_at > $3
-         for update`,
+         limit 1`,
         [input.profileName, hashCode(input.code), now]
+      );
+      const candidateRow = candidate.rows[0];
+      if (!candidateRow) {
+        await client.query("rollback");
+        return { status: "invalid_code" };
+      }
+      await lockBindingCollection(client, input.profileName, candidateRow.collection_id);
+      const code = await client.query<BindingCodeRow>(
+        `select id, collection_id, created_by_hhc_user_id
+         from media_sync_binding_codes
+         where id=$1 and profile_name=$2 and code_hash=$3
+           and consumed_at is null and expires_at > $4
+         for update`,
+        [candidateRow.id, input.profileName, hashCode(input.code), now]
       );
       const codeRow = code.rows[0];
       if (!codeRow) {
@@ -258,6 +279,21 @@ export class PostgresMediaSyncStore {
       [collectionId]
     );
     return result.rows[0] ? mapBinding(result.rows[0]) : undefined;
+  }
+
+  async findPendingBindingCodeByCollection(input: {
+    profileName: string;
+    collectionId: string;
+  }): Promise<{ expiresAt: string } | undefined> {
+    const result = await this.pool.query<{ expires_at: Date | string }>(
+      `select expires_at from media_sync_binding_codes
+       where profile_name=$1 and collection_id=$2
+         and consumed_at is null and expires_at > $3
+       order by expires_at desc
+       limit 1`,
+      [input.profileName, input.collectionId, this.now()]
+    );
+    return result.rows[0] ? { expiresAt: timestamp(result.rows[0].expires_at) } : undefined;
   }
 
   async disableBindingByCollection(
@@ -1223,6 +1259,16 @@ function assertLease(leaseMs: number): void {
 
 async function lockSource(client: PoolClient, sourceKey: string): Promise<void> {
   await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [sourceKey]);
+}
+
+async function lockBindingCollection(
+  client: PoolClient,
+  profileName: string,
+  collectionId: string
+): Promise<void> {
+  await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    JSON.stringify([profileName, collectionId])
+  ]);
 }
 
 async function reopenDeleteOutbox(client: PoolClient, sourceKey: string): Promise<void> {

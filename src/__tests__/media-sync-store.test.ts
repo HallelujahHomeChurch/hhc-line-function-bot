@@ -144,30 +144,27 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     });
     await expect(
       store.createBindingCode({ ...firstInput, idempotencyKey: "different-key" })
-    ).rejects.toThrow("media_sync_binding_code_active");
+    ).resolves.toMatchObject({ status: "issued", code: "IDEMPOTENT-CODE-2" });
     await expect(
       store.createBindingCode({ ...firstInput, now: new Date("2099-01-01T02:00:00.000Z") })
-    ).resolves.toEqual({
-      status: "already_issued",
-      expiresAt: "2099-01-01T01:00:00.000Z"
-    });
+    ).resolves.toMatchObject({ status: "already_issued" });
     await expect(
       store.createBindingCode({
         ...firstInput,
         createdByHhcUserId: "manager-b",
         now: new Date("2099-01-01T02:00:00.000Z")
       })
-    ).resolves.toMatchObject({ status: "issued", code: "IDEMPOTENT-CODE-2" });
+    ).resolves.toMatchObject({ status: "issued", code: "IDEMPOTENT-CODE-3" });
     await expect(
       store.createBindingCode({
         ...firstInput,
         collectionId: "collection-other",
         now: new Date("2099-01-01T02:00:00.000Z")
       })
-    ).resolves.toMatchObject({ status: "issued", code: "IDEMPOTENT-CODE-3" });
+    ).resolves.toMatchObject({ status: "issued", code: "IDEMPOTENT-CODE-4" });
 
     expect(first).toMatchObject({ status: "issued", code: "IDEMPOTENT-CODE-1" });
-    expect(generated).toBe(3);
+    expect(generated).toBe(4);
     const rows = await left.query<{
       profile_name: string;
       collection_id: string;
@@ -177,7 +174,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       `select profile_name, collection_id, created_by_hhc_user_id, request_key_hash
        from media_sync_binding_codes where collection_id like 'collection-idempotent%' or collection_id='collection-other'`
     );
-    expect(rows.rows).toHaveLength(3);
+    expect(rows.rows).toHaveLength(4);
     expect(rows.rows.every((row) => /^[0-9a-f]{64}$/u.test(row.request_key_hash))).toBe(true);
     expect(JSON.stringify(rows.rows)).not.toContain("same-client-key");
   });
@@ -215,15 +212,163 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
         idempotencyKey: "right-key"
       })
     ]);
-    expect(conflicts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(conflicts.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(conflicts.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    expect(conflicts.filter((result) => result.status === "rejected")).toHaveLength(0);
     await expect(
       left.query(
         `select 1 from media_sync_binding_codes
          where profile_name=$1 and collection_id=$2 and consumed_at is null and expires_at > now()`,
-        [input.profileName, input.collectionId]
+        [input.profileName, "collection-concurrent-different-key"]
       )
     ).resolves.toMatchObject({ rowCount: 1 });
+  });
+
+  it("atomically invalidates the previous code when rotating", async () => {
+    const codes = ["ROTATE-OLD", "ROTATE-NEW"];
+    const store = new PostgresMediaSyncStore(left, { codeFactory: () => codes.shift()! });
+    const base = {
+      profileName: "helper",
+      collectionId: "collection-rotate",
+      createdByHhcUserId: "manager",
+      now: new Date("2099-01-01T00:00:00.000Z")
+    };
+
+    await store.createBindingCode({ ...base, idempotencyKey: "rotate-old" });
+    await expect(
+      store.createBindingCode({ ...base, idempotencyKey: "rotate-new" })
+    ).resolves.toMatchObject({ status: "issued", code: "ROTATE-NEW" });
+    await expect(
+      store.bindWithCode({
+        profileName: "helper",
+        code: "ROTATE-OLD",
+        groupId: "group-rotate-old",
+        groupDisplayName: "Old",
+        now: new Date("2099-01-01T00:01:00.000Z")
+      })
+    ).resolves.toEqual({ status: "invalid_code" });
+    await expect(
+      store.bindWithCode({
+        profileName: "helper",
+        code: "ROTATE-NEW",
+        groupId: "group-rotate-new",
+        groupDisplayName: "New",
+        now: new Date("2099-01-01T00:01:00.000Z")
+      })
+    ).resolves.toMatchObject({ status: "bound" });
+  });
+
+  it("serializes binding against code rotation", async () => {
+    const issuer = new PostgresMediaSyncStore(left, { codeFactory: () => "RACE-OLD" });
+    const rotator = new PostgresMediaSyncStore(left, { codeFactory: () => "RACE-NEW" });
+    const binder = new PostgresMediaSyncStore(right);
+    const now = new Date("2099-01-01T00:00:00.000Z");
+    await issuer.createBindingCode({
+      profileName: "helper",
+      collectionId: "collection-bind-rotate-race",
+      createdByHhcUserId: "manager",
+      idempotencyKey: "race-old",
+      now
+    });
+
+    const [rotation, binding] = await Promise.all([
+      rotator.createBindingCode({
+        profileName: "helper",
+        collectionId: "collection-bind-rotate-race",
+        createdByHhcUserId: "manager",
+        idempotencyKey: "race-new",
+        now
+      }),
+      binder.bindWithCode({
+        profileName: "helper",
+        code: "RACE-OLD",
+        groupId: "group-bind-rotate-race",
+        groupDisplayName: "Race",
+        now
+      })
+    ]);
+
+    expect([
+      ["issued", "invalid_code"],
+      ["collection_bound", "bound"]
+    ]).toContainEqual([rotation.status, binding.status]);
+  });
+
+  it("rolls back old-code invalidation when replacement insertion fails", async () => {
+    const target = new PostgresMediaSyncStore(left, { codeFactory: () => "ROLLBACK-OLD" });
+    const duplicate = new PostgresMediaSyncStore(left, { codeFactory: () => "DUPLICATE-CODE" });
+    const rotating = new PostgresMediaSyncStore(left, { codeFactory: () => "DUPLICATE-CODE" });
+    const now = new Date("2099-01-01T00:00:00.000Z");
+
+    await target.createBindingCode({
+      profileName: "helper",
+      collectionId: "collection-rotation-rollback",
+      createdByHhcUserId: "manager",
+      idempotencyKey: "rollback-old",
+      now
+    });
+    await duplicate.createBindingCode({
+      profileName: "helper",
+      collectionId: "collection-duplicate-code",
+      createdByHhcUserId: "manager",
+      idempotencyKey: "duplicate-code",
+      now
+    });
+
+    await expect(
+      rotating.createBindingCode({
+        profileName: "helper",
+        collectionId: "collection-rotation-rollback",
+        createdByHhcUserId: "manager",
+        idempotencyKey: "rollback-new",
+        now
+      })
+    ).rejects.toMatchObject({ constraint: "media_sync_binding_codes_code_hash_key" });
+    await expect(
+      target.bindWithCode({
+        profileName: "helper",
+        code: "ROLLBACK-OLD",
+        groupId: "group-rotation-rollback",
+        groupDisplayName: "Rollback",
+        now: new Date("2099-01-01T00:01:00.000Z")
+      })
+    ).resolves.toMatchObject({ status: "bound" });
+  });
+
+  it("reports only a live pending code and refuses rotation after binding", async () => {
+    const store = new PostgresMediaSyncStore(left, {
+      codeFactory: () => "PENDING-CODE",
+      now: () => new Date("2099-01-01T00:00:00.000Z")
+    });
+    const input = {
+      profileName: "helper",
+      collectionId: "collection-pending",
+      createdByHhcUserId: "manager",
+      idempotencyKey: "pending-code"
+    };
+
+    await store.createBindingCode(input);
+    await expect(
+      store.findPendingBindingCodeByCollection({
+        profileName: "helper",
+        collectionId: "collection-pending"
+      })
+    ).resolves.toEqual({ expiresAt: "2099-01-01T01:00:00.000Z" });
+    await store.bindWithCode({
+      profileName: "helper",
+      code: "PENDING-CODE",
+      groupId: "group-pending",
+      groupDisplayName: "Pending",
+      now: new Date("2099-01-01T00:01:00.000Z")
+    });
+    await expect(
+      store.findPendingBindingCodeByCollection({
+        profileName: "helper",
+        collectionId: "collection-pending"
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.createBindingCode({ ...input, idempotencyKey: "after-binding" })
+    ).resolves.toEqual({ status: "collection_bound" });
   });
 
   it("binds once without accepting registration state into the atomic store boundary", async () => {
@@ -322,22 +467,14 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       })
     ).resolves.toEqual({ status: "group_already_bound" });
 
-    const sameCollectionCode = await store.createBindingCode({
-      profileName: "main",
-      collectionId: "collection-unique-a",
-      createdByHhcUserId: "manager",
-      idempotencyKey: "same-collection-request"
-    });
-    const sameCollectionCodeValue = issuedCode(sameCollectionCode);
     await expect(
-      store.bindWithCode({
+      store.createBindingCode({
         profileName: "main",
-        code: sameCollectionCodeValue,
-        groupId: "group-unique-b",
-        groupDisplayName: "Replacement",
-        boundByLineUserId: "line-user"
+        collectionId: "collection-unique-a",
+        createdByHhcUserId: "manager",
+        idempotencyKey: "same-collection-request"
       })
-    ).resolves.toEqual({ status: "collection_already_bound" });
+    ).resolves.toEqual({ status: "collection_bound" });
 
     const existing = await store.findActiveBinding({
       profileName: "helper",
@@ -351,10 +488,16 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       { groupId: "group-unique-a" }
     );
     await expect(store.disableBindingByCollection("collection-unique-a")).resolves.toBe(true);
+    const replacementCode = await store.createBindingCode({
+      profileName: "main",
+      collectionId: "collection-unique-a",
+      createdByHhcUserId: "manager",
+      idempotencyKey: "replacement-request"
+    });
     await expect(
       store.bindWithCode({
         profileName: "main",
-        code: sameCollectionCodeValue,
+        code: issuedCode(replacementCode),
         groupId: "group-unique-b",
         groupDisplayName: "Rebound",
         boundByLineUserId: "line-user"

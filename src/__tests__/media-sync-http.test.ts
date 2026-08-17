@@ -74,6 +74,7 @@ function asset(): AssetApiClient {
 function store(): PostgresMediaSyncStore {
   return {
     findActiveBindingByCollection: vi.fn().mockResolvedValue(undefined),
+    findPendingBindingCodeByCollection: vi.fn().mockResolvedValue(undefined),
     createBindingCode: vi.fn().mockResolvedValue({
       status: "issued",
       code: "PLAIN-CODE",
@@ -442,7 +443,11 @@ describe("media sync management HTTP", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().collections[0]).toEqual({ ...collection, binding: null });
+    expect(response.json().collections[0]).toEqual({
+      ...collection,
+      binding: null,
+      pendingBinding: null
+    });
     await instance.close();
   });
 
@@ -622,7 +627,8 @@ describe("media sync management HTTP", () => {
             groupId: "group-1",
             groupDisplayName: "Worship Team",
             boundAt: "2026-08-16T00:00:00.000Z"
-          }
+          },
+          pendingBinding: null
         }
       ],
       hasMore: false
@@ -637,7 +643,29 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
-  it.each(["missing", "deleted", "bound"])(
+  it("lists pending binding expiry without exposing code material", async () => {
+    const mediaStore = store();
+    vi.mocked(mediaStore.findPendingBindingCodeByCollection).mockResolvedValue({
+      expiresAt: "2026-08-16T01:00:00.000Z"
+    });
+    const { instance } = await app({ store: mediaStore });
+    const response = await instance.inject({
+      method: "GET",
+      url: "/api/line/media-sync/collections",
+      headers: trustedHeaders
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().collections[0]).toMatchObject({
+      binding: null,
+      pendingBinding: { expiresAt: "2026-08-16T01:00:00.000Z" }
+    });
+    expect(response.body).not.toContain("PLAIN-CODE");
+    expect(response.body).not.toContain("request_key_hash");
+    await instance.close();
+  });
+
+  it.each(["missing", "deleted", "bound", "raced-bound"])(
     "does not issue a binding code for a %s collection",
     async (state) => {
       const assets = asset();
@@ -650,22 +678,30 @@ describe("media sync management HTTP", () => {
           collection: { ...collection.collection, deletedAt: "2026-08-16T00:00:00.000Z" }
         });
       } else {
-        vi.mocked(mediaStore.findActiveBindingByCollection).mockResolvedValue({
-          id: "binding-1",
-          profileName: "helper",
-          groupId: "group-1",
-          collectionId: "collection-1",
-          groupDisplayName: "Group",
-          bindingCodeCreatedByHhcUserId: userId,
-          boundAt: "2026-08-16T00:00:00.000Z"
-        });
+        if (state === "bound") {
+          vi.mocked(mediaStore.findActiveBindingByCollection).mockResolvedValue({
+            id: "binding-1",
+            profileName: "helper",
+            groupId: "group-1",
+            collectionId: "collection-1",
+            groupDisplayName: "Group",
+            bindingCodeCreatedByHhcUserId: userId,
+            boundAt: "2026-08-16T00:00:00.000Z"
+          });
+        } else {
+          vi.mocked(mediaStore.createBindingCode).mockResolvedValue({ status: "collection_bound" });
+        }
       }
       const service = new MediaSyncManagementService(assets, mediaStore);
 
       await expect(
         service.createBindingCode("collection-1", userId, "binding-1", "request-1")
       ).rejects.toBeInstanceOf(Error);
-      expect(mediaStore.createBindingCode).not.toHaveBeenCalled();
+      if (state === "raced-bound") {
+        expect(mediaStore.createBindingCode).toHaveBeenCalledOnce();
+      } else {
+        expect(mediaStore.createBindingCode).not.toHaveBeenCalled();
+      }
     }
   );
 });
