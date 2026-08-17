@@ -117,7 +117,7 @@ export async function runAttachmentAssetJob(
       graph: createGraphDriveClient(config.graph)
     });
     const deadlines = attachmentAssetDeadlines(startedAt);
-    return runAttachmentAssetQueueLease(queueLease, {
+    return await runAttachmentAssetQueueLease(queueLease, {
       runAttachment: (workId) =>
         runAttachmentAssetWorker(workId, {
           workStore,
