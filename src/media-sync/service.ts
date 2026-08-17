@@ -26,6 +26,7 @@ export class MediaSyncManagementService {
     collections: Array<
       ManagedCollection & {
         binding: { groupId: string; groupDisplayName: string; boundAt: string } | null;
+        pendingBinding: { expiresAt: string } | null;
       }
     >;
     cursor?: string;
@@ -35,6 +36,12 @@ export class MediaSyncManagementService {
     const collections = await Promise.all(
       page.collections.map(async (managed) => {
         const binding = await this.store.findActiveBindingByCollection(managed.collection.id);
+        const pendingBinding = binding
+          ? undefined
+          : await this.store.findPendingBindingCodeByCollection({
+              profileName: "helper",
+              collectionId: managed.collection.id
+            });
         return {
           ...managed,
           binding: binding
@@ -43,7 +50,8 @@ export class MediaSyncManagementService {
                 groupDisplayName: binding.groupDisplayName,
                 boundAt: binding.boundAt
               }
-            : null
+            : null,
+          pendingBinding: pendingBinding ?? null
         };
       })
     );
@@ -107,6 +115,9 @@ export class MediaSyncManagementService {
     });
     if (issued.status === "already_issued") {
       throw new MediaSyncManagementError("binding_code_already_issued");
+    }
+    if (issued.status === "collection_bound") {
+      throw new MediaSyncManagementError("collection_bound");
     }
     return { command: `/media-sync ${issued.code}`, expiresAt: issued.expiresAt };
   }

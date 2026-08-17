@@ -20,7 +20,8 @@ export type CreateMediaSyncBindingCodeInput = {
 
 export type CreateMediaSyncBindingCodeResult =
   | { status: "issued"; code: string; expiresAt: string }
-  | { status: "already_issued"; expiresAt: string };
+  | { status: "already_issued"; expiresAt: string }
+  | { status: "collection_bound" };
 
 export type BindMediaSyncCodeInput = {
   profileName: string;
