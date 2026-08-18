@@ -129,6 +129,151 @@ export function registerMediaSyncRoutes(
     }
   );
 
+  app.get<{ Params: { collectionId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/items",
+    { preHandler: authorize },
+    async (request, reply) => {
+      const auth = requireAuth(request);
+      const query = parseManagedItemListQuery(request.query);
+      if (!validOpaqueId(request.params.collectionId) || !query || !hasNoBody(request.body)) {
+        return sendError(reply, 400, "invalid_request");
+      }
+      return run(reply, () =>
+        deps.service.listCollectionItems(request.params.collectionId, query, auth.requestId)
+      );
+    }
+  );
+
+  app.patch<{ Params: { collectionId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/retention",
+    { preHandler: authorize },
+    async (request, reply) => {
+      const auth = requireAuth(request);
+      const key = idempotencyKey(request);
+      const body = strictObject(request.body, ["retentionDays"]);
+      const retentionDays = body?.retentionDays;
+      if (
+        !validOpaqueId(request.params.collectionId) ||
+        !key ||
+        !validRetentionDays(retentionDays)
+      ) {
+        return sendError(reply, 400, "invalid_request");
+      }
+      return run(reply, () =>
+        deps.service.updateCollectionRetention(
+          request.params.collectionId,
+          retentionDays,
+          key,
+          auth.requestId
+        )
+      );
+    }
+  );
+
+  app.patch<{ Params: { collectionId: string; itemId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/items/:itemId",
+    { preHandler: authorize },
+    async (request, reply) => {
+      const auth = requireAuth(request);
+      const key = idempotencyKey(request);
+      const body = strictObject(request.body, ["displayName"]);
+      const displayName =
+        typeof body?.displayName === "string" ? body.displayName.trim() : undefined;
+      if (
+        !validOpaqueId(request.params.collectionId) ||
+        !validOpaqueId(request.params.itemId) ||
+        !key ||
+        !validItemDisplayName(displayName)
+      ) {
+        return sendError(reply, 400, "invalid_request");
+      }
+      return run(reply, () =>
+        deps.service.renameCollectionItem(
+          request.params.collectionId,
+          request.params.itemId,
+          displayName,
+          key,
+          auth.requestId
+        )
+      );
+    }
+  );
+
+  app.post<{ Params: { collectionId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/items/retention",
+    { preHandler: authorize },
+    async (request, reply) => {
+      const auth = requireAuth(request);
+      const key = idempotencyKey(request);
+      const body = strictObject(request.body, ["itemIds", "retentionExempt"]);
+      const itemIds = body?.itemIds;
+      const retentionExempt = body?.retentionExempt;
+      if (
+        !validOpaqueId(request.params.collectionId) ||
+        !key ||
+        !validItemIds(itemIds) ||
+        typeof retentionExempt !== "boolean"
+      ) {
+        return sendError(reply, 400, "invalid_request");
+      }
+      return run(reply, () =>
+        deps.service.setCollectionItemsRetention(
+          request.params.collectionId,
+          { itemIds, retentionExempt },
+          key,
+          auth.requestId
+        )
+      );
+    }
+  );
+
+  app.post<{ Params: { collectionId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/items/delete",
+    { preHandler: authorize },
+    async (request, reply) => {
+      const auth = requireAuth(request);
+      const key = idempotencyKey(request);
+      const body = strictObject(request.body, ["itemIds"]);
+      const itemIds = body?.itemIds;
+      if (!validOpaqueId(request.params.collectionId) || !key || !validItemIds(itemIds)) {
+        return sendError(reply, 400, "invalid_request");
+      }
+      return run(reply, () =>
+        deps.service.deleteCollectionItems(
+          request.params.collectionId,
+          itemIds,
+          key,
+          auth.requestId
+        )
+      );
+    }
+  );
+
+  app.post<{ Params: { collectionId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/items/content-tickets",
+    { preHandler: authorize },
+    async (request, reply) => {
+      const auth = requireAuth(request);
+      const body = strictObject(request.body, ["itemIds"]);
+      const itemIds = body?.itemIds;
+      if (!validOpaqueId(request.params.collectionId) || !validItemIds(itemIds)) {
+        return sendError(reply, 400, "invalid_request");
+      }
+      reply.header("cache-control", "private, no-store");
+      reply.header("referrer-policy", "no-referrer");
+      return run(
+        reply,
+        () =>
+          deps.service.issueCollectionItemTickets(
+            request.params.collectionId,
+            itemIds,
+            auth.requestId
+          ),
+        201
+      );
+    }
+  );
+
   app.post<{ Params: { collectionId: string } }>(
     "/api/line/media-sync/collections/:collectionId/acl",
     { preHandler: authorize },
@@ -292,6 +437,39 @@ function parseListQuery(value: unknown): { cursor?: string; limit?: number } | u
   };
 }
 
+function parseManagedItemListQuery(
+  value: unknown
+): { query?: string; cursor?: string; limit?: number } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const query = value as Record<string, unknown>;
+  if (Object.keys(query).some((key) => key !== "q" && key !== "cursor" && key !== "limit")) {
+    return undefined;
+  }
+  if (
+    query.q !== undefined &&
+    (typeof query.q !== "string" || Buffer.byteLength(query.q, "utf8") > 255 || hasControl(query.q))
+  ) {
+    return undefined;
+  }
+  if (
+    query.cursor !== undefined &&
+    (typeof query.cursor !== "string" || !query.cursor || Buffer.byteLength(query.cursor) > 2048)
+  ) {
+    return undefined;
+  }
+  let limit: number | undefined;
+  if (query.limit !== undefined) {
+    if (typeof query.limit !== "string" || !/^[1-9]\d*$/u.test(query.limit)) return undefined;
+    limit = Number(query.limit);
+    if (!Number.isSafeInteger(limit) || limit > 100) return undefined;
+  }
+  return {
+    ...(typeof query.q === "string" ? { query: query.q } : {}),
+    ...(typeof query.cursor === "string" ? { cursor: query.cursor } : {}),
+    ...(limit === undefined ? {} : { limit })
+  };
+}
+
 function parseAclSubjectQuery(
   value: unknown
 ): { subjectType: "user" | "role"; query: string; page: number; perPage: number } | undefined {
@@ -332,6 +510,29 @@ function validName(value: unknown): value is string {
     value.trim() !== "" &&
     Buffer.byteLength(value.trim(), "utf8") <= 120 &&
     !hasControl(value)
+  );
+}
+
+function validItemDisplayName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() !== "" &&
+    Buffer.byteLength(value.trim(), "utf8") <= 255 &&
+    !/[\\/]/u.test(value) &&
+    !hasControl(value)
+  );
+}
+
+function validRetentionDays(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 365;
+}
+
+function validItemIds(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 1 &&
+    value.length <= 100 &&
+    value.every((itemId) => typeof itemId === "string" && validOpaqueId(itemId))
   );
 }
 
@@ -394,8 +595,8 @@ function assetStatus(error: unknown): number | undefined {
   const match = /^asset_api_(\d{3})$/u.exec(errorMessage(error));
   if (!match) return undefined;
   const status = Number(match[1]);
-  if ([400, 403, 404, 409].includes(status)) return status;
-  return status === 408 || status === 429 || status >= 500 ? 503 : 502;
+  if ([400, 401, 403, 404, 409, 429].includes(status)) return status;
+  return status === 408 || status >= 500 ? 503 : 502;
 }
 
 function errorMessage(error: unknown): string {

@@ -67,6 +67,44 @@ function asset(): AssetApiClient {
         createdAt: "2026-08-16T00:00:00.000Z",
         revokedAt: "2026-08-16T01:00:00.000Z"
       }
+    }),
+    listManagedCollectionItems: vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: "550e8400e29b41d4a716446655440000",
+          displayName: "Sunday.mp4",
+          mimeType: "video/mp4",
+          sizeBytes: 1200,
+          createdAt: "2026-08-18T06:30:00.000Z",
+          retentionExempt: false
+        }
+      ],
+      hasMore: false
+    }),
+    updateCollectionRetention: vi.fn().mockResolvedValue({
+      ...collection.collection,
+      retentionDays: 14
+    }),
+    renameManagedCollectionItem: vi.fn().mockResolvedValue({
+      id: "550e8400e29b41d4a716446655440000",
+      displayName: "Renamed.mp4",
+      mimeType: "video/mp4",
+      sizeBytes: 1200,
+      createdAt: "2026-08-18T06:30:00.000Z",
+      retentionExempt: false
+    }),
+    setManagedCollectionItemsRetention: vi.fn().mockResolvedValue(undefined),
+    deleteManagedCollectionItems: vi.fn().mockResolvedValue({ deleted: 1, alreadyRemoved: 0 }),
+    issueManagedContentTickets: vi.fn().mockResolvedValue({
+      tickets: [
+        {
+          itemId: "550e8400e29b41d4a716446655440000",
+          contentUrl: "/api/assets/content?ticket=opaque",
+          expiresAt: "2026-08-18T06:35:00.000Z",
+          etag: "asset-version"
+        }
+      ],
+      unavailableItemIds: []
     })
   } as unknown as AssetApiClient;
 }
@@ -141,7 +179,33 @@ const routeRequests = [
     url: "/api/line/media-sync/collections/collection-1/binding-code",
     payload: {}
   },
-  { method: "DELETE", url: "/api/line/media-sync/collections/collection-1/binding" }
+  { method: "DELETE", url: "/api/line/media-sync/collections/collection-1/binding" },
+  { method: "GET", url: "/api/line/media-sync/collections/collection-1/items" },
+  {
+    method: "PATCH",
+    url: "/api/line/media-sync/collections/collection-1/retention",
+    payload: { retentionDays: 14 }
+  },
+  {
+    method: "PATCH",
+    url: "/api/line/media-sync/collections/collection-1/items/550e8400e29b41d4a716446655440000",
+    payload: { displayName: "Renamed.mp4" }
+  },
+  {
+    method: "POST",
+    url: "/api/line/media-sync/collections/collection-1/items/retention",
+    payload: { itemIds: ["550e8400e29b41d4a716446655440000"], retentionExempt: true }
+  },
+  {
+    method: "POST",
+    url: "/api/line/media-sync/collections/collection-1/items/delete",
+    payload: { itemIds: ["550e8400e29b41d4a716446655440000"] }
+  },
+  {
+    method: "POST",
+    url: "/api/line/media-sync/collections/collection-1/items/content-tickets",
+    payload: { itemIds: ["550e8400e29b41d4a716446655440000"] }
+  }
 ] as const;
 
 describe("media sync management HTTP", () => {
@@ -192,7 +256,7 @@ describe("media sync management HTTP", () => {
     ["wrong caller", { ...trustedHeaders, "dapr-caller-app-id": "attacker" }],
     ["missing token", { ...trustedHeaders, "dapr-api-token": undefined }],
     ["wrong token", { ...trustedHeaders, "dapr-api-token": "attacker" }]
-  ])("rejects %s on all nine routes before Account lookup", async (_label, headers) => {
+  ])("rejects %s on all management routes before Account lookup", async (_label, headers) => {
     const accountClient = account();
     const { instance } = await app({ account: accountClient });
     for (const request of routeRequests) {
@@ -210,7 +274,7 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
-  it("requires normalized user identity on all nine routes before Account lookup", async () => {
+  it("requires normalized user identity on all management routes before Account lookup", async () => {
     const accountClient = account();
     const { instance } = await app({ account: accountClient });
     for (const request of routeRequests) {
@@ -224,23 +288,120 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
-  it("requires media-sync:manage on all nine routes", async () => {
+  it("requires media-sync:manage on all management routes", async () => {
     const accountClient = account(false);
     const { instance } = await app({ account: accountClient });
     for (const request of routeRequests) {
       const response = await instance.inject({ ...request, headers: trustedHeaders });
       expect(response.statusCode, `${request.method} ${request.url}`).toBe(403);
     }
-    expect(accountClient.verifyPermission).toHaveBeenCalledTimes(9);
+    expect(accountClient.verifyPermission).toHaveBeenCalledTimes(routeRequests.length);
     await instance.close();
   });
 
-  it("requires an idempotency key on every mutation route", async () => {
+  it("requires an idempotency key on every idempotent mutation route", async () => {
     const { instance } = await app({});
-    for (const request of routeRequests.slice(2)) {
+    for (const request of routeRequests.filter(
+      (request) => request.method !== "GET" && !request.url.endsWith("/content-tickets")
+    )) {
       const response = await instance.inject({ ...request, headers: trustedHeaders });
       expect(response.statusCode, `${request.method} ${request.url}`).toBe(400);
     }
+    await instance.close();
+  });
+
+  it("does not accept reader ACL identity as a management permission", async () => {
+    const accountClient = account(false);
+    const { instance } = await app({ account: accountClient });
+    const response = await instance.inject({
+      method: "GET",
+      url: "/api/line/media-sync/collections/collection-1/items",
+      headers: { ...trustedHeaders, "x-collection-reader-role": "media_sync_reader" }
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "forbidden" });
+    expect(accountClient.verifyPermission).toHaveBeenCalledWith({ userId, requestId: "request-1" });
+    await instance.close();
+  });
+
+  it("validates managed retention and item selection boundaries", async () => {
+    const assets = asset();
+    const { instance } = await app({ assets });
+    const itemId = "550e8400e29b41d4a716446655440000";
+    const requests = [
+      {
+        method: "PATCH",
+        url: "/api/line/media-sync/collections/collection-1/retention",
+        payload: { retentionDays: 0 }
+      },
+      {
+        method: "PATCH",
+        url: "/api/line/media-sync/collections/collection-1/retention",
+        payload: { retentionDays: 366 }
+      },
+      {
+        method: "POST",
+        url: "/api/line/media-sync/collections/collection-1/items/retention",
+        payload: { itemIds: [], retentionExempt: true }
+      },
+      {
+        method: "POST",
+        url: "/api/line/media-sync/collections/collection-1/items/delete",
+        payload: { itemIds: Array.from({ length: 101 }, () => itemId) }
+      },
+      {
+        method: "POST",
+        url: "/api/line/media-sync/collections/collection-1/items/content-tickets",
+        payload: { itemIds: Array.from({ length: 101 }, () => itemId) }
+      }
+    ] as const;
+
+    for (const request of requests) {
+      const response = await instance.inject({
+        ...request,
+        headers: { ...trustedHeaders, "idempotency-key": "request-1" }
+      });
+      expect(response.statusCode, `${request.method} ${request.url}`).toBe(400);
+    }
+    expect(assets.updateCollectionRetention).not.toHaveBeenCalled();
+    expect(assets.setManagedCollectionItemsRetention).not.toHaveBeenCalled();
+    expect(assets.deleteManagedCollectionItems).not.toHaveBeenCalled();
+    expect(assets.issueManagedContentTickets).not.toHaveBeenCalled();
+    await instance.close();
+  });
+
+  it("issues content tickets without an idempotency key", async () => {
+    const assets = asset();
+    const { instance } = await app({ assets });
+    const itemId = "550e8400e29b41d4a716446655440000";
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/line/media-sync/collections/collection-1/items/content-tickets",
+      headers: trustedHeaders,
+      payload: { itemIds: [itemId] }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(assets.issueManagedContentTickets).toHaveBeenCalledWith("collection-1", [itemId], {
+      requestId: "request-1"
+    });
+    await instance.close();
+  });
+
+  it("maps an Asset 403 without revealing managed item existence", async () => {
+    const assets = asset();
+    vi.mocked(assets.listManagedCollectionItems).mockRejectedValue(new Error("asset_api_403"));
+    const { instance } = await app({ assets });
+    const response = await instance.inject({
+      method: "GET",
+      url: "/api/line/media-sync/collections/collection-1/items",
+      headers: trustedHeaders
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "asset_request_failed" });
+    expect(response.body).not.toContain("collection-1");
     await instance.close();
   });
 

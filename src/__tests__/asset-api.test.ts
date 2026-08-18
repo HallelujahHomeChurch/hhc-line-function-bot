@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAssetApiClient,
   isAssetAccessDeniedError,
-  isTransientAssetApiError
+  isTransientAssetApiError,
+  parseManagedCollectionItem
 } from "../clients/asset-api.js";
 
 const tempDirectories: string[] = [];
@@ -20,6 +21,21 @@ afterEach(async () => {
 });
 
 describe("asset api client", () => {
+  it("accepts only the exact safe managed collection item DTO", () => {
+    const itemId = "550e8400e29b41d4a716446655440000";
+    const item = {
+      id: itemId,
+      displayName: "Sunday.mp4",
+      mimeType: "video/mp4",
+      sizeBytes: 1200,
+      createdAt: "2026-08-18T06:30:00.000Z",
+      retentionExempt: false
+    };
+
+    expect(parseManagedCollectionItem(item)).toEqual(item);
+    expect(parseManagedCollectionItem({ ...item, assetId: "internal-asset" })).toBeUndefined();
+  });
+
   it("uses exact Dapr management paths, request IDs, and idempotency keys", async () => {
     const collection = {
       id: "collection-1",
