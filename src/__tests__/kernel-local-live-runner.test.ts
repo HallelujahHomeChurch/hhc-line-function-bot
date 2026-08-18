@@ -76,7 +76,7 @@ describe("Kernel local live disposable runner", () => {
     async (_name, failure, expectedExit) => {
       const fixture = await createFakeRuntime(failure);
       const result = fixture.run();
-      const log = await readFile(fixture.logPath, "utf8");
+      const log = await readFile(fixture.logPath, "utf8").catch(() => "");
 
       expect(result.status, `${result.stdout}\n${result.stderr}\n${log}`).toBe(expectedExit);
       if (failure !== "az") {
