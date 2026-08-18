@@ -14,6 +14,7 @@ const collection: ManagedCollection = {
     namespace: "line.group.media-sync",
     name: "Media",
     revision: 1,
+    retentionDays: 14,
     createdAt: "2026-08-16T00:00:00.000Z",
     updatedAt: "2026-08-16T00:00:00.000Z"
   },
@@ -368,6 +369,37 @@ describe("media sync management HTTP", () => {
     expect(assets.setManagedCollectionItemsRetention).not.toHaveBeenCalled();
     expect(assets.deleteManagedCollectionItems).not.toHaveBeenCalled();
     expect(assets.issueManagedContentTickets).not.toHaveBeenCalled();
+    await instance.close();
+  });
+
+  it.each([
+    ["collection name", "POST", "/api/line/media-sync/collections", { name: "Media\u0085" }],
+    [
+      "managed item query",
+      "GET",
+      "/api/line/media-sync/collections/collection-1/items?q=Media%C2%85",
+      undefined
+    ],
+    [
+      "managed item name",
+      "PATCH",
+      "/api/line/media-sync/collections/collection-1/items/550e8400e29b41d4a716446655440000",
+      { displayName: "Sunday\u0085.mp4" }
+    ]
+  ])("rejects Unicode control text in %s", async (_label, method, url, payload) => {
+    const assets = asset();
+    const { instance } = await app({ assets });
+    const response = await instance.inject({
+      method,
+      url,
+      headers: { ...trustedHeaders, "idempotency-key": "request-1" },
+      ...(payload === undefined ? {} : { payload })
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(assets.createCollection).not.toHaveBeenCalled();
+    expect(assets.listManagedCollectionItems).not.toHaveBeenCalled();
+    expect(assets.renameManagedCollectionItem).not.toHaveBeenCalled();
     await instance.close();
   });
 

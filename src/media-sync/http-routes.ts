@@ -565,10 +565,7 @@ function validRequestId(value: string | undefined): value is string {
 }
 
 function hasControl(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const code = character.codePointAt(0) ?? 0;
-    return code <= 31 || code === 127;
-  });
+  return /\p{Cc}|[\uD800-\uDFFF]/u.test(value);
 }
 
 async function run(reply: FastifyReply, operation: () => Promise<unknown>, successStatus = 200) {

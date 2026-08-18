@@ -34,6 +34,127 @@ describe("asset api client", () => {
 
     expect(parseManagedCollectionItem(item)).toEqual(item);
     expect(parseManagedCollectionItem({ ...item, assetId: "internal-asset" })).toBeUndefined();
+    expect(
+      parseManagedCollectionItem({ ...item, displayName: "Sunday\u0085.mp4" })
+    ).toBeUndefined();
+  });
+
+  it("rejects managed collection pages over the loaded-item limit", async () => {
+    const item = {
+      id: "550e8400e29b41d4a716446655440000",
+      displayName: "Sunday.mp4",
+      mimeType: "video/mp4",
+      sizeBytes: 1200,
+      createdAt: "2026-08-18T06:30:00.000Z",
+      retentionExempt: false
+    };
+    const client = createAssetApiClient({
+      baseUrl: "http://asset-api",
+      fetcher: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          Response.json({ items: Array.from({ length: 101 }, () => item), hasMore: true })
+        )
+    });
+
+    await expect(client.listManagedCollectionItems("collection-1")).rejects.toMatchObject({
+      message: "asset_api_invalid_response"
+    });
+  });
+
+  it("rejects managed content tickets outside the requested bounded set", async () => {
+    const itemId = "550e8400e29b41d4a716446655440000";
+    const otherItemId = "550e8400e29b41d4a716446655440001";
+    const ticket = (id = itemId) => ({
+      itemId: id,
+      contentUrl: "/api/assets/content?ticket=opaque",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      etag: "asset-version"
+    });
+    const cases = [
+      { response: { tickets: [ticket(otherItemId)], unavailableItemIds: [] }, itemIds: [itemId] },
+      { response: { tickets: [ticket(), ticket()], unavailableItemIds: [] }, itemIds: [itemId] },
+      { response: { tickets: [ticket()], unavailableItemIds: [itemId] }, itemIds: [itemId] },
+      {
+        response: {
+          tickets: Array.from({ length: 101 }, (_, index) =>
+            ticket((index + 1).toString(16).padStart(32, "0"))
+          ),
+          unavailableItemIds: []
+        },
+        itemIds: Array.from({ length: 101 }, (_, index) =>
+          (index + 1).toString(16).padStart(32, "0")
+        )
+      }
+    ];
+
+    for (const { response, itemIds } of cases) {
+      const client = createAssetApiClient({
+        baseUrl: "http://asset-api",
+        fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json(response))
+      });
+      await expect(
+        client.issueManagedContentTickets("collection-1", itemIds)
+      ).rejects.toMatchObject({
+        message: "asset_api_invalid_response"
+      });
+    }
+  });
+
+  it("rejects malformed or stale managed content ticket URLs", async () => {
+    const itemId = "550e8400e29b41d4a716446655440000";
+    const validTicket = {
+      itemId,
+      contentUrl: "/api/assets/content?ticket=opaque",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      etag: "asset-version"
+    };
+    const cases = [
+      { ...validTicket, contentUrl: "/api/assets/content?ticket=opaque&other=value" },
+      { ...validTicket, contentUrl: "/api/assets/content?ticket=opaque#fragment" },
+      { ...validTicket, contentUrl: "/api/assets/content?ticket=opaque&ticket=other" },
+      { ...validTicket, contentUrl: "/api/assets/content?ticket=" },
+      { ...validTicket, contentUrl: "/api/assets/content?ticket=%C2%85" },
+      { ...validTicket, expiresAt: new Date(Date.now() - 60_000).toISOString() },
+      { ...validTicket, expiresAt: new Date(Date.now() + 6 * 60_000).toISOString() }
+    ];
+
+    for (const ticket of cases) {
+      const client = createAssetApiClient({
+        baseUrl: "http://asset-api",
+        fetcher: vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(Response.json({ tickets: [ticket], unavailableItemIds: [] }))
+      });
+      await expect(
+        client.issueManagedContentTickets("collection-1", [itemId])
+      ).rejects.toMatchObject({
+        message: "asset_api_invalid_response"
+      });
+    }
+  });
+
+  it("requires collection retention in every Asset collection response", async () => {
+    const client = createAssetApiClient({
+      baseUrl: "http://asset-api",
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          collection: {
+            id: "collection-1",
+            namespace: "line.group.media-sync",
+            name: "Media",
+            revision: 1,
+            createdAt: "2026-08-16T00:00:00Z",
+            updatedAt: "2026-08-16T00:00:00Z"
+          },
+          acls: []
+        })
+      )
+    });
+
+    await expect(client.getManagedCollection("collection-1")).rejects.toMatchObject({
+      message: "asset_api_invalid_response"
+    });
   });
 
   it("uses exact Dapr management paths, request IDs, and idempotency keys", async () => {
@@ -42,6 +163,7 @@ describe("asset api client", () => {
       namespace: "line.group.media-sync",
       name: "Media",
       revision: 1,
+      retentionDays: 14,
       createdAt: "2026-08-16T00:00:00Z",
       updatedAt: "2026-08-16T00:00:00Z"
     };
@@ -161,6 +283,7 @@ describe("asset api client", () => {
             namespace: "line.group.media-sync",
             name: "Media",
             revision: 1,
+            retentionDays: 14,
             createdAt: "2026-08-16T00:00:00Z",
             updatedAt: "2026-08-16T00:00:00Z",
             deletedAt: "0001-01-01T00:00:00Z"
@@ -186,6 +309,7 @@ describe("asset api client", () => {
         namespace: "line.group.media-sync",
         name: "Media",
         revision: 1,
+        retentionDays: 14,
         createdAt: "2026-08-16T00:00:00Z",
         updatedAt: "2026-08-16T00:00:00Z"
       },
@@ -631,6 +755,7 @@ function liveCollection(revision: number) {
     namespace: "line.group.media-sync",
     name: "Media",
     revision,
+    retentionDays: 14,
     createdAt: "2026-08-16T00:00:00Z",
     updatedAt: "2026-08-16T00:01:00Z"
   };

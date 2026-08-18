@@ -36,7 +36,7 @@ export interface CollectionRecord {
   namespace: "line.group.media-sync";
   name: string;
   revision: number;
-  retentionDays?: number;
+  retentionDays: number;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -439,7 +439,7 @@ export function createAssetApiClient(options: {
         },
         requestOptions
       );
-      const tickets = parseManagedContentTicketBatch(await readJson(response));
+      const tickets = parseManagedContentTicketBatch(await readJson(response), itemIds);
       if (!tickets) throw new AssetApiRequestError("asset_api_invalid_response", false);
       return tickets;
     },
@@ -896,6 +896,7 @@ function parseManagedCollectionItemPage(value: unknown): ManagedCollectionItemPa
   if (
     !isExactRecord(value, ["items", "hasMore"], ["cursor"]) ||
     !Array.isArray(value.items) ||
+    value.items.length > 100 ||
     typeof value.hasMore !== "boolean" ||
     (value.cursor !== undefined && (typeof value.cursor !== "string" || !value.cursor))
   ) {
@@ -939,7 +940,10 @@ export function parseManagedCollectionItem(value: unknown): ManagedCollectionIte
   return value as unknown as ManagedCollectionItem;
 }
 
-function parseManagedContentTicketBatch(value: unknown): ManagedContentTicketBatch | undefined {
+function parseManagedContentTicketBatch(
+  value: unknown,
+  requestedItemIds: string[]
+): ManagedContentTicketBatch | undefined {
   if (
     !isExactRecord(value, ["tickets", "unavailableItemIds"]) ||
     !Array.isArray(value.tickets) ||
@@ -948,9 +952,24 @@ function parseManagedContentTicketBatch(value: unknown): ManagedContentTicketBat
     return undefined;
   }
   const tickets = value.tickets.map(parseManagedContentTicket);
+  const requested = new Set(requestedItemIds);
+  const ticketIds = new Set<string>();
+  const unavailableIds = new Set<string>();
   if (
+    value.tickets.length + value.unavailableItemIds.length > 100 ||
     tickets.some((ticket) => ticket === undefined) ||
-    value.unavailableItemIds.some((itemId) => !validOpaqueId(itemId))
+    tickets.some((ticket) => {
+      if (!ticket || !requested.has(ticket.itemId) || ticketIds.has(ticket.itemId)) return true;
+      ticketIds.add(ticket.itemId);
+      return false;
+    }) ||
+    value.unavailableItemIds.some((itemId) => {
+      if (!validOpaqueId(itemId) || !requested.has(itemId) || unavailableIds.has(itemId))
+        return true;
+      unavailableIds.add(itemId);
+      return false;
+    }) ||
+    [...ticketIds].some((itemId) => unavailableIds.has(itemId))
   ) {
     return undefined;
   }
@@ -964,11 +983,8 @@ function parseManagedContentTicket(value: unknown): ManagedContentTicket | undef
   if (
     !isExactRecord(value, ["itemId", "contentUrl", "expiresAt", "etag"]) ||
     !validOpaqueId(value.itemId) ||
-    typeof value.contentUrl !== "string" ||
-    !value.contentUrl.startsWith("/api/assets/content?ticket=") ||
-    Buffer.byteLength(value.contentUrl, "utf8") > 2048 ||
-    hasControl(value.contentUrl) ||
-    !validDate(value.expiresAt) ||
+    !validContentTicketUrl(value.contentUrl) ||
+    !validTicketExpiry(value.expiresAt) ||
     typeof value.etag !== "string" ||
     !value.etag ||
     Buffer.byteLength(value.etag, "utf8") > 1024 ||
@@ -999,20 +1015,20 @@ function parseCollection(value: unknown): CollectionRecord | undefined {
   if (
     !isExactRecord(
       value,
-      ["id", "namespace", "name", "revision", "createdAt", "updatedAt"],
-      ["deletedAt", "retentionDays"]
+      ["id", "namespace", "name", "revision", "retentionDays", "createdAt", "updatedAt"],
+      ["deletedAt"]
     ) ||
     !validOpaqueId(value.id) ||
     value.namespace !== "line.group.media-sync" ||
     typeof value.name !== "string" ||
     !value.name ||
+    hasControl(value.name) ||
     typeof value.revision !== "number" ||
     !Number.isSafeInteger(value.revision) ||
     value.revision < 1 ||
-    (value.retentionDays !== undefined &&
-      (!Number.isSafeInteger(value.retentionDays) ||
-        (value.retentionDays as number) < 1 ||
-        (value.retentionDays as number) > 365)) ||
+    !Number.isSafeInteger(value.retentionDays) ||
+    (value.retentionDays as number) < 1 ||
+    (value.retentionDays as number) > 365 ||
     !validDate(value.createdAt) ||
     !validDate(value.updatedAt) ||
     (value.deletedAt !== undefined && !validDate(value.deletedAt))
@@ -1024,7 +1040,7 @@ function parseCollection(value: unknown): CollectionRecord | undefined {
     namespace: "line.group.media-sync",
     name: value.name,
     revision: value.revision,
-    ...(typeof value.retentionDays === "number" ? { retentionDays: value.retentionDays } : {}),
+    retentionDays: value.retentionDays as number,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     ...(typeof value.deletedAt === "string" && !isZeroTime(value.deletedAt)
@@ -1078,11 +1094,38 @@ function validDate(value: unknown): value is string {
   return typeof value === "string" && value !== "" && Number.isFinite(Date.parse(value));
 }
 
+function validContentTicketUrl(value: unknown): value is string {
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > 2048 || hasControl(value)) {
+    return false;
+  }
+  try {
+    const base = new URL("https://asset.invalid");
+    const url = new URL(value, base);
+    const ticket = url.searchParams.get("ticket");
+    return (
+      url.origin === base.origin &&
+      url.pathname === "/api/assets/content" &&
+      url.hash === "" &&
+      url.searchParams.size === 1 &&
+      url.searchParams.getAll("ticket").length === 1 &&
+      typeof ticket === "string" &&
+      ticket.trim() !== "" &&
+      !hasControl(ticket)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function validTicketExpiry(value: unknown): value is string {
+  if (!validDate(value)) return false;
+  const expiresAt = Date.parse(value);
+  const now = Date.now();
+  return expiresAt > now && expiresAt - now <= 5 * 60_000;
+}
+
 function hasControl(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const code = character.codePointAt(0) ?? 0;
-    return code <= 31 || code === 127;
-  });
+  return /\p{Cc}|[\uD800-\uDFFF]/u.test(value);
 }
 
 function isZeroTime(value: string): boolean {
