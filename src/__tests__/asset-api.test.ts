@@ -110,6 +110,13 @@ describe("asset api client", () => {
       etag: "asset-version"
     };
     const cases = [
+      { ...validTicket, contentUrl: "https://asset.invalid/api/assets/content?ticket=opaque" },
+      { ...validTicket, contentUrl: "//asset.invalid/api/assets/content?ticket=opaque" },
+      {
+        ...validTicket,
+        contentUrl: "https://user:pass@asset.invalid/api/assets/content?ticket=opaque"
+      },
+      { ...validTicket, contentUrl: "api/assets/content?ticket=opaque" },
       { ...validTicket, contentUrl: "/api/assets/content?ticket=opaque&other=value" },
       { ...validTicket, contentUrl: "/api/assets/content?ticket=opaque#fragment" },
       { ...validTicket, contentUrl: "/api/assets/content?ticket=opaque&ticket=other" },

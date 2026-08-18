@@ -1095,7 +1095,12 @@ function validDate(value: unknown): value is string {
 }
 
 function validContentTicketUrl(value: unknown): value is string {
-  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > 2048 || hasControl(value)) {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith("/api/assets/content?") ||
+    Buffer.byteLength(value, "utf8") > 2048 ||
+    hasControl(value)
+  ) {
     return false;
   }
   try {
