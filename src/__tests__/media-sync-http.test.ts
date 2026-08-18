@@ -247,7 +247,9 @@ describe("media sync management HTTP", () => {
   it("proxies bounded ACL subject search with only the authenticated requester", async () => {
     const accountClient = account();
     vi.mocked(accountClient.searchMediaSyncAclSubjects).mockResolvedValue({
-      subjects: [{ id: userId, type: "user", displayName: "Ada Lovelace" }],
+      subjects: [
+        { id: userId, type: "user", displayName: "Ada Lovelace", email: "ada@example.com" }
+      ],
       page: 2,
       perPage: 20,
       hasMore: false
@@ -262,7 +264,9 @@ describe("media sync management HTTP", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["x-hhc-request-id"]).toBe("request-1");
     expect(response.json()).toEqual({
-      subjects: [{ id: userId, type: "user", displayName: "Ada Lovelace" }],
+      subjects: [
+        { id: userId, type: "user", displayName: "Ada Lovelace", email: "ada@example.com" }
+      ],
       page: 2,
       perPage: 20,
       hasMore: false
