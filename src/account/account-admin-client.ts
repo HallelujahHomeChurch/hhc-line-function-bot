@@ -299,7 +299,7 @@ function parseMediaSyncAclSubjectSearch(
 }
 
 function validAclSubjectEmail(value: unknown): value is string {
-  return validAclSubjectText(value, 320) && /^[^\s@]+@[^\s@]+$/u.test(value);
+  return validAclSubjectText(value, 320);
 }
 
 function validAclSubjectText(value: unknown, maxBytes: number): value is string {

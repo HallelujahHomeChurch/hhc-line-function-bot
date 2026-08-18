@@ -133,6 +133,31 @@ describe("account admin client", () => {
     expect(Buffer.byteLength(displayName, "utf8")).toBe(1531);
   });
 
+  it("accepts the legacy System Admin login identifier in the email field", async () => {
+    const payload = {
+      subjects: [
+        {
+          id: "019faf9e-238c-7332-9abd-9b4c72412cb9",
+          type: "user",
+          displayName: "System Admin",
+          email: "admin"
+        }
+      ],
+      page: 2,
+      perPage: 20,
+      hasMore: false
+    };
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload))
+    });
+
+    await expect(client.searchMediaSyncAclSubjects(aclSubjectSearchInput)).resolves.toEqual(
+      payload
+    );
+  });
+
   it.each([
     ["unknown envelope field", { trace: "secret" }],
     ["wrong page", { page: 1 }],
@@ -152,14 +177,14 @@ describe("account admin client", () => {
       }
     ],
     [
-      "invalid user email",
+      "blank user email",
       {
         subjects: [
           {
             id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
             type: "user",
             displayName: "Ada Lovelace",
-            email: "not-an-email"
+            email: ""
           }
         ]
       }
