@@ -66,11 +66,10 @@ export interface SearchMediaSyncAclSubjectsInput {
 }
 
 export interface MediaSyncAclSubjectSearchResult {
-  subjects: Array<{
-    id: string;
-    type: MediaSyncAclSubjectType;
-    displayName: string;
-  }>;
+  subjects: Array<
+    | { id: string; type: "user"; displayName: string; email?: string }
+    | { id: string; type: "role"; displayName: string }
+  >;
   page: number;
   perPage: number;
   hasMore: boolean;
@@ -269,18 +268,38 @@ function parseMediaSyncAclSubjectSearch(
   }
   const parsed = [] as MediaSyncAclSubjectSearchResult["subjects"];
   for (const subject of subjects) {
-    if (!isExactRecord(subject, ["id", "type", "displayName"])) return undefined;
+    if (!subject || typeof subject !== "object" || Array.isArray(subject)) return undefined;
+    const candidate = subject as Record<string, unknown>;
+    const keys =
+      candidate.type === "user" && candidate.email !== undefined
+        ? ["id", "type", "displayName", "email"]
+        : ["id", "type", "displayName"];
+    if (!isExactRecord(candidate, keys)) return undefined;
     if (
-      (subject.type !== "user" && subject.type !== "role") ||
-      subject.type !== input.subjectType ||
-      !validAclSubjectText(subject.id, 255) ||
-      !validAclSubjectText(subject.displayName, 2048)
+      (candidate.type !== "user" && candidate.type !== "role") ||
+      candidate.type !== input.subjectType ||
+      !validAclSubjectText(candidate.id, 255) ||
+      !validAclSubjectText(candidate.displayName, 2048) ||
+      (candidate.email !== undefined && !validAclSubjectEmail(candidate.email))
     ) {
       return undefined;
     }
-    parsed.push({ id: subject.id, type: subject.type, displayName: subject.displayName });
+    if (candidate.type === "user") {
+      parsed.push({
+        id: candidate.id,
+        type: "user",
+        displayName: candidate.displayName,
+        ...(candidate.email === undefined ? {} : { email: candidate.email })
+      });
+    } else {
+      parsed.push({ id: candidate.id, type: "role", displayName: candidate.displayName });
+    }
   }
   return { subjects: parsed, page, perPage, hasMore };
+}
+
+function validAclSubjectEmail(value: unknown): value is string {
+  return validAclSubjectText(value, 320) && /^[^\s@]+@[^\s@]+$/u.test(value);
 }
 
 function validAclSubjectText(value: unknown, maxBytes: number): value is string {

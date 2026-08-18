@@ -69,7 +69,8 @@ describe("account admin client", () => {
         {
           id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
           type: "user",
-          displayName: "Ada Lovelace"
+          displayName: "Ada Lovelace",
+          email: "ada@example.com"
         }
       ],
       page: 2,
@@ -145,7 +146,20 @@ describe("account admin client", () => {
             id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
             type: "user",
             displayName: "Ada Lovelace",
-            email: "ada@example.com"
+            secret: "hidden"
+          }
+        ]
+      }
+    ],
+    [
+      "invalid user email",
+      {
+        subjects: [
+          {
+            id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+            type: "user",
+            displayName: "Ada Lovelace",
+            email: "not-an-email"
           }
         ]
       }
@@ -214,6 +228,27 @@ describe("account admin client", () => {
       message: "account_api_invalid_acl_subjects",
       retryable: false
     });
+  });
+
+  it("rejects email on role subjects", async () => {
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          subjects: [
+            { id: "admin", type: "role", displayName: "admin", email: "admin@example.com" }
+          ],
+          page: 2,
+          perPage: 20,
+          hasMore: false
+        })
+      )
+    });
+
+    await expect(
+      client.searchMediaSyncAclSubjects({ ...aclSubjectSearchInput, subjectType: "role" })
+    ).rejects.toMatchObject({ message: "account_api_invalid_acl_subjects", retryable: false });
   });
 
   it.each([{ allowed: true, roles: ["admin"] }, { allowed: "true" }, { denied: true }])(
