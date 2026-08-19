@@ -302,7 +302,7 @@ function reportAssetApiRejection(
           ? "authorization_rejected"
           : httpStatus === 429
             ? "rate_limited"
-            : httpStatus === 0 || httpStatus === 408 || httpStatus >= 500
+            : httpStatus === 0 || httpStatus >= 500
               ? "upstream_unavailable"
               : "upstream_rejected"
     });

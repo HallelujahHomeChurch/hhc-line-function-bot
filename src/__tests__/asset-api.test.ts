@@ -25,6 +25,7 @@ describe("asset api client", () => {
   it.each([
     [401, "authorization_rejected"],
     [403, "authorization_rejected"],
+    [408, "upstream_rejected"],
     [429, "rate_limited"],
     [422, "upstream_rejected"],
     [503, "upstream_unavailable"]
