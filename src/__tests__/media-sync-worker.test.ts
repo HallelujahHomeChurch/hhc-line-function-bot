@@ -375,6 +375,71 @@ describe("media sync Asset and collection stage", () => {
     });
   });
 
+  it("persists a production-shaped Asset occurrence without owner compensation", async () => {
+    const fixture = cleanAssetFixture();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          asset({
+            scanStatus: "clean",
+            scanSignatureVersion: "daily-20260816",
+            processingStatus: "ready"
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            collection: {
+              id: "collection-1",
+              namespace: "line.group.media-sync",
+              name: "Media",
+              revision: 2,
+              retentionDays: 14,
+              createdAt: "2026-08-16T00:00:00Z",
+              updatedAt: "2026-08-16T00:01:00Z"
+            },
+            item: {
+              id: "occurrence-actual-1",
+              collectionId: "collection-1",
+              assetId: "asset-1",
+              remoteItemId: "work-opaque-1",
+              displayName: "video.mp4",
+              sourceRevision: "a".repeat(64),
+              createdRevision: 2,
+              retentionExempt: false,
+              updatedRevision: 2,
+              mimeType: "video/mp4",
+              sizeBytes: 5,
+              etag: "etag-1",
+              createdAt: "2026-08-16T00:01:00Z",
+              updatedAt: "2026-08-16T00:01:00Z"
+            }
+          },
+          { status: 201 }
+        )
+      );
+    fixture.options.assets = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      fetcher
+    });
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "completed"
+    });
+    expect(fixture.work.publications[0]).toMatchObject({
+      state: "published",
+      targetId: "occurrence-actual-1"
+    });
+    expect(fixture.store.failClaimedWork).not.toHaveBeenCalled();
+    expect(
+      fetcher.mock.calls.some(
+        ([url, init]) => String(url).endsWith("/assets/asset-1") && init?.method === "DELETE"
+      )
+    ).toBe(false);
+  });
+
   it.each([
     ["infected", "not_required", "scan_infected"],
     ["failed", "not_required", "scan_failed"],

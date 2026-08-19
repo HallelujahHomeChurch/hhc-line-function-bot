@@ -103,11 +103,14 @@ export interface CollectionItemRecord {
   displayName: string;
   sourceRevision: string;
   createdRevision: number;
+  retentionExempt: boolean;
+  updatedRevision: number;
   deletedRevision?: number;
   mimeType?: string;
   sizeBytes?: number;
   etag?: string;
   createdAt: string;
+  updatedAt: string;
   deletedAt?: string;
 }
 
@@ -834,7 +837,10 @@ function parseCollectionItem(value: unknown): CollectionItemRecord | undefined {
         "displayName",
         "sourceRevision",
         "createdRevision",
-        "createdAt"
+        "retentionExempt",
+        "updatedRevision",
+        "createdAt",
+        "updatedAt"
       ],
       ["deletedRevision", "mimeType", "sizeBytes", "etag", "deletedAt"]
     ) ||
@@ -849,6 +855,9 @@ function parseCollectionItem(value: unknown): CollectionItemRecord | undefined {
     !value.sourceRevision ||
     !Number.isSafeInteger(value.createdRevision) ||
     (value.createdRevision as number) < 1 ||
+    typeof value.retentionExempt !== "boolean" ||
+    !Number.isSafeInteger(value.updatedRevision) ||
+    (value.updatedRevision as number) < 1 ||
     (value.deletedRevision !== undefined &&
       (!Number.isSafeInteger(value.deletedRevision) || (value.deletedRevision as number) < 1)) ||
     (value.mimeType !== undefined && typeof value.mimeType !== "string") ||
@@ -856,6 +865,7 @@ function parseCollectionItem(value: unknown): CollectionItemRecord | undefined {
       (!Number.isSafeInteger(value.sizeBytes) || (value.sizeBytes as number) < 0)) ||
     (value.etag !== undefined && typeof value.etag !== "string") ||
     !validDate(value.createdAt) ||
+    !validDate(value.updatedAt) ||
     (value.deletedAt !== undefined && !validDate(value.deletedAt))
   ) {
     return undefined;
