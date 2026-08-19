@@ -670,7 +670,7 @@ describe("asset api client", () => {
     expect(fetcher.mock.calls[4]?.[1]).toMatchObject({ method: "DELETE", signal });
   });
 
-  it("uses the media-sync namespace and returns the actual collection occurrence", async () => {
+  it("accepts the current Asset add-collection-item response", async () => {
     const collection = liveCollection(2);
     const item = liveCollectionItem();
     const fetcher = vi
@@ -694,8 +694,7 @@ describe("asset api client", () => {
           201
         )
       )
-      .mockResolvedValueOnce(jsonResponse({ collection, item }, 201))
-      .mockResolvedValueOnce(jsonResponse({ collection: liveCollection(3), item }));
+      .mockResolvedValueOnce(jsonResponse({ collection, item }, 201));
     const client = createAssetApiClient({ baseUrl: "https://asset.internal", fetcher });
 
     const created = await client.createUpload({
@@ -718,12 +717,6 @@ describe("asset api client", () => {
       },
       "media-sync-membership-1"
     );
-    await client.deleteCollectionItem(
-      "collection-1",
-      "occurrence-actual-1",
-      "media-sync-membership-delete-1"
-    );
-
     expect(created.asset).toMatchObject({ etag: "etag-1", processingStatus: "pending" });
     expect(mutation.item.id).toBe("occurrence-actual-1");
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({
@@ -742,7 +735,33 @@ describe("asset api client", () => {
       displayName: "video.mp4",
       sourceRevision: "checksum-1"
     });
-    expect(fetcher.mock.calls[2]?.[0]).toBe(
+  });
+
+  it("accepts the current Asset delete-collection-item response", async () => {
+    const item = liveCollectionItem();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        collection: liveCollection(3),
+        item: { ...item, deletedRevision: 3, deletedAt: "2026-08-16T00:02:00Z" },
+        tombstone: {
+          id: item.id,
+          remoteItemId: item.remoteItemId,
+          deletedRevision: 3,
+          deletedAt: "2026-08-16T00:02:00Z"
+        }
+      })
+    );
+    const client = createAssetApiClient({ baseUrl: "https://asset.internal", fetcher });
+
+    await expect(
+      client.deleteCollectionItem(
+        "collection-1",
+        "occurrence-actual-1",
+        "media-sync-membership-delete-1"
+      )
+    ).resolves.toMatchObject({ item: { id: "occurrence-actual-1", updatedRevision: 2 } });
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
       "https://asset.internal/priv/assets/collections/collection-1/items/occurrence-actual-1"
     );
   });
@@ -789,6 +808,32 @@ describe("asset api client", () => {
         "key-2"
       )
     ).rejects.toThrow("asset_api_invalid_response");
+
+    for (const item of [
+      { ...liveCollectionItem(), retentionExempt: "false" },
+      { ...liveCollectionItem(), updatedRevision: 0 },
+      { ...liveCollectionItem(), updatedAt: "not-a-date" },
+      { ...liveCollectionItem(), internalBlobKey: "must-not-leak" }
+    ]) {
+      const invalid = createAssetApiClient({
+        baseUrl: "https://asset.internal",
+        fetcher: vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(jsonResponse({ collection: liveCollection(2), item }))
+      });
+      await expect(
+        invalid.addCollectionItem(
+          "collection-1",
+          {
+            assetId: "asset-1",
+            remoteItemId: "line:helper:message-1",
+            displayName: "video.mp4",
+            sourceRevision: "checksum-1"
+          },
+          "key-invalid"
+        )
+      ).rejects.toThrow("asset_api_invalid_response");
+    }
   });
 
   it("streams a temporary file to the signed upload target", async () => {
@@ -861,9 +906,12 @@ function liveCollectionItem() {
     displayName: "video.mp4",
     sourceRevision: "checksum-1",
     createdRevision: 2,
+    retentionExempt: false,
+    updatedRevision: 2,
     mimeType: "video/mp4",
     sizeBytes: 5,
     etag: "etag-1",
-    createdAt: "2026-08-16T00:01:00Z"
+    createdAt: "2026-08-16T00:01:00Z",
+    updatedAt: "2026-08-16T00:01:00Z"
   };
 }
