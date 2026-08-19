@@ -23,6 +23,8 @@ export type CreateMediaSyncBindingCodeResult =
   | { status: "already_issued"; expiresAt: string }
   | { status: "collection_bound" };
 
+export type BeginCollectionDeletionResult = { status: "started" | "replay" | "completed" };
+
 export type BindMediaSyncCodeInput = {
   profileName: string;
   code: string;

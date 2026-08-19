@@ -60,6 +60,14 @@ const migrations = [
   where consumed_at is null
   `,
   `
+  create table if not exists media_sync_collection_deletions (
+    collection_id text primary key,
+    profile_name text not null,
+    started_at timestamptz not null,
+    completed_at timestamptz
+  )
+  `,
+  `
   create table if not exists media_sync_source_tombstones (
     source_key text primary key,
     tombstoned_at timestamptz not null
