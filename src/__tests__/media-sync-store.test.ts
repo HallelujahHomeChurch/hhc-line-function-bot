@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runMediaSyncMigrations } from "../media-sync/migrations.js";
@@ -722,6 +722,160 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
         expectedClaimedUntil: claim.claimedUntil!
       })
     ).resolves.toBe(false);
+  });
+
+  it.each([
+    "persistCompletedAsset",
+    "finalizeCollectionPublication",
+    "finalizeManualPublication",
+    "completeClaimedWork"
+  ] as const)("serializes %s behind collection deletion", async (operation) => {
+    const suffix = `delete-race-${operation}`;
+    const collectionId = `collection-${suffix}`;
+    const groupId = `group-${suffix}`;
+    const sourceKey = `line:helper:message-${suffix}`;
+    const now = new Date("2099-03-01T00:00:00.000Z");
+    const setup = new PostgresMediaSyncStore(left, { now: () => now });
+    const writer = new PostgresMediaSyncStore(right, { now: () => now });
+    await bind(setup, collectionId, groupId);
+    const input = { ...ingest(suffix), sourceKey, collectionId, groupId };
+    const manual = operation === "finalizeManualPublication";
+    const created = await setup.createIngest(
+      input,
+      manual
+        ? {
+            manualIntent: {
+              destinationId: `pending-${suffix}`,
+              requesterUserId: "line-user"
+            }
+          }
+        : undefined
+    );
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    if (manual) {
+      await setup.confirmManualPublication({
+        sourceKey,
+        destinationId: `pending-${suffix}`,
+        requesterUserId: "line-user",
+        jobId: `job-${suffix}`,
+        manualSourceKey: "ppt_slides",
+        manualItemKind: "ppt_slide",
+        manualDomain: "presentation",
+        manualTitle: suffix
+      });
+    }
+    await completeOtherOutbox(left, sourceKey);
+    const dispatch = (await setup.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000, now }))[0]!;
+    await setup.markOutboxDispatched({
+      workId: dispatch.workId,
+      operation: "intake",
+      expectedClaimedUntil: dispatch.claimedUntil!
+    });
+    const claim = await setup.claimWork({
+      workId: dispatch.workId,
+      operation: "intake",
+      leaseMs: 60_000,
+      now: new Date("2099-03-01T00:00:01.000Z")
+    });
+    if (typeof claim === "string" || !claim) throw new Error("expected intake claim");
+    if (operation === "completeClaimedWork") {
+      await expect(
+        setup.finalizeCollectionPublication({
+          workId: dispatch.workId,
+          expectedClaimedUntil: claim.claimedUntil!,
+          collectionId,
+          occurrenceId: `occurrence-${suffix}`
+        })
+      ).resolves.toBe(true);
+    }
+
+    const blocker = await left.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        JSON.stringify(["helper", collectionId])
+      ]);
+      let settled = false;
+      let mutation: Promise<boolean>;
+      switch (operation) {
+        case "persistCompletedAsset":
+          mutation = writer.persistCompletedAsset({
+            workId: dispatch.workId,
+            expectedClaimedUntil: claim.claimedUntil!,
+            assetId: `asset-${suffix}`,
+            assetEtag: `etag-${suffix}`,
+            sizeBytes: 1,
+            checksumSha256: "c".repeat(64)
+          });
+          break;
+        case "finalizeCollectionPublication":
+          mutation = writer.finalizeCollectionPublication({
+            workId: dispatch.workId,
+            expectedClaimedUntil: claim.claimedUntil!,
+            collectionId,
+            occurrenceId: `occurrence-${suffix}`
+          });
+          break;
+        case "finalizeManualPublication":
+          mutation = writer.finalizeManualPublication({
+            workId: dispatch.workId,
+            expectedClaimedUntil: claim.claimedUntil!,
+            destinationId: `pending-${suffix}`,
+            resourceId: `resource-${suffix}`
+          });
+          break;
+        case "completeClaimedWork":
+          mutation = writer.completeClaimedWork({
+            workId: dispatch.workId,
+            expectedClaimedUntil: claim.claimedUntil!
+          });
+          break;
+      }
+      const result = mutation.then((value) => {
+        settled = true;
+        return value;
+      });
+      await waitForAdvisoryWaiter(blocker, () => settled);
+      await blocker.query(
+        `insert into media_sync_collection_deletions
+          (collection_id, profile_name, started_at)
+         values ($1, 'helper', $2)`,
+        [collectionId, now]
+      );
+      await blocker.query("commit");
+
+      await expect(result).resolves.toBe(false);
+      const state = (
+        await left.query<{
+          asset_id: string | null;
+          ingest_state: string;
+          publication_state: string;
+          target_id: string | null;
+          completed_at: Date | null;
+        }>(
+          `select ingest.asset_id, ingest.state ingest_state,
+                  publication.state publication_state, publication.target_id,
+                  outbox.completed_at
+           from media_sync_ingests ingest
+           join media_sync_publications publication using (source_key)
+           join media_sync_outbox outbox on outbox.source_key=ingest.source_key
+             and outbox.operation='intake'
+           where ingest.source_key=$1 and publication.publication_type=$2`,
+          [sourceKey, manual ? "manual" : "collection"]
+        )
+      ).rows[0];
+      expect(state).toMatchObject({
+        asset_id: null,
+        ingest_state: "pending",
+        completed_at: null,
+        ...(operation === "completeClaimedWork"
+          ? { publication_state: "published", target_id: `occurrence-${suffix}` }
+          : { publication_state: "pending", target_id: null })
+      });
+    } finally {
+      await blocker.query("rollback").catch(() => undefined);
+      blocker.release();
+    }
   });
 
   it("rolls code consumption back when binding insertion fails", async () => {
@@ -1890,6 +2044,31 @@ async function completeOtherOutbox(pool: Pool, sourceKey: string): Promise<void>
     "update media_sync_outbox set completed_at=now() where source_key<>$1 and completed_at is null",
     [sourceKey]
   );
+}
+
+async function waitForAdvisoryWaiter(blocker: PoolClient, settled: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const waiting = (
+      await blocker.query<{ waiting: boolean }>(`
+        select exists (
+          select 1
+          from pg_locks held
+          join pg_locks waiting
+            on waiting.locktype=held.locktype
+           and waiting.database is not distinct from held.database
+           and waiting.classid is not distinct from held.classid
+           and waiting.objid is not distinct from held.objid
+           and waiting.objsubid is not distinct from held.objsubid
+          where held.pid=pg_backend_pid() and held.locktype='advisory'
+            and held.granted and not waiting.granted
+        ) waiting
+      `)
+    ).rows[0]?.waiting;
+    if (waiting) return;
+    if (settled()) throw new Error("media_sync_terminal_write_bypassed_collection_lock");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("media_sync_test_collection_lock_waiter_missing");
 }
 
 async function waitForLeaseExpiry(pool: Pool, claimedUntil: string): Promise<void> {

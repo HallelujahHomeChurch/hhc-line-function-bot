@@ -863,37 +863,39 @@ export class PostgresMediaSyncStore {
     sizeBytes: number;
     checksumSha256: string;
   }): Promise<boolean> {
-    const result = await this.pool.query(
-      `update media_sync_ingests ingest
-       set asset_id=$3, asset_etag=$4, size_bytes=$5, checksum_sha256=$6,
-           state='awaiting_scan', updated_at=clock_timestamp()
-       from media_sync_outbox outbox
-       where outbox.source_key=ingest.source_key and ingest.work_id=$1
-         and ingest.state<>'tombstoned' and outbox.operation='intake'
-         and outbox.completed_at is null
-         and outbox.claimed_until=$2::timestamptz
-         and outbox.claimed_until > clock_timestamp()
-         and exists (
-           select 1 from media_sync_bindings binding
-           where binding.profile_name=ingest.profile_name
-             and binding.group_id=ingest.group_id
-             and binding.collection_id=ingest.collection_id
-             and binding.disabled_at is null
-         )
-         and not exists (
-           select 1 from media_sync_collection_deletions deletion
-           where deletion.collection_id=ingest.collection_id
-         )`,
-      [
-        input.workId,
-        input.expectedClaimedUntil,
-        input.assetId,
-        input.assetEtag,
-        input.sizeBytes,
-        input.checksumSha256
-      ]
-    );
-    return Boolean(result.rowCount);
+    return this.withCollectionDeletionFence(input.workId, async (client) => {
+      const result = await client.query(
+        `update media_sync_ingests ingest
+         set asset_id=$3, asset_etag=$4, size_bytes=$5, checksum_sha256=$6,
+             state='awaiting_scan', updated_at=clock_timestamp()
+         from media_sync_outbox outbox
+         where outbox.source_key=ingest.source_key and ingest.work_id=$1
+           and ingest.state<>'tombstoned' and outbox.operation='intake'
+           and outbox.completed_at is null
+           and outbox.claimed_until=$2::timestamptz
+           and outbox.claimed_until > clock_timestamp()
+           and exists (
+             select 1 from media_sync_bindings binding
+             where binding.profile_name=ingest.profile_name
+               and binding.group_id=ingest.group_id
+               and binding.collection_id=ingest.collection_id
+               and binding.disabled_at is null
+           )
+           and not exists (
+             select 1 from media_sync_collection_deletions deletion
+             where deletion.collection_id=ingest.collection_id
+           )`,
+        [
+          input.workId,
+          input.expectedClaimedUntil,
+          input.assetId,
+          input.assetEtag,
+          input.sizeBytes,
+          input.checksumSha256
+        ]
+      );
+      return Boolean(result.rowCount);
+    });
   }
 
   async confirmManualPublication(input: {
@@ -946,33 +948,35 @@ export class PostgresMediaSyncStore {
     collectionId: string;
     occurrenceId: string;
   }): Promise<boolean> {
-    const result = await this.pool.query(
-      `update media_sync_publications publication
-       set target_id=$4, state='published', failure_category=null,
-           updated_at=clock_timestamp()
-       from media_sync_ingests ingest, media_sync_outbox outbox
-       where publication.source_key=ingest.source_key
-         and outbox.source_key=ingest.source_key
-         and ingest.work_id=$1 and ingest.state<>'tombstoned'
-         and publication.publication_type='collection'
-         and publication.destination_id=$3
-         and outbox.operation='intake' and outbox.completed_at is null
-         and outbox.claimed_until=$2::timestamptz
-         and outbox.claimed_until > clock_timestamp()
-         and exists (
-           select 1 from media_sync_bindings binding
-           where binding.profile_name=ingest.profile_name
-             and binding.group_id=ingest.group_id
-             and binding.collection_id=ingest.collection_id
-             and binding.disabled_at is null
-         )
-         and not exists (
-           select 1 from media_sync_collection_deletions deletion
-           where deletion.collection_id=ingest.collection_id
-         )`,
-      [input.workId, input.expectedClaimedUntil, input.collectionId, input.occurrenceId]
-    );
-    return Boolean(result.rowCount);
+    return this.withCollectionDeletionFence(input.workId, async (client) => {
+      const result = await client.query(
+        `update media_sync_publications publication
+         set target_id=$4, state='published', failure_category=null,
+             updated_at=clock_timestamp()
+         from media_sync_ingests ingest, media_sync_outbox outbox
+         where publication.source_key=ingest.source_key
+           and outbox.source_key=ingest.source_key
+           and ingest.work_id=$1 and ingest.state<>'tombstoned'
+           and publication.publication_type='collection'
+           and publication.destination_id=$3
+           and outbox.operation='intake' and outbox.completed_at is null
+           and outbox.claimed_until=$2::timestamptz
+           and outbox.claimed_until > clock_timestamp()
+           and exists (
+             select 1 from media_sync_bindings binding
+             where binding.profile_name=ingest.profile_name
+               and binding.group_id=ingest.group_id
+               and binding.collection_id=ingest.collection_id
+               and binding.disabled_at is null
+           )
+           and not exists (
+             select 1 from media_sync_collection_deletions deletion
+             where deletion.collection_id=ingest.collection_id
+           )`,
+        [input.workId, input.expectedClaimedUntil, input.collectionId, input.occurrenceId]
+      );
+      return Boolean(result.rowCount);
+    });
   }
 
   async finalizeManualPublication(input: {
@@ -981,34 +985,36 @@ export class PostgresMediaSyncStore {
     destinationId: string;
     resourceId: string;
   }): Promise<boolean> {
-    const result = await this.pool.query(
-      `update media_sync_publications publication
-       set target_id=$4, state='published', failure_category=null,
-           updated_at=clock_timestamp()
-       from media_sync_ingests ingest, media_sync_outbox outbox
-       where publication.source_key=ingest.source_key
-         and outbox.source_key=ingest.source_key
-         and ingest.work_id=$1 and ingest.state<>'tombstoned'
-         and publication.publication_type='manual'
-         and publication.destination_id=$3 and publication.state='pending'
-         and publication.manual_source_key is not null
-         and outbox.operation='intake' and outbox.completed_at is null
-         and outbox.claimed_until=$2::timestamptz
-         and outbox.claimed_until > clock_timestamp()
-         and exists (
-           select 1 from media_sync_bindings binding
-           where binding.profile_name=ingest.profile_name
-             and binding.group_id=ingest.group_id
-             and binding.collection_id=ingest.collection_id
-             and binding.disabled_at is null
-         )
-         and not exists (
-           select 1 from media_sync_collection_deletions deletion
-           where deletion.collection_id=ingest.collection_id
-         )`,
-      [input.workId, input.expectedClaimedUntil, input.destinationId, input.resourceId]
-    );
-    return Boolean(result.rowCount);
+    return this.withCollectionDeletionFence(input.workId, async (client) => {
+      const result = await client.query(
+        `update media_sync_publications publication
+         set target_id=$4, state='published', failure_category=null,
+             updated_at=clock_timestamp()
+         from media_sync_ingests ingest, media_sync_outbox outbox
+         where publication.source_key=ingest.source_key
+           and outbox.source_key=ingest.source_key
+           and ingest.work_id=$1 and ingest.state<>'tombstoned'
+           and publication.publication_type='manual'
+           and publication.destination_id=$3 and publication.state='pending'
+           and publication.manual_source_key is not null
+           and outbox.operation='intake' and outbox.completed_at is null
+           and outbox.claimed_until=$2::timestamptz
+           and outbox.claimed_until > clock_timestamp()
+           and exists (
+             select 1 from media_sync_bindings binding
+             where binding.profile_name=ingest.profile_name
+               and binding.group_id=ingest.group_id
+               and binding.collection_id=ingest.collection_id
+               and binding.disabled_at is null
+           )
+           and not exists (
+             select 1 from media_sync_collection_deletions deletion
+             where deletion.collection_id=ingest.collection_id
+           )`,
+        [input.workId, input.expectedClaimedUntil, input.destinationId, input.resourceId]
+      );
+      return Boolean(result.rowCount);
+    });
   }
 
   async failManualPublication(input: {
@@ -1039,9 +1045,7 @@ export class PostgresMediaSyncStore {
     workId: string;
     expectedClaimedUntil: string;
   }): Promise<boolean> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("begin");
+    return this.withCollectionDeletionFence(input.workId, async (client) => {
       const owned = await client.query<{ source_key: string }>(
         `select ingest.source_key
          from media_sync_ingests ingest
@@ -1073,10 +1077,7 @@ export class PostgresMediaSyncStore {
         [input.workId, input.expectedClaimedUntil]
       );
       const sourceKey = owned.rows[0]?.source_key;
-      if (!sourceKey) {
-        await client.query("rollback");
-        return false;
-      }
+      if (!sourceKey) return false;
       await client.query(
         `update media_sync_ingests set state='ready', updated_at=clock_timestamp()
          where source_key=$1`,
@@ -1088,14 +1089,8 @@ export class PostgresMediaSyncStore {
          where source_key=$1 and operation='intake'`,
         [sourceKey]
       );
-      await client.query("commit");
       return true;
-    } catch (error) {
-      await rollback(client);
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   async completeDeleteWork(input: {
@@ -1358,6 +1353,39 @@ export class PostgresMediaSyncStore {
         )
       ).rows[0];
       const result = await operation(client, ingest);
+      await client.query("commit");
+      return result;
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async withCollectionDeletionFence(
+    workId: string,
+    operation: (client: PoolClient) => Promise<boolean>
+  ): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const identity = (
+        await client.query<{ profile_name: string; collection_id: string }>(
+          "select profile_name, collection_id from media_sync_ingests where work_id=$1",
+          [workId]
+        )
+      ).rows[0];
+      if (!identity) {
+        await client.query("rollback");
+        return false;
+      }
+      await lockBindingCollection(client, identity.profile_name, identity.collection_id);
+      if (await collectionDeletionExists(client, identity.collection_id)) {
+        await client.query("rollback");
+        return false;
+      }
+      const result = await operation(client);
       await client.query("commit");
       return result;
     } catch (error) {
