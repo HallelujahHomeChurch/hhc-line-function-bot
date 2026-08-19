@@ -736,6 +736,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const sourceKey = `line:helper:message-${suffix}`;
     const now = new Date("2099-03-01T00:00:00.000Z");
     const setup = new PostgresMediaSyncStore(left, { now: () => now });
+    const pausedBegin = pausePoolAfterInsert(left);
+    const deletion = new PostgresMediaSyncStore(pausedBegin.pool, { now: () => now });
     const writer = new PostgresMediaSyncStore(right, { now: () => now });
     await bind(setup, collectionId, groupId);
     const input = { ...ingest(suffix), sourceKey, collectionId, groupId };
@@ -789,12 +791,9 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       ).resolves.toBe(true);
     }
 
-    const blocker = await left.connect();
+    const begun = deletion.beginCollectionDeletion({ profileName: "helper", collectionId, now });
+    const blocker = await pausedBegin.reached;
     try {
-      await blocker.query("begin");
-      await blocker.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-        JSON.stringify(["helper", collectionId])
-      ]);
       let settled = false;
       let mutation: Promise<boolean>;
       switch (operation) {
@@ -836,14 +835,9 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
         return value;
       });
       await waitForAdvisoryWaiter(blocker, () => settled);
-      await blocker.query(
-        `insert into media_sync_collection_deletions
-          (collection_id, profile_name, started_at)
-         values ($1, 'helper', $2)`,
-        [collectionId, now]
-      );
-      await blocker.query("commit");
+      pausedBegin.resume();
 
+      await expect(begun).resolves.toEqual({ status: "started" });
       await expect(result).resolves.toBe(false);
       const state = (
         await left.query<{
@@ -873,8 +867,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
           : { publication_state: "pending", target_id: null })
       });
     } finally {
-      await blocker.query("rollback").catch(() => undefined);
-      blocker.release();
+      pausedBegin.resume();
+      await begun.catch(() => undefined);
     }
   });
 
@@ -2044,6 +2038,50 @@ async function completeOtherOutbox(pool: Pool, sourceKey: string): Promise<void>
     "update media_sync_outbox set completed_at=now() where source_key<>$1 and completed_at is null",
     [sourceKey]
   );
+}
+
+function pausePoolAfterInsert(pool: Pool): {
+  pool: Pool;
+  reached: Promise<PoolClient>;
+  resume(): void;
+} {
+  let reach!: (client: PoolClient) => void;
+  let resume!: () => void;
+  let paused = false;
+  const reached = new Promise<PoolClient>((resolve) => {
+    reach = resolve;
+  });
+  const resumed = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const wrapped = new Proxy(pool, {
+    get(target, property) {
+      if (property === "connect") {
+        return async () => {
+          const client = await target.connect();
+          const query = (async (sql: string, values?: unknown[]) => {
+            const result = await client.query(sql, values);
+            if (!paused && result.command === "INSERT") {
+              paused = true;
+              reach(client);
+              await resumed;
+            }
+            return result;
+          }) as PoolClient["query"];
+          return new Proxy(client, {
+            get(clientTarget, clientProperty) {
+              if (clientProperty === "query") return query;
+              const value = Reflect.get(clientTarget, clientProperty, clientTarget);
+              return typeof value === "function" ? value.bind(clientTarget) : value;
+            }
+          });
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }
+  });
+  return { pool: wrapped, reached, resume };
 }
 
 async function waitForAdvisoryWaiter(blocker: PoolClient, settled: () => boolean): Promise<void> {
