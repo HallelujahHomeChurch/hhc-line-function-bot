@@ -44,7 +44,7 @@ for command_name in az docker git timeout; do
     exit 2
   }
 done
-[[ -d /dev/shm ]] || {
+[[ "${KERNEL_LOCAL_LIVE_TEST_MODE:-}" == "1" || -d /dev/shm ]] || {
   printf '%s\n' "kernel_local_live_memory_storage_missing" >&2
   exit 2
 }
@@ -156,7 +156,11 @@ fi
 az account show --output none >/dev/null || exit 2
 
 CURRENT_STAGE="secret_retrieval"
-TEMP_DIRECTORY="$(mktemp -d /dev/shm/kernel-local-live.XXXXXXXX)"
+if [[ "${KERNEL_LOCAL_LIVE_TEST_MODE:-}" == "1" ]]; then
+  TEMP_DIRECTORY="$(mktemp -d "${KERNEL_LOCAL_LIVE_ARTIFACT_ROOT:?}/kernel-local-live.XXXXXXXX")"
+else
+  TEMP_DIRECTORY="$(mktemp -d /dev/shm/kernel-local-live.XXXXXXXX)"
+fi
 chmod 0700 "$TEMP_DIRECTORY"
 DEEPSEEK_FILE="${TEMP_DIRECTORY}/deepseek-api-key"
 AZURE_EMBEDDING_FILE="${TEMP_DIRECTORY}/azure-openai-embedding-key"

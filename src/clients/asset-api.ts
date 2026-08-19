@@ -36,6 +36,7 @@ export interface CollectionRecord {
   namespace: "line.group.media-sync";
   name: string;
   revision: number;
+  retentionDays: number;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -60,6 +61,33 @@ export interface ManagedCollectionPage {
   collections: ManagedCollection[];
   cursor?: string;
   hasMore: boolean;
+}
+
+export interface ManagedCollectionItem {
+  id: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+  retentionExempt: boolean;
+}
+
+export interface ManagedCollectionItemPage {
+  items: ManagedCollectionItem[];
+  cursor?: string;
+  hasMore: boolean;
+}
+
+export interface ManagedContentTicket {
+  itemId: string;
+  contentUrl: string;
+  expiresAt: string;
+  etag: string;
+}
+
+export interface ManagedContentTicketBatch {
+  tickets: ManagedContentTicket[];
+  unavailableItemIds: string[];
 }
 
 export interface CollectionAclMutation {
@@ -97,6 +125,41 @@ export interface AssetApiClient {
     collectionId: string,
     options?: AssetApiRequestOptions
   ): Promise<ManagedCollection>;
+  listManagedCollectionItems(
+    collectionId: string,
+    input?: { query?: string; cursor?: string; limit?: number },
+    options?: AssetApiRequestOptions
+  ): Promise<ManagedCollectionItemPage>;
+  updateCollectionRetention(
+    collectionId: string,
+    retentionDays: number,
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<CollectionRecord>;
+  renameManagedCollectionItem(
+    collectionId: string,
+    itemId: string,
+    displayName: string,
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<ManagedCollectionItem>;
+  setManagedCollectionItemsRetention(
+    collectionId: string,
+    input: { itemIds: string[]; retentionExempt: boolean },
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<void>;
+  deleteManagedCollectionItems(
+    collectionId: string,
+    itemIds: string[],
+    idempotencyKey: string,
+    options?: AssetApiRequestOptions
+  ): Promise<{ deleted: number; alreadyRemoved: number }>;
+  issueManagedContentTickets(
+    collectionId: string,
+    itemIds: string[],
+    options?: AssetApiRequestOptions
+  ): Promise<ManagedContentTicketBatch>;
   createCollection(
     name: string,
     idempotencyKey: string,
@@ -282,6 +345,103 @@ export function createAssetApiClient(options: {
       const collection = parseManagedCollection(await readJson(response));
       if (!collection) throw new AssetApiRequestError("asset_api_invalid_response", false);
       return collection;
+    },
+    async listManagedCollectionItems(collectionId, input = {}, requestOptions) {
+      const query = new URLSearchParams();
+      if (input.query !== undefined) query.set("q", input.query);
+      if (input.cursor !== undefined) query.set("cursor", input.cursor);
+      if (input.limit !== undefined) query.set("limit", String(input.limit));
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/items${
+          query.size ? `?${query.toString()}` : ""
+        }`,
+        {},
+        requestOptions
+      );
+      const page = parseManagedCollectionItemPage(await readJson(response));
+      if (!page) throw new AssetApiRequestError("asset_api_invalid_response", false);
+      return page;
+    },
+    async updateCollectionRetention(collectionId, retentionDays, idempotencyKey, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/retention`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify({ retentionDays })
+        },
+        requestOptions
+      );
+      return requireCollection(await readJson(response));
+    },
+    async renameManagedCollectionItem(
+      collectionId,
+      itemId,
+      displayName,
+      idempotencyKey,
+      requestOptions
+    ) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(itemId)}`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify({ displayName })
+        },
+        requestOptions
+      );
+      const item = parseManagedCollectionItem(await readJson(response));
+      if (!item) throw new AssetApiRequestError("asset_api_invalid_response", false);
+      return item;
+    },
+    async setManagedCollectionItemsRetention(collectionId, input, idempotencyKey, requestOptions) {
+      await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/retention`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify(input)
+        },
+        requestOptions
+      );
+    },
+    async deleteManagedCollectionItems(collectionId, itemIds, idempotencyKey, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/delete`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify({ itemIds })
+        },
+        requestOptions
+      );
+      return requireDeleteCollectionItemsResult(await readJson(response));
+    },
+    async issueManagedContentTickets(collectionId, itemIds, requestOptions) {
+      const response = await request(
+        `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/content-tickets`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ itemIds })
+        },
+        requestOptions
+      );
+      const tickets = parseManagedContentTicketBatch(await readJson(response), itemIds);
+      if (!tickets) throw new AssetApiRequestError("asset_api_invalid_response", false);
+      return tickets;
     },
     async createCollection(name, idempotencyKey, requestOptions) {
       const response = await request(
@@ -732,20 +892,143 @@ function parseManagedCollection(value: unknown): ManagedCollection | undefined {
   return { collection, acls: acls as CollectionAclRecord[] };
 }
 
+function parseManagedCollectionItemPage(value: unknown): ManagedCollectionItemPage | undefined {
+  if (
+    !isExactRecord(value, ["items", "hasMore"], ["cursor"]) ||
+    !Array.isArray(value.items) ||
+    value.items.length > 100 ||
+    typeof value.hasMore !== "boolean" ||
+    (value.cursor !== undefined && (typeof value.cursor !== "string" || !value.cursor))
+  ) {
+    return undefined;
+  }
+  const items = value.items.map(parseManagedCollectionItem);
+  if (items.some((item) => item === undefined)) return undefined;
+  return {
+    items: items as ManagedCollectionItem[],
+    ...(typeof value.cursor === "string" ? { cursor: value.cursor } : {}),
+    hasMore: value.hasMore
+  };
+}
+
+export function parseManagedCollectionItem(value: unknown): ManagedCollectionItem | undefined {
+  if (
+    !isExactRecord(value, [
+      "id",
+      "displayName",
+      "mimeType",
+      "sizeBytes",
+      "createdAt",
+      "retentionExempt"
+    ]) ||
+    !validOpaqueId(value.id) ||
+    typeof value.displayName !== "string" ||
+    !value.displayName ||
+    Buffer.byteLength(value.displayName, "utf8") > 255 ||
+    hasControl(value.displayName) ||
+    typeof value.mimeType !== "string" ||
+    !value.mimeType ||
+    Buffer.byteLength(value.mimeType, "utf8") > 255 ||
+    hasControl(value.mimeType) ||
+    !Number.isSafeInteger(value.sizeBytes) ||
+    (value.sizeBytes as number) < 0 ||
+    !validDate(value.createdAt) ||
+    typeof value.retentionExempt !== "boolean"
+  ) {
+    return undefined;
+  }
+  return value as unknown as ManagedCollectionItem;
+}
+
+function parseManagedContentTicketBatch(
+  value: unknown,
+  requestedItemIds: string[]
+): ManagedContentTicketBatch | undefined {
+  if (
+    !isExactRecord(value, ["tickets", "unavailableItemIds"]) ||
+    !Array.isArray(value.tickets) ||
+    !Array.isArray(value.unavailableItemIds)
+  ) {
+    return undefined;
+  }
+  const tickets = value.tickets.map(parseManagedContentTicket);
+  const requested = new Set(requestedItemIds);
+  const ticketIds = new Set<string>();
+  const unavailableIds = new Set<string>();
+  if (
+    value.tickets.length + value.unavailableItemIds.length > 100 ||
+    tickets.some((ticket) => ticket === undefined) ||
+    tickets.some((ticket) => {
+      if (!ticket || !requested.has(ticket.itemId) || ticketIds.has(ticket.itemId)) return true;
+      ticketIds.add(ticket.itemId);
+      return false;
+    }) ||
+    value.unavailableItemIds.some((itemId) => {
+      if (!validOpaqueId(itemId) || !requested.has(itemId) || unavailableIds.has(itemId))
+        return true;
+      unavailableIds.add(itemId);
+      return false;
+    }) ||
+    [...ticketIds].some((itemId) => unavailableIds.has(itemId))
+  ) {
+    return undefined;
+  }
+  return {
+    tickets: tickets as ManagedContentTicket[],
+    unavailableItemIds: value.unavailableItemIds as string[]
+  };
+}
+
+function parseManagedContentTicket(value: unknown): ManagedContentTicket | undefined {
+  if (
+    !isExactRecord(value, ["itemId", "contentUrl", "expiresAt", "etag"]) ||
+    !validOpaqueId(value.itemId) ||
+    !validContentTicketUrl(value.contentUrl) ||
+    !validTicketExpiry(value.expiresAt) ||
+    typeof value.etag !== "string" ||
+    !value.etag ||
+    Buffer.byteLength(value.etag, "utf8") > 1024 ||
+    hasControl(value.etag)
+  ) {
+    return undefined;
+  }
+  return value as unknown as ManagedContentTicket;
+}
+
+function requireDeleteCollectionItemsResult(value: unknown): {
+  deleted: number;
+  alreadyRemoved: number;
+} {
+  if (
+    !isExactRecord(value, ["deleted", "alreadyRemoved"]) ||
+    !Number.isSafeInteger(value.deleted) ||
+    (value.deleted as number) < 0 ||
+    !Number.isSafeInteger(value.alreadyRemoved) ||
+    (value.alreadyRemoved as number) < 0
+  ) {
+    throw new AssetApiRequestError("asset_api_invalid_response", false);
+  }
+  return value as { deleted: number; alreadyRemoved: number };
+}
+
 function parseCollection(value: unknown): CollectionRecord | undefined {
   if (
     !isExactRecord(
       value,
-      ["id", "namespace", "name", "revision", "createdAt", "updatedAt"],
+      ["id", "namespace", "name", "revision", "retentionDays", "createdAt", "updatedAt"],
       ["deletedAt"]
     ) ||
     !validOpaqueId(value.id) ||
     value.namespace !== "line.group.media-sync" ||
     typeof value.name !== "string" ||
     !value.name ||
+    hasControl(value.name) ||
     typeof value.revision !== "number" ||
     !Number.isSafeInteger(value.revision) ||
     value.revision < 1 ||
+    !Number.isSafeInteger(value.retentionDays) ||
+    (value.retentionDays as number) < 1 ||
+    (value.retentionDays as number) > 365 ||
     !validDate(value.createdAt) ||
     !validDate(value.updatedAt) ||
     (value.deletedAt !== undefined && !validDate(value.deletedAt))
@@ -757,6 +1040,7 @@ function parseCollection(value: unknown): CollectionRecord | undefined {
     namespace: "line.group.media-sync",
     name: value.name,
     revision: value.revision,
+    retentionDays: value.retentionDays as number,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     ...(typeof value.deletedAt === "string" && !isZeroTime(value.deletedAt)
@@ -801,12 +1085,52 @@ function validOpaqueId(value: unknown): value is string {
     typeof value === "string" &&
     value.trim() !== "" &&
     value.trim() === value &&
-    Buffer.byteLength(value) <= 255
+    Buffer.byteLength(value) <= 255 &&
+    !hasControl(value)
   );
 }
 
 function validDate(value: unknown): value is string {
   return typeof value === "string" && value !== "" && Number.isFinite(Date.parse(value));
+}
+
+function validContentTicketUrl(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith("/api/assets/content?") ||
+    Buffer.byteLength(value, "utf8") > 2048 ||
+    hasControl(value)
+  ) {
+    return false;
+  }
+  try {
+    const base = new URL("https://asset.invalid");
+    const url = new URL(value, base);
+    const ticket = url.searchParams.get("ticket");
+    return (
+      url.origin === base.origin &&
+      url.pathname === "/api/assets/content" &&
+      url.hash === "" &&
+      url.searchParams.size === 1 &&
+      url.searchParams.getAll("ticket").length === 1 &&
+      typeof ticket === "string" &&
+      ticket.trim() !== "" &&
+      !hasControl(ticket)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function validTicketExpiry(value: unknown): value is string {
+  if (!validDate(value)) return false;
+  const expiresAt = Date.parse(value);
+  const now = Date.now();
+  return expiresAt > now && expiresAt - now <= 5 * 60_000;
+}
+
+function hasControl(value: string): boolean {
+  return /\p{Cc}|[\uD800-\uDFFF]/u.test(value);
 }
 
 function isZeroTime(value: string): boolean {

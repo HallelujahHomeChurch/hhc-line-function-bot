@@ -66,6 +66,67 @@ export class MediaSyncManagementService {
     return this.assets.createCollection(name, idempotencyKey, { requestId });
   }
 
+  listCollectionItems(
+    collectionId: string,
+    input: { query?: string; cursor?: string; limit?: number },
+    requestId: string
+  ) {
+    return this.assets.listManagedCollectionItems(collectionId, input, { requestId });
+  }
+
+  updateCollectionRetention(
+    collectionId: string,
+    retentionDays: number,
+    idempotencyKey: string,
+    requestId: string
+  ) {
+    return this.assets.updateCollectionRetention(collectionId, retentionDays, idempotencyKey, {
+      requestId
+    });
+  }
+
+  renameCollectionItem(
+    collectionId: string,
+    itemId: string,
+    displayName: string,
+    idempotencyKey: string,
+    requestId: string
+  ) {
+    return this.assets.renameManagedCollectionItem(
+      collectionId,
+      itemId,
+      displayName,
+      idempotencyKey,
+      { requestId }
+    );
+  }
+
+  setCollectionItemsRetention(
+    collectionId: string,
+    input: { itemIds: string[]; retentionExempt: boolean },
+    idempotencyKey: string,
+    requestId: string
+  ) {
+    return this.assets.setManagedCollectionItemsRetention(collectionId, input, idempotencyKey, {
+      requestId
+    });
+  }
+
+  deleteCollectionItems(
+    collectionId: string,
+    itemIds: string[],
+    idempotencyKey: string,
+    requestId: string
+  ) {
+    return this.assets.deleteManagedCollectionItems(collectionId, itemIds, idempotencyKey, {
+      requestId
+    });
+  }
+
+  issueCollectionItemTickets(collectionId: string, itemIds: string[], requestId: string) {
+    return this.assets.issueManagedContentTickets(collectionId, itemIds, { requestId });
+  }
+
   renameCollection(collectionId: string, name: string, idempotencyKey: string, requestId: string) {
     return this.assets.renameCollection(collectionId, name, idempotencyKey, { requestId });
   }
