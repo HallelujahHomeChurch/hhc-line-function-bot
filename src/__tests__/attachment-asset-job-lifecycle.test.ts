@@ -4,6 +4,7 @@ import type * as MediaSyncWorkerModule from "../media-sync/worker.js";
 import type * as AttachmentScanJobModule from "../tools/run-attachment-scan-job.js";
 
 const mocks = vi.hoisted(() => ({
+  createAssetApiClient: vi.fn(),
   complete: vi.fn(),
   postgresEnd: vi.fn(),
   receiveWork: vi.fn(),
@@ -48,7 +49,7 @@ vi.mock("../catalog/source-seeds.js", () => ({
 }));
 vi.mock("../clients/asset-api.js", () => ({
   assetAccessTokenScope: (audience: string) => `${audience}/.default`,
-  createAssetApiClient: vi.fn().mockReturnValue({})
+  createAssetApiClient: mocks.createAssetApiClient
 }));
 vi.mock("../clients/external-binary.js", () => ({
   createExternalBinaryClient: vi.fn().mockReturnValue({})
@@ -84,6 +85,7 @@ import { runAttachmentAssetJob } from "../tools/run-attachment-asset-job.js";
 describe("attachment asset job lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.createAssetApiClient.mockReturnValue({});
     mocks.complete.mockResolvedValue(undefined);
     mocks.postgresEnd.mockResolvedValue(undefined);
     mocks.receiveWork.mockResolvedValue({
@@ -119,5 +121,35 @@ describe("attachment asset job lifecycle", () => {
     expect(mocks.complete).toHaveBeenCalledTimes(1);
     expect(mocks.redisQuit).toHaveBeenCalledTimes(1);
     expect(mocks.postgresEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits only safe Asset rejection telemetry", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    mocks.createAssetApiClient.mockImplementation((options) => {
+      options.onRejection({
+        operationStage: "create_upload",
+        httpStatus: 403,
+        category: "authorization_rejected"
+      });
+      return {};
+    });
+
+    await runAttachmentAssetJob({
+      ASSET_API_AUDIENCE: "api://asset-api",
+      ASSET_API_URL: "https://tenant-private.example/blob-key-private",
+      ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/media-private-id",
+      AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
+    });
+
+    const serialized = write.mock.calls.map(([value]) => String(value)).join("");
+    expect(JSON.parse(serialized)).toEqual({
+      operationStage: "create_upload",
+      httpStatus: 403,
+      category: "authorization_rejected"
+    });
+    for (const fixture of ["tenant-private", "blob-key-private", "media-private-id"]) {
+      expect(serialized).not.toContain(fixture);
+    }
+    write.mockRestore();
   });
 });

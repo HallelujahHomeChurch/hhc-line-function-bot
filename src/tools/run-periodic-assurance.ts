@@ -17,7 +17,8 @@ import { runAssetLifecycleAssurance } from "../assurance/asset-lifecycle-probe.j
 import {
   assetAccessTokenScope,
   createAssetApiClient,
-  type AssetApiClient
+  type AssetApiClient,
+  type AssetApiRejectionTelemetry
 } from "../clients/asset-api.js";
 import { createGraphDriveClient, type CreateGraphDriveClientOptions } from "../clients/graph.js";
 import type { GraphConfig, GraphDriveClient } from "../types.js";
@@ -64,6 +65,7 @@ export interface PeriodicAssuranceAdapterFactories {
   createAsset(options: {
     baseUrl: string;
     getAccessToken: (signal?: AbortSignal) => Promise<string>;
+    onRejection: (telemetry: AssetApiRejectionTelemetry) => void;
   }): AssetApiClient;
 }
 
@@ -151,7 +153,8 @@ export function createPeriodicAssuranceDependencies(
       });
       if (!token?.token) throw new Error("periodic_assurance_asset_token_unavailable");
       return token.token;
-    }
+    },
+    onRejection: (telemetry) => process.stdout.write(`${JSON.stringify(telemetry)}\n`)
   });
 
   return {

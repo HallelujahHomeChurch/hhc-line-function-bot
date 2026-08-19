@@ -9,7 +9,8 @@ import {
   createAssetApiClient,
   isAssetAccessDeniedError,
   isTransientAssetApiError,
-  parseManagedCollectionItem
+  parseManagedCollectionItem,
+  type AssetApiRejectionTelemetry
 } from "../clients/asset-api.js";
 
 const tempDirectories: string[] = [];
@@ -21,6 +22,88 @@ afterEach(async () => {
 });
 
 describe("asset api client", () => {
+  it.each([
+    [401, "authorization_rejected"],
+    [403, "authorization_rejected"],
+    [429, "rate_limited"],
+    [422, "upstream_rejected"],
+    [503, "upstream_unavailable"]
+  ] as const)("reports a safe create-upload rejection for HTTP %i", async (status, category) => {
+    const telemetry: AssetApiRejectionTelemetry[] = [];
+    const fixtures = {
+      token: "asset-token-secret",
+      tenant: "tenant-private",
+      mediaId: "media-private-id",
+      fileName: "private-sermon.mp4",
+      blobKey: "blob-key-private",
+      identity: "identity-private"
+    };
+    const client = createAssetApiClient({
+      baseUrl: `https://${fixtures.tenant}.example/${fixtures.blobKey}`,
+      getAccessToken: async () => fixtures.token,
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ mediaId: fixtures.mediaId, fileName: fixtures.fileName }), {
+          status
+        })
+      ),
+      onRejection: (event) => telemetry.push(event)
+    });
+
+    await expect(
+      client.createUpload({
+        idempotencyKey: fixtures.identity,
+        ownerType: "line_message",
+        ownerId: fixtures.mediaId,
+        purpose: "resource",
+        fileName: fixtures.fileName,
+        mimeType: "video/mp4",
+        maxSizeBytes: 1
+      })
+    ).rejects.toThrow(`asset_api_${status}`);
+
+    expect(telemetry).toEqual([{ operationStage: "create_upload", httpStatus: status, category }]);
+    const serialized = JSON.stringify(telemetry);
+    for (const fixture of Object.values(fixtures)) expect(serialized).not.toContain(fixture);
+    expect(serialized).not.toContain("example");
+  });
+
+  it("reports a safe create-upload rejection for an unavailable network", async () => {
+    const telemetry: AssetApiRejectionTelemetry[] = [];
+    const fixtures = {
+      token: "asset-token-secret",
+      url: "https://tenant-private.example/blob-key-private",
+      mediaId: "media-private-id",
+      fileName: "private-sermon.mp4",
+      identity: "identity-private"
+    };
+    const client = createAssetApiClient({
+      baseUrl: fixtures.url,
+      getAccessToken: async () => fixtures.token,
+      fetcher: vi
+        .fn<typeof fetch>()
+        .mockRejectedValue(new Error(`${fixtures.mediaId}:${fixtures.fileName}`)),
+      onRejection: (event) => telemetry.push(event)
+    });
+
+    await expect(
+      client.createUpload({
+        idempotencyKey: fixtures.identity,
+        ownerType: "line_message",
+        ownerId: fixtures.mediaId,
+        purpose: "resource",
+        fileName: fixtures.fileName,
+        mimeType: "video/mp4",
+        maxSizeBytes: 1
+      })
+    ).rejects.toThrow("asset_api_unavailable");
+
+    expect(telemetry).toEqual([
+      { operationStage: "create_upload", httpStatus: 0, category: "upstream_unavailable" }
+    ]);
+    const serialized = JSON.stringify(telemetry);
+    for (const fixture of Object.values(fixtures)) expect(serialized).not.toContain(fixture);
+  });
+
   it("accepts only the exact safe managed collection item DTO", () => {
     const itemId = "550e8400e29b41d4a716446655440000";
     const item = {
