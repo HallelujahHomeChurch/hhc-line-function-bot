@@ -119,7 +119,8 @@ function store(): PostgresMediaSyncStore {
       code: "PLAIN-CODE",
       expiresAt: "2026-08-16T01:00:00.000Z"
     }),
-    disableBindingByCollection: vi.fn().mockResolvedValue(true)
+    beginCollectionDeletion: vi.fn().mockResolvedValue({ status: "started" }),
+    completeCollectionDeletion: vi.fn().mockResolvedValue(true)
   } as unknown as PostgresMediaSyncStore;
 }
 
@@ -180,7 +181,6 @@ const routeRequests = [
     url: "/api/line/media-sync/collections/collection-1/binding-code",
     payload: {}
   },
-  { method: "DELETE", url: "/api/line/media-sync/collections/collection-1/binding" },
   { method: "GET", url: "/api/line/media-sync/collections/collection-1/items" },
   {
     method: "PATCH",
@@ -572,11 +572,6 @@ describe("media sync management HTTP", () => {
         method: "POST",
         url: "/api/line/media-sync/collections/collection-1/binding-code",
         payload: { code: "chosen" }
-      },
-      {
-        method: "DELETE",
-        url: "/api/line/media-sync/collections/collection-1/binding",
-        payload: { unexpected: true }
       }
     ] as const;
     const { instance } = await app({});
@@ -648,7 +643,7 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
-  it("dispatches the exact eight routes and propagates request/idempotency identity", async () => {
+  it("dispatches the exact seven routes and propagates request/idempotency identity", async () => {
     const assets = asset();
     const mediaStore = store();
     const { instance } = await app({ assets, store: mediaStore });
@@ -677,14 +672,7 @@ describe("media sync management HTTP", () => {
         "acl-delete-1",
         200
       ],
-      ["POST", "/api/line/media-sync/collections/collection-1/binding-code", {}, "binding-1", 201],
-      [
-        "DELETE",
-        "/api/line/media-sync/collections/collection-1/binding",
-        undefined,
-        "unbind-1",
-        200
-      ]
+      ["POST", "/api/line/media-sync/collections/collection-1/binding-code", {}, "binding-1", 201]
     ] as const;
 
     for (const [method, url, payload, key, statusCode] of cases) {
@@ -713,6 +701,92 @@ describe("media sync management HTTP", () => {
       createdByHhcUserId: userId,
       idempotencyKey: "binding-1"
     });
+    await instance.close();
+  });
+
+  it("orders the durable fence before Asset deletion and binding release", async () => {
+    const assets = asset();
+    const mediaStore = store();
+    const { instance } = await app({ assets, store: mediaStore });
+
+    const response = await instance.inject({
+      method: "DELETE",
+      url: "/api/line/media-sync/collections/collection-1",
+      headers: { ...trustedHeaders, "idempotency-key": "browser-delete-1" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mediaStore.beginCollectionDeletion).toHaveBeenCalledWith({
+      profileName: "helper",
+      collectionId: "collection-1"
+    });
+    expect(assets.deleteCollection).toHaveBeenCalledWith(
+      "collection-1",
+      "media-sync-delete-collection:42b643ca77341fa608146921da51aac2223c49edf3ad34a72a7ff01a3330bef6",
+      { requestId: "request-1" }
+    );
+    expect(mediaStore.completeCollectionDeletion).toHaveBeenCalledWith({
+      profileName: "helper",
+      collectionId: "collection-1"
+    });
+    expect(mediaStore.beginCollectionDeletion.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(assets.deleteCollection).mock.invocationCallOrder[0]!
+    );
+    expect(vi.mocked(assets.deleteCollection).mock.invocationCallOrder[0]).toBeLessThan(
+      mediaStore.completeCollectionDeletion.mock.invocationCallOrder[0]!
+    );
+    await instance.close();
+  });
+
+  it("leaves the durable fence incomplete when Asset deletion fails", async () => {
+    const assets = asset();
+    vi.mocked(assets.deleteCollection).mockRejectedValue(new Error("asset_api_503"));
+    const mediaStore = store();
+    const { instance } = await app({ assets, store: mediaStore });
+
+    const response = await instance.inject({
+      method: "DELETE",
+      url: "/api/line/media-sync/collections/collection-1",
+      headers: { ...trustedHeaders, "idempotency-key": "browser-delete-1" }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(mediaStore.beginCollectionDeletion).toHaveBeenCalledOnce();
+    expect(mediaStore.completeCollectionDeletion).not.toHaveBeenCalled();
+    await instance.close();
+  });
+
+  it("resumes completion with a new browser key and one collection deletion identity", async () => {
+    const assets = asset();
+    const mediaStore = store();
+    mediaStore.beginCollectionDeletion = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "started" })
+      .mockResolvedValueOnce({ status: "replay" });
+    mediaStore.completeCollectionDeletion = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("postgres unavailable"))
+      .mockResolvedValueOnce(true);
+    const { instance } = await app({ assets, store: mediaStore });
+
+    const remove = (key: string) =>
+      instance.inject({
+        method: "DELETE",
+        url: "/api/line/media-sync/collections/collection-1",
+        headers: { ...trustedHeaders, "idempotency-key": key }
+      });
+    const first = await remove("browser-delete-1");
+    const replay = await remove("browser-delete-2");
+
+    expect(first.statusCode).toBe(503);
+    expect(replay.statusCode).toBe(200);
+    expect(mediaStore.beginCollectionDeletion).toHaveBeenCalledTimes(2);
+    expect(assets.deleteCollection).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(assets.deleteCollection).mock.calls.map((call) => call[1])).toEqual([
+      "media-sync-delete-collection:42b643ca77341fa608146921da51aac2223c49edf3ad34a72a7ff01a3330bef6",
+      "media-sync-delete-collection:42b643ca77341fa608146921da51aac2223c49edf3ad34a72a7ff01a3330bef6"
+    ]);
+    expect(mediaStore.completeCollectionDeletion).toHaveBeenCalledTimes(2);
     await instance.close();
   });
 
@@ -747,7 +821,8 @@ describe("media sync management HTTP", () => {
     ["GET", "/api/line/media-sync/collections/collection-1/acl"],
     ["PATCH", "/api/line/media-sync/collections/collection-1/acl/acl-1"],
     ["GET", "/api/line/media-sync/collections/collection-1/binding-code"],
-    ["POST", "/api/line/media-sync/collections/collection-1/binding"]
+    ["POST", "/api/line/media-sync/collections/collection-1/binding"],
+    ["DELETE", "/api/line/media-sync/collections/collection-1/binding"]
   ])("does not expose an unplanned %s route at %s", async (method, url) => {
     const accountClient = account();
     const { instance } = await app({ account: accountClient });

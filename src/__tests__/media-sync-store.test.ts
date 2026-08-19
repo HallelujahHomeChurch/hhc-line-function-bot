@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runMediaSyncMigrations } from "../media-sync/migrations.js";
@@ -17,6 +17,8 @@ describe("media sync migrations", () => {
     expect(sql).toContain("media_sync_bindings_active_collection_idx");
     expect(sql).toContain("request_key_hash");
     expect(sql).toContain("media_sync_binding_codes_request_fence_idx");
+    expect(sql).toContain("media_sync_collection_deletions");
+    expect(sql).toContain("collection_id text primary key");
     expect(sql).toContain("where disabled_at is null");
     expect(sql).toContain("source_key text primary key");
     expect(sql).toContain("work_id uuid");
@@ -65,6 +67,13 @@ describe("media sync binding-code issuance", () => {
         idempotencyKey: "   "
       })
     ).rejects.toThrow("media_sync_binding_code_idempotency_invalid");
+  });
+
+  it("does not expose standalone binding release mutations", () => {
+    const store = new PostgresMediaSyncStore({} as Pool);
+
+    expect(store).not.toHaveProperty("disableBindingByCollection");
+    expect(store).not.toHaveProperty("disableBinding");
   });
 });
 
@@ -487,52 +496,377 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await expect(store.findActiveBindingByCollection("collection-unique-a")).resolves.toMatchObject(
       { groupId: "group-unique-a" }
     );
-    await expect(store.disableBindingByCollection("collection-unique-a")).resolves.toBe(true);
-    const replacementCode = await store.createBindingCode({
-      profileName: "main",
-      collectionId: "collection-unique-a",
-      createdByHhcUserId: "manager",
-      idempotencyKey: "replacement-request"
-    });
-    await expect(
-      store.bindWithCode({
-        profileName: "main",
-        code: issuedCode(replacementCode),
-        groupId: "group-unique-b",
-        groupDisplayName: "Rebound",
-        boundByLineUserId: "line-user"
-      })
-    ).resolves.toMatchObject({ status: "bound", binding: { groupId: "group-unique-b" } });
   });
 
-  it("disables only the exact profile and group binding", async () => {
-    const store = new PostgresMediaSyncStore(left);
-    await bind(store, "collection-leave-helper", "group-leave");
-    const mainCode = await store.createBindingCode({
-      profileName: "main",
-      collectionId: "collection-leave-main",
-      createdByHhcUserId: "manager",
-      idempotencyKey: "leave-main"
-    });
-    await store.bindWithCode({
-      profileName: "main",
-      code: issuedCode(mainCode),
-      groupId: "group-leave",
-      groupDisplayName: "Main group"
-    });
+  it("keeps collection binding uniqueness until deletion completes", async () => {
+    const now = new Date("2099-01-01T00:00:00.000Z");
+    const completedAt = new Date("2099-01-01T00:01:00.000Z");
+    const store = new PostgresMediaSyncStore(left, { now: () => now });
+    await bind(store, "collection-delete-lifecycle", "group-delete-lifecycle");
+    await left.query(
+      `insert into media_sync_binding_codes
+        (id, profile_name, collection_id, code_hash, created_by_hhc_user_id, expires_at)
+       values ($1, 'helper', 'collection-delete-lifecycle', $2, 'manager', $3)`,
+      [randomUUID(), "a".repeat(64), new Date("2099-01-01T01:00:00.000Z")]
+    );
 
     await expect(
-      store.disableBinding({ profileName: "helper", groupId: "group-leave" })
+      store.beginCollectionDeletion({
+        profileName: "helper",
+        collectionId: "collection-delete-lifecycle",
+        now
+      })
+    ).resolves.toEqual({ status: "started" });
+    await expect(
+      store.beginCollectionDeletion({
+        profileName: "helper",
+        collectionId: "collection-delete-lifecycle",
+        now
+      })
+    ).resolves.toEqual({ status: "replay" });
+
+    const begun = await left.query<{
+      disabled_at: Date | null;
+      expires_at: Date;
+      completed_at: Date | null;
+    }>(
+      `select binding.disabled_at, code.expires_at, deletion.completed_at
+       from media_sync_bindings binding
+       join media_sync_binding_codes code using (collection_id)
+       join media_sync_collection_deletions deletion using (collection_id)
+       where binding.collection_id='collection-delete-lifecycle' and code.consumed_at is null`
+    );
+    expect(begun.rows[0]).toEqual({ disabled_at: null, expires_at: now, completed_at: null });
+    const replacementCode = await store.createBindingCode({
+      profileName: "helper",
+      collectionId: "collection-delete-replacement",
+      createdByHhcUserId: "manager",
+      idempotencyKey: "replacement-request",
+      now
+    });
+    const replacementInput = {
+      profileName: "helper",
+      code: issuedCode(replacementCode),
+      groupId: "group-delete-lifecycle",
+      groupDisplayName: "Replacement",
+      boundByLineUserId: "line-user",
+      now
+    };
+    await expect(store.bindWithCode(replacementInput)).resolves.toEqual({
+      status: "group_already_bound"
+    });
+    await expect(
+      left.query(
+        `insert into media_sync_bindings
+          (id, profile_name, group_id, collection_id, group_display_name,
+           binding_code_created_by_hhc_user_id, bound_at)
+         values ($1, 'main', 'group-delete-conflict', 'collection-delete-lifecycle',
+                 'Conflict', 'manager', $2)`,
+        [randomUUID(), now]
+      )
+    ).rejects.toMatchObject({ constraint: "media_sync_bindings_active_collection_idx" });
+
+    await expect(
+      store.completeCollectionDeletion({
+        profileName: "helper",
+        collectionId: "collection-delete-lifecycle",
+        now: completedAt
+      })
     ).resolves.toBe(true);
     await expect(
-      store.disableBinding({ profileName: "helper", groupId: "group-leave" })
+      store.completeCollectionDeletion({
+        profileName: "helper",
+        collectionId: "collection-delete-lifecycle",
+        now: completedAt
+      })
     ).resolves.toBe(false);
     await expect(
-      store.findActiveBinding({ profileName: "helper", groupId: "group-leave" })
-    ).resolves.toBeUndefined();
+      store.beginCollectionDeletion({
+        profileName: "helper",
+        collectionId: "collection-delete-lifecycle"
+      })
+    ).resolves.toEqual({ status: "completed" });
     await expect(
-      store.findActiveBinding({ profileName: "main", groupId: "group-leave" })
-    ).resolves.toMatchObject({ collectionId: "collection-leave-main" });
+      store.createBindingCode({
+        profileName: "helper",
+        collectionId: "collection-delete-lifecycle",
+        createdByHhcUserId: "manager",
+        idempotencyKey: "deleted-collection-request",
+        now: completedAt
+      })
+    ).rejects.toThrow("media_sync_collection_deleted");
+    await expect(
+      store.bindWithCode({ ...replacementInput, now: completedAt })
+    ).resolves.toMatchObject({
+      status: "bound",
+      binding: {
+        groupId: "group-delete-lifecycle",
+        collectionId: "collection-delete-replacement"
+      }
+    });
+
+    const completed = await left.query<{ disabled_at: Date; completed_at: Date }>(
+      `select binding.disabled_at, deletion.completed_at
+       from media_sync_bindings binding
+       join media_sync_collection_deletions deletion using (collection_id)
+       where binding.collection_id='collection-delete-lifecycle'`
+    );
+    expect(completed.rows[0]).toEqual({ disabled_at: completedAt, completed_at: completedAt });
+  });
+
+  it("rejects binding, intake, and publication while collection deletion is fenced", async () => {
+    const now = new Date("2099-02-01T00:00:00.000Z");
+    const store = new PostgresMediaSyncStore(left, { now: () => now });
+    const collectionId = "collection-delete-fence";
+    const groupId = "group-delete-fence";
+    await bind(store, collectionId, groupId);
+    const input = { ...ingest("delete-fence"), collectionId, groupId };
+    const created = await store.createIngest(input, {
+      manualIntent: { destinationId: "pending-delete-fence", requesterUserId: "line-user" }
+    });
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await store.confirmManualPublication({
+      sourceKey: input.sourceKey,
+      destinationId: "pending-delete-fence",
+      requesterUserId: "line-user",
+      jobId: "job-delete-fence",
+      manualSourceKey: "ppt_slides",
+      manualItemKind: "ppt_slide",
+      manualDomain: "presentation",
+      manualTitle: "DeleteFence"
+    });
+    await completeOtherOutbox(left, input.sourceKey);
+    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000, now }))[0]!;
+    await store.markOutboxDispatched({
+      workId: dispatch.workId,
+      operation: "intake",
+      expectedClaimedUntil: dispatch.claimedUntil!
+    });
+    const claim = await store.claimWork({
+      workId: dispatch.workId,
+      operation: "intake",
+      leaseMs: 60_000,
+      now: new Date("2099-02-01T00:00:01.000Z")
+    });
+    if (typeof claim === "string" || !claim) throw new Error("expected intake claim");
+    const code = "DELETE-FENCE-CODE";
+    await left.query(
+      `insert into media_sync_binding_codes
+        (id, profile_name, collection_id, code_hash, created_by_hhc_user_id, expires_at)
+       values ($1, 'helper', $2, $3, 'manager', $4)`,
+      [
+        randomUUID(),
+        collectionId,
+        createHash("sha256").update(code).digest("hex"),
+        new Date("2099-02-01T01:00:00.000Z")
+      ]
+    );
+
+    await store.beginCollectionDeletion({ profileName: "helper", collectionId, now });
+
+    await expect(
+      store.findActiveBinding({ profileName: "helper", groupId })
+    ).resolves.toBeUndefined();
+    await expect(store.findActiveBindingByCollection(collectionId)).resolves.toBeUndefined();
+    await expect(
+      store.createBindingCode({
+        profileName: "helper",
+        collectionId,
+        createdByHhcUserId: "manager",
+        idempotencyKey: "after-delete"
+      })
+    ).rejects.toThrow("media_sync_collection_deleted");
+    await expect(
+      store.bindWithCode({
+        profileName: "helper",
+        code,
+        groupId: "group-delete-fence-new",
+        groupDisplayName: "New"
+      })
+    ).resolves.toEqual({ status: "invalid_code" });
+    await expect(
+      store.createIngest({ ...input, sourceKey: `${input.sourceKey}-after-delete` })
+    ).rejects.toThrow("media_sync_collection_deleted");
+    await expect(
+      store.persistCompletedAsset({
+        workId: dispatch.workId,
+        expectedClaimedUntil: claim.claimedUntil!,
+        assetId: "asset-delete-fence",
+        assetEtag: "etag-delete-fence",
+        sizeBytes: 1,
+        checksumSha256: "b".repeat(64)
+      })
+    ).resolves.toBe(false);
+    await expect(
+      store.finalizeCollectionPublication({
+        workId: dispatch.workId,
+        expectedClaimedUntil: claim.claimedUntil!,
+        collectionId,
+        occurrenceId: "occurrence-delete-fence"
+      })
+    ).resolves.toBe(false);
+    await expect(
+      store.finalizeManualPublication({
+        workId: dispatch.workId,
+        expectedClaimedUntil: claim.claimedUntil!,
+        destinationId: "pending-delete-fence",
+        resourceId: "resource-delete-fence"
+      })
+    ).resolves.toBe(false);
+    await expect(
+      store.completeClaimedWork({
+        workId: dispatch.workId,
+        expectedClaimedUntil: claim.claimedUntil!
+      })
+    ).resolves.toBe(false);
+  });
+
+  it.each([
+    "persistCompletedAsset",
+    "finalizeCollectionPublication",
+    "finalizeManualPublication",
+    "completeClaimedWork"
+  ] as const)("serializes %s behind collection deletion", async (operation) => {
+    const suffix = `delete-race-${operation}`;
+    const collectionId = `collection-${suffix}`;
+    const groupId = `group-${suffix}`;
+    const sourceKey = `line:helper:message-${suffix}`;
+    const now = new Date("2099-03-01T00:00:00.000Z");
+    const setup = new PostgresMediaSyncStore(left, { now: () => now });
+    const pausedBegin = pausePoolAfterInsert(left);
+    const deletion = new PostgresMediaSyncStore(pausedBegin.pool, { now: () => now });
+    const writer = new PostgresMediaSyncStore(right, { now: () => now });
+    await bind(setup, collectionId, groupId);
+    const input = { ...ingest(suffix), sourceKey, collectionId, groupId };
+    const manual = operation === "finalizeManualPublication";
+    const created = await setup.createIngest(
+      input,
+      manual
+        ? {
+            manualIntent: {
+              destinationId: `pending-${suffix}`,
+              requesterUserId: "line-user"
+            }
+          }
+        : undefined
+    );
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    if (manual) {
+      await setup.confirmManualPublication({
+        sourceKey,
+        destinationId: `pending-${suffix}`,
+        requesterUserId: "line-user",
+        jobId: `job-${suffix}`,
+        manualSourceKey: "ppt_slides",
+        manualItemKind: "ppt_slide",
+        manualDomain: "presentation",
+        manualTitle: suffix
+      });
+    }
+    await completeOtherOutbox(left, sourceKey);
+    const dispatch = (await setup.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000, now }))[0]!;
+    await setup.markOutboxDispatched({
+      workId: dispatch.workId,
+      operation: "intake",
+      expectedClaimedUntil: dispatch.claimedUntil!
+    });
+    const claim = await setup.claimWork({
+      workId: dispatch.workId,
+      operation: "intake",
+      leaseMs: 60_000,
+      now: new Date("2099-03-01T00:00:01.000Z")
+    });
+    if (typeof claim === "string" || !claim) throw new Error("expected intake claim");
+    if (operation === "completeClaimedWork") {
+      await expect(
+        setup.finalizeCollectionPublication({
+          workId: dispatch.workId,
+          expectedClaimedUntil: claim.claimedUntil!,
+          collectionId,
+          occurrenceId: `occurrence-${suffix}`
+        })
+      ).resolves.toBe(true);
+    }
+
+    const begun = deletion.beginCollectionDeletion({ profileName: "helper", collectionId, now });
+    const blocker = await pausedBegin.reached;
+    try {
+      let settled = false;
+      let mutation: Promise<boolean>;
+      switch (operation) {
+        case "persistCompletedAsset":
+          mutation = writer.persistCompletedAsset({
+            workId: dispatch.workId,
+            expectedClaimedUntil: claim.claimedUntil!,
+            assetId: `asset-${suffix}`,
+            assetEtag: `etag-${suffix}`,
+            sizeBytes: 1,
+            checksumSha256: "c".repeat(64)
+          });
+          break;
+        case "finalizeCollectionPublication":
+          mutation = writer.finalizeCollectionPublication({
+            workId: dispatch.workId,
+            expectedClaimedUntil: claim.claimedUntil!,
+            collectionId,
+            occurrenceId: `occurrence-${suffix}`
+          });
+          break;
+        case "finalizeManualPublication":
+          mutation = writer.finalizeManualPublication({
+            workId: dispatch.workId,
+            expectedClaimedUntil: claim.claimedUntil!,
+            destinationId: `pending-${suffix}`,
+            resourceId: `resource-${suffix}`
+          });
+          break;
+        case "completeClaimedWork":
+          mutation = writer.completeClaimedWork({
+            workId: dispatch.workId,
+            expectedClaimedUntil: claim.claimedUntil!
+          });
+          break;
+      }
+      const result = mutation.then((value) => {
+        settled = true;
+        return value;
+      });
+      await waitForAdvisoryWaiter(blocker, () => settled);
+      pausedBegin.resume();
+
+      await expect(begun).resolves.toEqual({ status: "started" });
+      await expect(result).resolves.toBe(false);
+      const state = (
+        await left.query<{
+          asset_id: string | null;
+          ingest_state: string;
+          publication_state: string;
+          target_id: string | null;
+          completed_at: Date | null;
+        }>(
+          `select ingest.asset_id, ingest.state ingest_state,
+                  publication.state publication_state, publication.target_id,
+                  outbox.completed_at
+           from media_sync_ingests ingest
+           join media_sync_publications publication using (source_key)
+           join media_sync_outbox outbox on outbox.source_key=ingest.source_key
+             and outbox.operation='intake'
+           where ingest.source_key=$1 and publication.publication_type=$2`,
+          [sourceKey, manual ? "manual" : "collection"]
+        )
+      ).rows[0];
+      expect(state).toMatchObject({
+        asset_id: null,
+        ingest_state: "pending",
+        completed_at: null,
+        ...(operation === "completeClaimedWork"
+          ? { publication_state: "published", target_id: `occurrence-${suffix}` }
+          : { publication_state: "pending", target_id: null })
+      });
+    } finally {
+      pausedBegin.resume();
+      await begun.catch(() => undefined);
+    }
   });
 
   it("rolls code consumption back when binding insertion fails", async () => {
@@ -1225,7 +1559,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     });
     if (created.tombstoned) throw new Error("unexpected tombstone");
     await completeOtherOutbox(left, input.sourceKey);
-    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    const now = await databaseNow(left);
+    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000, now }))[0]!;
     await store.markOutboxDispatched({
       workId: dispatch.workId,
       operation: "intake",
@@ -1234,7 +1569,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const firstLease = await store.claimWork({
       workId: dispatch.workId,
       operation: "intake",
-      leaseMs: 60_000
+      leaseMs: 60_000,
+      now
     });
     await store.finalizeCollectionPublication({
       workId: dispatch.workId,
@@ -1313,7 +1649,14 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       manualDomain: "presentation",
       manualTitle: "SundayDeck"
     });
-    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    const now = await databaseNow(left);
+    const dispatch = (
+      await store.claimOutboxForDispatch({
+        limit: 1,
+        leaseMs: 60_000,
+        now
+      })
+    )[0]!;
     await store.markOutboxDispatched({
       workId: dispatch.workId,
       operation: "intake",
@@ -1322,7 +1665,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const lease = await store.claimWork({
       workId: dispatch.workId,
       operation: "intake",
-      leaseMs: 60_000
+      leaseMs: 60_000,
+      now
     });
     await store.tombstoneSource(input.sourceKey);
 
@@ -1701,6 +2045,83 @@ async function completeOtherOutbox(pool: Pool, sourceKey: string): Promise<void>
     "update media_sync_outbox set completed_at=now() where source_key<>$1 and completed_at is null",
     [sourceKey]
   );
+}
+
+async function databaseNow(pool: Pool): Promise<Date> {
+  return (
+    await pool.query<{ now: Date }>(
+      "select date_trunc('milliseconds', clock_timestamp()) + interval '1 millisecond' now"
+    )
+  ).rows[0]!.now;
+}
+
+function pausePoolAfterInsert(pool: Pool): {
+  pool: Pool;
+  reached: Promise<PoolClient>;
+  resume(): void;
+} {
+  let reach!: (client: PoolClient) => void;
+  let resume!: () => void;
+  let paused = false;
+  const reached = new Promise<PoolClient>((resolve) => {
+    reach = resolve;
+  });
+  const resumed = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const wrapped = new Proxy(pool, {
+    get(target, property) {
+      if (property === "connect") {
+        return async () => {
+          const client = await target.connect();
+          const query = (async (sql: string, values?: unknown[]) => {
+            const result = await client.query(sql, values);
+            if (!paused && result.command === "INSERT") {
+              paused = true;
+              reach(client);
+              await resumed;
+            }
+            return result;
+          }) as PoolClient["query"];
+          return new Proxy(client, {
+            get(clientTarget, clientProperty) {
+              if (clientProperty === "query") return query;
+              const value = Reflect.get(clientTarget, clientProperty, clientTarget);
+              return typeof value === "function" ? value.bind(clientTarget) : value;
+            }
+          });
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }
+  });
+  return { pool: wrapped, reached, resume };
+}
+
+async function waitForAdvisoryWaiter(blocker: PoolClient, settled: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const waiting = (
+      await blocker.query<{ waiting: boolean }>(`
+        select exists (
+          select 1
+          from pg_locks held
+          join pg_locks waiting
+            on waiting.locktype=held.locktype
+           and waiting.database is not distinct from held.database
+           and waiting.classid is not distinct from held.classid
+           and waiting.objid is not distinct from held.objid
+           and waiting.objsubid is not distinct from held.objsubid
+          where held.pid=pg_backend_pid() and held.locktype='advisory'
+            and held.granted and not waiting.granted
+        ) waiting
+      `)
+    ).rows[0]?.waiting;
+    if (waiting) return;
+    if (settled()) throw new Error("media_sync_terminal_write_bypassed_collection_lock");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("media_sync_test_collection_lock_waiter_missing");
 }
 
 async function waitForLeaseExpiry(pool: Pool, claimedUntil: string): Promise<void> {

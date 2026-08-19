@@ -355,18 +355,6 @@ export function registerMediaSyncRoutes(
       );
     }
   );
-
-  app.delete<{ Params: { collectionId: string } }>(
-    "/api/line/media-sync/collections/:collectionId/binding",
-    { preHandler: authorize },
-    async (request, reply) => {
-      const key = idempotencyKey(request);
-      if (!validOpaqueId(request.params.collectionId) || !key || !hasNoBody(request.body)) {
-        return sendError(reply, 400, "invalid_request");
-      }
-      return run(reply, () => deps.service.unbind(request.params.collectionId));
-    }
-  );
 }
 
 function sameToken(got: string | undefined, want: string): boolean {

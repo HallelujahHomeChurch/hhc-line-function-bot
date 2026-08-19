@@ -500,6 +500,76 @@ describe("media sync Asset and collection stage", () => {
     });
   });
 
+  it("settles an Asset created before the collection deletion fence without an active item", async () => {
+    const fixture = cleanAssetFixture();
+    let tombstoned = false;
+    let assetActive = true;
+    let softDeleteAttempts = 0;
+    const activeCollectionItems: string[] = [];
+    const rejectingAssets = createAssetApiClient({
+      baseUrl: "https://asset.internal",
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 409 }))
+    });
+    fixture.store.claimWork.mockImplementation(async ({ operation }) => {
+      if (operation === "intake") return tombstoned ? "terminal" : fixture.claim;
+      return fixture.claim;
+    });
+    fixture.store.tombstoneClaimedWorkForCleanup.mockImplementation(async () => {
+      tombstoned = true;
+      fixture.work.ingest.state = "tombstoned";
+      return true;
+    });
+    fixture.assets.get
+      .mockResolvedValueOnce(
+        asset({
+          scanStatus: "clean",
+          scanSignatureVersion: "daily-20260816",
+          processingStatus: "ready"
+        })
+      )
+      .mockResolvedValueOnce(
+        asset({
+          ownerService: "hhc-line-function-bot",
+          ownerType: "media_sync_ingest",
+          ownerId: "work-opaque-1"
+        })
+      );
+    fixture.assets.addCollectionItem.mockImplementation(async (...args) => {
+      const mutation = await rejectingAssets.addCollectionItem(...args);
+      activeCollectionItems.push(mutation.item.id);
+      return mutation;
+    });
+    fixture.assets.softDelete.mockImplementation(async () => {
+      softDeleteAttempts += 1;
+      if (softDeleteAttempts === 1) throw new Error("asset_api_503");
+      assetActive = false;
+    });
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "permanent_failure",
+      reason: "asset_policy_rejected"
+    });
+    expect(fixture.assets.softDelete).toHaveBeenNthCalledWith(1, "asset-1");
+    expect(fixture.store.rememberOwnedAsset).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      assetId: "asset-1",
+      assetEtag: "etag-1"
+    });
+    expect(fixture.store.tombstoneClaimedWorkForCleanup).toHaveBeenCalledOnce();
+    expect(fixture.store.finalizeCollectionPublication).not.toHaveBeenCalled();
+    expect(activeCollectionItems).toEqual([]);
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "completed"
+    });
+    expect(fixture.assets.softDelete).toHaveBeenNthCalledWith(2, "asset-1", {
+      signal: undefined
+    });
+    expect(fixture.store.completeDeleteWork).toHaveBeenCalledOnce();
+    expect(assetActive).toBe(false);
+    expect(activeCollectionItems).toEqual([]);
+  });
+
   it("compensates the actual occurrence when the finalize lease/tombstone fence rejects it", async () => {
     const fixture = cleanAssetFixture();
     fixture.store.finalizeCollectionPublication.mockResolvedValue(false);
@@ -1065,6 +1135,7 @@ function createAssetFixture() {
       return true;
     }),
     completeClaimedWork: vi.fn().mockResolvedValue(true),
+    completeDeleteWork: vi.fn().mockResolvedValue(true),
     tombstoneClaimedWorkForCleanup: vi.fn().mockResolvedValue(true),
     rememberExternalHandle: vi.fn().mockResolvedValue(true),
     rememberOwnedAsset: vi.fn().mockResolvedValue(true)

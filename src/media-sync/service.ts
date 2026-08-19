@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   AssetApiClient,
   CollectionSubjectType,
@@ -131,9 +133,14 @@ export class MediaSyncManagementService {
     return this.assets.renameCollection(collectionId, name, idempotencyKey, { requestId });
   }
 
-  async deleteCollection(collectionId: string, idempotencyKey: string, requestId: string) {
-    const result = await this.assets.deleteCollection(collectionId, idempotencyKey, { requestId });
-    await this.store.disableBindingByCollection(collectionId);
+  async deleteCollection(collectionId: string, _idempotencyKey: string, requestId: string) {
+    await this.store.beginCollectionDeletion({ profileName: "helper", collectionId });
+    const result = await this.assets.deleteCollection(
+      collectionId,
+      `media-sync-delete-collection:${createHash("sha256").update(collectionId).digest("hex")}`,
+      { requestId }
+    );
+    await this.store.completeCollectionDeletion({ profileName: "helper", collectionId });
     return result;
   }
 
@@ -181,9 +188,5 @@ export class MediaSyncManagementService {
       throw new MediaSyncManagementError("collection_bound");
     }
     return { command: `/media-sync ${issued.code}`, expiresAt: issued.expiresAt };
-  }
-
-  async unbind(collectionId: string): Promise<{ unbound: boolean }> {
-    return { unbound: await this.store.disableBindingByCollection(collectionId) };
   }
 }
