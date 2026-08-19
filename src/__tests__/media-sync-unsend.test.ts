@@ -62,23 +62,67 @@ describe("LINE media-sync lifecycle", () => {
     expect(findActiveBinding).not.toHaveBeenCalled();
   });
 
-  it("disables only the exact helper group binding on leave", async () => {
-    const disableBinding = vi.fn().mockResolvedValue(true);
+  it("preserves the helper binding across leave and rejoin", async () => {
+    let bindingActive = true;
+    const disableBinding = vi.fn(async () => {
+      bindingActive = false;
+      return true;
+    });
     const tombstoneSource = vi.fn();
+    const findActiveBinding = vi.fn(async () =>
+      bindingActive ? { collectionId: "collection-1" } : undefined
+    );
+    const createIngest = vi.fn().mockResolvedValue({
+      created: true,
+      ingest: { workId: "work-after-rejoin" }
+    });
     const app = createTestApp(config(), {
+      accessStore: new InMemoryAccessStore({
+        principals: [
+          {
+            id: "group-rejoin",
+            profileName: "helper",
+            type: "group",
+            principalId: "G-leaving",
+            createdAt: "2026-08-16T00:00:00.000Z",
+            createdBy: "test"
+          }
+        ]
+      }),
       mediaSyncStore: {
         disableBinding,
-        tombstoneSource
+        tombstoneSource,
+        findActiveBinding,
+        createIngest
       } as unknown as PostgresMediaSyncStore
     });
 
-    const response = await inject(app, "/api/line/webhook/helper", "helper-secret", {
+    const leave = await inject(app, "/api/line/webhook/helper", "helper-secret", {
       type: "leave",
       source: { type: "group", groupId: "G-leaving" }
     });
+    const rejoin = await inject(app, "/api/line/webhook/helper", "helper-secret", {
+      type: "join",
+      source: { type: "group", groupId: "G-leaving" }
+    });
+    const media = await inject(app, "/api/line/webhook/helper", "helper-secret", {
+      type: "message",
+      webhookEventId: "event-after-rejoin",
+      source: { type: "group", groupId: "G-leaving", userId: "U-rejoining" },
+      message: {
+        id: "message-after-rejoin",
+        type: "image",
+        contentProvider: { type: "line" }
+      }
+    });
 
-    expect(response.statusCode).toBe(200);
-    expect(disableBinding).toHaveBeenCalledWith({ profileName: "helper", groupId: "G-leaving" });
+    expect(leave.statusCode).toBe(200);
+    expect(rejoin.statusCode).toBe(200);
+    expect(media.statusCode).toBe(200);
+    expect(disableBinding).not.toHaveBeenCalled();
+    expect(createIngest).toHaveBeenCalledWith(
+      expect.objectContaining({ groupId: "G-leaving", collectionId: "collection-1" })
+    );
     expect(tombstoneSource).not.toHaveBeenCalled();
   });
 

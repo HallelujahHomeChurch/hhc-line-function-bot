@@ -1,8 +1,7 @@
 import type { PostgresMediaSyncStore } from "./store.js";
 import type { BotProfileConfig, LineEvent } from "../types.js";
 
-export type MediaSyncLifecycleAction =
-  { type: "unsend"; sourceKey: string } | { type: "leave"; profileName: string; groupId: string };
+export type MediaSyncLifecycleAction = { type: "unsend"; sourceKey: string };
 
 export function mediaSyncLifecycleAction(
   profile: BotProfileConfig,
@@ -15,9 +14,6 @@ export function mediaSyncLifecycleAction(
   ) {
     return undefined;
   }
-  if (event.type === "leave") {
-    return { type: "leave", profileName: profile.name, groupId: event.source.groupId };
-  }
   if (event.type !== "unsend" || !boundedOpaque(event.unsend?.messageId)) return undefined;
   return { type: "unsend", sourceKey: mediaSyncSourceKey(profile.name, event.unsend.messageId) };
 }
@@ -26,11 +22,7 @@ export async function applyMediaSyncLifecycle(
   action: MediaSyncLifecycleAction,
   store: PostgresMediaSyncStore
 ): Promise<void> {
-  if (action.type === "unsend") {
-    await store.tombstoneSource(action.sourceKey);
-    return;
-  }
-  await store.disableBinding({ profileName: action.profileName, groupId: action.groupId });
+  await store.tombstoneSource(action.sourceKey);
 }
 
 export function mediaSyncSourceKey(profileName: string, messageId: string): string {
