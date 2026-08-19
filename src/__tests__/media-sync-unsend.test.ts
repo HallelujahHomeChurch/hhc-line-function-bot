@@ -63,15 +63,8 @@ describe("LINE media-sync lifecycle", () => {
   });
 
   it("preserves the helper binding across leave and rejoin", async () => {
-    let bindingActive = true;
-    const disableBinding = vi.fn(async () => {
-      bindingActive = false;
-      return true;
-    });
     const tombstoneSource = vi.fn();
-    const findActiveBinding = vi.fn(async () =>
-      bindingActive ? { collectionId: "collection-1" } : undefined
-    );
+    const findActiveBinding = vi.fn().mockResolvedValue({ collectionId: "collection-1" });
     const createIngest = vi.fn().mockResolvedValue({
       created: true,
       ingest: { workId: "work-after-rejoin" }
@@ -90,7 +83,6 @@ describe("LINE media-sync lifecycle", () => {
         ]
       }),
       mediaSyncStore: {
-        disableBinding,
         tombstoneSource,
         findActiveBinding,
         createIngest
@@ -119,7 +111,6 @@ describe("LINE media-sync lifecycle", () => {
     expect(leave.statusCode).toBe(200);
     expect(rejoin.statusCode).toBe(200);
     expect(media.statusCode).toBe(200);
-    expect(disableBinding).not.toHaveBeenCalled();
     expect(createIngest).toHaveBeenCalledWith(
       expect.objectContaining({ groupId: "G-leaving", collectionId: "collection-1" })
     );
@@ -177,11 +168,9 @@ describe("LINE media-sync lifecycle", () => {
     "ignores %s lifecycle input without touching media state",
     async (_case, url, secret, event) => {
       const tombstoneSource = vi.fn();
-      const disableBinding = vi.fn();
       const app = createTestApp(config(), {
         mediaSyncStore: {
-          tombstoneSource,
-          disableBinding
+          tombstoneSource
         } as unknown as PostgresMediaSyncStore
       });
 
@@ -189,7 +178,6 @@ describe("LINE media-sync lifecycle", () => {
 
       expect(response.statusCode).toBe(200);
       expect(tombstoneSource).not.toHaveBeenCalled();
-      expect(disableBinding).not.toHaveBeenCalled();
     }
   );
 

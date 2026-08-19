@@ -68,6 +68,13 @@ describe("media sync binding-code issuance", () => {
       })
     ).rejects.toThrow("media_sync_binding_code_idempotency_invalid");
   });
+
+  it("does not expose standalone binding release mutations", () => {
+    const store = new PostgresMediaSyncStore({} as Pool);
+
+    expect(store).not.toHaveProperty("disableBindingByCollection");
+    expect(store).not.toHaveProperty("disableBinding");
+  });
 });
 
 const databaseUrl = process.env.KERNEL_POSTGRES_URL?.trim();
@@ -489,52 +496,6 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await expect(store.findActiveBindingByCollection("collection-unique-a")).resolves.toMatchObject(
       { groupId: "group-unique-a" }
     );
-    await expect(store.disableBindingByCollection("collection-unique-a")).resolves.toBe(true);
-    const replacementCode = await store.createBindingCode({
-      profileName: "main",
-      collectionId: "collection-unique-a",
-      createdByHhcUserId: "manager",
-      idempotencyKey: "replacement-request"
-    });
-    await expect(
-      store.bindWithCode({
-        profileName: "main",
-        code: issuedCode(replacementCode),
-        groupId: "group-unique-b",
-        groupDisplayName: "Rebound",
-        boundByLineUserId: "line-user"
-      })
-    ).resolves.toMatchObject({ status: "bound", binding: { groupId: "group-unique-b" } });
-  });
-
-  it("disables only the exact profile and group binding", async () => {
-    const store = new PostgresMediaSyncStore(left);
-    await bind(store, "collection-leave-helper", "group-leave");
-    const mainCode = await store.createBindingCode({
-      profileName: "main",
-      collectionId: "collection-leave-main",
-      createdByHhcUserId: "manager",
-      idempotencyKey: "leave-main"
-    });
-    await store.bindWithCode({
-      profileName: "main",
-      code: issuedCode(mainCode),
-      groupId: "group-leave",
-      groupDisplayName: "Main group"
-    });
-
-    await expect(
-      store.disableBinding({ profileName: "helper", groupId: "group-leave" })
-    ).resolves.toBe(true);
-    await expect(
-      store.disableBinding({ profileName: "helper", groupId: "group-leave" })
-    ).resolves.toBe(false);
-    await expect(
-      store.findActiveBinding({ profileName: "helper", groupId: "group-leave" })
-    ).resolves.toBeUndefined();
-    await expect(
-      store.findActiveBinding({ profileName: "main", groupId: "group-leave" })
-    ).resolves.toMatchObject({ collectionId: "collection-leave-main" });
   });
 
   it("keeps collection binding uniqueness until deletion completes", async () => {
@@ -576,6 +537,24 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
        where binding.collection_id='collection-delete-lifecycle' and code.consumed_at is null`
     );
     expect(begun.rows[0]).toEqual({ disabled_at: null, expires_at: now, completed_at: null });
+    const replacementCode = await store.createBindingCode({
+      profileName: "helper",
+      collectionId: "collection-delete-replacement",
+      createdByHhcUserId: "manager",
+      idempotencyKey: "replacement-request",
+      now
+    });
+    const replacementInput = {
+      profileName: "helper",
+      code: issuedCode(replacementCode),
+      groupId: "group-delete-lifecycle",
+      groupDisplayName: "Replacement",
+      boundByLineUserId: "line-user",
+      now
+    };
+    await expect(store.bindWithCode(replacementInput)).resolves.toEqual({
+      status: "group_already_bound"
+    });
     await expect(
       left.query(
         `insert into media_sync_bindings
@@ -607,6 +586,24 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
         collectionId: "collection-delete-lifecycle"
       })
     ).resolves.toEqual({ status: "completed" });
+    await expect(
+      store.createBindingCode({
+        profileName: "helper",
+        collectionId: "collection-delete-lifecycle",
+        createdByHhcUserId: "manager",
+        idempotencyKey: "deleted-collection-request",
+        now: completedAt
+      })
+    ).rejects.toThrow("media_sync_collection_deleted");
+    await expect(
+      store.bindWithCode({ ...replacementInput, now: completedAt })
+    ).resolves.toMatchObject({
+      status: "bound",
+      binding: {
+        groupId: "group-delete-lifecycle",
+        collectionId: "collection-delete-replacement"
+      }
+    });
 
     const completed = await left.query<{ disabled_at: Date; completed_at: Date }>(
       `select binding.disabled_at, deletion.completed_at

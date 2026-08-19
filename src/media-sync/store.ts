@@ -320,30 +320,6 @@ export class PostgresMediaSyncStore {
     return result.rows[0] ? { expiresAt: timestamp(result.rows[0].expires_at) } : undefined;
   }
 
-  async disableBindingByCollection(
-    collectionId: string,
-    disabledAt: Date = this.now()
-  ): Promise<boolean> {
-    const result = await this.pool.query(
-      `update media_sync_bindings set disabled_at=$2
-       where collection_id=$1 and disabled_at is null`,
-      [collectionId, disabledAt]
-    );
-    return Boolean(result.rowCount);
-  }
-
-  async disableBinding(
-    input: { profileName: string; groupId: string },
-    disabledAt: Date = this.now()
-  ): Promise<boolean> {
-    const result = await this.pool.query(
-      `update media_sync_bindings set disabled_at=$3
-       where profile_name=$1 and group_id=$2 and disabled_at is null`,
-      [input.profileName, input.groupId, disabledAt]
-    );
-    return Boolean(result.rowCount);
-  }
-
   async beginCollectionDeletion(input: {
     profileName: string;
     collectionId: string;
