@@ -1559,7 +1559,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     });
     if (created.tombstoned) throw new Error("unexpected tombstone");
     await completeOtherOutbox(left, input.sourceKey);
-    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    const now = await databaseNow(left);
+    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000, now }))[0]!;
     await store.markOutboxDispatched({
       workId: dispatch.workId,
       operation: "intake",
@@ -1568,7 +1569,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const firstLease = await store.claimWork({
       workId: dispatch.workId,
       operation: "intake",
-      leaseMs: 60_000
+      leaseMs: 60_000,
+      now
     });
     await store.finalizeCollectionPublication({
       workId: dispatch.workId,
@@ -1647,7 +1649,14 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       manualDomain: "presentation",
       manualTitle: "SundayDeck"
     });
-    const dispatch = (await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60_000 }))[0]!;
+    const now = await databaseNow(left);
+    const dispatch = (
+      await store.claimOutboxForDispatch({
+        limit: 1,
+        leaseMs: 60_000,
+        now
+      })
+    )[0]!;
     await store.markOutboxDispatched({
       workId: dispatch.workId,
       operation: "intake",
@@ -1656,7 +1665,8 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const lease = await store.claimWork({
       workId: dispatch.workId,
       operation: "intake",
-      leaseMs: 60_000
+      leaseMs: 60_000,
+      now
     });
     await store.tombstoneSource(input.sourceKey);
 
@@ -2035,6 +2045,14 @@ async function completeOtherOutbox(pool: Pool, sourceKey: string): Promise<void>
     "update media_sync_outbox set completed_at=now() where source_key<>$1 and completed_at is null",
     [sourceKey]
   );
+}
+
+async function databaseNow(pool: Pool): Promise<Date> {
+  return (
+    await pool.query<{ now: Date }>(
+      "select date_trunc('milliseconds', clock_timestamp()) + interval '1 millisecond' now"
+    )
+  ).rows[0]!.now;
 }
 
 function pausePoolAfterInsert(pool: Pool): {
