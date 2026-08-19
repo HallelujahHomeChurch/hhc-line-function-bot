@@ -252,6 +252,13 @@ export interface AssetApiRequestOptions {
   requestId?: string;
 }
 
+export type AssetApiRejectionTelemetry = {
+  operationStage: string;
+  httpStatus: number;
+  category:
+    "authorization_rejected" | "rate_limited" | "upstream_rejected" | "upstream_unavailable";
+};
+
 class AssetApiRequestError extends Error {
   constructor(
     code: string,
@@ -280,15 +287,41 @@ export function assetAccessTokenScope(audience: string): string {
   return `${audience.replace(/\/$/u, "")}/.default`;
 }
 
+function reportAssetApiRejection(
+  onRejection: ((telemetry: AssetApiRejectionTelemetry) => void) | undefined,
+  operationStage: string,
+  httpStatus: number
+): void {
+  if (!onRejection) return;
+  try {
+    onRejection({
+      operationStage,
+      httpStatus,
+      category:
+        httpStatus === 401 || httpStatus === 403
+          ? "authorization_rejected"
+          : httpStatus === 429
+            ? "rate_limited"
+            : httpStatus === 0 || httpStatus >= 500
+              ? "upstream_unavailable"
+              : "upstream_rejected"
+    });
+  } catch {
+    // Rejection telemetry must not alter Asset operation behavior.
+  }
+}
+
 export function createAssetApiClient(options: {
   baseUrl: string;
   getAccessToken?: (signal?: AbortSignal) => Promise<string>;
   timeoutMs?: number;
   fetcher?: typeof fetch;
+  onRejection?: (telemetry: AssetApiRejectionTelemetry) => void;
 }): AssetApiClient {
   const fetcher = options.fetcher ?? fetch;
   const baseUrl = options.baseUrl.replace(/\/$/u, "");
   const request = async (
+    operationStage: string,
     path: string,
     init: RequestInit = {},
     requestOptions?: AssetApiRequestOptions
@@ -311,9 +344,11 @@ export function createAssetApiClient(options: {
         }
       });
     } catch {
+      reportAssetApiRejection(options.onRejection, operationStage, 0);
       throw new AssetApiRequestError("asset_api_unavailable", true);
     }
     if (!response.ok) {
+      reportAssetApiRejection(options.onRejection, operationStage, response.status);
       throw new AssetApiRequestError(
         `asset_api_${response.status}`,
         response.status === 408 || response.status === 429 || response.status >= 500
@@ -328,6 +363,7 @@ export function createAssetApiClient(options: {
       if (input.cursor !== undefined) query.set("cursor", input.cursor);
       if (input.limit !== undefined) query.set("limit", String(input.limit));
       const response = await request(
+        "list_managed_collections",
         `/priv/assets/collections${query.size ? `?${query.toString()}` : ""}`,
         {},
         requestOptions
@@ -338,6 +374,7 @@ export function createAssetApiClient(options: {
     },
     async getManagedCollection(collectionId, requestOptions) {
       const response = await request(
+        "get_managed_collection",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}`,
         {},
         requestOptions
@@ -352,6 +389,7 @@ export function createAssetApiClient(options: {
       if (input.cursor !== undefined) query.set("cursor", input.cursor);
       if (input.limit !== undefined) query.set("limit", String(input.limit));
       const response = await request(
+        "list_managed_collection_items",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/items${
           query.size ? `?${query.toString()}` : ""
         }`,
@@ -364,6 +402,7 @@ export function createAssetApiClient(options: {
     },
     async updateCollectionRetention(collectionId, retentionDays, idempotencyKey, requestOptions) {
       const response = await request(
+        "update_collection_retention",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/retention`,
         {
           method: "PATCH",
@@ -385,6 +424,7 @@ export function createAssetApiClient(options: {
       requestOptions
     ) {
       const response = await request(
+        "rename_managed_collection_item",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(itemId)}`,
         {
           method: "PATCH",
@@ -402,6 +442,7 @@ export function createAssetApiClient(options: {
     },
     async setManagedCollectionItemsRetention(collectionId, input, idempotencyKey, requestOptions) {
       await request(
+        "set_managed_collection_items_retention",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/retention`,
         {
           method: "POST",
@@ -416,6 +457,7 @@ export function createAssetApiClient(options: {
     },
     async deleteManagedCollectionItems(collectionId, itemIds, idempotencyKey, requestOptions) {
       const response = await request(
+        "delete_managed_collection_items",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/delete`,
         {
           method: "POST",
@@ -431,6 +473,7 @@ export function createAssetApiClient(options: {
     },
     async issueManagedContentTickets(collectionId, itemIds, requestOptions) {
       const response = await request(
+        "issue_managed_content_tickets",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/content-tickets`,
         {
           method: "POST",
@@ -445,6 +488,7 @@ export function createAssetApiClient(options: {
     },
     async createCollection(name, idempotencyKey, requestOptions) {
       const response = await request(
+        "create_collection",
         "/priv/assets/collections",
         {
           method: "POST",
@@ -460,6 +504,7 @@ export function createAssetApiClient(options: {
     },
     async renameCollection(collectionId, name, idempotencyKey, requestOptions) {
       const response = await request(
+        "rename_collection",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}`,
         {
           method: "PATCH",
@@ -475,6 +520,7 @@ export function createAssetApiClient(options: {
     },
     async deleteCollection(collectionId, idempotencyKey, requestOptions) {
       const response = await request(
+        "delete_collection",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}`,
         { method: "DELETE", headers: { "idempotency-key": idempotencyKey } },
         requestOptions
@@ -483,6 +529,7 @@ export function createAssetApiClient(options: {
     },
     async addCollectionAcl(collectionId, input, idempotencyKey, requestOptions) {
       const response = await request(
+        "add_collection_acl",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl`,
         {
           method: "POST",
@@ -498,6 +545,7 @@ export function createAssetApiClient(options: {
     },
     async revokeCollectionAcl(collectionId, aclId, idempotencyKey, requestOptions) {
       const response = await request(
+        "revoke_collection_acl",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl/${encodeURIComponent(aclId)}`,
         { method: "DELETE", headers: { "idempotency-key": idempotencyKey } },
         requestOptions
@@ -506,6 +554,7 @@ export function createAssetApiClient(options: {
     },
     async createUpload(input, requestOptions) {
       const response = await request(
+        "create_upload",
         "/priv/assets/upload-sessions",
         {
           method: "POST",
@@ -563,6 +612,7 @@ export function createAssetApiClient(options: {
     },
     async complete(assetId, input, requestOptions) {
       const response = await request(
+        "complete_upload",
         `/priv/assets/${encodeURIComponent(assetId)}/complete`,
         {
           method: "POST",
@@ -577,6 +627,7 @@ export function createAssetApiClient(options: {
     },
     async grantServiceRead(assetId, idempotencyKey, requestOptions) {
       const response = await request(
+        "grant_service_read",
         `/priv/assets/${encodeURIComponent(assetId)}/grants`,
         {
           method: "POST",
@@ -607,6 +658,7 @@ export function createAssetApiClient(options: {
     },
     async revokeGrant(assetId, grantId, requestOptions) {
       await request(
+        "revoke_grant",
         `/priv/assets/${encodeURIComponent(assetId)}/grants/${encodeURIComponent(grantId)}`,
         { method: "DELETE" },
         requestOptions
@@ -614,6 +666,7 @@ export function createAssetApiClient(options: {
     },
     async get(assetId, requestOptions) {
       const response = await request(
+        "get_asset",
         `/priv/assets/${encodeURIComponent(assetId)}`,
         {},
         requestOptions
@@ -624,6 +677,7 @@ export function createAssetApiClient(options: {
     },
     async download(assetId, requestOptions) {
       const response = await request(
+        "download_asset",
         `/priv/assets/${encodeURIComponent(assetId)}/download`,
         {
           headers: {
@@ -640,6 +694,7 @@ export function createAssetApiClient(options: {
     },
     async softDelete(assetId, requestOptions) {
       await request(
+        "soft_delete_asset",
         `/priv/assets/${encodeURIComponent(assetId)}`,
         { method: "DELETE" },
         requestOptions
@@ -647,6 +702,7 @@ export function createAssetApiClient(options: {
     },
     async addCollectionItem(collectionId, input, idempotencyKey, requestOptions) {
       const response = await request(
+        "add_collection_item",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/items`,
         {
           method: "POST",
@@ -662,6 +718,7 @@ export function createAssetApiClient(options: {
     },
     async deleteCollectionItem(collectionId, itemId, idempotencyKey, requestOptions) {
       const response = await request(
+        "delete_collection_item",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(itemId)}`,
         { method: "DELETE", headers: { "idempotency-key": idempotencyKey } },
         requestOptions

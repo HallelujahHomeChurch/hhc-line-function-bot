@@ -109,7 +109,8 @@ export async function runAttachmentAssetJob(
         const token = await credential.getToken(assetAccessTokenScope(job.assetApiAudience));
         if (!token?.token) throw new Error("asset_api_token_unavailable");
         return token.token;
-      }
+      },
+      onRejection: (telemetry) => process.stdout.write(`${JSON.stringify(telemetry)}\n`)
     });
     const lineContent = createLineSdkContentClient();
     const publisher = createResourceBinaryPublisher({

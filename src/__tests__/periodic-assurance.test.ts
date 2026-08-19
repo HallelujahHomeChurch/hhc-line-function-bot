@@ -454,7 +454,8 @@ describe("periodic assurance CLI", () => {
     expect(createCredential).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
     expect(createAsset).toHaveBeenCalledWith({
       baseUrl: "https://asset.internal",
-      getAccessToken: expect.any(Function)
+      getAccessToken: expect.any(Function),
+      onRejection: expect.any(Function)
     });
     const getAssetAccessToken = createAsset.mock.calls[0]?.[0].getAccessToken;
     const signal = AbortSignal.timeout(1_000);
@@ -463,6 +464,63 @@ describe("periodic assurance CLI", () => {
       abortSignal: signal
     });
     expect(deps.runAssetLifecycle).toEqual(expect.any(Function));
+  });
+
+  it("emits only safe Asset rejection telemetry", () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const createAsset = vi.fn().mockImplementation((options) => {
+      options.onRejection({
+        operationStage: "create_upload",
+        httpStatus: 429,
+        category: "rate_limited"
+      });
+      return {} as AssetApiClient;
+    });
+
+    createPeriodicAssuranceDependencies(
+      {
+        GRAPH_TENANT_ID: "tenant-private",
+        GRAPH_CLIENT_ID: "client",
+        GRAPH_CLIENT_SECRET: "secret",
+        GRAPH_DRIVE_ID: "drive-1",
+        GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID: "other-folder",
+        NOTION_TOKEN: "notion-token",
+        ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING: "queue-connection",
+        ATTACHMENT_SCAN_QUEUE_NAME: "attachment-scan",
+        ASSET_API_URL: "https://tenant-private.example/blob-key-private",
+        ASSET_API_AUDIENCE: "api://asset-api",
+        AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
+      },
+      {
+        createGraph: vi.fn().mockReturnValue({
+          getItemById: vi.fn(),
+          ensureFolder: vi.fn(),
+          uploadFile: vi.fn(),
+          deleteItem: vi.fn()
+        }),
+        createNotion: vi.fn().mockReturnValue({
+          databases: { retrieve: vi.fn() },
+          dataSources: { retrieve: vi.fn(), query: vi.fn() }
+        }),
+        createQueue: vi.fn().mockReturnValue({
+          getProperties: vi.fn(),
+          peekMessages: vi.fn()
+        }),
+        createCredential: vi.fn().mockReturnValue({ getToken: vi.fn() }),
+        createAsset
+      }
+    );
+
+    const serialized = write.mock.calls.map(([value]) => String(value)).join("");
+    expect(JSON.parse(serialized)).toEqual({
+      operationStage: "create_upload",
+      httpStatus: 429,
+      category: "rate_limited"
+    });
+    for (const fixture of ["tenant-private", "blob-key-private", "secret", "notion-token"]) {
+      expect(serialized).not.toContain(fixture);
+    }
+    write.mockRestore();
   });
 
   it("resolves an existing Notion database to one bounded data-source result", async () => {
