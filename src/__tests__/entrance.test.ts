@@ -3931,7 +3931,7 @@ describe("LINE entrance", () => {
     });
     expect(replyText).toHaveBeenLastCalledWith(
       "reply-media-existing",
-      "這個群組已經綁定媒體資料夾。",
+      "已經綁定過，無法二次綁定。",
       undefined
     );
     expect(identityClient.getGroupDisplayName).not.toHaveBeenCalled();
@@ -4032,7 +4032,7 @@ describe("LINE entrance", () => {
 
   it.each([
     ["invalid_code", "綁定碼無效、已過期或已使用。"],
-    ["group_already_bound", "這個群組已經綁定媒體資料夾。"],
+    ["group_already_bound", "已經綁定過，無法二次綁定。"],
     ["collection_already_bound", "這個媒體資料夾已綁定其他群組。"]
   ] as const)("keeps media sync binding conflicts safe (%s)", async (status, reply) => {
     const accessStore = new InMemoryAccessStore();
