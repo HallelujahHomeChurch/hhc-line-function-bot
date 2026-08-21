@@ -56,6 +56,8 @@ export interface ProductEventContext {
   hmacKey?: string;
 }
 
+const GROUP_ALREADY_BOUND_REPLY = "已經綁定過，無法二次綁定。";
+
 export async function handlePublicAccessCommand(input: {
   text: string;
   profile: BotProfileConfig;
@@ -137,7 +139,7 @@ async function handleMediaSyncCommand(
     return { ok: true, replyText: "這個群組尚未開通小哈，請先使用 /registry <code>。" };
   }
   if (await input.mediaSyncStore.findActiveBinding({ profileName: input.profile.name, groupId })) {
-    return { ok: true, replyText: "這個群組已經綁定媒體資料夾。" };
+    return { ok: true, replyText: GROUP_ALREADY_BOUND_REPLY };
   }
   let groupDisplayName: string | undefined;
   try {
@@ -156,7 +158,7 @@ async function handleMediaSyncCommand(
   });
   if (result.status === "bound") return { ok: true, replyText: "已綁定這個群組的媒體資料夾。" };
   if (result.status === "group_already_bound")
-    return { ok: true, replyText: "這個群組已經綁定媒體資料夾。" };
+    return { ok: true, replyText: GROUP_ALREADY_BOUND_REPLY };
   if (result.status === "collection_already_bound")
     return { ok: true, replyText: "這個媒體資料夾已綁定其他群組。" };
   return { ok: true, replyText: "綁定碼無效、已過期或已使用。" };
