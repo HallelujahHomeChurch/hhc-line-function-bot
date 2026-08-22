@@ -16,8 +16,8 @@ The service is lane-based and authority-first for controlled routing:
 - Every enabled semantic lane uses DeepSeek as its sole provider. The public `main` profile declares `allowedProviders: []` and makes no semantic-provider request.
 - `deepseek` uses `DEEPSEEK_API_KEY`.
 - The repository has no workstation auxiliary-service runtime. External search
-  is an internal ACA app, and attachment scanning/signature refresh are finite
-  ACA Jobs.
+  is an internal ACA app, while attachment malware scanning and signature
+  refresh belong to Asset API.
 - Provider runtimes may reason and generate text, but this bot owns authority:
   profile policy, function toggles, tool execution, memory writes, and deny or
   clarify flows remain server-side.
@@ -502,7 +502,7 @@ title/snippet/url fields, passes them to the `web_summarization` provider for
 ranking/summary, and never downloads or saves results automatically. A
 requester with effective `save_resource` permission may explicitly select and
 confirm one direct HTTPS PDF/JPEG/PNG result. Confirmation persists and queues
-only an opaque work ID. Inside the finite scan worker, each request and redirect
+only an opaque work ID. Inside the finite attachment worker, each request and redirect
 is DNS-resolved, checked for private/reserved addresses, and pinned to the
 validated address; HTML, credentials, cookies, and page crawling are rejected.
 Clean confirmed bytes enter the same shared binary publisher as LINE
@@ -588,9 +588,7 @@ of quarantine Blob state, ClamAV signatures and execution, scan lifecycle,
 grants, and clean download. Any status other than `clean` fails closed. The LINE
 Job has one replica per execution, uses a dedicated managed identity, and has no
 storage key, queue connection string, ClamAV state, channel secret, admin ID,
-LLM/Notion credential, or observability secret. The previous local scanner and
-weekly `10 19 * * 0` UTC signature refresh remain rollback-only until production
-smoke succeeds. The
+LLM/Notion credential, or observability secret. The
 `xiaoha_database` manual source is skipped by catalog sync and receives a 90-day
 catalog `expiresAt`; formal synced sources do not. Successful publication
 records opaque drive/item metadata as a recent general resource, so a scoped
@@ -612,9 +610,7 @@ Function dependencies are intentionally behind ports/clients:
 
 - LINE: `src/clients/line.ts`
 - Asset API attachment client and finite worker: `src/clients/asset-api.ts` and
-  `src/tools/run-attachment-worker.ts` (`run-attachment-asset-job.ts` remains a temporary
-  compatibility entrypoint during the ACA Job rename)
-- Legacy rollback scanner: `src/tools/run-attachment-scan-job.ts`
+  `src/tools/run-attachment-worker.ts`
 - SearXNG web search: `src/clients/searxng.ts`
 - DeepSeek provider: `src/clients/deepseek.ts`
 - Azure OpenAI embeddings: `src/clients/azure-openai-embedding.ts`

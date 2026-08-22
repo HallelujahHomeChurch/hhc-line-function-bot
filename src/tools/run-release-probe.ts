@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -24,8 +23,7 @@ function readInput(env: Record<string, string | undefined>): ReleaseProbeInput {
     gatewayWebhookUrl: required(env, "GATEWAY_WEBHOOK_URL"),
     gatewayMainWebhookUrl: required(env, "GATEWAY_MAIN_WEBHOOK_URL"),
     lineHelperChannelSecret: required(env, "LINE_HELPER_CHANNEL_SECRET"),
-    lineMainEmptyWebhookSignature: required(env, "LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE"),
-    clamavSignatureManifestPath: required(env, "CLAMAV_SIGNATURE_MANIFEST_PATH")
+    lineMainEmptyWebhookSignature: required(env, "LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE")
   };
 }
 
@@ -36,11 +34,7 @@ function required(env: Record<string, string | undefined>, key: string): string 
 }
 
 function defaultDependencies(): ReleaseProbeDependencies {
-  return {
-    fetch: globalThis.fetch,
-    readFile,
-    now: () => new Date()
-  };
+  return { fetch: globalThis.fetch };
 }
 
 async function main(): Promise<void> {

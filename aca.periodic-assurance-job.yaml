@@ -27,7 +27,7 @@ properties:
   template:
     containers:
       - name: periodic-assurance
-        image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest
+        image: alive.azurecr.io/alive/hhc-line-function-bot:latest
         args:
           - dist/tools/run-periodic-assurance.js
         env:
@@ -55,17 +55,7 @@ properties:
             value: PLACEHOLDER_ASSET_API_AUDIENCE
           - name: AZURE_CLIENT_ID
             value: PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID
-          - name: CLAMAV_SIGNATURE_MANIFEST_PATH
-            value: /var/lib/clamav/current/manifest.json
-          - name: CLAMAV_SCAN_TIMEOUT_MS
-            value: "15000"
-        volumeMounts:
-          - volumeName: clamav-signatures
-            mountPath: /var/lib/clamav
         resources:
-          cpu: 2
-          memory: 4Gi
-    volumes:
-      - name: clamav-signatures
-        storageType: AzureFile
-        storageName: clamav-signatures-readonly
+          cpu: 0.25
+          memory: 0.5Gi
+    volumes: []

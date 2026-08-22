@@ -108,6 +108,6 @@ properties:
           - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
             value: pdf,jpg,jpeg,png
         resources:
-          cpu: 1.0
-          memory: 2Gi
+          cpu: 0.5
+          memory: 1Gi
     volumes: []

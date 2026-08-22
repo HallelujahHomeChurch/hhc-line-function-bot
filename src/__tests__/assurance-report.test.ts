@@ -95,7 +95,7 @@ describe("buildAssuranceReport", () => {
     });
   });
 
-  it("accepts the periodic-only checks and warning status", () => {
+  it("accepts the periodic-only checks", () => {
     const report = buildAssuranceReport({
       version: 1,
       kind: "periodic",
@@ -106,7 +106,7 @@ describe("buildAssuranceReport", () => {
       status: "passed",
       failureCode: "none",
       target: {
-        resource: "attachment_scan",
+        resource: "attachment_worker",
         revision: "scan--r5",
         image: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         status: "ready"
@@ -116,12 +116,6 @@ describe("buildAssuranceReport", () => {
         image: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       },
       checks: [
-        {
-          name: "clamav_signature",
-          status: "warning",
-          observedAt: timestamp,
-          code: "signature_warning"
-        },
         {
           name: "attachment_queue",
           status: "passed",
@@ -140,7 +134,7 @@ describe("buildAssuranceReport", () => {
     });
 
     expect(report.kind).toBe("periodic");
-    expect(report.checks).toHaveLength(3);
+    expect(report.checks).toHaveLength(2);
   });
 
   it("rejects a registry hostname instead of serializing it as an image identity", () => {

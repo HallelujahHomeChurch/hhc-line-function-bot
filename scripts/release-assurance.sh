@@ -16,7 +16,6 @@ RELEASE_ROLLBACK_REVISION="${RELEASE_ROLLBACK_REVISION:-}"
 RELEASE_ROLLBACK_IMAGE="${RELEASE_ROLLBACK_IMAGE:-}"
 RELEASE_CATALOG_JOB_MUTATED="${RELEASE_CATALOG_JOB_MUTATED:-false}"
 RELEASE_SCAN_JOB_MUTATED="${RELEASE_SCAN_JOB_MUTATED:-false}"
-RELEASE_REFRESH_JOB_MUTATED="${RELEASE_REFRESH_JOB_MUTATED:-false}"
 RELEASE_PROBE_JOB_MUTATED="${RELEASE_PROBE_JOB_MUTATED:-false}"
 RELEASE_PERIODIC_JOB_MUTATED="${RELEASE_PERIODIC_JOB_MUTATED:-false}"
 RELEASE_SEARXNG_MUTATED="${RELEASE_SEARXNG_MUTATED:-false}"
@@ -141,7 +140,6 @@ capture_known_good_state() {
   : "${CONTAINER_APP_NAME:?CONTAINER_APP_NAME is required}"
   : "${CATALOG_SYNC_JOB_NAME:?CATALOG_SYNC_JOB_NAME is required}"
   : "${ATTACHMENT_SCAN_JOB_NAME:?ATTACHMENT_SCAN_JOB_NAME is required}"
-  : "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME:?CLAMAV_SIGNATURE_REFRESH_JOB_NAME is required}"
   : "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"
   : "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"
   : "${SEARXNG_CONTAINER_APP_NAME:?SEARXNG_CONTAINER_APP_NAME is required}"
@@ -173,7 +171,6 @@ capture_known_good_state() {
 
   if ! capture_release_job_snapshot CATALOG "${CATALOG_SYNC_JOB_NAME}" \
     || ! capture_release_job_snapshot SCAN "${ATTACHMENT_SCAN_JOB_NAME}" \
-    || ! capture_release_job_snapshot REFRESH "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
     || ! capture_release_job_snapshot PROBE "${RELEASE_PROBE_JOB_NAME}" \
     || ! capture_release_job_snapshot PERIODIC "${PERIODIC_ASSURANCE_JOB_NAME}"; then
     set_release_failure known_good_snapshot_failed
@@ -398,9 +395,6 @@ mark_release_job_mutated() {
     "${ATTACHMENT_SCAN_JOB_NAME}")
       RELEASE_SCAN_JOB_MUTATED=true
       ;;
-    "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}")
-      RELEASE_REFRESH_JOB_MUTATED=true
-      ;;
     "${RELEASE_PROBE_JOB_NAME}")
       RELEASE_PROBE_JOB_MUTATED=true
       ;;
@@ -432,18 +426,14 @@ run_release_gates() {
   : "${RELEASE_TARGET_SCAN_IMAGE:?RELEASE_TARGET_SCAN_IMAGE is required}"
   : "${RELEASE_TARGET_ATTACHMENT_IMAGE:?RELEASE_TARGET_ATTACHMENT_IMAGE is required}"
   : "${RELEASE_EXPECTED_SEARXNG_IMAGE:?RELEASE_EXPECTED_SEARXNG_IMAGE is required}"
-  : "${RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME:?RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME is required}"
   : "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME:?RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME is required}"
 
   release_wait_for_target || return
   release_check_account_preflight || return
   release_check_searxng || return
   release_check_job_definition \
-    "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" Schedule 900 1 schedule \
-    "${RELEASE_TARGET_SCAN_IMAGE}" clamav_refresh_job refresh_definition_mismatch false || return
-  release_check_job_definition \
     "${ATTACHMENT_SCAN_JOB_NAME}" Event 1800 1 event \
-    "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_scan_job scan_definition_mismatch false || return
+    "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_worker_job worker_definition_mismatch false || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
     "${RELEASE_TARGET_IMAGE}" catalog_job catalog_definition_mismatch false || return
@@ -455,13 +445,9 @@ run_release_gates() {
     "${RELEASE_TARGET_SCAN_IMAGE}" periodic_assurance_job periodic_definition_mismatch || return
   RELEASE_PROVIDER_CONTRACT_VERIFIED=true
   release_wait_for_job_execution \
-    "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
-    "${RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME}" \
-    clamav_refresh_job clamav_bootstrap_failed clamav_manifest_invalid || return
-  release_wait_for_job_execution \
     "${ATTACHMENT_SCAN_JOB_NAME}" \
     "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME}" \
-    attachment_scan_job attachment_bootstrap_failed attachment_queue_failed || return
+    attachment_worker_job attachment_bootstrap_failed attachment_queue_failed || return
   release_check_recent_catalog_success || return
   release_run_probe || return
 }
@@ -751,24 +737,6 @@ resources = definition.get("resources")
 mounts = definition.get("volumeMounts")
 volumes = definition.get("volumes")
 
-expected_mounts = [
-    {"volumeName": "clamav-signatures", "mountPath": "/var/lib/clamav"}
-]
-readonly_volumes = [
-    {
-        "name": "clamav-signatures",
-        "storageType": "AzureFile",
-        "storageName": "clamav-signatures-readonly",
-    }
-]
-readwrite_volumes = [
-    {
-        "name": "clamav-signatures",
-        "storageType": "AzureFile",
-        "storageName": "clamav-signatures-readwrite",
-    }
-]
-
 def env_contract(entries, expected):
     if not isinstance(entries, list) or len(entries) != len(expected):
         return False
@@ -818,14 +786,7 @@ if check_name == "catalog_job":
             }
         ]
     )
-elif check_name == "clamav_refresh_job":
-    valid = (
-        valid
-        and trigger.get("cronExpression") == "10 19 * * 0"
-        and mounts == expected_mounts
-        and volumes == readwrite_volumes
-    )
-elif check_name == "attachment_scan_job":
+elif check_name == "attachment_worker_job":
     scale = trigger.get("scale") or {}
     rules = scale.get("rules")
     rule = rules[0] if isinstance(rules, list) and len(rules) == 1 else {}
@@ -848,7 +809,7 @@ elif check_name == "attachment_scan_job":
         and isinstance(rule.get("identity"), str)
         and bool(rule.get("identity"))
         and not rule.get("auth")
-        and args == ["dist/tools/run-attachment-asset-job.js"]
+        and args == ["dist/tools/run-attachment-worker.js"]
         and {
             "ATTACHMENT_SCAN_QUEUE_URL",
             "ASSET_API_URL",
@@ -860,7 +821,7 @@ elif check_name == "attachment_scan_job":
         and env_by_name.get("MEDIA_SYNC_MAX_BYTES", {}).get("value") == "209715200"
         and env_by_name.get("MAX_ATTACHMENT_BYTES", {}).get("value") == "26214400"
         and not any(name and name.startswith("CLAMAV_") for name in env_names)
-        and resources == {"cpu": 1, "memory": "2Gi"}
+        and resources == {"cpu": 0.5, "memory": "1Gi"}
         and not mounts
         and not volumes
     )
@@ -879,16 +840,13 @@ elif check_name == "release_probe":
                     "secretRef": "line-helper-channel-secret"
                 },
                 "LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE": {"value": None},
-                "CLAMAV_SIGNATURE_MANIFEST_PATH": {
-                    "value": "/var/lib/clamav/current/manifest.json"
-                },
             },
         )
         and isinstance(resources, dict)
         and resources.get("cpu") == 0.25
         and resources.get("memory") == "0.5Gi"
-        and mounts == expected_mounts
-        and volumes == readonly_volumes
+        and not mounts
+        and not volumes
     )
 elif check_name == "periodic_assurance_job":
     valid = (
@@ -911,17 +869,13 @@ elif check_name == "periodic_assurance_job":
                 "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": {
                     "secretRef": "attachment-scan-queue-connection-string"
                 },
-                "CLAMAV_SIGNATURE_MANIFEST_PATH": {
-                    "value": "/var/lib/clamav/current/manifest.json"
-                },
-                "CLAMAV_SCAN_TIMEOUT_MS": {"value": "15000"},
             },
         )
         and isinstance(resources, dict)
-        and resources.get("cpu") == 2
-        and resources.get("memory") == "4Gi"
-        and mounts == expected_mounts
-        and volumes == readonly_volumes
+        and resources.get("cpu") == 0.25
+        and resources.get("memory") == "0.5Gi"
+        and not mounts
+        and not volumes
     )
 else:
     valid = False
@@ -1139,7 +1093,6 @@ check_codes = {
         "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
         "contract_mismatch",
     },
-    "clamav_signature": {"none", "clamav_manifest_invalid", "signature_warning"},
 }
 
 def candidates(value):
@@ -1183,22 +1136,16 @@ for row in payload["checks"]:
     if not isinstance(row, dict):
         raise SystemExit(1)
     allowed_fields = {"name", "status", "code"}
-    if row.get("name") == "clamav_signature":
-        allowed_fields.add("signatureHealth")
     if not {"name", "status", "code"} <= set(row) or not set(row) <= allowed_fields:
         raise SystemExit(1)
     name, status, code = row["name"], row["status"], row["code"]
     if name not in check_codes or name in names:
         raise SystemExit(1)
-    if status not in {"passed", "failed", "warning"} or code not in check_codes[name]:
-        raise SystemExit(1)
-    if (status == "warning") != (code == "signature_warning"):
+    if status not in {"passed", "failed"} or code not in check_codes[name]:
         raise SystemExit(1)
     if status == "passed" and code != "none":
         raise SystemExit(1)
-    if status == "failed" and code in {"none", "signature_warning"}:
-        raise SystemExit(1)
-    if "signatureHealth" in row and row["signatureHealth"] not in {"current", "warning"}:
+    if status == "failed" and code == "none":
         raise SystemExit(1)
     names.add(name)
     observed.append((name, status, "http_mismatch" if code == "contract_mismatch" else code))
@@ -1357,19 +1304,11 @@ PY
       || rollback_ok=false
   fi
   if [[ "${RELEASE_SCAN_JOB_MUTATED}" == "true" ]]; then
-    restore_changed_job \
+    restore_changed_job_image_only \
       "${ATTACHMENT_SCAN_JOB_NAME}" \
       "${RELEASE_KNOWN_GOOD_SCAN_EXISTS}" \
       "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" \
       "${RELEASE_KNOWN_GOOD_SCAN_MANIFEST}" \
-      || rollback_ok=false
-  fi
-  if [[ "${RELEASE_REFRESH_JOB_MUTATED}" == "true" ]]; then
-    restore_changed_job \
-      "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
-      "${RELEASE_KNOWN_GOOD_REFRESH_EXISTS}" \
-      "${RELEASE_KNOWN_GOOD_REFRESH_IMAGE}" \
-      "${RELEASE_KNOWN_GOOD_REFRESH_MANIFEST}" \
       || rollback_ok=false
   fi
   if [[ "${RELEASE_PROBE_JOB_MUTATED}" == "true" ]]; then
@@ -1498,6 +1437,35 @@ PY
   return 1
 }
 
+restore_changed_job_image_only() {
+  local job_name="$1"
+  local existed="$2"
+  local known_image="$3"
+  local known_manifest="$4"
+  local observed_image
+  local observed_json
+  local observed_manifest
+  if [[ "${existed}" == "false" ]]; then
+    [[ "$(release_job_exists "${job_name}")" == "false" ]]
+    return
+  fi
+  az containerapp job update \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${job_name}" \
+    --container-name attachment-worker \
+    --image "${known_image}" \
+    --only-show-errors \
+    --output none || return
+  observed_image="$(release_job_image "${job_name}")" || return
+  observed_image="$(resolve_release_image "${observed_image}")" || return
+  [[ "${observed_image}" == "${known_image}" ]] || return
+  observed_json="$(release_job_manifest_json "${job_name}")" || return
+  observed_manifest="$(mktemp)"
+  RELEASE_CLEANUP_FILES+=("${observed_manifest}")
+  normalize_release_job_manifest "${observed_json}" "${observed_image}" "${observed_manifest}" || return
+  cmp -s -- "${known_manifest}" "${observed_manifest}"
+}
+
 restore_changed_job() {
   local job_name="$1"
   local existed="$2"
@@ -1585,15 +1553,11 @@ failure_map = {
     "account_preflight_failed": "http_mismatch",
     "malformed_target_state": "malformed_json",
     "searxng_definition_mismatch": "http_mismatch",
-    "refresh_definition_mismatch": "http_mismatch",
-    "scan_definition_mismatch": "http_mismatch",
+    "worker_definition_mismatch": "http_mismatch",
     "catalog_definition_mismatch": "http_mismatch",
     "catalog_recent_success_missing": "timeout",
     "release_probe_definition_mismatch": "http_mismatch",
     "periodic_definition_mismatch": "http_mismatch",
-    "clamav_bootstrap_failed": "clamav_manifest_invalid",
-    "clamav_bootstrap_failed_timeout": "timeout",
-    "clamav_bootstrap_start_failed": "network_failed",
     "attachment_bootstrap_failed": "attachment_queue_failed",
     "attachment_bootstrap_failed_timeout": "timeout",
     "attachment_bootstrap_start_failed": "network_failed",
@@ -1608,7 +1572,6 @@ failure_map = {
     "searxng_root_failed": "searxng_root_failed",
     "gateway_helper_signed_empty_webhook_failed": "gateway_webhook_failed",
     "gateway_main_signed_empty_webhook_failed": "gateway_webhook_failed",
-    "clamav_signature_failed": "clamav_manifest_invalid",
     "report_write_failed": "network_failed",
     "transaction_incomplete": "network_failed",
     "unclassified_release_failure": "network_failed",
@@ -1623,15 +1586,13 @@ check_names = {
     "searxng_deployment",
     "release_probe",
     "catalog_job",
-    "clamav_refresh_job",
-    "attachment_scan_job",
+    "attachment_worker_job",
     "periodic_assurance_job",
     "bot_health",
     "bot_readiness",
     "searxng_root",
     "gateway_helper_signed_empty_webhook",
     "gateway_main_signed_empty_webhook",
-    "clamav_signature",
 }
 check_codes = {
     "none",
@@ -1639,8 +1600,6 @@ check_codes = {
     "timeout",
     "http_mismatch",
     "malformed_json",
-    "clamav_manifest_invalid",
-    "signature_warning",
 }
 
 def image_identity(value):

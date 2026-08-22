@@ -5,8 +5,6 @@ import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
 const retiredOfficeAddress = ["172", "16", "65", "5"].join(".");
-const retiredEndpointNames = [["CLAM", "AV_HOST"].join(""), ["CLAM", "AV_PORT"].join("")];
-const retiredEndpointPrefixes = [["OLLA", "MA_"].join(""), ["VIRUS_", "SCAN_"].join("")];
 
 function readProjectFile(path: string): string {
   return readFileSync(resolve(root, path), "utf8");
@@ -161,12 +159,12 @@ describe("production profile configuration deployment contract", () => {
       'bot_env_json="$(az containerapp show',
       botDeploy
     );
-    const renderJobs = deployment.indexOf('render_job_manifest \\\n  "${clamav_refresh');
-    const refreshDeploy = deployment.indexOf('deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"');
-    const refreshBootstrap = deployment.indexOf(
-      'start_release_job \\\n  "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"'
+    const renderJobs = deployment.indexOf(
+      'render_job_manifest \\\n  "${catalog_job_manifest_template}"'
     );
-    const scanDeploy = deployment.indexOf('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
+    const scanDeploy = deployment.indexOf(
+      'az containerapp job update \\\n  --resource-group "${RESOURCE_GROUP}"'
+    );
     const catalogDeploy = deployment.indexOf('deploy_job "${CATALOG_SYNC_JOB_NAME}"');
 
     for (const position of [
@@ -177,8 +175,6 @@ describe("production profile configuration deployment contract", () => {
       refreshedSecretSnapshot,
       refreshedEnvSnapshot,
       renderJobs,
-      refreshDeploy,
-      refreshBootstrap,
       scanDeploy,
       catalogDeploy
     ]) {
@@ -189,9 +185,7 @@ describe("production profile configuration deployment contract", () => {
     expect(botDeploy).toBeLessThan(refreshedEnvSnapshot);
     expect(refreshedSecretSnapshot).toBeLessThan(renderJobs);
     expect(refreshedEnvSnapshot).toBeLessThan(renderJobs);
-    expect(renderJobs).toBeLessThan(refreshDeploy);
-    expect(refreshDeploy).toBeLessThan(refreshBootstrap);
-    expect(refreshBootstrap).toBeLessThan(scanDeploy);
+    expect(renderJobs).toBeLessThan(scanDeploy);
     expect(scanDeploy).toBeLessThan(catalogDeploy);
 
     expect(botRenderer).not.toContain("BOT_SECRETS_JSON");
@@ -258,7 +252,6 @@ describe("production profile configuration deployment contract", () => {
     for (const retiredSecret of [
       "bot-profiles-base64-json",
       "attachment-scan-queue-connection-string",
-      "clamav-signature-storage-key",
       "openai-api-key"
     ]) {
       expect(retiredSecretCleanupBlock).toContain(retiredSecret);
@@ -417,10 +410,8 @@ describe("production profile configuration deployment contract", () => {
     );
 
     const jobPaths = [
-      "aca.attachment-scan-job.yaml",
       "aca.attachment-worker-job.yaml",
       "aca.catalog-sync-job.yaml",
-      "aca.clamav-signature-refresh-job.yaml",
       "aca.periodic-assurance-job.yaml",
       "aca.release-probe-job.yaml"
     ];
@@ -449,10 +440,8 @@ describe("production profile configuration deployment contract", () => {
       expect(deployment).toContain(`"${name}"`);
       expect(readProjectFile(".env.example")).toContain(`${name}=PLACEHOLDER_${name}`);
       for (const path of [
-        "aca.attachment-scan-job.yaml",
         "aca.attachment-worker-job.yaml",
         "aca.catalog-sync-job.yaml",
-        "aca.clamav-signature-refresh-job.yaml",
         "aca.periodic-assurance-job.yaml",
         "aca.release-probe-job.yaml",
         "scripts/release-assurance.sh"
@@ -644,10 +633,8 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("value: PLACEHOLDER_GATEWAY_WEBHOOK_URL");
     expect(job).toContain("name: GATEWAY_MAIN_WEBHOOK_URL");
     expect(job).toContain("value: PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL");
-    expect(job).toContain("name: CLAMAV_SIGNATURE_MANIFEST_PATH");
-    expect(job).toContain("value: /var/lib/clamav/current/manifest.json");
-    expect(job).toContain("mountPath: /var/lib/clamav");
-    expect(job).toContain("storageName: clamav-signatures-readonly");
+    expect(job).not.toContain("CLAMAV_");
+    expect(job).toContain("volumes: []");
     expect(job).not.toContain("scheduleTriggerConfig:");
     expect(job).not.toContain("cronExpression:");
     expect(job).not.toContain("ingress:");
@@ -670,11 +657,11 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}");
     expect(job).toContain("server: alive.azurecr.io");
     expect(job).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
-    expect(job).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot-scan:latest");
+    expect(job).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot:latest");
     expect(job).toContain("args:\n          - dist/tools/run-periodic-assurance.js");
     expect(job).not.toContain("command:");
-    expect(job).toContain("cpu: 2");
-    expect(job).toContain("memory: 4Gi");
+    expect(job).toContain("cpu: 0.25");
+    expect(job).toContain("memory: 0.5Gi");
     expect(job).toContain("name: GRAPH_CLIENT_SECRET");
     expect(job).toContain("secretRef: graph-client-secret");
     expect(job).toContain("name: NOTION_TOKEN");
@@ -688,12 +675,8 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID");
     expect(job).toContain("name: NOTION_SERVICE_DATABASE_ID");
     expect(job).toContain("name: ATTACHMENT_SCAN_QUEUE_NAME");
-    expect(job).toContain("name: CLAMAV_SCAN_TIMEOUT_MS");
-    expect(job).toContain('value: "15000"');
-    expect(job).toContain("name: CLAMAV_SIGNATURE_MANIFEST_PATH");
-    expect(job).toContain("value: /var/lib/clamav/current/manifest.json");
-    expect(job).toContain("mountPath: /var/lib/clamav");
-    expect(job).toContain("storageName: clamav-signatures-readonly");
+    expect(job).not.toContain("CLAMAV_");
+    expect(job).toContain("volumes: []");
     expect(job).not.toContain("scheduleTriggerConfig:");
     expect(job).not.toContain("cronExpression:");
     expect(job).not.toContain("ingress:");
@@ -740,7 +723,7 @@ describe("production profile configuration deployment contract", () => {
       'render_job_manifest \\\n  "${periodic_assurance_job_manifest_template}"'
     );
     expect(deployment).toContain('"${RELEASE_PROBE_JOB_NAME}" \\\n  "${image_ref}"');
-    expect(deployment).toContain('"${PERIODIC_ASSURANCE_JOB_NAME}" \\\n  "${scan_image_ref}"');
+    expect(deployment).toContain('"${PERIODIC_ASSURANCE_JOB_NAME}" \\\n  "${image_ref}"');
     expect(deployment).toContain(
       'deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"'
     );
@@ -788,6 +771,7 @@ describe("production profile configuration deployment contract", () => {
     expect(workflow).toContain("tenant-id: ${{ vars.AZURE_TENANT_ID }}");
     expect(workflow).toContain("subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}");
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./);
+    expect(workflow).toContain("ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker");
     expect(workflow).toContain("bash scripts/run-periodic-assurance.sh");
     expect(workflow).toContain(
       "PERIODIC_REPORT_PATH: artifacts/release-assurance/periodic-report.json"
@@ -854,21 +838,18 @@ describe("production profile configuration deployment contract", () => {
     expect(report).toBeLessThan(complete);
     expect(deployment).toContain('RELEASE_TARGET_REVISION="${target_revision}"');
     expect(deployment).toContain('RELEASE_TARGET_IMAGE="${image_ref}"');
-    expect(deployment).toContain('RELEASE_TARGET_SCAN_IMAGE="${scan_image_ref}"');
-    expect(deployment).toContain(
-      'RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"'
-    );
+    expect(deployment).toContain('RELEASE_TARGET_SCAN_IMAGE="${image_ref}"');
     for (const jobName of [
-      "CLAMAV_SIGNATURE_REFRESH_JOB_NAME",
       "ATTACHMENT_SCAN_JOB_NAME",
       "CATALOG_SYNC_JOB_NAME",
       "RELEASE_PROBE_JOB_NAME",
       "PERIODIC_ASSURANCE_JOB_NAME"
     ]) {
       const mutation = deployment.indexOf(`mark_release_job_mutated "\${${jobName}}"`);
-      const deploy = deployment.search(
-        new RegExp(`deploy_job(?:\\\\|\\s)+"\\$\\{${jobName}\\}"`, "u")
-      );
+      const deploy =
+        jobName === "ATTACHMENT_SCAN_JOB_NAME"
+          ? deployment.indexOf('--name "${ATTACHMENT_SCAN_JOB_NAME}"', mutation)
+          : deployment.search(new RegExp(`deploy_job(?:\\\\|\\s)+"\\$\\{${jobName}\\}"`, "u"));
       expect(mutation).toBeGreaterThanOrEqual(0);
       expect(deploy).toBeGreaterThanOrEqual(0);
       expect(mutation).toBeLessThan(deploy);
@@ -879,196 +860,40 @@ describe("production profile configuration deployment contract", () => {
     expect(helper).toContain('--from-revision "${RELEASE_KNOWN_GOOD_REVISION}"');
   });
 
-  it("provisions finite queue scans and atomic scheduled ClamAV signature refreshes", () => {
-    const scanJob = readProjectFile("aca.attachment-worker-job.yaml");
-    const refreshJob = readProjectFile("aca.clamav-signature-refresh-job.yaml");
+  it("uses the Terraform-owned Asset attachment worker and no local ClamAV runtime", () => {
+    const worker = readProjectFile("aca.attachment-worker-job.yaml");
     const bot = readProjectFile("aca.containerapp.yaml");
     const catalogJob = readProjectFile("aca.catalog-sync-job.yaml");
     const dockerfile = readProjectFile("Dockerfile");
-    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
+    const workflow = readProjectFile(".github/workflows/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
     const packageJson = JSON.parse(readProjectFile("package.json")) as {
       scripts: Record<string, string>;
     };
 
-    expect(scanJob).toContain("type: Microsoft.App/jobs");
-    expect(scanJob).toContain("triggerType: Event");
-    expect(scanJob).toContain("eventTriggerConfig:");
-    expect(scanJob).toContain("minExecutions: 0");
-    expect(scanJob).toContain("replicaTimeout: 1800");
-    expect(scanJob).toContain("parallelism: 1");
-    expect(scanJob).toContain("replicaCompletionCount: 1");
-    expect(scanJob).toContain("type: azure-queue");
-    expect(scanJob).toContain("queueLength: 1");
-    expect(scanJob).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
-    expect(scanJob).not.toContain("triggerParameter: connection");
-    expect(scanJob).not.toContain("secretRef: attachment-scan-queue-connection-string");
-    expect(scanJob).toContain("name: LINE_HELPER_CHANNEL_ACCESS_TOKEN");
-    expect(scanJob).toContain("name: DATABASE_URL");
-    expect(scanJob).toContain("name: REDIS_URL");
-    expect(scanJob).toContain("name: GRAPH_CLIENT_SECRET");
-    expect(scanJob).not.toContain("name: LINE_HELPER_CHANNEL_SECRET");
-    expect(scanJob).not.toContain("name: LINE_HELPER_ADMIN_USER_ID");
-    expect(scanJob).not.toContain("name: AZURE_OPENAI_EMBEDDING_API_KEY");
-    expect(scanJob).not.toContain("name: DEEPSEEK_API_KEY");
-    expect(scanJob).not.toContain("name: NOTION_TOKEN");
-    expect(scanJob).not.toContain("name: OBSERVABILITY_HMAC_KEY");
-    expect(scanJob).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
-    expect(scanJob).toContain("name: ASSET_API_URL");
-    expect(scanJob).toContain("name: ASSET_API_AUDIENCE");
-    expect(scanJob).toContain("name: AZURE_CLIENT_ID");
-    expect(scanJob).toContain('name: MEDIA_SYNC_MAX_BYTES\n            value: "209715200"');
-    expect(scanJob).toContain('name: MAX_ATTACHMENT_BYTES\n            value: "26214400"');
-    expect(scanJob).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot:latest");
-    expect(scanJob).toContain("name: hhc-line-bot-attachment-worker");
-    expect(scanJob).toContain("value: hhc-line-bot-attachment-worker");
-    expect(scanJob).toContain("dist/tools/run-attachment-worker.js");
-    expect(scanJob).toContain("cpu: 1.0");
-    expect(scanJob).toContain("memory: 2Gi");
-    expect(scanJob).not.toContain("mountPath: /var/lib/clamav");
-    expect(scanJob).not.toContain("name: CLAMAV_");
-    expect(scanJob).toContain("  volumes: []");
-    expect(scanJob).not.toContain("ingress:");
+    expect(worker).toContain("name: hhc-line-bot-attachment-worker");
+    expect(worker).toContain("triggerType: Event");
+    expect(worker).toContain("dist/tools/run-attachment-worker.js");
+    expect(worker).toContain("cpu: 0.5");
+    expect(worker).toContain("memory: 1Gi");
+    expect(worker).toContain("volumes: []");
+    expect(worker).not.toContain("CLAMAV_");
     expect(packageJson.scripts["attachment-worker:run"]).toBe(
       "node dist/tools/run-attachment-worker.js"
     );
-    expect(packageJson.scripts["attachment-scan:run"]).toBe(
-      "node dist/tools/run-attachment-asset-job.js"
-    );
+    expect(packageJson.scripts["attachment-scan:run"]).toBeUndefined();
 
-    expect(refreshJob).toContain("type: Microsoft.App/jobs");
-    expect(refreshJob).toContain("triggerType: Schedule");
-    expect(refreshJob).toContain('cronExpression: "10 19 * * 0"');
-    expect(refreshJob).toContain("parallelism: 1");
-    expect(refreshJob).toContain("replicaCompletionCount: 1");
-    expect(refreshJob).toContain("dist/tools/refresh-clamav-signatures.js");
-    expect(refreshJob).toContain("mountPath: /var/lib/clamav");
-    expect(refreshJob).toContain("storageName: clamav-signatures-readwrite");
-    expect(refreshJob).not.toContain("ingress:");
-    expect(dockerfile).toContain('"clamav-freshclam=${CLAMAV_VERSION}"');
-    expect(dockerfile).toContain("ca-certificates");
-    expect(dockerfile).toContain("UpdateLogFile /tmp/hhc-line-bot-freshclam.log");
-    expect(dockerfile.indexOf("clamav-freshclam")).toBeLessThan(
-      dockerfile.indexOf("FROM gcr.io/distroless")
-    );
-
-    expect(bot).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
-    expect(bot).toContain("secretRef: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_URL_SECRET_REF");
-    expect(bot).not.toContain("name: CLAMAV_DATABASE_DIRECTORY");
-    expect(catalogJob).not.toContain("name: CLAMAV_DATABASE_DIRECTORY");
-    expect(catalogJob).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
-
-    expect(releaseWorkflow).toContain("- aca.attachment-scan-job.yaml");
-    expect(releaseWorkflow).toContain("- aca.attachment-worker-job.yaml");
-    expect(releaseWorkflow).toContain("- aca.clamav-signature-refresh-job.yaml");
-    expect(releaseWorkflow).toContain("--target attachment-scan-worker");
-    expect(releaseWorkflow).toContain("SCAN_IMAGE_REPOSITORY");
-
-    expect(deployment).toContain("az containerapp env storage set");
-    expect(deployment).toContain("az storage account keys list");
-    expect(deployment).not.toContain('secrets.get("clamav-signature-storage-key")');
-    expect(deployment).toContain("--storage-name clamav-signatures-readonly");
-    expect(deployment).toContain("--access-mode ReadOnly");
-    expect(deployment).toContain("--storage-name clamav-signatures-readwrite");
-    expect(deployment).toContain("--access-mode ReadWrite");
-    expect(deployment).toContain("az containerapp secret set");
-    expect(deployment).toContain("az storage queue generate-sas");
-    expect(deployment).toContain("--permissions a");
-    expect(deployment).toContain('"attachment-scan-queue-url=${attachment_scan_queue_url}"');
-    expect(deployment).not.toContain(
-      '"attachment-scan-queue-url=${attachment_scan_queue_connection_string}"'
-    );
-    expect(deployment).not.toContain('"OPENAI_API_KEY=secretref:openai-api-key"');
-    expect(bot).not.toContain("name: OPENAI_API_KEY");
-    expect(bot).not.toContain("name: OPENAI_BASE_URL");
-    expect(bot).not.toContain("name: OPENAI_EMBEDDING_MODEL");
-    expect(catalogJob).not.toContain("name: OPENAI_API_KEY");
-    expect(catalogJob).not.toContain("name: OPENAI_BASE_URL");
-    expect(catalogJob).not.toContain("name: OPENAI_EMBEDDING_MODEL");
+    for (const contents of [worker, bot, catalogJob, dockerfile, workflow, deployment]) {
+      expect(contents).not.toMatch(/clamav|freshclam/iu);
+    }
+    expect(workflow).not.toContain("SCAN_IMAGE_REPOSITORY");
     expect(deployment).toContain("az containerapp job update");
-    expect(deployment).toContain("ATTACHMENT_SCAN_JOB_NAME");
-    expect(deployment).toContain("CLAMAV_SIGNATURE_REFRESH_JOB_NAME");
-    expect(deployment).toContain("CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs");
-    expect(deployment).toContain("ATTACHMENT_JOB_IDENTITY_NAME:=hhc-line-bot-attachment");
-    expect(deployment).toContain("az identity show");
-    expect(deployment).toContain("CONTAINER_APP_JOB_IDENTITY_ID");
-    expect(deployment).toContain("Storage Queue Data Reader");
-    expect(deployment).toContain("az containerapp job identity assign");
+    expect(deployment).toContain("--container-name attachment-worker");
+    expect(deployment).toContain("--image");
     expect(deployment).toContain(
-      'deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}" "${attachment_job_identity_id}"'
+      'start_release_job \\\n  "${ATTACHMENT_SCAN_JOB_NAME}" \\\n  attachment_worker_job'
     );
-    expect(deployment).toContain('start_release_job \\\n  "${ATTACHMENT_SCAN_JOB_NAME}"');
-    expect(deployment).toContain(
-      'RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"'
-    );
-
-    for (const jobManifest of [catalogJob, refreshJob]) {
-      expect(jobManifest).toContain("type: UserAssigned");
-      expect(jobManifest).toContain("PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}");
-      expect(jobManifest).toContain("registries:");
-      expect(jobManifest).toContain("server: alive.azurecr.io");
-      expect(jobManifest).toContain("identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
-    }
-    expect(scanJob).toContain("PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}");
-
-    for (const name of [
-      "BOT_PROFILES_BASE64_JSON",
-      "BOT_PROFILES_JSON",
-      "PROFILE_CONFIG_VERSION",
-      "PPT_ALLOWED_EXTENSIONS",
-      "PPT_DEFAULT_INCLUDE_PDF",
-      "GRAPH_SHEET_MUSIC_FOLDER_ITEM_ID",
-      "GRAPH_SHEET_MUSIC_FOLDER_PATH",
-      "SHEET_MUSIC_DEFAULT_RECURSIVE",
-      "LLM_PROVIDER",
-      "LLM_FALLBACK_PROVIDER",
-      "OPENAI_API_KEY",
-      "OPENAI_BASE_URL",
-      "OPENAI_EMBEDDING_MODEL",
-      "EMBEDDING_KEEP_ALIVE",
-      "CLAMAV_TIMEOUT_MS"
-    ]) {
-      expect(bot).not.toContain(`name: ${name}`);
-    }
-
-    const queueSecretDeploy = deployment.indexOf("az containerapp secret set");
-    const searxngDeploy = deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"');
-    const botDeploy = deployment.indexOf('--yaml "${bot_manifest}"');
-    const refreshedSecretSnapshot = deployment.indexOf(
-      'bot_secrets_json="$(az containerapp secret list',
-      botDeploy
-    );
-    const refreshedEnvSnapshot = deployment.indexOf(
-      'bot_env_json="$(az containerapp show',
-      botDeploy
-    );
-    const refreshDeploy = deployment.indexOf('deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"');
-    const refreshBootstrap = deployment.indexOf(
-      'start_release_job \\\n  "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"'
-    );
-    const scanDeploy = deployment.indexOf('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
-    expect(queueSecretDeploy).toBeGreaterThanOrEqual(0);
-    expect(queueSecretDeploy).toBeLessThan(botDeploy);
-    expect(refreshedSecretSnapshot).toBeGreaterThan(botDeploy);
-    expect(refreshedEnvSnapshot).toBeGreaterThan(botDeploy);
-    expect(searxngDeploy).toBeGreaterThanOrEqual(0);
-    expect(searxngDeploy).toBeLessThan(botDeploy);
-    expect(botDeploy).toBeLessThan(refreshDeploy);
-    expect(refreshDeploy).toBeLessThan(refreshBootstrap);
-    expect(refreshBootstrap).toBeLessThan(scanDeploy);
-    expect(refreshDeploy).toBeLessThan(scanDeploy);
-
-    for (const contents of [scanJob, refreshJob, bot, catalogJob]) {
-      for (const name of retiredEndpointNames) {
-        expect(contents).not.toContain(name);
-      }
-      for (const prefix of retiredEndpointPrefixes) {
-        expect(contents).not.toContain(prefix);
-      }
-      expect(contents).not.toContain(retiredOfficeAddress);
-    }
-    expect(bot).not.toContain("mountPath: /var/lib/clamav");
-    expect(catalogJob).not.toContain("mountPath: /var/lib/clamav");
+    expect(deployment).not.toContain("az containerapp env storage set");
   });
 
   it("does not ship workstation auxiliary-service startup assets", () => {

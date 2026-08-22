@@ -39,15 +39,7 @@ properties:
             secretRef: line-helper-channel-secret
           - name: LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE
             value: PLACEHOLDER_LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE
-          - name: CLAMAV_SIGNATURE_MANIFEST_PATH
-            value: /var/lib/clamav/current/manifest.json
-        volumeMounts:
-          - volumeName: clamav-signatures
-            mountPath: /var/lib/clamav
         resources:
           cpu: 0.25
           memory: 0.5Gi
-    volumes:
-      - name: clamav-signatures
-        storageType: AzureFile
-        storageName: clamav-signatures-readonly
+    volumes: []

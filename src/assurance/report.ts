@@ -8,12 +8,9 @@ export type AssuranceFailureCode =
   | "bot_readiness_failed"
   | "searxng_root_failed"
   | "gateway_webhook_failed"
-  | "clamav_manifest_invalid"
   | "graph_metadata_failed"
   | "notion_query_failed"
   | "attachment_queue_failed"
-  | "clamav_clean_failed"
-  | "clamav_eicar_failed"
   | "diagnostic_folder_failed"
   | "diagnostic_upload_failed"
   | "diagnostic_delete_failed"
@@ -25,13 +22,7 @@ export type AssuranceFailureCode =
   | "malformed_json"
   | "rollback_failed";
 export type AssuranceResourceName =
-  | "bot"
-  | "searxng"
-  | "catalog_sync"
-  | "clamav_refresh"
-  | "attachment_scan"
-  | "release_probe"
-  | "periodic_assurance";
+  "bot" | "searxng" | "catalog_sync" | "attachment_worker" | "release_probe" | "periodic_assurance";
 export type ReleaseCheckName =
   | "target_revision"
   | "target_traffic"
@@ -41,23 +32,18 @@ export type ReleaseCheckName =
   | "searxng_deployment"
   | "release_probe"
   | "catalog_job"
-  | "clamav_refresh_job"
-  | "attachment_scan_job"
+  | "attachment_worker_job"
   | "periodic_assurance_job"
   | "bot_health"
   | "bot_readiness"
   | "searxng_root"
   | "gateway_helper_signed_empty_webhook"
-  | "gateway_main_signed_empty_webhook"
-  | "clamav_signature";
+  | "gateway_main_signed_empty_webhook";
 export type PeriodicCheckName =
   | "graph_metadata"
   | "notion_query"
-  | "clamav_clean"
-  | "clamav_eicar"
   | "attachment_queue"
   | "diagnostic_write_delete"
-  | "clamav_signature"
   | "asset_lifecycle";
 export type AssuranceCheckName = ReleaseCheckName | PeriodicCheckName;
 
@@ -104,12 +90,9 @@ const failureCodes = new Set<AssuranceFailureCode>([
   "bot_readiness_failed",
   "searxng_root_failed",
   "gateway_webhook_failed",
-  "clamav_manifest_invalid",
   "graph_metadata_failed",
   "notion_query_failed",
   "attachment_queue_failed",
-  "clamav_clean_failed",
-  "clamav_eicar_failed",
   "diagnostic_folder_failed",
   "diagnostic_upload_failed",
   "diagnostic_delete_failed",
@@ -125,8 +108,7 @@ const resources = new Set<AssuranceResourceName>([
   "bot",
   "searxng",
   "catalog_sync",
-  "clamav_refresh",
-  "attachment_scan",
+  "attachment_worker",
   "release_probe",
   "periodic_assurance"
 ]);
@@ -139,24 +121,19 @@ const releaseChecks = new Set<ReleaseCheckName>([
   "searxng_deployment",
   "release_probe",
   "catalog_job",
-  "clamav_refresh_job",
-  "attachment_scan_job",
+  "attachment_worker_job",
   "periodic_assurance_job",
   "bot_health",
   "bot_readiness",
   "searxng_root",
   "gateway_helper_signed_empty_webhook",
-  "gateway_main_signed_empty_webhook",
-  "clamav_signature"
+  "gateway_main_signed_empty_webhook"
 ]);
 const periodicChecks = new Set<PeriodicCheckName>([
   "graph_metadata",
   "notion_query",
-  "clamav_clean",
-  "clamav_eicar",
   "attachment_queue",
   "diagnostic_write_delete",
-  "clamav_signature",
   "asset_lifecycle"
 ]);
 

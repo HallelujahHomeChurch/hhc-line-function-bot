@@ -221,9 +221,6 @@ check_codes = {
     "graph_metadata": {"none", "graph_metadata_failed"},
     "notion_query": {"none", "notion_query_failed"},
     "attachment_queue": {"none", "attachment_queue_failed"},
-    "clamav_signature": {"none", "clamav_manifest_invalid", "signature_warning"},
-    "clamav_clean": {"none", "clamav_manifest_invalid", "clamav_clean_failed"},
-    "clamav_eicar": {"none", "clamav_manifest_invalid", "clamav_eicar_failed"},
     "diagnostic_write_delete": {
         "none",
         "diagnostic_folder_failed",

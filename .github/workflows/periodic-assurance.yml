@@ -20,7 +20,7 @@ jobs:
     env:
       RESOURCE_GROUP: alive
       PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
-      ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-scan
+      ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker
       PERIODIC_REPORT_PATH: artifacts/release-assurance/periodic-report.json
       PERIODIC_RUN_ID: periodic-${{ github.run_id }}
       PERIODIC_COMMIT_SHA: ${{ github.sha }}

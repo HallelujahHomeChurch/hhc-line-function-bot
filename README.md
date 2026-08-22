@@ -123,7 +123,7 @@ Profile names must use lowercase letters, numbers, dash, or underscore. The `web
 profile file. The bot runtime resolves each canonical `@` LINE account ID and
 the shared LINE Developers Provider ID; account-link-enabled profiles with
 different Provider IDs fail startup. These identifiers are injected only into
-the bot container, not attachment, catalog, ClamAV, probe, or assurance jobs.
+the bot container, not attachment, catalog, probe, or assurance jobs.
 Production profiles also declare `permissionRequiredFunctions` explicitly; it
 must contain unique known functions and remain a subset of `enabledFunctions`.
 
@@ -242,7 +242,7 @@ Candidate generation does not treat `詩歌` or `流行歌` alone as PPT request
 
 For sheet music requests, the planner can extract the song title, optional artist, requested file type, and fuzzy/exact match preference. Candidate generation stays conservative and only offers this capability when current-message evidence supports it.
 
-Sheet music lookup remains catalog/local-first. If no local sheet music matches and `SEARXNG_BASE_URL` is configured, the bot asks the requester whether to search public web results. It calls SearXNG only after explicit consent, sends only the query to SearXNG, and passes only returned title/snippet/url fields to the `web_summarization` provider. Results are never fetched or saved automatically. An authorized requester with effective `save_resource` permission may explicitly select and confirm one direct HTTPS PDF/JPEG/PNG result for import into the shared pop or hymn catalog. Confirmation queues an opaque work ID; only the finite scan worker performs the SSRF-safe download, ClamAV scan, and shared binary publication. HTML pages, authenticated downloads, and crawling remain prohibited.
+Sheet music lookup remains catalog/local-first. If no local sheet music matches and `SEARXNG_BASE_URL` is configured, the bot asks the requester whether to search public web results. It calls SearXNG only after explicit consent, sends only the query to SearXNG, and passes only returned title/snippet/url fields to the `web_summarization` provider. Results are never fetched or saved automatically. An authorized requester with effective `save_resource` permission may explicitly select and confirm one direct HTTPS PDF/JPEG/PNG result for import into the shared pop or hymn catalog. Confirmation queues an opaque work ID; only the finite attachment worker performs the SSRF-safe download and publishes through Asset API's malware-scanned lifecycle. HTML pages, authenticated downloads, and crawling remain prohibited.
 
 The candidate generator and validator guard model output when the user names an explicit domain. For example, `查維基百科` with no topic asks for the missing topic instead of letting a model invent one, and `查週報音檔` resolves to internal catalog search rather than Wikipedia when `find_resource` is enabled.
 
@@ -455,11 +455,11 @@ Requester-scoped task-frame state records the last successful capability plus ca
 
 Production profiles still allow text messages only unless `allowedMessageTypes` is explicitly expanded. When a profile allows `image` or `file`, the webhook does not immediately download, upload, or save the attachment. Direct chat stores a requester/source-scoped pending attachment session and asks `要我幫忙保存這個檔案嗎？` with `是` and `否` quick replies. Groups first require the requester-scoped two-minute upload activation described above; without it the attachment is ignored without a reply or session.
 
-After opt-in, the bot offers exactly four purposes: `投影片`, `流行歌譜`, `詩歌歌譜`, and `小哈資料庫`. It checks the selected target's write capability, asks the requester to enter a title, and then creates a metadata-only preview with `保存` and `取消`. It does not download or scan the binary during these stages. Only after the requester replies `保存` does the bot atomically claim the pending attachment and persist one opaque work ID in a Redis-backed enqueue outbox. A successful queue send advances that record to `queued`; an ambiguous queue/Redis failure is reported as a scheduled retry, never as a successful queue handoff. The event-driven `aca.attachment-scan-job.yaml` execution leases one queue message and claims the work with a bounded token lease. Expired pre-publication claims are reclaimable and stale claim tokens cannot mutate newer work. A `publishing` lease is not reclaimed: once it expires, the work becomes an observable `publication_abandoned` terminal failure because publication may already have committed externally.
+After opt-in, the bot offers exactly four purposes: `投影片`, `流行歌譜`, `詩歌歌譜`, and `小哈資料庫`. It checks the selected target's write capability, asks the requester to enter a title, and then creates a metadata-only preview with `保存` and `取消`. It does not download or scan the binary during these stages. Only after the requester replies `保存` does the bot atomically claim the pending attachment and persist one opaque work ID in a Redis-backed enqueue outbox. A successful queue send advances that record to `queued`; an ambiguous queue/Redis failure is reported as a scheduled retry, never as a successful queue handoff. The event-driven `hhc-line-bot-attachment-worker` execution leases one queue message and claims the work with a bounded token lease. Expired pre-publication claims are reclaimable and stale claim tokens cannot mutate newer work. A `publishing` lease is not reclaimed: once it expires, the work becomes an observable `publication_abandoned` terminal failure because publication may already have committed externally.
 
 The worker downloads the LINE or authorized external source only until it has durably recorded a non-secret upload descriptor and Asset identity. Redelivery with an Asset identity uses Asset get/wait/grant/download only and validates the persisted checksum, size, and detected MIME before Graph publication. If Asset completion won but recording the identity did not, the worker first replays Asset create with the same work ID and descriptor so Asset idempotency can recover the existing object without another source download. Concurrent duplicate confirmations cannot publish the same session twice. Work completion/failure first wins the fenced terminal state transition and atomically records the bounded requester-job update to apply. Queue deliveries acknowledge only durable completed, permanent-failure, and missing outcomes; transient dependencies, pending scans, and legitimate claim/publication contention remain unacknowledged. The concrete policy is a 10-minute scan deadline, 14-minute publication deadline, 15-minute replica timeout, 1-minute acknowledgement margin, 17-minute queue visibility, 20-minute claim lease, and 60-minute work/job retention. OneDrive upload and catalog upsert remain one logical commit.
 
-The attachment binary is fetched outbound from the finite scan worker through the LINE Content API; it is not part of the inbound webhook JSON. API Gateway, Dapr, and Fastify webhook body limits therefore remain unchanged.
+The attachment binary is fetched outbound from the finite attachment worker through the LINE Content API; it is not part of the inbound webhook JSON. API Gateway, Dapr, and Fastify webhook body limits therefore remain unchanged.
 
 Supported attachment targets in this flow:
 
@@ -468,9 +468,7 @@ Supported attachment targets in this flow:
 - `詩歌歌譜`: writes to the `hymn_sheet_music` OneDrive root and indexes `hymn_sheet`.
 - `小哈資料庫` / `教會資料`: writes to `xiaoha_database` subfolders and indexes `church_document`, `church_image`, or `church_other` with 90-day retention.
 
-The finite attachment Job uses a dedicated managed identity to consume the queue and call Asset API through internal ingress. It creates an idempotent `line.group.file` asset, waits for Asset's durable scan result, downloads only a clean granted asset, verifies its persisted descriptor again, then publishes through the existing Graph and catalog path. Pending scans and transient Asset failures leave the queue delivery unacknowledged for retry; infected, invalid, or permanent Asset failures transition durably before acknowledgement. The Job does not receive storage keys, queue connection strings, ClamAV configuration, LINE channel secrets, Account authorization, LLM keys, Notion credentials, or observability secrets. The previous local ClamAV worker and signature refresh resources remain available only as the deployment rollback path until the cloud flow passes production smoke.
-
-`aca.clamav-signature-refresh-job.yaml` runs every Monday at `10 19 * * 0` UTC, which is 03:10 Monday in Asia/Taipei. It mounts the same Azure Files share through a separate read/write environment storage definition, downloads into a private staging directory, requires `main`, `daily`, and `bytecode` databases, validates each with ClamAV tooling, moves the set into an immutable versioned directory, and atomically replaces the sanitized manifest last. Deployment also starts and waits for one refresh execution before enabling the queue scanner, so a newly provisioned share is never left empty until the first scheduled run. Any download, completeness, validation, or promotion failure exits non-zero and retains the prior active set. Signature age is warning-only: it is never an age-based publication block after 7 days.
+The finite attachment Job uses a dedicated managed identity to consume the queue and call Asset API through internal ingress. It creates an idempotent `line.group.file` asset, waits for Asset's durable scan result, downloads only a clean granted asset, verifies its persisted descriptor again, then publishes through the existing Graph and catalog path. Pending scans and transient Asset failures leave the queue delivery unacknowledged for retry; infected, invalid, or permanent Asset failures transition durably before acknowledgement. The Job does not receive storage keys, queue connection strings, ClamAV configuration, LINE channel secrets, Account authorization, LLM keys, Notion credentials, or observability secrets. Asset API owns malware scanning, signature freshness, and EICAR assurance.
 
 ## Runtime Secrets
 
@@ -484,8 +482,6 @@ Do not commit real `.env` files. In Azure Container Apps, store only real creden
 - `GRAPH_CLIENT_SECRET`
 - `ATTACHMENT_SCAN_QUEUE_URL` as the queue-scoped bot producer secret
 - `ASSET_API_AUDIENCE` for the attachment Job's managed-identity token
-
-The release script obtains the ClamAV Azure Files account key directly from the storage account while provisioning the Container Apps environment storage, then discards it. It is never copied into the bot app or the scan-job secret set.
 
 `config/profiles.json` is intentionally non-sensitive and is packaged in the image. Do not set `BOT_PROFILES_JSON` or `BOT_PROFILES_BASE64_JSON`; the runtime rejects both.
 
@@ -521,11 +517,9 @@ Operational details are in `docs/runbooks/production-operations.md`.
 ```text
 alive.azurecr.io/alive/hhc-line-function-bot:<branch>-<githubRunId>
 alive.azurecr.io/alive/hhc-line-function-bot:latest
-alive.azurecr.io/alive/hhc-line-function-bot-scan:<branch>-<githubRunId>
-alive.azurecr.io/alive/hhc-line-function-bot-scan:latest
 ```
 
-Bot deployment is manifest-driven: `aca.containerapp.yaml` owns the bot's Dapr, ingress, probe, scale, resource, mount, and environment-variable structure, while `scripts/deploy-aca.sh` owns environment-specific values, secret-reference names and values, image selection, rendering, apply order, and rollout verification. It applies and verifies Dapr configuration. The active attachment Job uses a dedicated managed identity for ACR, queue consumption, and internal Asset API access. The legacy ClamAV image, signature share, and refresh Job remain deployment rollback resources until the cloud path passes production smoke.
+Bot deployment is manifest-driven: `aca.containerapp.yaml` owns the bot's Dapr, ingress, probe, scale, resource, mount, and environment-variable structure, while `scripts/deploy-aca.sh` owns environment-specific values, secret-reference names and values, image selection, rendering, apply order, and rollout verification. It applies and verifies Dapr configuration. The Terraform-owned attachment Job uses the same immutable runtime image and a dedicated managed identity for ACR, queue consumption, and internal Asset API access.
 
 Documentation-only merges do not trigger `Production Release`. GitHub Actions is the sole CI/CD system for this repository; the former Azure DevOps pipeline and its YAML definition have been removed.
 

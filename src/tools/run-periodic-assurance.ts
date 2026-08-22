@@ -1,13 +1,9 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { ManagedIdentityCredential } from "@azure/identity";
 import { QueueServiceClient } from "@azure/storage-queue";
 import { Client, LogLevel } from "@notionhq/client";
 
-import { scanWithClamAvCli } from "../attachments/clamav-cli.js";
 import {
   runPeriodicAssurance,
   type PeriodicAssuranceDependencies,
@@ -23,7 +19,6 @@ import {
 import { createGraphDriveClient, type CreateGraphDriveClientOptions } from "../clients/graph.js";
 import type { GraphConfig, GraphDriveClient } from "../types.js";
 
-const DEFAULT_SCAN_TIMEOUT_MS = 15_000;
 const ASSET_OPERATION_TIMEOUT_MS = 180_000;
 const ASSET_CLEANUP_TIMEOUT_MS = 30_000;
 const ASSET_POLL_INTERVAL_MS = 2_000;
@@ -119,9 +114,7 @@ function readInput(env: Record<string, string | undefined>): PeriodicAssuranceIn
   return {
     graphDriveId: required(env, "GRAPH_DRIVE_ID"),
     graphOtherFolderItemId: required(env, "GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID"),
-    notionDatabaseId: required(env, "NOTION_SERVICE_DATABASE_ID"),
-    clamavSignatureManifestPath: required(env, "CLAMAV_SIGNATURE_MANIFEST_PATH"),
-    scanTimeoutMs: positiveInteger(env.CLAMAV_SCAN_TIMEOUT_MS, DEFAULT_SCAN_TIMEOUT_MS)
+    notionDatabaseId: required(env, "NOTION_SERVICE_DATABASE_ID")
   };
 }
 
@@ -172,17 +165,6 @@ export function createPeriodicAssuranceDependencies(
           ? { oldestInsertedAt: peeked.peekedMessageItems[0].insertedOn }
           : {})
       };
-    },
-    readSignatureManifest: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
-    scanSample: async ({ fileName, data, databaseDirectory, timeoutMs }) => {
-      const directory = await mkdtemp(join(tmpdir(), "hhc-periodic-assurance-"));
-      try {
-        const filePath = join(directory, fileName);
-        await writeFile(filePath, data, { flag: "wx" });
-        return await scanWithClamAvCli({ filePath, databaseDirectory, timeoutMs });
-      } finally {
-        await rm(directory, { recursive: true, force: true });
-      }
     },
     ensureDiagnosticsFolder: (driveId, parentItemId, name) =>
       graph.ensureFolder!(driveId, parentItemId, name),
@@ -243,15 +225,6 @@ function requiredUuid(env: Record<string, string | undefined>, key: string): str
   const value = required(env, key);
   if (!UUID_PATTERN.test(value)) throw new Error("periodic_assurance_invalid_input");
   return value;
-}
-
-function positiveInteger(value: string | undefined, fallback: number): number {
-  if (value === undefined || value.trim() === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error("periodic_assurance_invalid_input");
-  }
-  return parsed;
 }
 
 async function main(): Promise<void> {

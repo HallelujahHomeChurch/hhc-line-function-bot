@@ -88,7 +88,6 @@ describe("Kernel v1 versioned acceptance corpus", () => {
         "kernel-v1/write/bare-confirmation-precedence@1",
         "kernel-v1/write/unauthorized-save-denied@1",
         "kernel-v1/write/account-admin-outside-read-projection@1",
-        "kernel-v1/write/scan-unavailable-fails-closed@1",
         "kernel-v1/write/group-attachment-without-intent-silent@1",
         "kernel-v1/write/group-requester-cannot-complete-other-upload@1",
         "kernel-v1/resource/unavailable-not-not-found@1",
@@ -96,10 +95,8 @@ describe("Kernel v1 versioned acceptance corpus", () => {
         "kernel-v1/state/expired-active-task-not-used@1",
         "kernel-v1/resource/deepseek-unavailable-explicit@1",
         "kernel-v1/resource/deepseek-unavailable-ambiguous@1",
-        "kernel-v1/write/signature-missing-no-publish@1",
-        "kernel-v1/write/signature-aged-publishes@1",
-        "kernel-v1/write/infected-no-publish@1",
-        "kernel-v1/state/clean-job-requester-scope@1"
+        "kernel-v1/write/real-attachment-lifecycle@1",
+        "kernel-v1/write/reclaimed-claim-publication-fenced@1"
       ])
     );
     expect(

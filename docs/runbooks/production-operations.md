@@ -101,7 +101,7 @@ The line bot does not expose LLM auth callback routes. Public gateway routing sh
 
 Catalog sources live in PostgreSQL `catalog_sources`. Startup and the sync job run an idempotent seed from environment-backed roots such as `GRAPH_POP_SHEET_FOLDER_ITEM_ID`, not real folder IDs in git. Keep actual Graph drive/folder IDs in ACA environment settings or secrets.
 
-The webhook service should stay long-running on `node dist/index.js`. The LINE webhook Container App keeps `minReplicas: 1` because LINE delivery is latency-sensitive and must not wait for ACA scale-from-zero. It retains `maxReplicas: 10` and `0.5 CPU / 1 GiB` per replica. Attachment scanning and ClamAV refresh remain finite ACA Jobs because they are asynchronous and are not part of the synchronous reply-token path.
+The webhook service should stay long-running on `node dist/index.js`. The LINE webhook Container App keeps `minReplicas: 1` because LINE delivery is latency-sensitive and must not wait for ACA scale-from-zero. It retains `maxReplicas: 10` and `0.5 CPU / 1 GiB` per replica. Attachment publication remains a finite ACA Job because it is asynchronous and is not part of the synchronous reply-token path; Asset API owns malware scanning and signature refresh.
 
 Catalog sync runs as a separate ACA Scheduled Job from the same image:
 
@@ -231,7 +231,7 @@ a human LINE reply from this probe; inspect sanitized naturally occurring
 success telemetry in a separately declared acceptance window for that evidence.
 
 Release check failures use bounded codes such as `network_failed`, `timeout`,
-`http_mismatch`, `malformed_json`, or `clamav_manifest_invalid`. Treat any
+`http_mismatch`, `malformed_json`, or `attachment_queue_failed`. Treat any
 non-`none` `failureCode` as a failed release: retain the report artifact,
 inspect the named check and Azure execution state, and correct the manifest,
 network, or dependency condition in a reviewed pull request. Never retry by
@@ -272,7 +272,7 @@ After either path, verify `GET /healthz`, `GET /readyz`, and direct-admin
 The scheduled GitHub workflow runs `hhc-line-bot-periodic-assurance` weekly
 and uploads `artifacts/release-assurance/periodic-report.json`. It is distinct
 from release acceptance: it executes bounded Graph/Notion metadata checks,
-attachment-queue and recent-scan checks, ClamAV clean/EICAR checks, and a
+attachment-queue and recent-worker checks, Asset lifecycle assurance, and a
 dedicated diagnostics-folder write/delete check. Its report has the same
 allowlisted identity, timestamp, check, `failureCode`, target, known-good, and
 rollback fields, with `providerRequests: { deepseek: 0, embedding: 0 }`.
@@ -300,7 +300,7 @@ The bot does not perform arbitrary web browsing or maintain an administrator web
 
 Sheet music has one controlled public-search fallback. If `SEARXNG_BASE_URL` points to an internal SearXNG service and local sheet music lookup finds nothing, the bot asks the requester whether to search public results. It calls SearXNG only after consent, uses only title/snippet/url fields, sends those fields to the `web_summarization` provider for summary/ranking, and does not fetch pages, download files, or save the results. Leave `SEARXNG_BASE_URL` unset to disable this fallback.
 
-Production deploys `hhc-searxng` with internal-only ingress, one replica, `0.25` CPU, and `0.5Gi` memory. The active attachment Job has one replica per execution and uses a dedicated managed identity to call Asset API through authenticated internal ingress. Asset API owns the finite ClamAV scan and signature refresh Jobs. The LINE-owned weekly `10 19 * * 0` UTC refresh remains rollback-only until production smoke succeeds.
+Production deploys `hhc-searxng` with internal-only ingress, one replica, `0.25` CPU, and `0.5Gi` memory. The active `hhc-line-bot-attachment-worker` Job has one replica per execution, `0.5` CPU / `1Gi` memory, and uses a dedicated managed identity to call Asset API through authenticated internal ingress. Asset API owns the finite malware scan and signature refresh Jobs; LINE has no scanner image, signature share, or ClamAV refresh Job.
 
 Asset returns a durable scan status. `pending` and `scanning` remain retryable; `infected`, `failed`, or any malformed response fails closed. The LINE Job downloads only after creating a service grant and verifies the original hash again before Graph publication.
 

@@ -25,32 +25,6 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 USER node
 
-FROM node:24-bookworm-slim AS attachment-scan-worker
-ARG CLAMAV_VERSION=1.4.3+dfsg-1~deb12u2
-WORKDIR /app
-ENV NODE_ENV=production
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-      ca-certificates \
-      "clamav=${CLAMAV_VERSION}" \
-      "clamav-base=${CLAMAV_VERSION}" \
-      "clamav-freshclam=${CLAMAV_VERSION}" \
-    && sed -i \
-      's#^UpdateLogFile .*#UpdateLogFile /tmp/hhc-line-bot-freshclam.log#' \
-      /etc/clamav/freshclam.conf \
-    && grep -Fxq \
-      'UpdateLogFile /tmp/hhc-line-bot-freshclam.log' \
-      /etc/clamav/freshclam.conf \
-    && rm -rf /var/lib/apt/lists/*
-LABEL org.opencontainers.image.source="https://github.com/HallelujahHomeChurch/hhc-line-function-bot"
-LABEL org.opencontainers.image.description="Finite LINE attachment scan and signature refresh worker"
-COPY --from=prod-deps /app/package.json ./package.json
-COPY --from=prod-deps /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
-COPY config ./config
-USER node
-CMD ["node", "dist/tools/run-attachment-scan-job.js"]
-
 FROM gcr.io/distroless/nodejs24-debian13:nonroot AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
