@@ -799,18 +799,32 @@ async function handleWebhook(
     const needsRegistrationAuthorization = Boolean(
       event.source.userId && profile.accountLink && parsedAdminCommand?.command === "registry"
     );
+    const needsManagedDirectAuthorization = Boolean(
+      event.source.type === "user" &&
+      event.source.userId &&
+      profile.accountLink &&
+      directAccessPolicy(profile) === "managed"
+    );
+    const managedDirectAuthorization = needsManagedDirectAuthorization
+      ? profile.permissionRequiredFunctions.filter((name) =>
+          profile.enabledFunctions.includes(name)
+        )
+      : [];
     let accountAuthorizationUsed =
       needsAdminAuthorization ||
       needsAttachmentAuthorization ||
       needsIntroAuthorization ||
-      needsRegistrationAuthorization;
+      needsRegistrationAuthorization ||
+      needsManagedDirectAuthorization;
     let accountState = accountAuthorizationUsed
       ? await turnAccountAuthorization.state(
-          needsAttachmentAuthorization
-            ? attachmentAuthorization
-            : needsIntroAuthorization
-              ? introAuthorization
-              : registrationAuthorization
+          needsManagedDirectAuthorization
+            ? managedDirectAuthorization
+            : needsAttachmentAuthorization
+              ? attachmentAuthorization
+              : needsIntroAuthorization
+                ? introAuthorization
+                : registrationAuthorization
         )
       : { available: true, authorization: emptyFunctionAuthorization() };
     let accountAuthorization = adminAuthorizationFromFunctionState(accountState);

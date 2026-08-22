@@ -1653,8 +1653,13 @@ describe("LINE entrance", () => {
     expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("權限");
   });
 
-  it("blocks /memories when retrieve_memory is not configured without calling Account", async () => {
-    const authorizeFunctions = vi.fn();
+  it("blocks /memories when retrieve_memory is not configured after resolving Account role", async () => {
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: false,
+      allowedFunctions: []
+    });
     const handleCommand = vi.fn().mockResolvedValue({ ok: true, replyText: "unsafe memories" });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
@@ -1677,15 +1682,25 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith({
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: []
+    });
     expect(handleCommand).not.toHaveBeenCalled();
     expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("權限");
   });
 
-  it("runs public /memories locally without an Account lookup", async () => {
+  it("runs public /memories locally after resolving Account role", async () => {
     const config = testConfig();
     config.profiles[0]!.enabledFunctions.push("retrieve_memory");
-    const authorizeFunctions = vi.fn();
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: false,
+      allowedFunctions: []
+    });
     const handleCommand = vi.fn().mockResolvedValue({ ok: true, replyText: "stored memories" });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
@@ -1708,7 +1723,12 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith({
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: []
+    });
     expect(handleCommand).toHaveBeenCalledOnce();
     expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("stored memories");
   });
@@ -6284,26 +6304,46 @@ describe("LINE entrance", () => {
     expect(router.route).not.toHaveBeenCalled();
   });
 
-  it("stores an allowed direct attachment as a requester-scoped pending save-resource request", async () => {
+  it("continues an administrator's pending direct attachment without a registration prompt", async () => {
     const config = testConfig();
     config.profiles[0] = {
       ...config.profiles[0],
       allowedMessageTypes: ["text", "image", "file"],
       enabledFunctions: ["save_resource"],
-      permissionRequiredFunctions: ["save_resource"]
+      permissionRequiredFunctions: ["save_resource"],
+      registration: { enabled: true }
     };
     const router: FunctionRouterPort = { route: vi.fn() };
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const continuePendingAttachment = vi.fn().mockResolvedValue({
+      ok: true,
+      replyText: "這個檔案要保存成哪一種用途？"
+    });
+    const authorizeFunctions = vi.fn(async ({ functionNames }) => ({
+      bound: true,
+      active: true,
+      administrator: true,
+      allowedFunctions: functionNames
+    }));
     const sessionStore = new InMemorySessionStore();
     const app = createTestApp(config, {
       router,
       sessionStore,
+      textMessageHandlers: {
+        pending_attachment: {
+          turnStage: "attachment",
+          capability: "save_resource",
+          matches: vi.fn().mockResolvedValue(true),
+          handle: continuePendingAttachment
+        }
+      },
+      accountAdminClient: { authorizeFunctions },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
       type: "message",
       replyToken: "reply-token",
-      source: { type: "user", userId: "Uadmin" },
+      source: { type: "user", userId: "Uaccountadmin" },
       message: { type: "image", id: "image-1" }
     });
 
@@ -6328,8 +6368,8 @@ describe("LINE entrance", () => {
     await expect(
       sessionStore.findPendingAttachment({
         profileName: "main",
-        source: { type: "user", userId: "Uadmin" },
-        requesterUserId: "Uadmin"
+        source: { type: "user", userId: "Uaccountadmin" },
+        requesterUserId: "Uaccountadmin"
       })
     ).resolves.toMatchObject({
       action: "save_resource",
@@ -6337,6 +6377,84 @@ describe("LINE entrance", () => {
       attachment: { messageId: "image-1", messageType: "image" }
     });
     expect(router.route).not.toHaveBeenCalled();
+
+    replyText.mockClear();
+    const confirmationBody = lineBody({
+      type: "message",
+      replyToken: "confirmation-reply-token",
+      source: { type: "user", userId: "Uaccountadmin" },
+      message: { type: "text", text: "是" }
+    });
+
+    const confirmationResponse = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(confirmationBody, "main-secret"),
+      payload: confirmationBody
+    });
+
+    expect(confirmationResponse.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith(
+      "confirmation-reply-token",
+      "這個檔案要保存成哪一種用途？",
+      undefined
+    );
+    expect(continuePendingAttachment).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
+    expect(authorizeFunctions.mock.calls[1]?.[0]).toMatchObject({
+      functionNames: ["save_resource"]
+    });
+  });
+
+  it("resolves a managed direct Account role before a locally allowed continuation", async () => {
+    const config = testConfig();
+    config.profiles[0] = {
+      ...config.profiles[0],
+      registration: { enabled: true }
+    };
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: true,
+      allowedFunctions: []
+    });
+    const handle = vi.fn().mockResolvedValue({ ok: true, replyText: "continued" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      accountAdminClient: { authorizeFunctions },
+      textMessageHandlers: {
+        role_probe: {
+          turnStage: "attachment",
+          capability: "query_schedule",
+          matches: vi.fn().mockResolvedValue(true),
+          handle
+        }
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "role-reply-token",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "繼續" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith("role-reply-token", "continued", undefined);
+    expect(handle.mock.calls[0]?.[1]).toMatchObject({ requesterIsAdmin: true });
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith({
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: []
+    });
   });
 
   it("silently ignores a group attachment without a requester upload intent", async () => {
@@ -6883,7 +7001,7 @@ describe("LINE entrance", () => {
     expect(authorizeFunctions).toHaveBeenCalledOnce();
   });
 
-  it("fails a legacy completed slow job without an owning capability closed", async () => {
+  it("fails a legacy completed slow job without an owning capability closed after resolving role", async () => {
     const jobStore = new InMemoryAgentJobStore();
     const job = await jobStore.createPending({
       scope: {
@@ -6895,7 +7013,12 @@ describe("LINE entrance", () => {
       ttlMs: 60_000
     });
     await jobStore.complete(job.id, { ok: true, replyText: "unsafe legacy result" });
-    const authorizeFunctions = vi.fn();
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: false,
+      allowedFunctions: []
+    });
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
       agentJobStore: jobStore,
@@ -6917,7 +7040,12 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(authorizeFunctions).not.toHaveBeenCalled();
+    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledWith({
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: []
+    });
     expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("權限");
     expect(String(replyText.mock.calls.at(-1)?.[1])).not.toContain("unsafe legacy result");
   });
