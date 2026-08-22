@@ -376,6 +376,7 @@ function realAttachmentJourney(): KernelAcceptanceCase {
         activated?.replyText?.includes("兩分鐘") === true &&
         otherRequester === undefined &&
         accepted?.replyText.includes("要我幫忙保存") === true &&
+        writeResults[0]?.replyText === "這個檔案要保存成哪一種用途？" &&
         scanQueue.workIds.length === 1 &&
         writeResults[3]?.replyText?.includes("查看結果") === true &&
         work?.scope.requesterUserId === "U_SYNTHETIC_1" &&
