@@ -20,6 +20,7 @@
     "eval:kernel:local-live": "bash scripts/run-kernel-local-live.sh",
     "eval:retrieval-product": "vitest run src/__tests__/retrieval-product-evals.test.ts",
     "catalog:sync": "tsx src/tools/sync-catalog.ts",
+    "attachment-worker:run": "node dist/tools/run-attachment-worker.js",
     "attachment-scan:run": "node dist/tools/run-attachment-asset-job.js",
     "attachment-scan:legacy": "node dist/tools/run-attachment-scan-job.js",
     "config:validate": "tsx src/tools/check-profile-config.ts",

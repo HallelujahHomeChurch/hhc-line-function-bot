@@ -612,7 +612,8 @@ Function dependencies are intentionally behind ports/clients:
 
 - LINE: `src/clients/line.ts`
 - Asset API attachment client and finite worker: `src/clients/asset-api.ts` and
-  `src/tools/run-attachment-asset-job.ts`
+  `src/tools/run-attachment-worker.ts` (`run-attachment-asset-job.ts` remains a temporary
+  compatibility entrypoint during the ACA Job rename)
 - Legacy rollback scanner: `src/tools/run-attachment-scan-job.ts`
 - SearXNG web search: `src/clients/searxng.ts`
 - DeepSeek provider: `src/clients/deepseek.ts`

@@ -418,6 +418,7 @@ describe("production profile configuration deployment contract", () => {
 
     const jobPaths = [
       "aca.attachment-scan-job.yaml",
+      "aca.attachment-worker-job.yaml",
       "aca.catalog-sync-job.yaml",
       "aca.clamav-signature-refresh-job.yaml",
       "aca.periodic-assurance-job.yaml",
@@ -449,6 +450,7 @@ describe("production profile configuration deployment contract", () => {
       expect(readProjectFile(".env.example")).toContain(`${name}=PLACEHOLDER_${name}`);
       for (const path of [
         "aca.attachment-scan-job.yaml",
+        "aca.attachment-worker-job.yaml",
         "aca.catalog-sync-job.yaml",
         "aca.clamav-signature-refresh-job.yaml",
         "aca.periodic-assurance-job.yaml",
@@ -878,13 +880,16 @@ describe("production profile configuration deployment contract", () => {
   });
 
   it("provisions finite queue scans and atomic scheduled ClamAV signature refreshes", () => {
-    const scanJob = readProjectFile("aca.attachment-scan-job.yaml");
+    const scanJob = readProjectFile("aca.attachment-worker-job.yaml");
     const refreshJob = readProjectFile("aca.clamav-signature-refresh-job.yaml");
     const bot = readProjectFile("aca.containerapp.yaml");
     const catalogJob = readProjectFile("aca.catalog-sync-job.yaml");
     const dockerfile = readProjectFile("Dockerfile");
     const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const packageJson = JSON.parse(readProjectFile("package.json")) as {
+      scripts: Record<string, string>;
+    };
 
     expect(scanJob).toContain("type: Microsoft.App/jobs");
     expect(scanJob).toContain("triggerType: Event");
@@ -915,13 +920,21 @@ describe("production profile configuration deployment contract", () => {
     expect(scanJob).toContain('name: MEDIA_SYNC_MAX_BYTES\n            value: "209715200"');
     expect(scanJob).toContain('name: MAX_ATTACHMENT_BYTES\n            value: "26214400"');
     expect(scanJob).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot:latest");
-    expect(scanJob).toContain("dist/tools/run-attachment-asset-job.js");
+    expect(scanJob).toContain("name: hhc-line-bot-attachment-worker");
+    expect(scanJob).toContain("value: hhc-line-bot-attachment-worker");
+    expect(scanJob).toContain("dist/tools/run-attachment-worker.js");
     expect(scanJob).toContain("cpu: 1.0");
     expect(scanJob).toContain("memory: 2Gi");
     expect(scanJob).not.toContain("mountPath: /var/lib/clamav");
     expect(scanJob).not.toContain("name: CLAMAV_");
     expect(scanJob).toContain("  volumes: []");
     expect(scanJob).not.toContain("ingress:");
+    expect(packageJson.scripts["attachment-worker:run"]).toBe(
+      "node dist/tools/run-attachment-worker.js"
+    );
+    expect(packageJson.scripts["attachment-scan:run"]).toBe(
+      "node dist/tools/run-attachment-asset-job.js"
+    );
 
     expect(refreshJob).toContain("type: Microsoft.App/jobs");
     expect(refreshJob).toContain("triggerType: Schedule");
@@ -946,6 +959,7 @@ describe("production profile configuration deployment contract", () => {
     expect(catalogJob).toContain("name: ATTACHMENT_SCAN_QUEUE_URL");
 
     expect(releaseWorkflow).toContain("- aca.attachment-scan-job.yaml");
+    expect(releaseWorkflow).toContain("- aca.attachment-worker-job.yaml");
     expect(releaseWorkflow).toContain("- aca.clamav-signature-refresh-job.yaml");
     expect(releaseWorkflow).toContain("--target attachment-scan-worker");
     expect(releaseWorkflow).toContain("SCAN_IMAGE_REPOSITORY");

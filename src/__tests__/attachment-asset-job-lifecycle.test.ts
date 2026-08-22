@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as MediaSyncWorkerModule from "../media-sync/worker.js";
-import type * as AttachmentScanJobModule from "../tools/run-attachment-scan-job.js";
 
 const mocks = vi.hoisted(() => ({
   createAssetApiClient: vi.fn(),
   complete: vi.fn(),
   postgresEnd: vi.fn(),
-  receiveWork: vi.fn(),
+  receiveMessages: vi.fn(),
   redisQuit: vi.fn(),
   runMediaSyncWorker: vi.fn()
 }));
@@ -16,7 +15,14 @@ vi.mock("@azure/identity", () => ({
   ManagedIdentityCredential: class ManagedIdentityCredential {}
 }));
 vi.mock("@azure/storage-queue", () => ({
-  QueueClient: class QueueClient {}
+  QueueClient: class QueueClient {
+    receiveMessages() {
+      return mocks.receiveMessages();
+    }
+    deleteMessage() {
+      return mocks.complete();
+    }
+  }
 }));
 vi.mock("../agent/jobs.js", () => ({ RedisAgentJobStore: class RedisAgentJobStore {} }));
 vi.mock("../attachments/asset-worker.js", () => ({ runAttachmentAssetWorker: vi.fn() }));
@@ -75,12 +81,7 @@ vi.mock("../redis.js", () => ({
     keyPrefix: "test"
   }))
 }));
-vi.mock("../tools/run-attachment-scan-job.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof AttachmentScanJobModule>()),
-  receiveAttachmentScanWork: mocks.receiveWork
-}));
-
-import { runAttachmentAssetJob } from "../tools/run-attachment-asset-job.js";
+import { runAttachmentWorker } from "../tools/run-attachment-worker.js";
 
 describe("attachment asset job lifecycle", () => {
   beforeEach(() => {
@@ -88,10 +89,17 @@ describe("attachment asset job lifecycle", () => {
     mocks.createAssetApiClient.mockReturnValue({});
     mocks.complete.mockResolvedValue(undefined);
     mocks.postgresEnd.mockResolvedValue(undefined);
-    mocks.receiveWork.mockResolvedValue({
-      kind: "media-sync",
-      workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
-      complete: mocks.complete
+    mocks.receiveMessages.mockResolvedValue({
+      receivedMessageItems: [
+        {
+          messageText: JSON.stringify({
+            kind: "media-sync",
+            workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab"
+          }),
+          messageId: "opaque-message",
+          popReceipt: "opaque-receipt"
+        }
+      ]
     });
     mocks.redisQuit.mockResolvedValue(undefined);
   });
@@ -104,7 +112,7 @@ describe("attachment asset job lifecycle", () => {
       })
     );
 
-    const running = runAttachmentAssetJob({
+    const running = runAttachmentWorker({
       ASSET_API_AUDIENCE: "api://asset-api",
       ASSET_API_URL: "https://asset-api.internal.example",
       ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/media-sync",
@@ -134,7 +142,7 @@ describe("attachment asset job lifecycle", () => {
       return {};
     });
 
-    await runAttachmentAssetJob({
+    await runAttachmentWorker({
       ASSET_API_AUDIENCE: "api://asset-api",
       ASSET_API_URL: "https://tenant-private.example/blob-key-private",
       ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/media-private-id",

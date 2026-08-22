@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   assetAccessTokenScope,
-  readAttachmentAssetJobEnvironment,
-  runAttachmentAssetQueueLease
-} from "../tools/run-attachment-asset-job.js";
+  readAttachmentWorkerEnvironment,
+  runAttachmentWorkerQueueLease
+} from "../tools/run-attachment-worker.js";
 
 describe("attachment asset job environment", () => {
   it("requires one dedicated managed identity and private Asset endpoint", () => {
     expect(
-      readAttachmentAssetJobEnvironment({
+      readAttachmentWorkerEnvironment({
         ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/line-attachment-scan",
         ASSET_API_URL: "https://asset-api.internal.example",
         ASSET_API_AUDIENCE: "api://asset-api",
@@ -30,7 +30,7 @@ describe("attachment asset job environment", () => {
     ["AZURE_CLIENT_ID", { AZURE_CLIENT_ID: "not-a-uuid" }]
   ])("rejects an invalid %s", (field, override) => {
     expect(() =>
-      readAttachmentAssetJobEnvironment({
+      readAttachmentWorkerEnvironment({
         ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/line-attachment-scan",
         ASSET_API_URL: "https://asset-api.internal.example",
         ASSET_API_AUDIENCE: "api://asset-api",
@@ -53,7 +53,7 @@ describe("attachment asset job environment", () => {
     });
 
     await expect(
-      runAttachmentAssetQueueLease(
+      runAttachmentWorkerQueueLease(
         {
           kind: "media-sync",
           workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
@@ -74,7 +74,7 @@ describe("attachment asset job environment", () => {
     const complete = vi.fn().mockResolvedValue(undefined);
 
     await expect(
-      runAttachmentAssetQueueLease(
+      runAttachmentWorkerQueueLease(
         {
           kind: "media-sync",
           workId: "4c03465b-8a87-45a2-9d0d-54f904f4e6ab",
