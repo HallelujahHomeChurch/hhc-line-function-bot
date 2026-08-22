@@ -20,6 +20,7 @@ on:
       - aca.searxng.containerapp.yaml
       - aca.catalog-sync-job.yaml
       - aca.attachment-scan-job.yaml
+      - aca.attachment-worker-job.yaml
       - aca.clamav-signature-refresh-job.yaml
       - aca.release-probe-job.yaml
       - aca.periodic-assurance-job.yaml

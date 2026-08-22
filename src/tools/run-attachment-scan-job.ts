@@ -21,6 +21,12 @@ import { createLineSdkContentClient } from "../clients/line.js";
 import { createPostgresRuntime } from "../db/postgres.js";
 import { createResourceBinaryPublisher } from "../functions/resource-binary-publisher.js";
 import { createRedisRuntime } from "../redis.js";
+import {
+  receiveAttachmentScanWork,
+  type AttachmentScanWorkLease
+} from "./run-attachment-worker.js";
+
+export { receiveAttachmentScanWork } from "./run-attachment-worker.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DEFAULT_SIGNATURE_WARNING_AGE_HOURS = 168;
@@ -75,68 +81,6 @@ export function readAttachmentScanJobEnvironment(
     signatureManifestPath,
     scanTimeoutMs,
     signaturePolicy: { warningAgeMs: signatureWarningAgeHours * HOUR_MS }
-  };
-}
-
-export interface AttachmentScanQueueReceiver {
-  receiveMessages(options: { numberOfMessages: number; visibilityTimeout: number }): Promise<{
-    receivedMessageItems: Array<{
-      messageText: string;
-      messageId: string;
-      popReceipt: string;
-    }>;
-  }>;
-  deleteMessage(messageId: string, popReceipt: string): Promise<unknown>;
-}
-
-export interface AttachmentScanWorkLease {
-  kind: "attachment" | "media-sync";
-  workId: string;
-  complete(): Promise<void>;
-}
-
-export async function receiveAttachmentScanWork(
-  client: AttachmentScanQueueReceiver
-): Promise<AttachmentScanWorkLease | undefined> {
-  const response = await client.receiveMessages({
-    numberOfMessages: 1,
-    visibilityTimeout: ATTACHMENT_SCAN_TIMING.queueVisibilityMs / 1000
-  });
-  const message = response.receivedMessageItems[0];
-  if (!message) return undefined;
-
-  let workId: string | undefined;
-  let kind: "attachment" | "media-sync" | undefined;
-  try {
-    const value = JSON.parse(message.messageText) as unknown;
-    if (value && typeof value === "object" && "workId" in value) {
-      const keys = Object.keys(value);
-      const rawKind = "kind" in value ? value.kind : "attachment";
-      if (
-        (keys.length === 1 ||
-          (keys.length === 2 && keys.includes("kind") && keys.includes("workId"))) &&
-        (rawKind === "attachment" || rawKind === "media-sync") &&
-        typeof value.workId === "string" &&
-        UUID_PATTERN.test(value.workId)
-      ) {
-        workId = value.workId;
-        kind = rawKind;
-      }
-    }
-  } catch {
-    // Invalid queue content is acknowledged below without being logged.
-  }
-  if (!workId) {
-    await client.deleteMessage(message.messageId, message.popReceipt);
-    return undefined;
-  }
-
-  return {
-    kind: kind!,
-    workId,
-    complete: async () => {
-      await client.deleteMessage(message.messageId, message.popReceipt);
-    }
   };
 }
 
