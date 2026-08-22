@@ -890,6 +890,15 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain("az containerapp job update");
     expect(deployment).toContain("--container-name attachment-worker");
     expect(deployment).toContain("--image");
+    const workerMutation = deployment.indexOf(
+      'mark_release_job_mutated "${ATTACHMENT_SCAN_JOB_NAME}"'
+    );
+    const workerUpdate = deployment.slice(
+      deployment.indexOf("az containerapp job update", workerMutation),
+      deployment.indexOf("start_release_job", workerMutation)
+    );
+    expect(workerUpdate).toContain("--cpu 0.5");
+    expect(workerUpdate).toContain("--memory 1Gi");
     expect(deployment).toContain(
       'start_release_job \\\n  "${ATTACHMENT_SCAN_JOB_NAME}" \\\n  attachment_worker_job'
     );
