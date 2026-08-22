@@ -1,7 +1,3 @@
-import {
-  assessClamAvSignatureManifest,
-  type ClamAvSignatureHealth
-} from "../attachments/clamav-signature-policy.js";
 import { signLineBody } from "../line-signature.js";
 
 export type ReleaseProbeCheckName =
@@ -9,18 +5,10 @@ export type ReleaseProbeCheckName =
   | "bot_readiness"
   | "searxng_root"
   | "gateway_helper_signed_empty_webhook"
-  | "gateway_main_signed_empty_webhook"
-  | "clamav_signature";
+  | "gateway_main_signed_empty_webhook";
 export type ReleaseProbeCheckStatus = "passed" | "failed" | "warning";
 export type ReleaseProbeFailureCode =
-  | "none"
-  | "timeout"
-  | "http_mismatch"
-  | "malformed_json"
-  | "network_failed"
-  | "clamav_manifest_invalid"
-  | "contract_mismatch"
-  | "signature_warning";
+  "none" | "timeout" | "http_mismatch" | "malformed_json" | "network_failed" | "contract_mismatch";
 
 export interface ReleaseProbeInput {
   botBaseUrl: string;
@@ -29,21 +17,17 @@ export interface ReleaseProbeInput {
   gatewayMainWebhookUrl: string;
   lineHelperChannelSecret: string;
   lineMainEmptyWebhookSignature: string;
-  clamavSignatureManifestPath: string;
   timeoutMs?: number;
 }
 
 export interface ReleaseProbeDependencies {
   fetch: typeof globalThis.fetch;
-  readFile: (path: string, encoding: "utf8") => Promise<string>;
-  now: () => Date;
 }
 
 export interface ReleaseProbeCheckResult {
   name: ReleaseProbeCheckName;
   status: ReleaseProbeCheckStatus;
   code: ReleaseProbeFailureCode;
-  signatureHealth?: ClamAvSignatureHealth;
 }
 
 export interface ReleaseProbeResult {
@@ -89,8 +73,7 @@ export async function runReleaseProbe(
       mainSignature,
       dependencies,
       timeoutMs
-    ),
-    checkSignatureManifest(input.clamavSignatureManifestPath, dependencies)
+    )
   ]);
   return {
     status: checks.some((check) => check.status === "failed") ? "failed" : "passed",
@@ -159,28 +142,6 @@ async function checkWebhook(
   }
 }
 
-async function checkSignatureManifest(
-  manifestPath: string,
-  dependencies: ReleaseProbeDependencies
-): Promise<ReleaseProbeCheckResult> {
-  try {
-    const value = JSON.parse(await dependencies.readFile(manifestPath, "utf8")) as unknown;
-    const assessment = assessClamAvSignatureManifest(value, dependencies.now());
-    if (assessment.status !== "usable")
-      return failed("clamav_signature", "clamav_manifest_invalid");
-    return assessment.health === "current"
-      ? { ...passed("clamav_signature"), signatureHealth: "current" }
-      : {
-          name: "clamav_signature",
-          status: "warning",
-          code: "signature_warning",
-          signatureHealth: "warning"
-        };
-  } catch {
-    return failed("clamav_signature", "clamav_manifest_invalid");
-  }
-}
-
 function isHealthy(value: unknown): boolean {
   return isRecord(value) && value.ok === true && value.service === "hhc-line-function-bot";
 }
@@ -225,9 +186,7 @@ function validLineSignature(value: string): string {
   return value;
 }
 
-function failureFrom(
-  error: unknown
-): Exclude<ReleaseProbeFailureCode, "none" | "signature_warning" | "clamav_manifest_invalid"> {
+function failureFrom(error: unknown): Exclude<ReleaseProbeFailureCode, "none"> {
   if (error instanceof ProbeJsonError) return "malformed_json";
   if (
     error instanceof DOMException &&
@@ -244,7 +203,7 @@ function passed(name: ReleaseProbeCheckName): ReleaseProbeCheckResult {
 
 function failed(
   name: ReleaseProbeCheckName,
-  code: Exclude<ReleaseProbeFailureCode, "none" | "signature_warning">
+  code: Exclude<ReleaseProbeFailureCode, "none">
 ): ReleaseProbeCheckResult {
   return { name, status: "failed", code };
 }

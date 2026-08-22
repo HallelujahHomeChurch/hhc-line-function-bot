@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { ATTACHMENT_SCAN_TIMING } from "../attachments/scan-timing.js";
 import { attachmentWorkerDeadlines } from "../tools/run-attachment-worker.js";
-import { attachmentScanPublicationDeadline } from "../tools/run-attachment-scan-job.js";
 
 describe("attachment scan timing", () => {
   it("keeps scan, publication, replica, queue, claim, and retention in safe order", () => {
@@ -18,15 +17,12 @@ describe("attachment scan timing", () => {
     );
   });
 
-  it("derives both Asset deadlines from the shared timing policy", () => {
+  it("derives Asset deadlines from the shared timing policy", () => {
     const startedAt = new Date("2026-08-01T08:00:00.000Z");
 
     expect(attachmentWorkerDeadlines(startedAt)).toEqual({
       scanDeadline: new Date("2026-08-01T08:10:00.000Z"),
       publicationDeadline: new Date("2026-08-01T08:14:00.000Z")
     });
-    expect(attachmentScanPublicationDeadline(startedAt)).toEqual(
-      new Date("2026-08-01T08:14:00.000Z")
-    );
   });
 });

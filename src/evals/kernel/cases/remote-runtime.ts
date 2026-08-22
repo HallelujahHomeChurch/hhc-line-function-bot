@@ -2,14 +2,6 @@ import { InMemoryAgentJobStore } from "../../../agent/jobs.js";
 import type { AgentPlanner } from "../../../agent/planner.js";
 import { createControlledAgentRouter } from "../../../agent/controlled-agent-router.js";
 import { InMemoryAttachmentScanWorkStore } from "../../../attachments/scan-work-store.js";
-import {
-  runAttachmentScanWorker,
-  type AttachmentFileScanner,
-  type ClamAvSignatureManifest
-} from "../../../attachments/scan-worker.js";
-import { InMemoryCatalogStore } from "../../../catalog/store.js";
-import { createResourceBinaryPublisher } from "../../../functions/resource-binary-publisher.js";
-import type { BotProfileConfig, GraphDriveClient, LineContentClient } from "../../../types.js";
 import type {
   KernelAcceptanceCase,
   KernelBoundary,
@@ -28,15 +20,11 @@ export const REMOTE_RUNTIME_KERNEL_CASES: KernelAcceptanceCase[] = [
     ambiguousProviderFailureClarifies,
     true
   ),
-  attachmentCase("kernel-v1/write/signature-missing-no-publish@1", missingSignatureDoesNotPublish),
-  attachmentCase("kernel-v1/write/signature-aged-publishes@1", agedSignaturePublishes),
-  attachmentCase("kernel-v1/write/infected-no-publish@1", infectedAttachmentDoesNotPublish),
   attachmentCase(
     "kernel-v1/write/reclaimed-claim-publication-fenced@1",
     reclaimedClaimCannotPublish
   ),
-  attachmentCase("kernel-v1/write/expired-scan-work-disposable@1", expiredScanWorkIsDisposable),
-  jobCase("kernel-v1/state/clean-job-requester-scope@1", cleanJobResultIsRequesterScoped)
+  attachmentCase("kernel-v1/write/expired-scan-work-disposable@1", expiredScanWorkIsDisposable)
 ];
 
 function providerCase(
@@ -85,27 +73,6 @@ function attachmentCase(id: string, check: (now: Date) => Promise<boolean>): Ker
   };
 }
 
-function jobCase(id: string, check: (now: Date) => Promise<boolean>): KernelAcceptanceCase {
-  return {
-    id,
-    version: 1,
-    journey: "write",
-    recurrenceFamily: "group_requester_scope_leak",
-    boundary: "active_task_lifecycle",
-    async run(context) {
-      const passed = await check(context.now());
-      return observation({
-        id,
-        boundary: "active_task_lifecycle",
-        recurrenceFamily: "group_requester_scope_leak",
-        passed,
-        securityViolation: "scope_leak",
-        returnedRetrievableJob: passed
-      });
-    }
-  };
-}
-
 async function explicitProviderFailureRecoversDeterministically(now: Date): Promise<boolean> {
   const router = createControlledAgentRouter({
     planner: unavailablePlanner(),
@@ -148,39 +115,6 @@ async function ambiguousProviderFailureClarifies(now: Date): Promise<boolean> {
     minPlannerConfidence: 0.65
   });
   return result.disposition === "clarify" && result.reasonCode === "planner_unavailable";
-}
-
-async function missingSignatureDoesNotPublish(now: Date): Promise<boolean> {
-  const fixture = await createScanFixture(now, undefined, "clean");
-  const result = await runAttachmentScanWorker(fixture.workId, fixture.workerOptions);
-  return (
-    result.status === "failed" &&
-    result.failureCode === "signature_stale" &&
-    fixture.uploads() === 0
-  );
-}
-
-async function agedSignaturePublishes(now: Date): Promise<boolean> {
-  const fixture = await createScanFixture(
-    now,
-    {
-      ...freshSignature(now),
-      lastSuccessfulAt: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    },
-    "clean"
-  );
-  const result = await runAttachmentScanWorker(fixture.workId, fixture.workerOptions);
-  return (
-    result.status === "completed" && result.signatureHealth === "warning" && fixture.uploads() === 1
-  );
-}
-
-async function infectedAttachmentDoesNotPublish(now: Date): Promise<boolean> {
-  const fixture = await createScanFixture(now, freshSignature(now), "infected");
-  const result = await runAttachmentScanWorker(fixture.workId, fixture.workerOptions);
-  return (
-    result.status === "failed" && result.failureCode === "scan_infected" && fixture.uploads() === 0
-  );
 }
 
 async function reclaimedClaimCannotPublish(now: Date): Promise<boolean> {
@@ -254,120 +188,6 @@ async function expiredScanWorkIsDisposable(now: Date): Promise<boolean> {
   return (await workStore.claimForProcessing(work.id)).disposition === "missing";
 }
 
-async function cleanJobResultIsRequesterScoped(now: Date): Promise<boolean> {
-  const fixture = await createScanFixture(now, freshSignature(now), "clean");
-  const result = await runAttachmentScanWorker(fixture.workId, fixture.workerOptions);
-  const ownerResult = await fixture.jobStore.get(fixture.jobId, fixture.scope);
-  const foreignResult = await fixture.jobStore.get(fixture.jobId, {
-    ...fixture.scope,
-    requesterUserId: "U_SYNTHETIC_2"
-  });
-  return (
-    result.status === "completed" &&
-    fixture.uploads() === 1 &&
-    ownerResult?.status === "completed" &&
-    ownerResult.result?.executedAction === "save_resource" &&
-    foreignResult === undefined
-  );
-}
-
-function freshSignature(now: Date): ClamAvSignatureManifest {
-  return {
-    version: 1,
-    signatureVersion: "synthetic-current",
-    lastSuccessfulAt: new Date(now.getTime() - 60 * 60 * 1000).toISOString(),
-    databaseDirectory: "sets/synthetic-current"
-  };
-}
-
-async function createScanFixture(
-  now: Date,
-  signatureManifest: ClamAvSignatureManifest | undefined,
-  scanStatus: "clean" | "infected" | "unavailable"
-) {
-  const scope = {
-    profileName: "helper",
-    sourceKey: "group:G_SYNTHETIC",
-    requesterUserId: "U_SYNTHETIC_1"
-  };
-  const jobStore = new InMemoryAgentJobStore({ now: () => now });
-  const job = await jobStore.createPending({ scope, label: "scan", ttlMs: 60_000 });
-  const workStore = new InMemoryAttachmentScanWorkStore({
-    jobStore,
-    now: () => now,
-    idFactory: () => "4c03465b-8a87-45a2-9d0d-54f904f4e6ab"
-  });
-  const work = await workStore.create({
-    jobId: job.id,
-    lineMessageId: "opaque-line-message",
-    scope,
-    target: {
-      sourceKey: "synthetic_uploads",
-      itemKind: "ppt_slide",
-      domain: "presentation",
-      title: "synthetic"
-    },
-    ttlMs: 60_000
-  });
-  await workStore.markEnqueued(work.id);
-  const catalog = new InMemoryCatalogStore();
-  await catalog.upsertSource({
-    profileName: "helper",
-    sourceKey: "synthetic_uploads",
-    adapterType: "onedrive",
-    domain: "presentation",
-    defaultItemKind: "ppt_slide",
-    rootLocation: { driveId: "drive", folderItemId: "folder" },
-    enabled: true,
-    syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-    capabilities: { read: ["helper"], write: ["helper:ppt_slide:write"] }
-  });
-  let uploadCount = 0;
-  const graph: GraphDriveClient = {
-    listFolderChildren: async () => [],
-    createSharingLink: async () => "synthetic-link",
-    uploadFile: async () => {
-      uploadCount += 1;
-      return {
-        id: "item",
-        driveId: "drive",
-        name: "synthetic.pptx",
-        path: "synthetic.pptx"
-      };
-    }
-  };
-  const lineContent: LineContentClient = {
-    async getMessageContent() {
-      return {
-        data: new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]),
-        contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-      };
-    }
-  };
-  const scanner: AttachmentFileScanner = {
-    scan: async () => ({ status: scanStatus })
-  };
-  return {
-    scope,
-    jobStore,
-    jobId: job.id,
-    workId: work.id,
-    uploads: () => uploadCount,
-    workerOptions: {
-      workStore,
-      lineContent,
-      profiles: [kernelProfile()],
-      publisher: createResourceBinaryPublisher({ catalog, graph }),
-      scanner,
-      readSignatureManifest: async () => signatureManifest,
-      databaseDirectory: "/synthetic/signatures",
-      maxBytes: 1_024,
-      lineDownloadTimeoutMs: 1_000,
-      now: () => now
-    }
-  };
-}
-
 function unavailablePlanner(): AgentPlanner {
   return {
     propose: async () => ({
@@ -383,27 +203,6 @@ function unavailablePlanner(): AgentPlanner {
         }
       ]
     })
-  };
-}
-
-function kernelProfile(): BotProfileConfig {
-  return {
-    name: "helper",
-    webhookPath: "/api/line/webhook/helper",
-    channelSecret: "synthetic-secret",
-    channelAccessToken: "synthetic-token",
-    allowDirectUser: true,
-    allowRooms: false,
-    allowedMessageTypes: ["text", "file"],
-    groupRequireWakeWord: false,
-    wakeKeywords: [],
-    acceptMention: true,
-    enabledFunctions: ["save_resource"],
-    permissionRequiredFunctions: [],
-    allowedProviders: ["deepseek"],
-    allowSubscriptionProviders: false,
-    controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
-    schedulePolicy: { meetingWindows: [], domains: [] }
   };
 }
 

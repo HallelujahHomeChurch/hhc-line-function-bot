@@ -46,7 +46,7 @@ describe("periodic assurance shell runner", () => {
       rollback: { status: "not_required" },
       providerRequests: { deepseek: 0, embedding: 0 }
     });
-    expect(report.checks).toHaveLength(8);
+    expect(report.checks).toHaveLength(5);
     expect(report.checks.every((check) => check.status !== "failed")).toBe(true);
     expect(reportText).not.toContain("private-registry");
     expect(reportText).not.toContain("fake-private-error");
@@ -84,11 +84,6 @@ describe("periodic assurance shell runner", () => {
   });
 
   it.each([
-    {
-      scenario: "clamav_failure_and_scan_failure",
-      check: "clamav_eicar",
-      code: "clamav_eicar_failed"
-    },
     {
       scenario: "diagnostic_failure_and_malformed_scan",
       check: "diagnostic_write_delete",
@@ -270,7 +265,7 @@ export FAKE_AZ_STATE="${toBashPath(stateDirectory)}"
 export FAKE_SCENARIO="${scenario}"
 export RESOURCE_GROUP="fixture-resource-group"
 export PERIODIC_ASSURANCE_JOB_NAME="hhc-line-bot-periodic-assurance"
-export ATTACHMENT_SCAN_JOB_NAME="hhc-line-bot-attachment-scan"
+export ATTACHMENT_SCAN_JOB_NAME="hhc-line-bot-attachment-worker"
 export PERIODIC_REPORT_PATH="${toBashPath(reportPath)}"
 export PERIODIC_RUN_ID="periodic-17"
 export PERIODIC_COMMIT_SHA="${"a".repeat(40)}"
@@ -331,7 +326,7 @@ function expectRecentScanObservation(calls: string[][]): void {
     calls.filter(
       (args) =>
         command(args, "containerapp", "job", "execution", "list") &&
-        value(args, "--name") === "hhc-line-bot-attachment-scan"
+        value(args, "--name") === "hhc-line-bot-attachment-worker"
     )
   ).toHaveLength(1);
 }
@@ -360,7 +355,7 @@ function expectForbiddenCallsAbsent(calls: string[][]): void {
     calls.some(
       (args) =>
         command(args, "containerapp", "job", "start") &&
-        value(args, "--name") === "hhc-line-bot-attachment-scan"
+        value(args, "--name") === "hhc-line-bot-attachment-worker"
     )
   ).toBe(false);
 }
@@ -427,7 +422,6 @@ elif command("containerapp", "job", "execution", "show"):
         print("Running")
     elif scenario in {
         "periodic_and_scan_failure",
-        "clamav_failure_and_scan_failure",
         "diagnostic_failure_and_malformed_scan",
         "asset_cleanup_failure",
         "failed_check_with_none",
@@ -446,7 +440,7 @@ elif command("containerapp", "job", "execution", "list"):
     ).isoformat().replace("+00:00", "Z")
     print(json.dumps({
         "name":"scan-exec-3",
-        "status":"Failed" if scenario in {"periodic_and_scan_failure", "clamav_failure_and_scan_failure", "recent_scan_failure"} else "Succeeded",
+        "status":"Failed" if scenario in {"periodic_and_scan_failure", "recent_scan_failure"} else "Succeeded",
         "startTime":started,
     }))
 elif command("monitor", "log-analytics", "query"):
@@ -464,15 +458,11 @@ elif command("monitor", "log-analytics", "query"):
         {"name":"graph_metadata","status":"passed","code":"none"},
         {"name":"notion_query","status":"passed","code":"none"},
         {"name":"attachment_queue","status":"passed","code":"none"},
-        {"name":"clamav_signature","status":"passed","code":"none"},
-        {"name":"clamav_clean","status":"passed","code":"none"},
-        {"name":"clamav_eicar","status":"passed","code":"none"},
         {"name":"diagnostic_write_delete","status":"passed","code":"none"},
         {"name":"asset_lifecycle","status":"passed","code":"none"},
     ]
     failures = {
         "periodic_and_scan_failure": ("graph_metadata", "graph_metadata_failed"),
-        "clamav_failure_and_scan_failure": ("clamav_eicar", "clamav_eicar_failed"),
         "diagnostic_failure_and_malformed_scan": ("diagnostic_write_delete", "diagnostic_delete_failed"),
         "asset_cleanup_failure": ("asset_lifecycle", "asset_cleanup_failed"),
     }

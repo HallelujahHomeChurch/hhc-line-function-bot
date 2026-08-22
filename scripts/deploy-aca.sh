@@ -10,21 +10,17 @@ required_release_environment=(
   ACR_NAME
   ACR_LOGIN_SERVER
   IMAGE_REPOSITORY
-  SCAN_IMAGE_REPOSITORY
   IMAGE_TAG
   RESOURCE_GROUP
   CONTAINER_APP_NAME
   CATALOG_SYNC_JOB_NAME
   ATTACHMENT_SCAN_JOB_NAME
-  CLAMAV_SIGNATURE_REFRESH_JOB_NAME
   RELEASE_PROBE_JOB_NAME
   PERIODIC_ASSURANCE_JOB_NAME
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
   ATTACHMENT_SCAN_QUEUE_NAME
   ASSET_API_AUDIENCE
   LINE_PROVIDER_CONSOLE_VERIFIED_ID
-  CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME
-  CLAMAV_SIGNATURE_FILE_SHARE_NAME
 )
 for required_name in "${required_release_environment[@]}"; do
   if [[ -z "${!required_name-}" ]]; then
@@ -45,8 +41,6 @@ done
 
 if ! image_ref="$(
   resolve_release_image "${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
-)" || ! scan_image_ref="$(
-  resolve_release_image "${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 )"; then
   set_release_failure preflight_failed
   echo "Could not resolve immutable release image digests" >&2
@@ -58,23 +52,17 @@ bot_manifest_template="${script_dir}/../aca.containerapp.yaml"
 searxng_manifest_template="${script_dir}/../aca.searxng.containerapp.yaml"
 searxng_settings_template="${script_dir}/../infra/searxng/settings.yml"
 catalog_job_manifest_template="${script_dir}/../aca.catalog-sync-job.yaml"
-attachment_scan_job_manifest_template="${script_dir}/../aca.attachment-scan-job.yaml"
-clamav_refresh_job_manifest_template="${script_dir}/../aca.clamav-signature-refresh-job.yaml"
 release_probe_job_manifest_template="${script_dir}/../aca.release-probe-job.yaml"
 periodic_assurance_job_manifest_template="${script_dir}/../aca.periodic-assurance-job.yaml"
 bot_manifest="$(mktemp)"
 searxng_manifest="$(mktemp)"
 catalog_job_manifest="$(mktemp)"
-attachment_scan_job_manifest="$(mktemp)"
-clamav_refresh_job_manifest="$(mktemp)"
 release_probe_job_manifest="$(mktemp)"
 periodic_assurance_job_manifest="$(mktemp)"
 RELEASE_CLEANUP_FILES=(
   "${bot_manifest}"
   "${searxng_manifest}"
   "${catalog_job_manifest}"
-  "${attachment_scan_job_manifest}"
-  "${clamav_refresh_job_manifest}"
   "${release_probe_job_manifest}"
   "${periodic_assurance_job_manifest}"
 )
@@ -83,8 +71,6 @@ if [[ ! -f "${bot_manifest_template}" \
   || ! -f "${searxng_manifest_template}" \
   || ! -f "${searxng_settings_template}" \
   || ! -f "${catalog_job_manifest_template}" \
-  || ! -f "${attachment_scan_job_manifest_template}" \
-  || ! -f "${clamav_refresh_job_manifest_template}" \
   || ! -f "${release_probe_job_manifest_template}" \
   || ! -f "${periodic_assurance_job_manifest_template}" ]]; then
   echo "Missing deployment configuration"
@@ -341,16 +327,6 @@ if [[ ${#missing_bot_secrets[@]} -gt 0 ]]; then
   exit 1
 fi
 
-clamav_storage_key="$(az storage account keys list \
-  --resource-group "${RESOURCE_GROUP}" \
-  --account-name "${CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME}" \
-  --query "[0].value" \
-  --output tsv \
-  --only-show-errors)"
-if [[ -z "${clamav_storage_key}" ]]; then
-  echo "Required ClamAV signature storage credential is unavailable" >&2
-  exit 1
-fi
 attachment_scan_queue_connection_string="$(az storage account show-connection-string \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
@@ -399,30 +375,6 @@ az containerapp secret set \
   --only-show-errors \
   --output none
 unset attachment_scan_storage_key attachment_scan_queue_sas attachment_scan_queue_url
-
-az containerapp env storage set \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${managed_environment_name}" \
-  --storage-name clamav-signatures-readonly \
-  --storage-type AzureFile \
-  --azure-file-account-name "${CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME}" \
-  --azure-file-account-key "${clamav_storage_key}" \
-  --azure-file-share-name "${CLAMAV_SIGNATURE_FILE_SHARE_NAME}" \
-  --access-mode ReadOnly \
-  --only-show-errors \
-  --output none
-az containerapp env storage set \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${managed_environment_name}" \
-  --storage-name clamav-signatures-readwrite \
-  --storage-type AzureFile \
-  --azure-file-account-name "${CLAMAV_SIGNATURE_STORAGE_ACCOUNT_NAME}" \
-  --azure-file-account-key "${clamav_storage_key}" \
-  --azure-file-share-name "${CLAMAV_SIGNATURE_FILE_SHARE_NAME}" \
-  --access-mode ReadWrite \
-  --only-show-errors \
-  --output none
-unset clamav_storage_key
 
 searxng_secret_key="$(openssl rand -hex 32)"
 SEARXNG_MANIFEST_TEMPLATE="${searxng_manifest_template}" \
@@ -601,7 +553,7 @@ target_revision="$(az containerapp show \
   --output tsv)"
 RELEASE_TARGET_REVISION="${target_revision}"
 RELEASE_TARGET_IMAGE="${image_ref}"
-RELEASE_TARGET_SCAN_IMAGE="${scan_image_ref}"
+RELEASE_TARGET_SCAN_IMAGE="${image_ref}"
 RELEASE_TARGET_ATTACHMENT_IMAGE="${image_ref}"
 
 bot_fqdn="$(az containerapp show \
@@ -621,7 +573,6 @@ gateway_main_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/main"
 retired_bot_secrets=(
   bot-profiles-base64-json
   attachment-scan-queue-connection-string
-  clamav-signature-storage-key
   openai-api-key
 )
 for retired_bot_secret in "${retired_bot_secrets[@]}"; do
@@ -828,16 +779,6 @@ start_release_job() {
 }
 
 render_job_manifest \
-  "${clamav_refresh_job_manifest_template}" \
-  "${clamav_refresh_job_manifest}" \
-  "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
-  "${scan_image_ref}"
-render_job_manifest \
-  "${attachment_scan_job_manifest_template}" \
-  "${attachment_scan_job_manifest}" \
-  "${ATTACHMENT_SCAN_JOB_NAME}" \
-  "${image_ref}"
-render_job_manifest \
   "${catalog_job_manifest_template}" \
   "${catalog_job_manifest}" \
   "${CATALOG_SYNC_JOB_NAME}" \
@@ -851,20 +792,19 @@ render_job_manifest \
   "${periodic_assurance_job_manifest_template}" \
   "${periodic_assurance_job_manifest}" \
   "${PERIODIC_ASSURANCE_JOB_NAME}" \
-  "${scan_image_ref}"
+  "${image_ref}"
 
-mark_release_job_mutated "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}"
-deploy_job "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" "${clamav_refresh_job_manifest}"
-start_release_job \
-  "${CLAMAV_SIGNATURE_REFRESH_JOB_NAME}" \
-  clamav_refresh_job \
-  clamav_bootstrap_start_failed
-RELEASE_CLAMAV_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"
 mark_release_job_mutated "${ATTACHMENT_SCAN_JOB_NAME}"
-deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_scan_job_manifest}" "${attachment_job_identity_id}"
+az containerapp job update \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${ATTACHMENT_SCAN_JOB_NAME}" \
+  --container-name attachment-worker \
+  --image "${image_ref}" \
+  --only-show-errors \
+  --output none
 start_release_job \
   "${ATTACHMENT_SCAN_JOB_NAME}" \
-  attachment_scan_job \
+  attachment_worker_job \
   attachment_bootstrap_start_failed
 RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"
 mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"

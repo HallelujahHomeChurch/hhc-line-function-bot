@@ -15,25 +15,11 @@ const input = {
   gatewayWebhookUrl: "https://gateway.invalid/api/line/webhook/helper",
   gatewayMainWebhookUrl: "https://gateway.invalid/api/line/webhook/main",
   lineHelperChannelSecret: "test-channel-secret",
-  lineMainEmptyWebhookSignature: mainEmptyWebhookSignature,
-  clamavSignatureManifestPath: "/mnt/signatures/manifest.json"
+  lineMainEmptyWebhookSignature: mainEmptyWebhookSignature
 };
 
-function currentManifest(lastSuccessfulAt = "2026-07-26T23:00:00.000Z") {
-  return JSON.stringify({
-    version: 1,
-    signatureVersion: "current",
-    lastSuccessfulAt,
-    databaseDirectory: "sets/current"
-  });
-}
-
-function dependencies(fetchImpl: typeof fetch, manifest = currentManifest()) {
-  return {
-    fetch: fetchImpl,
-    readFile: vi.fn().mockResolvedValue(manifest),
-    now: () => now
-  };
+function dependencies(fetchImpl: typeof fetch) {
+  return { fetch: fetchImpl };
 }
 
 describe("runReleaseProbe", () => {
@@ -73,13 +59,7 @@ describe("runReleaseProbe", () => {
         { name: "bot_readiness", status: "passed", code: "none" },
         { name: "searxng_root", status: "passed", code: "none" },
         { name: "gateway_helper_signed_empty_webhook", status: "passed", code: "none" },
-        { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" },
-        {
-          name: "clamav_signature",
-          status: "passed",
-          code: "none",
-          signatureHealth: "current"
-        }
+        { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" }
       ]
     });
     expect(requests).toHaveLength(5);
@@ -185,34 +165,6 @@ describe("runReleaseProbe", () => {
     }
   );
 
-  it("keeps a usable old ClamAV signature manifest as a warning rather than failing", async () => {
-    const fetch = vi.fn(async (url: string | URL | Request) => {
-      if (String(url).endsWith("/healthz")) {
-        return Response.json({ ok: true, service: "hhc-line-function-bot" });
-      }
-      if (String(url).endsWith("/readyz")) {
-        return Response.json({
-          status: "ok",
-          database: { postgres: { status: "ok" }, redis: { status: "ok" } }
-        });
-      }
-      if (String(url) === "http://searxng.internal/") return new Response(null, { status: 200 });
-      return Response.json({ ok: true, ignored: true });
-    }) as unknown as typeof fetch;
-    const result = await runReleaseProbe(
-      input,
-      dependencies(fetch, currentManifest("2026-07-19T00:00:00.000Z"))
-    );
-
-    expect(result.checks.at(-1)).toEqual({
-      name: "clamav_signature",
-      status: "warning",
-      code: "signature_warning",
-      signatureHealth: "warning"
-    });
-    expect(result.status).toBe("passed");
-  });
-
   it.each([
     ["timeout", () => Promise.reject(new DOMException("timed out", "TimeoutError")), "timeout"],
     ["HTTP mismatch", () => Promise.resolve(new Response(null, { status: 503 })), "http_mismatch"],
@@ -225,34 +177,6 @@ describe("runReleaseProbe", () => {
     expect(result.status).toBe("failed");
     expect(result.checks).toContainEqual({ name: "bot_health", status: "failed", code });
     expect(JSON.stringify(result)).not.toContain(input.botBaseUrl);
-  });
-
-  it.each([
-    ["invalid", "{}"],
-    ["future", currentManifest("2026-07-27T00:00:01.000Z")]
-  ])("fails an %s ClamAV manifest", async (_reason, manifest) => {
-    const fetch = vi.fn(async (url: string | URL | Request) => {
-      if (String(url).endsWith("/healthz")) {
-        return Response.json({ ok: true, service: "hhc-line-function-bot" });
-      }
-      if (String(url).endsWith("/readyz")) {
-        return Response.json({
-          status: "ok",
-          database: { postgres: { status: "ok" }, redis: { status: "ok" } }
-        });
-      }
-      if (String(url) === "http://searxng.internal/") return new Response(null, { status: 200 });
-      return Response.json({ ok: true, ignored: true });
-    }) as unknown as typeof fetch;
-
-    const result = await runReleaseProbe(input, dependencies(fetch, manifest));
-
-    expect(result.status).toBe("failed");
-    expect(result.checks.at(-1)).toEqual({
-      name: "clamav_signature",
-      status: "failed",
-      code: "clamav_manifest_invalid"
-    });
   });
 
   it("prints one allowlisted result and returns a failing exit code for a failed required check", async () => {
@@ -276,8 +200,7 @@ describe("runReleaseProbe", () => {
         GATEWAY_WEBHOOK_URL: input.gatewayWebhookUrl,
         GATEWAY_MAIN_WEBHOOK_URL: input.gatewayMainWebhookUrl,
         LINE_HELPER_CHANNEL_SECRET: input.lineHelperChannelSecret,
-        LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE: input.lineMainEmptyWebhookSignature,
-        CLAMAV_SIGNATURE_MANIFEST_PATH: input.clamavSignatureManifestPath
+        LINE_MAIN_EMPTY_WEBHOOK_SIGNATURE: input.lineMainEmptyWebhookSignature
       },
       dependencies(fetch),
       writeLine

@@ -1,7 +1,3 @@
-import { posix } from "node:path";
-
-import { assessClamAvSignatureManifest } from "../attachments/clamav-signature-policy.js";
-import type { ClamAvCliScanResult } from "../attachments/clamav-cli.js";
 import type { AssuranceCheck, AssuranceFailureCode } from "./report.js";
 import type { AssetLifecycleAssuranceResult } from "./asset-lifecycle-probe.js";
 import type { DriveItem } from "../types.js";
@@ -10,9 +6,6 @@ export type PeriodicAssuranceCheckName =
   | "graph_metadata"
   | "notion_query"
   | "attachment_queue"
-  | "clamav_signature"
-  | "clamav_clean"
-  | "clamav_eicar"
   | "diagnostic_write_delete"
   | "asset_lifecycle";
 
@@ -21,37 +14,23 @@ export type PeriodicAssuranceFailureCode =
   | "graph_metadata_failed"
   | "notion_query_failed"
   | "attachment_queue_failed"
-  | "clamav_manifest_invalid"
-  | "clamav_clean_failed"
-  | "clamav_eicar_failed"
   | "diagnostic_folder_failed"
   | "diagnostic_upload_failed"
   | "diagnostic_delete_failed"
   | "asset_lifecycle_failed"
   | "asset_cleanup_failed"
-  | "timeout"
-  | "signature_warning";
+  | "timeout";
 
 export interface PeriodicAssuranceInput {
   graphDriveId: string;
   graphOtherFolderItemId: string;
   notionDatabaseId: string;
-  clamavSignatureManifestPath: string;
-  scanTimeoutMs: number;
 }
 
 export interface PeriodicAssuranceDependencies {
   readGraphMetadata(driveId: string, itemId: string): Promise<DriveItem | undefined>;
   readNotionOne(databaseId: string, pageSize: 1): Promise<number>;
   inspectQueue(): Promise<{ depth: number; oldestInsertedAt?: Date }>;
-  readSignatureManifest(path: string): Promise<unknown>;
-  scanSample(input: {
-    kind: "clean" | "eicar";
-    fileName: string;
-    data: Uint8Array;
-    databaseDirectory: string;
-    timeoutMs: number;
-  }): Promise<ClamAvCliScanResult>;
   ensureDiagnosticsFolder(driveId: string, parentItemId: string, name: string): Promise<DriveItem>;
   uploadDiagnostic(
     driveId: string,
@@ -81,18 +60,12 @@ export interface PeriodicAssuranceResult {
 export function mapPeriodicAssuranceCodeToReport(
   code: PeriodicAssuranceFailureCode
 ): AssuranceCheck["code"] {
-  if (code === "signature_warning") return code;
   return code satisfies AssuranceFailureCode;
 }
 
 const DIAGNOSTICS_FOLDER_NAME = "assurance-diagnostics";
 const DIAGNOSTIC_FILE_NAME = "periodic-assurance.txt";
-const CLEAN_FILE_NAME = "periodic-clean.txt";
-const EICAR_FILE_NAME = "periodic-eicar.txt";
 const CLEAN_PAYLOAD = new TextEncoder().encode("HHC periodic assurance\n");
-const EICAR_PAYLOAD = new TextEncoder().encode(
-  "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-);
 
 export async function runPeriodicAssurance(
   input: PeriodicAssuranceInput,
@@ -105,8 +78,6 @@ export async function runPeriodicAssurance(
   const queue = await queueCheck(dependencies);
   checks.push(queue.check);
 
-  const clamav = await clamAvChecks(input, dependencies);
-  checks.push(...clamav);
   checks.push(await diagnosticWriteDeleteCheck(input, dependencies));
   checks.push(await assetLifecycleCheck(dependencies));
 
@@ -188,92 +159,6 @@ async function queueCheck(dependencies: PeriodicAssuranceDependencies): Promise<
   }
 }
 
-async function clamAvChecks(
-  input: PeriodicAssuranceInput,
-  dependencies: PeriodicAssuranceDependencies
-): Promise<PeriodicAssuranceCheckResult[]> {
-  let databaseDirectory: string;
-  let signatureCheck: PeriodicAssuranceCheckResult;
-  try {
-    const assessment = assessClamAvSignatureManifest(
-      await dependencies.readSignatureManifest(input.clamavSignatureManifestPath),
-      dependencies.now()
-    );
-    if (assessment.status !== "usable") {
-      return invalidManifestChecks();
-    }
-    signatureCheck =
-      assessment.health === "warning"
-        ? { name: "clamav_signature", status: "warning", code: "signature_warning" }
-        : passed("clamav_signature");
-    databaseDirectory = assessment.manifest.databaseDirectory
-      ? posix.join(
-          posix.dirname(input.clamavSignatureManifestPath.replaceAll("\\", "/")),
-          assessment.manifest.databaseDirectory
-        )
-      : posix.dirname(input.clamavSignatureManifestPath.replaceAll("\\", "/"));
-  } catch {
-    return invalidManifestChecks();
-  }
-
-  const clean = await scanCheck(
-    "clean",
-    CLEAN_FILE_NAME,
-    CLEAN_PAYLOAD,
-    "clean",
-    "clamav_clean",
-    "clamav_clean_failed",
-    databaseDirectory,
-    input.scanTimeoutMs,
-    dependencies
-  );
-  const eicar = await scanCheck(
-    "eicar",
-    EICAR_FILE_NAME,
-    EICAR_PAYLOAD,
-    "infected",
-    "clamav_eicar",
-    "clamav_eicar_failed",
-    databaseDirectory,
-    input.scanTimeoutMs,
-    dependencies
-  );
-  return [signatureCheck, clean, eicar];
-}
-
-function invalidManifestChecks(): PeriodicAssuranceCheckResult[] {
-  return [
-    failed("clamav_signature", "clamav_manifest_invalid"),
-    failed("clamav_clean", "clamav_manifest_invalid"),
-    failed("clamav_eicar", "clamav_manifest_invalid")
-  ];
-}
-
-async function scanCheck(
-  kind: "clean" | "eicar",
-  fileName: string,
-  data: Uint8Array,
-  expected: ClamAvCliScanResult["status"],
-  name: "clamav_clean" | "clamav_eicar",
-  failureCode: "clamav_clean_failed" | "clamav_eicar_failed",
-  databaseDirectory: string,
-  timeoutMs: number,
-  dependencies: PeriodicAssuranceDependencies
-): Promise<PeriodicAssuranceCheckResult> {
-  try {
-    const result = await dependencies.scanSample({
-      kind,
-      fileName,
-      data,
-      databaseDirectory,
-      timeoutMs
-    });
-    return result.status === expected ? passed(name) : failed(name, failureCode);
-  } catch {
-    return failed(name, failureCode);
-  }
-}
-
 async function diagnosticWriteDeleteCheck(
   input: PeriodicAssuranceInput,
   dependencies: PeriodicAssuranceDependencies
@@ -325,7 +210,7 @@ function passed(name: PeriodicAssuranceCheckName): PeriodicAssuranceCheckResult 
 
 function failed(
   name: PeriodicAssuranceCheckName,
-  code: Exclude<PeriodicAssuranceFailureCode, "none" | "signature_warning">
+  code: Exclude<PeriodicAssuranceFailureCode, "none">
 ): PeriodicAssuranceCheckResult {
   return { name, status: "failed", code };
 }

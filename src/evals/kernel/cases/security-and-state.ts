@@ -1,21 +1,15 @@
 import type { ActiveTaskContext } from "../../../agent/active-task.js";
 import { InMemoryConversationWindowStore } from "../../../agent/context-manager.js";
-import { InMemoryAgentJobStore } from "../../../agent/jobs.js";
 import type { AgentPlanner } from "../../../agent/planner.js";
 import { matchNaturalLanguageSystemActionHint } from "../../../actions/catalog.js";
 import { evaluateActionPolicy } from "../../../actions/policy.js";
-import { InMemoryAttachmentScanWorkStore } from "../../../attachments/scan-work-store.js";
-import { runAttachmentScanWorker } from "../../../attachments/scan-worker.js";
-import { InMemoryCatalogStore } from "../../../catalog/store.js";
 import { isSupportedAttachment } from "../../../functions/pending-attachment.js";
-import { createResourceBinaryPublisher } from "../../../functions/resource-binary-publisher.js";
 import { messages } from "../../../messages.js";
 import { InMemorySessionStore } from "../../../state/session-store.js";
 import type {
   BotProfileConfig,
   FunctionName,
   FunctionRegistry,
-  GraphDriveClient,
   TextMessageHandlerRegistry
 } from "../../../types.js";
 import type {
@@ -36,11 +30,6 @@ export const SECURITY_AND_STATE_KERNEL_CASES: KernelAcceptanceCase[] = [
     "kernel-v1/write/unauthorized-save-denied@1",
     "write_safety_bypass",
     unauthorizedWriteDenied
-  ),
-  safetyCase(
-    "kernel-v1/write/scan-unavailable-fails-closed@1",
-    "write_safety_bypass",
-    scanUnavailableFailsClosed
   ),
   safetyCase(
     "kernel-v1/write/group-attachment-without-intent-silent@1",
@@ -340,80 +329,6 @@ async function missingWriteEvidenceDenied(now: Date): Promise<boolean> {
     }
   ]);
   return executions === 0 && result?.replyText !== "unsafe";
-}
-
-async function scanUnavailableFailsClosed(now: Date): Promise<boolean> {
-  const scope = {
-    profileName: "helper",
-    sourceKey: "user:U_SYNTHETIC_1",
-    requesterUserId: "U_SYNTHETIC_1"
-  };
-  const jobStore = new InMemoryAgentJobStore({ now: () => now });
-  const job = await jobStore.createPending({ scope, label: "scan", ttlMs: 60_000 });
-  const workStore = new InMemoryAttachmentScanWorkStore({
-    jobStore,
-    now: () => now,
-    idFactory: () => "4c03465b-8a87-45a2-9d0d-54f904f4e6ab"
-  });
-  const work = await workStore.create({
-    jobId: job.id,
-    lineMessageId: "opaque-line-message",
-    scope,
-    target: {
-      sourceKey: "synthetic_uploads",
-      itemKind: "ppt_slide",
-      domain: "presentation",
-      title: "synthetic"
-    },
-    ttlMs: 60_000
-  });
-  await workStore.markEnqueued(work.id);
-  const catalog = new InMemoryCatalogStore();
-  await catalog.upsertSource({
-    profileName: "helper",
-    sourceKey: "synthetic_uploads",
-    adapterType: "onedrive",
-    domain: "presentation",
-    defaultItemKind: "ppt_slide",
-    rootLocation: { driveId: "drive", folderItemId: "folder" },
-    enabled: true,
-    syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-    capabilities: { read: ["helper"], write: ["helper:ppt_slide:write"] }
-  });
-  let uploads = 0;
-  const graph: GraphDriveClient = {
-    listFolderChildren: async () => [],
-    createSharingLink: async () => "synthetic-link",
-    uploadFile: async () => {
-      uploads += 1;
-      return { id: "item", driveId: "drive", name: "synthetic.pptx", path: "synthetic.pptx" };
-    }
-  };
-  const profile = kernelProfile(["save_resource"]);
-  const result = await runAttachmentScanWorker(work.id, {
-    workStore,
-    lineContent: {
-      async getMessageContent() {
-        return {
-          data: new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]),
-          contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        };
-      }
-    },
-    profiles: [profile],
-    publisher: createResourceBinaryPublisher({ catalog, graph }),
-    scanner: { scan: async () => ({ status: "unavailable" }) },
-    readSignatureManifest: async () => ({
-      version: 1,
-      signatureVersion: "synthetic-current",
-      lastSuccessfulAt: now.toISOString()
-    }),
-    databaseDirectory: "/synthetic/clamav",
-    maxBytes: 1024,
-    lineDownloadTimeoutMs: 1000,
-    now: () => now
-  });
-  return result.status === "failed" && result.failureCode === "scan_unavailable" && uploads === 0;
 }
 
 async function groupWithoutIntentHasNoSession(now: Date): Promise<boolean> {

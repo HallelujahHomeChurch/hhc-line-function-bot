@@ -32,7 +32,7 @@ describe("R3.5 modular monolith documentation", () => {
       expect(content, name).toContain("clean");
     }
 
-    expect(readme).toContain("rollback path");
+    expect(readme).toContain("Terraform-owned attachment Job");
     expect(readme).toContain("manifest-driven");
     expect(readme).toContain("scripts/deploy-aca.sh");
     expect(architecture).toContain("sole owner");
@@ -115,7 +115,7 @@ describe("R5.0 release-assurance documentation", () => {
     expect(operations).toContain("hhc-line-bot-periodic-assurance");
     expect(operations).toContain("artifacts/release-assurance/periodic-report.json");
     expect(operations).toContain("The LINE webhook Container App keeps `minReplicas: 1`");
-    expect(operations).toContain("Attachment scanning and ClamAV refresh remain finite ACA Jobs");
+    expect(operations).toContain("Asset API owns malware scanning and signature refresh");
     expect(operations).toContain("az containerapp revision copy");
     expect(operations).toContain("--from-revision");
     expect(operations).toContain("providerRequests: { deepseek: 0, embedding: 0 }");
