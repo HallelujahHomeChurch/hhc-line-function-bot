@@ -800,6 +800,8 @@ az containerapp job update \
   --name "${ATTACHMENT_SCAN_JOB_NAME}" \
   --container-name attachment-worker \
   --image "${image_ref}" \
+  --cpu 0.5 \
+  --memory 1Gi \
   --only-show-errors \
   --output none
 start_release_job \
