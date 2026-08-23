@@ -8,16 +8,33 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 type Operation = {
   tags?: unknown;
   security?: unknown;
+  responses?: Record<string, unknown>;
   [key: `x-hhc-${string}`]: unknown;
+};
+
+type Schema = {
+  type?: unknown;
+  format?: unknown;
+  pattern?: unknown;
+  description?: unknown;
+  properties?: Record<string, Schema>;
+  oneOf?: Schema[];
+  allOf?: Schema[];
+  not?: Schema;
 };
 
 type OpenApiDocument = {
   openapi?: unknown;
   paths?: Record<string, Record<string, Operation>>;
+  components?: {
+    schemas?: Record<string, Schema>;
+    responses?: Record<string, { description?: unknown }>;
+  };
   [key: `x-hhc-${string}`]: unknown;
 };
 
 const methods = new Set(["delete", "get", "patch", "post", "put"]);
+const visibilities = new Set(["public", "admin", "private", "operations"]);
 const expectedOperations = [
   "GET /api/line/media-sync/acl-subjects",
   "GET /api/line/media-sync/collections",
@@ -37,6 +54,9 @@ const expectedOperations = [
   "GET /healthz",
   "GET /readyz"
 ].sort();
+const assetBackedOperations = expectedOperations.filter(
+  (value) => value.includes("/api/line/media-sync/") && !value.includes("/acl-subjects")
+);
 
 describe("LINE Function Bot OpenAPI contract", () => {
   let directory: string;
@@ -85,6 +105,7 @@ describe("LINE Function Bot OpenAPI contract", () => {
       for (const [method, operation] of Object.entries(pathItem)) {
         if (!methods.has(method)) continue;
         expect(operation.tags).toHaveLength(1);
+        expect(visibilities.has(`${operation["x-hhc-visibility"]}`)).toBe(true);
         expect(operation.tags).toEqual([
           `${operation["x-hhc-visibility"]}`.replace(/^./u, (value) => value.toUpperCase())
         ]);
@@ -109,5 +130,35 @@ describe("LINE Function Bot OpenAPI contract", () => {
         ]);
       }
     }
+  });
+
+  it("matches real webhook acknowledgements and downstream media error statuses", () => {
+    const acknowledgement = document.components?.schemas?.WebhookAcknowledgement;
+    expect(acknowledgement?.properties?.ignored?.oneOf).toEqual([
+      { type: "boolean", const: true },
+      { type: "string" }
+    ]);
+
+    for (const value of assetBackedOperations) {
+      const [method, path] = value.split(" ");
+      const responses = document.paths?.[path]?.[method.toLowerCase()]?.responses;
+      expect(Object.keys(responses ?? {}), value).toEqual(
+        expect.arrayContaining(["400", "401", "403", "404", "409", "429", "502", "503"])
+      );
+    }
+    expect(`${document.components?.responses?.AssetUnauthorized?.description}`).toContain("Asset");
+    expect(`${document.components?.responses?.AssetForbidden?.description}`).toContain("Asset");
+  });
+
+  it("matches media-sync UUID and item-name request constraints", () => {
+    const userId = document.components?.schemas?.HhcUserId;
+    expect(userId?.format).toBe("uuid");
+    expect(userId?.pattern).toBe(
+      "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-8][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$"
+    );
+
+    const displayName = document.components?.schemas?.ItemNameRequest?.properties?.displayName;
+    expect(displayName?.not?.pattern).toBe("[/\\\\]|\\p{Cc}|[\\uD800-\\uDFFF]");
+    expect(`${displayName?.description}`).toContain("255 UTF-8 bytes");
   });
 });
