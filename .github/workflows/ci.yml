@@ -48,6 +48,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Lint OpenAPI contract
         run: pnpm --package=@redocly/cli@2.47.0 dlx redocly lint docs/openapi.yaml
+      - name: Test OpenAPI contract
+        run: pnpm vitest run --config docs/vitest.config.ts docs/openapi-contract.test.ts
       - name: Check formatting
         run: pnpm format:check
       - name: Typecheck
