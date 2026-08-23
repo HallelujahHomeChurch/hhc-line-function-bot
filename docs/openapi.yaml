@@ -1,0 +1,929 @@
+openapi: 3.1.0
+x-hhc-service: hhc-line-function-bot
+x-hhc-owner: HHC Platform
+x-hhc-repository: HallelujahHomeChurch/hhc-line-function-bot
+info:
+  title: HHC LINE Function Bot API
+  version: 1.0.0
+  description: >-
+    HTTP contract for LINE webhooks, service probes, and administrator media-sync mechanics.
+    LINE chat commands, controlled functions, postbacks, and administrator chat commands are not
+    separate HTTP APIs.
+servers:
+  - url: http://hhc-line-function-bot
+    description: Internal Dapr service address; gateway-facing traffic is forwarded to this service.
+tags:
+  - name: Public
+    description: Public API Gateway routes called by the LINE Platform.
+  - name: Admin
+    description: Administrator media-sync mechanics called by admin-fe through API Gateway and Dapr.
+  - name: Operations
+    description: Liveness and public data-layer readiness probes.
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Check process liveness
+      description: Returns process liveness only and does not disclose dependency state.
+      tags: [Operations]
+      x-hhc-visibility: operations
+      x-hhc-callers: []
+      security: []
+      responses:
+        "200":
+          description: The process is live.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthResponse" }
+  /readyz:
+    get:
+      operationId: getReadiness
+      summary: Check public data-layer readiness
+      description: Checks only PostgreSQL and Redis; detailed diagnostics remain an admin chat surface.
+      tags: [Operations]
+      x-hhc-visibility: operations
+      x-hhc-callers: []
+      security: []
+      responses:
+        "200":
+          description: Required public data-layer dependencies are ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessResponse" }
+        "503":
+          description: A required public data-layer dependency is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessResponse" }
+  /api/line/webhook/{profileName}:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    post:
+      operationId: receiveLineWebhook
+      summary: Receive a LINE profile webhook
+      description: >-
+        API Gateway forwards this public route to the bot. The selected profile verifies
+        X-Line-Signature over the unmodified request bytes before parsing the JSON body. A valid
+        batch is acknowledged only after its accepted events have been handled; invalid signatures
+        or bodies are rejected, and retryable dependency failures return 503. Reply tokens and event
+        content are processed but are not retained in this API contract.
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [LINE]
+      security:
+        - lineSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LineWebhookPayload" }
+      responses:
+        "200":
+          description: The valid webhook batch was acknowledged or safely ignored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookAcknowledgement" }
+        "400": { $ref: "#/components/responses/WebhookBadRequest" }
+        "401": { $ref: "#/components/responses/WebhookUnauthorized" }
+        "503": { $ref: "#/components/responses/WebhookUnavailable" }
+  /api/line/media-sync/collections:
+    get:
+      operationId: listMediaSyncCollections
+      summary: List managed LINE media collections
+      description: >-
+        admin-fe calls through API Gateway. The service accepts only the configured api-gateway Dapr
+        caller and API token, validates the gateway-trusted HHC user UUID, and asks Account API to
+        verify that user has media-sync administration permission before calling Asset API.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Managed collection page.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedCollectionPage" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    post:
+      operationId: createMediaSyncCollection
+      summary: Create a managed LINE media collection
+      description: Creates an Asset-owned collection after the shared media-sync authorization gate.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CollectionNameRequest" }
+      responses:
+        "201":
+          description: Collection created.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Collection" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/acl-subjects:
+    get:
+      operationId: searchMediaSyncAclSubjects
+      summary: Search eligible media-sync ACL subjects
+      description: >-
+        Runs behind the shared media-sync authorization gate, then asks Account API for a bounded
+        page of users or roles. The trusted user identity is supplied separately as the requesting
+        administrator and cannot be selected by the request body.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: subjectType
+          in: query
+          required: true
+          schema: { type: string, enum: [user, role] }
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, maxLength: 120 }
+        - name: page
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 1000 }
+        - name: perPage
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses:
+        "200":
+          description: Eligible ACL subject page.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AclSubjectPage" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    patch:
+      operationId: renameMediaSyncCollection
+      summary: Rename a managed LINE media collection
+      description: Renames the Asset-owned collection after the shared media-sync authorization gate.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CollectionNameRequest" }
+      responses:
+        "200":
+          description: Collection renamed.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Collection" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      operationId: deleteMediaSyncCollection
+      summary: Delete a managed LINE media collection
+      description: Starts the binding-safe collection deletion lifecycle before deleting it in Asset API.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Collection deleted.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Collection" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/items:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    get:
+      operationId: listMediaSyncCollectionItems
+      summary: List managed collection items
+      description: Lists Asset-owned collection items after the shared media-sync authorization gate.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Managed collection item page.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedCollectionItemPage" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/retention:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    patch:
+      operationId: updateMediaSyncCollectionRetention
+      summary: Update collection retention
+      description: Sets Asset-owned collection retention after the shared media-sync authorization gate.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RetentionRequest" }
+      responses:
+        "200":
+          description: Collection retention updated.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Collection" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/items/{itemId}:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+      - $ref: "#/components/parameters/ItemId"
+    patch:
+      operationId: renameMediaSyncCollectionItem
+      summary: Rename a collection item
+      description: Renames an Asset-owned collection item after the shared authorization gate.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ItemNameRequest" }
+      responses:
+        "200":
+          description: Collection item renamed.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedCollectionItem" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/items/retention:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    post:
+      operationId: setMediaSyncItemsRetention
+      summary: Set item retention exemptions
+      description: Updates retention exemption for a bounded item set after the shared authorization gate.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ItemsRetentionRequest" }
+      responses:
+        "200":
+          description: Item retention exemptions updated.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/items/delete:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    post:
+      operationId: deleteMediaSyncCollectionItems
+      summary: Delete collection items
+      description: Deletes a bounded Asset-owned item set after the shared authorization gate.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ItemIdsRequest" }
+      responses:
+        "200":
+          description: Item deletion counts.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeleteItemsResponse" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/items/content-tickets:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    post:
+      operationId: issueMediaSyncContentTickets
+      summary: Issue short-lived item content tickets
+      description: >-
+        Issues private, no-store Asset content tickets for a bounded item set after the shared
+        authorization gate. Ticket values are response-only credentials and are not examples or
+        durable API configuration.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ItemIdsRequest" }
+      responses:
+        "201":
+          description: Short-lived content ticket batch.
+          headers:
+            X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            Referrer-Policy: { schema: { type: string, const: no-referrer } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContentTicketBatch" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/acl:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    post:
+      operationId: addMediaSyncCollectionAcl
+      summary: Add a read-only collection ACL entry
+      description: Adds an Asset-owned read ACL for an Account user UUID or role after authorization.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AclRequest" }
+      responses:
+        "201":
+          description: ACL entry added.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AclMutation" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/acl/{aclId}:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+      - $ref: "#/components/parameters/AclId"
+    delete:
+      operationId: revokeMediaSyncCollectionAcl
+      summary: Revoke a collection ACL entry
+      description: Revokes an Asset-owned collection ACL after the shared authorization gate.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: ACL entry revoked.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AclMutation" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/line/media-sync/collections/{collectionId}/binding-code:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    post:
+      operationId: createMediaSyncBindingCode
+      summary: Create a one-time LINE group binding command
+      description: >-
+        Creates a one-time, 60-minute group binding code only when the collection is active and
+        unbound. The returned command is for the authorized administrator to deliver out of band;
+        no real code is included in this contract.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "201":
+          description: One-time binding command created.
+          headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BindingCodeResponse" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+components:
+  securitySchemes:
+    lineSignature:
+      type: apiKey
+      in: header
+      name: X-Line-Signature
+      description: LINE HMAC-SHA256 signature verified against the unmodified request bytes.
+    gatewayCaller:
+      type: apiKey
+      in: header
+      name: Dapr-Caller-App-Id
+      description: Must exactly match the configured api-gateway Dapr app id.
+    appApiToken:
+      type: apiKey
+      in: header
+      name: dapr-api-token
+      description: Shared app API token compared without exposing its value.
+    trustedUser:
+      type: apiKey
+      in: header
+      name: X-HHC-User-ID
+      description: >-
+        Gateway-trusted HHC user UUID. After caller and token checks, every media-sync request is
+        authorized by Account API for the media-sync administration permission and fails closed.
+  parameters:
+    ProfileName:
+      name: profileName
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z0-9][a-z0-9_-]*$" }
+      description: Configured profile whose canonical webhookPath equals this route.
+    CollectionId:
+      name: collectionId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 255 }
+    ItemId:
+      name: itemId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 255 }
+    AclId:
+      name: aclId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 255 }
+    RequestId:
+      name: X-HHC-Request-ID
+      in: header
+      required: false
+      schema: { type: string, minLength: 1, maxLength: 128 }
+      description: Valid gateway request id reused for downstream correlation; otherwise regenerated.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, minLength: 1, maxLength: 2048 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100 }
+  headers:
+    RequestId:
+      schema: { type: string }
+      description: Request correlation id used for Account and Asset calls.
+  responses:
+    InvalidRequest:
+      description: The path, query, headers, or strict JSON body are invalid.
+      headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Unauthorized:
+      description: The trusted HHC user header is absent or invalid.
+      headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Forbidden:
+      description: The Dapr caller, API token, or Account permission check denied the request.
+      headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Conflict:
+      description: The requested mutation conflicts with current collection or binding state.
+      headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Unavailable:
+      description: Account permission, ACL subject search, or media-sync service is unavailable.
+      headers: { X-HHC-Request-ID: { $ref: "#/components/headers/RequestId" } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    WebhookBadRequest:
+      description: The signature header is missing or the JSON payload shape is invalid.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    WebhookUnauthorized:
+      description: The LINE signature does not match the selected profile.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    WebhookUnavailable:
+      description: A retryable webhook dependency could not complete the batch.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, service, timestamp]
+      properties:
+        ok: { type: boolean, const: true }
+        service: { type: string }
+        timestamp: { type: string, format: date-time }
+    ReadinessResponse:
+      type: object
+      description: Bounded public PostgreSQL and Redis readiness result.
+      additionalProperties: false
+      required: [service, status, database]
+      properties:
+        service: { type: string }
+        status: { type: string, enum: [ok, error] }
+        database:
+          type: object
+          additionalProperties: false
+          required: [postgres, redis]
+          properties:
+            postgres: { $ref: "#/components/schemas/DependencyStatus" }
+            redis: { $ref: "#/components/schemas/DependencyStatus" }
+    DependencyStatus:
+      type: object
+      additionalProperties: false
+      required: [configured, status]
+      properties:
+        configured: { type: boolean }
+        status: { type: string, enum: [ok, degraded, missing, error] }
+        latencyMs: { type: number, minimum: 0 }
+        message: { type: string }
+    LineWebhookPayload:
+      type: object
+      additionalProperties: true
+      required: [events]
+      properties:
+        destination: { type: string }
+        events:
+          type: array
+          items: { type: object, additionalProperties: true }
+    WebhookAcknowledgement:
+      type: object
+      additionalProperties: false
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
+        allowedEvents: { type: integer, minimum: 0 }
+        ignored: { type: boolean }
+        reason: { type: string }
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, error]
+      properties:
+        ok: { type: boolean, const: false }
+        error: { type: string }
+    Collection:
+      type: object
+      additionalProperties: false
+      required: [id, namespace, name, revision, retentionDays, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        namespace: { type: string, const: line.group.media-sync }
+        name: { type: string }
+        revision: { type: integer }
+        retentionDays: { type: integer, minimum: 1, maximum: 365 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time }
+    CollectionAcl:
+      type: object
+      additionalProperties: false
+      required: [id, collectionId, subjectType, subjectId, permission, createdAt]
+      properties:
+        id: { type: string }
+        collectionId: { type: string }
+        subjectType: { type: string, enum: [user, role] }
+        subjectId: { type: string }
+        permission: { type: string, const: read }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time }
+    ManagedCollection:
+      type: object
+      additionalProperties: false
+      required: [collection, acls, binding, pendingBinding]
+      properties:
+        collection: { $ref: "#/components/schemas/Collection" }
+        acls:
+          type: array
+          items: { $ref: "#/components/schemas/CollectionAcl" }
+        binding:
+          oneOf:
+            - $ref: "#/components/schemas/CollectionBinding"
+            - type: "null"
+        pendingBinding:
+          oneOf:
+            - $ref: "#/components/schemas/PendingBinding"
+            - type: "null"
+    ManagedCollectionPage:
+      type: object
+      additionalProperties: false
+      required: [collections, hasMore]
+      properties:
+        collections:
+          type: array
+          items: { $ref: "#/components/schemas/ManagedCollection" }
+        cursor: { type: string }
+        hasMore: { type: boolean }
+    CollectionBinding:
+      type: object
+      additionalProperties: false
+      required: [groupId, groupDisplayName, boundAt]
+      properties:
+        groupId: { type: string }
+        groupDisplayName: { type: string }
+        boundAt: { type: string, format: date-time }
+    PendingBinding:
+      type: object
+      additionalProperties: false
+      required: [expiresAt]
+      properties:
+        expiresAt: { type: string, format: date-time }
+    ManagedCollectionItem:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, mimeType, sizeBytes, createdAt, retentionExempt]
+      properties:
+        id: { type: string }
+        displayName: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        retentionExempt: { type: boolean }
+    ManagedCollectionItemPage:
+      type: object
+      additionalProperties: false
+      required: [items, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ManagedCollectionItem" }
+        cursor: { type: string }
+        hasMore: { type: boolean }
+    AclSubjectPage:
+      type: object
+      additionalProperties: false
+      required: [subjects, page, perPage, hasMore]
+      properties:
+        subjects:
+          type: array
+          items: { $ref: "#/components/schemas/AclSubject" }
+        page: { type: integer, minimum: 1 }
+        perPage: { type: integer, minimum: 1 }
+        hasMore: { type: boolean }
+    AclSubject:
+      type: object
+      additionalProperties: false
+      required: [id, type, displayName]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [user, role] }
+        displayName: { type: string }
+        email: { type: string, format: email }
+    CollectionNameRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+    RetentionRequest:
+      type: object
+      additionalProperties: false
+      required: [retentionDays]
+      properties:
+        retentionDays: { type: integer, minimum: 1, maximum: 365 }
+    ItemNameRequest:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 255 }
+    ItemIdsRequest:
+      type: object
+      additionalProperties: false
+      required: [itemIds]
+      properties:
+        itemIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 255 }
+    ItemsRetentionRequest:
+      type: object
+      additionalProperties: false
+      required: [itemIds, retentionExempt]
+      properties:
+        itemIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 255 }
+        retentionExempt: { type: boolean }
+    DeleteItemsResponse:
+      type: object
+      additionalProperties: false
+      required: [deleted, alreadyRemoved]
+      properties:
+        deleted: { type: integer, minimum: 0 }
+        alreadyRemoved: { type: integer, minimum: 0 }
+    ContentTicketBatch:
+      type: object
+      additionalProperties: false
+      required: [tickets, unavailableItemIds]
+      properties:
+        tickets:
+          type: array
+          items: { $ref: "#/components/schemas/ContentTicket" }
+        unavailableItemIds:
+          type: array
+          items: { type: string }
+    ContentTicket:
+      type: object
+      additionalProperties: false
+      required: [itemId, contentUrl, expiresAt, etag]
+      properties:
+        itemId: { type: string }
+        contentUrl: { type: string }
+        expiresAt: { type: string, format: date-time }
+        etag: { type: string }
+    AclRequest:
+      type: object
+      additionalProperties: false
+      required: [subjectType, subjectId]
+      properties:
+        subjectType: { type: string, enum: [user, role] }
+        subjectId: { type: string, minLength: 1, maxLength: 255 }
+    AclMutation:
+      type: object
+      additionalProperties: false
+      required: [collection, acl]
+      properties:
+        collection: { $ref: "#/components/schemas/Collection" }
+        acl: { $ref: "#/components/schemas/CollectionAcl" }
+    BindingCodeResponse:
+      type: object
+      additionalProperties: false
+      required: [command, expiresAt]
+      properties:
+        command:
+          type: string
+          description: One-time /media-sync command; its code is intentionally not exemplified.
+        expiresAt: { type: string, format: date-time }
