@@ -646,7 +646,7 @@ describe("media sync management HTTP", () => {
   it("dispatches the exact seven routes and propagates request/idempotency identity", async () => {
     const assets = asset();
     const mediaStore = store();
-    const { instance } = await app({ assets, store: mediaStore });
+    const { instance, accountClient } = await app({ assets, store: mediaStore });
     const cases = [
       ["GET", "/api/line/media-sync/collections", undefined, undefined, 200],
       ["POST", "/api/line/media-sync/collections", { name: "Media" }, "create-1", 201],
@@ -693,7 +693,21 @@ describe("media sync management HTTP", () => {
       "collection-1",
       { subjectType: "user", subjectId: userId },
       "acl-add-1",
-      { requestId: "request-1" }
+      { requestId: "request-1", actorUserId: userId }
+    );
+    expect(accountClient.searchMediaSyncAclSubjects).toHaveBeenCalledWith({
+      requestingUserId: userId,
+      subjectType: "user",
+      query: userId,
+      page: 1,
+      perPage: 20,
+      requestId: "request-1"
+    });
+    expect(assets.revokeCollectionAcl).toHaveBeenCalledWith(
+      "collection-1",
+      "acl-1",
+      "acl-delete-1",
+      { requestId: "request-1", actorUserId: userId }
     );
     expect(mediaStore.createBindingCode).toHaveBeenCalledWith({
       profileName: "helper",
@@ -701,6 +715,85 @@ describe("media sync management HTTP", () => {
       createdByHhcUserId: userId,
       idempotencyKey: "binding-1"
     });
+    await instance.close();
+  });
+
+  it.each([
+    ["user", "not-a-uuid"],
+    ["role", "media-sync-manager"]
+  ] as const)(
+    "rejects a non-UUID %s ACL subject without Account lookup",
+    async (subjectType, subjectId) => {
+      const accountClient = account();
+      const assets = asset();
+      const { instance } = await app({ account: accountClient, assets });
+
+      const response = await instance.inject({
+        method: "POST",
+        url: "/api/line/media-sync/collections/collection-1/acl",
+        headers: { ...trustedHeaders, "idempotency-key": "acl-add-1" },
+        payload: { subjectType, subjectId }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(accountClient.searchMediaSyncAclSubjects).not.toHaveBeenCalled();
+      expect(assets.addCollectionAcl).not.toHaveBeenCalled();
+      await instance.close();
+    }
+  );
+
+  it.each([
+    ["missing", []],
+    ["wrong type", [{ id: userId, type: "role", displayName: "Media managers" }]]
+  ] as const)("rejects an Account ACL lookup with %s exact subject", async (_label, subjects) => {
+    const accountClient = account();
+    vi.mocked(accountClient.searchMediaSyncAclSubjects).mockResolvedValue({
+      subjects,
+      page: 1,
+      perPage: 20,
+      hasMore: false
+    });
+    const assets = asset();
+    const { instance } = await app({ account: accountClient, assets });
+
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/line/media-sync/collections/collection-1/acl",
+      headers: { ...trustedHeaders, "idempotency-key": "acl-add-1" },
+      payload: { subjectType: "user", subjectId: userId }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(accountClient.searchMediaSyncAclSubjects).toHaveBeenCalledWith({
+      requestingUserId: userId,
+      subjectType: "user",
+      query: userId,
+      page: 1,
+      perPage: 20,
+      requestId: "request-1"
+    });
+    expect(assets.addCollectionAcl).not.toHaveBeenCalled();
+    await instance.close();
+  });
+
+  it("maps Account ACL re-resolution failure to 503", async () => {
+    const accountClient = account();
+    vi.mocked(accountClient.searchMediaSyncAclSubjects).mockRejectedValue(
+      new AccountApiError("account_api_transport_error", true)
+    );
+    const assets = asset();
+    const { instance } = await app({ account: accountClient, assets });
+
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/line/media-sync/collections/collection-1/acl",
+      headers: { ...trustedHeaders, "idempotency-key": "acl-add-1" },
+      payload: { subjectType: "user", subjectId: userId }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "subject_service_unavailable" });
+    expect(assets.addCollectionAcl).not.toHaveBeenCalled();
     await instance.close();
   });
 

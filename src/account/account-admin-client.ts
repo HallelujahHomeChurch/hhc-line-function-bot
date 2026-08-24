@@ -56,6 +56,8 @@ export interface VerifyAccountPermissionInput {
 
 export type MediaSyncAclSubjectType = "user" | "role";
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
 export interface SearchMediaSyncAclSubjectsInput {
   requestingUserId: string;
   subjectType: MediaSyncAclSubjectType;
@@ -278,7 +280,7 @@ function parseMediaSyncAclSubjectSearch(
     if (
       (candidate.type !== "user" && candidate.type !== "role") ||
       candidate.type !== input.subjectType ||
-      !validAclSubjectText(candidate.id, 255) ||
+      !validAclSubjectId(candidate.id) ||
       !validAclSubjectText(candidate.displayName, 2048) ||
       (candidate.email !== undefined && !validAclSubjectEmail(candidate.email))
     ) {
@@ -300,6 +302,10 @@ function parseMediaSyncAclSubjectSearch(
 
 function validAclSubjectEmail(value: unknown): value is string {
   return validAclSubjectText(value, 320);
+}
+
+function validAclSubjectId(value: unknown): value is string {
+  return validAclSubjectText(value, 255) && uuidPattern.test(value);
 }
 
 function validAclSubjectText(value: unknown, maxBytes: number): value is string {

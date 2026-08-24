@@ -441,7 +441,7 @@ paths:
     post:
       operationId: addMediaSyncCollectionAcl
       summary: Add a read-only collection ACL entry
-      description: Adds an Asset-owned read ACL for an Account user UUID or role after authorization.
+      description: Adds an Asset-owned read ACL after exact Account subject re-resolution.
       tags: [Admin]
       x-hhc-visibility: admin
       x-hhc-callers: [admin-fe]
@@ -472,7 +472,7 @@ paths:
     delete:
       operationId: revokeMediaSyncCollectionAcl
       summary: Revoke a collection ACL entry
-      description: Revokes an Asset-owned collection ACL after the shared authorization gate.
+      description: Revokes an Asset-owned collection ACL with the authenticated manager as actor.
       tags: [Admin]
       x-hhc-visibility: admin
       x-hhc-callers: [admin-fe]
@@ -859,7 +859,7 @@ components:
       additionalProperties: false
       required: [id, type, displayName]
       properties:
-        id: { type: string }
+        id: { $ref: "#/components/schemas/AclSubjectId" }
         type: { type: string, enum: [user, role] }
         displayName: { type: string }
         email: { type: string, format: email }
@@ -875,6 +875,11 @@ components:
       format: uuid
       pattern: "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-8][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$"
       description: Canonical Account user UUID accepted by the media-sync authorization boundary.
+    AclSubjectId:
+      type: string
+      format: uuid
+      pattern: "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-8][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$"
+      description: Immutable Account user or role UUID accepted for collection ACL subjects.
     CollectionNameRequest:
       type: object
       additionalProperties: false
@@ -972,7 +977,7 @@ components:
       required: [subjectType, subjectId]
       properties:
         subjectType: { type: string, const: role }
-        subjectId: { $ref: "#/components/schemas/OpaqueId" }
+        subjectId: { $ref: "#/components/schemas/AclSubjectId" }
     AclMutation:
       type: object
       additionalProperties: false
