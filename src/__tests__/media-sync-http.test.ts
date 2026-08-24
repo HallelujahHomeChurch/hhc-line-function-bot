@@ -797,6 +797,27 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
+  it("preserves an Account ACL re-resolution denial as forbidden", async () => {
+    const accountClient = account();
+    vi.mocked(accountClient.searchMediaSyncAclSubjects).mockRejectedValue(
+      new AccountApiError("account_api_http_403", false)
+    );
+    const assets = asset();
+    const { instance } = await app({ account: accountClient, assets });
+
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/line/media-sync/collections/collection-1/acl",
+      headers: { ...trustedHeaders, "idempotency-key": "acl-add-1" },
+      payload: { subjectType: "user", subjectId: userId }
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "forbidden" });
+    expect(assets.addCollectionAcl).not.toHaveBeenCalled();
+    await instance.close();
+  });
+
   it("orders the durable fence before Asset deletion and binding release", async () => {
     const assets = asset();
     const mediaStore = store();

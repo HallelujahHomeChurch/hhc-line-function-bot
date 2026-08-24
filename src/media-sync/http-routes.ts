@@ -308,7 +308,10 @@ export function registerMediaSyncRoutes(
         ) {
           return sendError(reply, 400, "invalid_request");
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof AccountApiError && error.message === "account_api_http_403") {
+          return sendError(reply, 403, "forbidden");
+        }
         return sendError(reply, 503, "subject_service_unavailable");
       }
       return run(
