@@ -183,13 +183,13 @@ export interface AssetApiClient {
     collectionId: string,
     input: { subjectType: CollectionSubjectType; subjectId: string },
     idempotencyKey: string,
-    options?: AssetApiRequestOptions
+    options: CollectionAclRequestOptions
   ): Promise<CollectionAclMutation>;
   revokeCollectionAcl(
     collectionId: string,
     aclId: string,
     idempotencyKey: string,
-    options?: AssetApiRequestOptions
+    options: CollectionAclRequestOptions
   ): Promise<CollectionAclMutation>;
   createUpload(
     input: {
@@ -253,6 +253,11 @@ export interface AssetApiClient {
 export interface AssetApiRequestOptions {
   signal?: AbortSignal;
   requestId?: string;
+}
+
+export interface CollectionAclRequestOptions extends AssetApiRequestOptions {
+  requestId: string;
+  actorUserId: string;
 }
 
 export type AssetApiRejectionTelemetry = {
@@ -531,6 +536,7 @@ export function createAssetApiClient(options: {
       return requireCollection(await readJson(response));
     },
     async addCollectionAcl(collectionId, input, idempotencyKey, requestOptions) {
+      const { actorUserId, ...options } = requestOptions;
       const response = await request(
         "add_collection_acl",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl`,
@@ -538,20 +544,25 @@ export function createAssetApiClient(options: {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": idempotencyKey
+            "idempotency-key": idempotencyKey,
+            "x-hhc-actor-user-id": actorUserId
           },
           body: JSON.stringify({ ...input, permission: "read" })
         },
-        requestOptions
+        options
       );
       return requireCollectionAclMutation(await readJson(response));
     },
     async revokeCollectionAcl(collectionId, aclId, idempotencyKey, requestOptions) {
+      const { actorUserId, ...options } = requestOptions;
       const response = await request(
         "revoke_collection_acl",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl/${encodeURIComponent(aclId)}`,
-        { method: "DELETE", headers: { "idempotency-key": idempotencyKey } },
-        requestOptions
+        {
+          method: "DELETE",
+          headers: { "idempotency-key": idempotencyKey, "x-hhc-actor-user-id": actorUserId }
+        },
+        options
       );
       return requireCollectionAclMutation(await readJson(response));
     },

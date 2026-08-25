@@ -107,6 +107,25 @@ describe("account admin client", () => {
     );
   });
 
+  it("rejects a legacy non-UUID role subject from Account", async () => {
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          subjects: [{ id: "media-sync-manager", type: "role", displayName: "Media managers" }],
+          page: 2,
+          perPage: 20,
+          hasMore: false
+        })
+      )
+    });
+
+    await expect(
+      client.searchMediaSyncAclSubjects({ ...aclSubjectSearchInput, subjectType: "role" })
+    ).rejects.toMatchObject({ message: "account_api_invalid_acl_subjects", retryable: false });
+  });
+
   it("accepts the bounded multibyte display name Account can compose from two profile fields", async () => {
     const displayName = `${"教".repeat(255)} ${"家".repeat(255)}`;
     const payload = {

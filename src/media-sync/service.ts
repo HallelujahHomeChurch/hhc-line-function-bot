@@ -148,18 +148,26 @@ export class MediaSyncManagementService {
     collectionId: string,
     input: { subjectType: CollectionSubjectType; subjectId: string },
     idempotencyKey: string,
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ) {
-    return this.assets.addCollectionAcl(collectionId, input, idempotencyKey, { requestId });
+    return this.assets.addCollectionAcl(collectionId, input, idempotencyKey, {
+      requestId,
+      actorUserId
+    });
   }
 
   revokeCollectionAcl(
     collectionId: string,
     aclId: string,
     idempotencyKey: string,
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ) {
-    return this.assets.revokeCollectionAcl(collectionId, aclId, idempotencyKey, { requestId });
+    return this.assets.revokeCollectionAcl(collectionId, aclId, idempotencyKey, {
+      requestId,
+      actorUserId
+    });
   }
 
   async createBindingCode(

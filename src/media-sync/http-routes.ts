@@ -290,6 +290,30 @@ export function registerMediaSyncRoutes(
       ) {
         return sendError(reply, 400, "invalid_request");
       }
+      const search = deps.accountAdminClient.searchMediaSyncAclSubjects;
+      if (!search) return sendError(reply, 503, "subject_service_unavailable");
+      try {
+        const result = await search.call(deps.accountAdminClient, {
+          requestingUserId: auth.userId,
+          subjectType: body.subjectType,
+          query: body.subjectId,
+          page: 1,
+          perPage: 20,
+          requestId: auth.requestId
+        });
+        if (
+          !result.subjects.some(
+            (subject) => subject.type === body.subjectType && subject.id === body.subjectId
+          )
+        ) {
+          return sendError(reply, 400, "invalid_request");
+        }
+      } catch (error) {
+        if (error instanceof AccountApiError && error.message === "account_api_http_403") {
+          return sendError(reply, 403, "forbidden");
+        }
+        return sendError(reply, 503, "subject_service_unavailable");
+      }
       return run(
         reply,
         () =>
@@ -300,7 +324,8 @@ export function registerMediaSyncRoutes(
               subjectId: body.subjectId as string
             },
             key,
-            auth.requestId
+            auth.requestId,
+            auth.userId
           ),
         201
       );
@@ -326,7 +351,8 @@ export function registerMediaSyncRoutes(
           request.params.collectionId,
           request.params.aclId,
           key,
-          auth.requestId
+          auth.requestId,
+          auth.userId
         )
       );
     }
@@ -533,12 +559,12 @@ function validOpaqueId(value: string): boolean {
   );
 }
 
-function validSubjectId(subjectType: "user" | "role", value: unknown): value is string {
+function validSubjectId(_subjectType: "user" | "role", value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.trim() === value &&
     validOpaqueId(value) &&
-    (subjectType === "role" || uuidPattern.test(value))
+    uuidPattern.test(value)
   );
 }
 
