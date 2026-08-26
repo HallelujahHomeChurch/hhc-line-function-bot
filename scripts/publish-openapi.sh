@@ -5,6 +5,12 @@ set -euo pipefail
 [[ "${RELEASE_COMMIT}" == "${GITHUB_SHA}" ]]
 [[ "${RELEASE_IMAGE}" == alive.azurecr.io/alive/hhc-line-function-bot@sha256:* ]]
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+published_dir="$(mktemp -d)"
+published_spec="${published_dir}/openapi.yaml"
+trap 'rm -rf "${published_dir}"' EXIT
+bash "${script_dir}/render-published-openapi.sh" docs/openapi.yaml "${published_spec}"
+
 is_canonical_run_id() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
 if ! is_canonical_run_id "${GITHUB_RUN_ID}"; then
   echo "Invalid GITHUB_RUN_ID: expected canonical positive decimal" >&2
@@ -12,7 +18,7 @@ if ! is_canonical_run_id "${GITHUB_RUN_ID}"; then
 fi
 
 spec_blob="specs/${GITHUB_SHA}/openapi.yaml"
-spec_sha256="$(sha256sum docs/openapi.yaml | cut -d " " -f 1)"
+spec_sha256="$(sha256sum "${published_spec}" | cut -d " " -f 1)"
 spec_exists="$(az storage blob exists \
   --account-name "${STORAGE_ACCOUNT}" \
   --container-name "${CONTAINER}" \
@@ -41,7 +47,7 @@ else
     --account-name "${STORAGE_ACCOUNT}" \
     --container-name "${CONTAINER}" \
     --name "${spec_blob}" \
-    --file docs/openapi.yaml \
+    --file "${published_spec}" \
     --auth-mode login \
     --overwrite false \
     --only-show-errors \
