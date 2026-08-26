@@ -517,6 +517,32 @@ describe("production profile configuration deployment contract", () => {
     expect(projectFileExists("azure-pipelines.yml")).toBe(false);
   });
 
+  it("publishes the deployed OpenAPI contract in a separate post-smoke job", () => {
+    const workflow = readProjectFile(".github/workflows/release.yml");
+    const deploy = workflow.indexOf("bash scripts/deploy-aca.sh");
+    const outputs = workflow.indexOf("id: release_outputs");
+    const publish = workflow.indexOf("  publish_openapi:");
+    const publishJob = workflow.slice(publish);
+
+    expect(workflow).toContain("fail_openapi_before_pointer:");
+    expect(workflow).toContain("commit: ${{ steps.release_outputs.outputs.commit }}");
+    expect(workflow).toContain("image: ${{ steps.release_outputs.outputs.image }}");
+    expect(outputs).toBeGreaterThan(deploy);
+    expect(publish).toBeGreaterThan(outputs);
+    expect(publishJob).toContain("needs: release");
+    expect(publishJob).not.toContain("environment:");
+    expect(publishJob).toContain("contents: read\n      id-token: write");
+    expect(publishJob).toContain("CONTAINER: api-docs-hhc-line-function-bot");
+    expect(publishJob).toContain("API_DOCS_AZURE_CLIENT_ID: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}");
+    expect(publishJob).toContain("RELEASE_COMMIT: ${{ needs.release.outputs.commit }}");
+    expect(publishJob).toContain("RELEASE_IMAGE: ${{ needs.release.outputs.image }}");
+    expect(publishJob).toContain(
+      "FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}"
+    );
+    expect(publishJob).toContain("bash scripts/publish-openapi.sh");
+    expect(publishJob).not.toMatch(/deploy-aca|rollback|containerapp (?:update|revision copy)/u);
+  });
+
   it("owns a loopback-only disposable Redis AOF and pgvector integration stack", () => {
     const compose = readProjectFile("compose.kernel-integration.yml");
     const vitestConfig = readProjectFile("vitest.config.ts");
@@ -749,14 +775,16 @@ describe("production profile configuration deployment contract", () => {
     const azureLoginSteps = [...releaseWorkflow.matchAll(/uses: azure\/login@v2/gu)];
     const finalImageBuild = releaseWorkflow.lastIndexOf("az acr build");
     const refreshedLogin = azureLoginSteps.at(1)?.index ?? -1;
+    const docsLogin = azureLoginSteps.at(2)?.index ?? -1;
     const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
     const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v4");
-    expect(azureLoginSteps).toHaveLength(2);
+    expect(azureLoginSteps).toHaveLength(3);
     expect(finalImageBuild).toBeGreaterThanOrEqual(0);
     expect(refreshedLogin).toBeGreaterThan(finalImageBuild);
     expect(deploy).toBeGreaterThan(refreshedLogin);
     expect(deploy).toBeGreaterThanOrEqual(0);
     expect(upload).toBeGreaterThan(deploy);
+    expect(docsLogin).toBeGreaterThan(upload);
   });
 
   it("schedules weekly periodic assurance with OIDC and always uploads its fixed report", () => {
