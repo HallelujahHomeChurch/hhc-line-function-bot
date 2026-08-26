@@ -498,6 +498,7 @@ describe("production profile configuration deployment contract", () => {
     expect(ciWorkflow).toContain("pnpm eval:agent");
     expect(ciWorkflow).toContain("pnpm eval:kernel");
     expect(ciWorkflow).toContain("pnpm eval:kernel:integration");
+    expect(ciWorkflow).toContain("bash scripts/render-published-openapi.test.sh");
     expect(ciWorkflow.indexOf("pnpm eval:kernel")).toBeLessThan(ciWorkflow.indexOf("pnpm build"));
     expect(ciWorkflow.indexOf("pnpm eval:kernel:integration")).toBeLessThan(
       ciWorkflow.indexOf("pnpm build")

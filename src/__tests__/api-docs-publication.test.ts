@@ -2,6 +2,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -10,6 +11,8 @@ const publicationScript = resolve(root, "scripts/publish-openapi.sh");
 const commit = "0123456789abcdef0123456789abcdef01234567";
 const image =
   "alive.azurecr.io/alive/hhc-line-function-bot@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const renderedSpec = "openapi: 3.1.0\nx-rendered: true\n";
+const renderedSpecSha256 = createHash("sha256").update(renderedSpec).digest("hex");
 
 describe("API docs publication", () => {
   let fixture: string;
@@ -55,6 +58,27 @@ esac
 `
     );
     await chmod(join(fixture, "bin", "az"), 0o755);
+    await writeFile(
+      join(fixture, "bin", "npx"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+command="$3"
+if [[ "$command" == bundle ]]; then
+  output=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output) output="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  printf 'openapi: 3.1.0\\nx-rendered: true\\n' > "$output"
+elif [[ "$command" != lint ]]; then
+  echo "unexpected npx command: $command" >&2
+  exit 2
+fi
+`
+    );
+    await chmod(join(fixture, "bin", "npx"), 0o755);
   });
 
   afterEach(async () => {
@@ -95,7 +119,7 @@ esac
 
     expect(result.status, result.stderr).toBe(0);
     expect(await readFile(join(container, `specs/${commit}/openapi.yaml`), "utf8")).toBe(
-      "openapi: 3.1.0\n"
+      renderedSpec
     );
     expect(JSON.parse(await pointer())).toMatchObject({
       schemaVersion: 1,
@@ -103,7 +127,7 @@ esac
       commit,
       image,
       specBlob: `specs/${commit}/openapi.yaml`,
-      specSha256: "f39db8e8ede3dc2457c613e2a304e6d478f6e5ec660e4746464f41e76ac77006",
+      specSha256: renderedSpecSha256,
       releaseUrl: "https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/20"
     });
   });
@@ -132,14 +156,14 @@ esac
     expect(result.stderr).toContain("Requested failure before API docs pointer upload");
     expect(await pointer()).toBe(previous);
     expect(await readFile(join(container, `specs/${commit}/openapi.yaml`), "utf8")).toBe(
-      "openapi: 3.1.0\n"
+      renderedSpec
     );
   });
 
   it("skips stale and same-run pointers but advances a newer run", async () => {
     const previous =
       '{"releaseUrl":"https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/20"}\n';
-    await seed(`specs/${commit}/openapi.yaml`, "openapi: 3.1.0\n");
+    await seed(`specs/${commit}/openapi.yaml`, renderedSpec);
     await seed("current.json", previous);
 
     expect(run("19").status).toBe(0);
@@ -151,7 +175,7 @@ esac
   });
 
   it("compares large workflow run IDs as decimal integers", async () => {
-    await seed(`specs/${commit}/openapi.yaml`, "openapi: 3.1.0\n");
+    await seed(`specs/${commit}/openapi.yaml`, renderedSpec);
     await seed(
       "current.json",
       '{"releaseUrl":"https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/99999999999999999999"}\n'
@@ -166,7 +190,7 @@ esac
   it.each(["{", "{}", '{"releaseUrl":null}', '{"releaseUrl":"https://example.com/runs/20"}'])(
     "rejects malformed existing pointer %s",
     async (invalidPointer) => {
-      await seed(`specs/${commit}/openapi.yaml`, "openapi: 3.1.0\n");
+      await seed(`specs/${commit}/openapi.yaml`, renderedSpec);
       await seed("current.json", `${invalidPointer}\n`);
 
       const result = run("21");
