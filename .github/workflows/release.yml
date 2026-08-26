@@ -24,6 +24,12 @@ on:
       - aca.periodic-assurance-job.yaml
       - infra/searxng/**
   workflow_dispatch:
+    inputs:
+      fail_openapi_before_pointer:
+        description: Test last-good API docs pointer preservation
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -37,6 +43,9 @@ jobs:
   release:
     name: Build and release
     runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.release_outputs.outputs.commit }}
+      image: ${{ steps.release_outputs.outputs.image }}
     env:
       ACR_NAME: alive
       ACR_LOGIN_SERVER: alive.azurecr.io
@@ -80,6 +89,26 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Deploy image and wait for healthy revision
         run: bash scripts/deploy-aca.sh
+      - name: Capture production release outputs
+        id: release_outputs
+        shell: bash
+        run: |
+          ready_revision="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${CONTAINER_APP_NAME}" \
+            --query properties.latestReadyRevisionName \
+            --output tsv \
+            --only-show-errors)"
+          live_image="$(az containerapp revision show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${CONTAINER_APP_NAME}" \
+            --revision "${ready_revision}" \
+            --query 'properties.template.containers[0].image' \
+            --output tsv \
+            --only-show-errors)"
+          [[ "${live_image}" == alive.azurecr.io/alive/hhc-line-function-bot@sha256:* ]]
+          echo "commit=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "image=${live_image}" >> "${GITHUB_OUTPUT}"
       - name: Upload release assurance report
         if: always()
         uses: actions/upload-artifact@v4
@@ -87,3 +116,35 @@ jobs:
           name: release-assurance-${{ github.run_id }}
           path: artifacts/release-assurance/report.json
           if-no-files-found: error
+
+  publish_openapi:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STORAGE_ACCOUNT: hhcapidocsprod
+      CONTAINER: api-docs-hhc-line-function-bot
+      API_DOCS_AZURE_CLIENT_ID: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      RELEASE_COMMIT: ${{ needs.release.outputs.commit }}
+      RELEASE_IMAGE: ${{ needs.release.outputs.image }}
+      FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate publication configuration
+        shell: bash
+        run: |
+          for name in API_DOCS_AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+            test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
+          done
+      - name: Sign in with API docs publisher identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Publish production OpenAPI contract
+        run: bash scripts/publish-openapi.sh
