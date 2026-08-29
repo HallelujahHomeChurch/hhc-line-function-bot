@@ -177,6 +177,7 @@ properties:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 2
         resources:
           cpu: 0.25
           memory: 0.5Gi
