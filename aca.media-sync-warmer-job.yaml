@@ -1,0 +1,43 @@
+name: hhc-line-bot-media-sync-warmer
+type: Microsoft.App/jobs
+location: PLACEHOLDER_AZURE_REGION
+identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}
+properties:
+  environmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
+  configuration:
+    registries:
+      - server: alive.azurecr.io
+        identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
+    triggerType: Schedule
+    replicaTimeout: 120
+    replicaRetryLimit: 1
+    scheduleTriggerConfig:
+      cronExpression: "*/1 * * * *"
+      parallelism: 1
+      replicaCompletionCount: 1
+  template:
+    containers:
+      - name: media-sync-warmer
+        image: alive.azurecr.io/alive/hhc-line-function-bot:latest
+        args:
+          - dist/tools/run-media-sync-warmer.js
+        env:
+          - name: MEETING_API_BASE_URL
+            value: PLACEHOLDER_MEETING_API_URL
+          - name: MEETING_API_AUDIENCE
+            value: PLACEHOLDER_MEETING_API_AUDIENCE
+          - name: MEDIA_SYNC_WARM_QUEUE_URL
+            value: https://PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME.queue.core.windows.net/PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME
+          - name: MEDIA_SYNC_WARM_LEAD
+            value: 5m
+          - name: MEDIA_SYNC_WARM_TAIL
+            value: 10m
+          - name: AZURE_CLIENT_ID
+            value: PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID
+        resources:
+          cpu: 0.25
+          memory: 0.5Gi
+    volumes: []

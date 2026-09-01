@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   MEDIA_SYNC_MAX_BYTES,
+  nextDelay,
   runMediaSyncWorker,
   safeMediaFileName,
   shouldAcknowledgeMediaSyncResult
@@ -20,6 +21,15 @@ import type { ResourceBinaryPublisher } from "../functions/resource-binary-publi
 import type { LineContentClient } from "../types.js";
 
 const pptxBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]);
+
+describe("media sync cadence", () => {
+  it("retries pending scans in 2 seconds only while warm", () => {
+    expect(nextDelay("pending", true)).toBe(2_000);
+    expect(nextDelay("scanning", true)).toBe(2_000);
+    expect(nextDelay("pending", false)).toBe(30_000);
+    expect(nextDelay("clean", true)).toBe(30_000);
+  });
+});
 
 describe("media sync source stage", () => {
   it("claims only the opaque work ID and loads through the exact lease token", async () => {
@@ -269,6 +279,22 @@ describe("media sync Asset and collection stage", () => {
     }
   );
 
+  it("reschedules a warm pending scan after 2 seconds", async () => {
+    const fixture = createAssetFixture();
+    fixture.work.ingest.assetId = "asset-1";
+    fixture.work.ingest.assetEtag = "etag-1";
+    fixture.assets.get.mockResolvedValue(asset({ scanStatus: "pending" }));
+    fixture.options.warm = true;
+
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "scan_pending"
+    });
+    expect(fixture.store.retryOutbox).toHaveBeenCalledWith(
+      expect.objectContaining({ availableAt: new Date("2026-08-16T00:00:02.000Z") })
+    );
+  });
+
   it.each([
     ["inactive binding", "binding_inactive"],
     ["infected Asset", "scan_infected"]
@@ -347,6 +373,8 @@ describe("media sync Asset and collection stage", () => {
 
   it("publishes only a clean ready Asset and persists the actual returned occurrence ID", async () => {
     const fixture = cleanAssetFixture();
+    const onTiming = vi.fn();
+    fixture.options.onTiming = onTiming;
 
     await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "completed"
@@ -373,6 +401,10 @@ describe("media sync Asset and collection stage", () => {
       workId: "work-opaque-1",
       expectedClaimedUntil: fixture.claim.claimedUntil
     });
+    expect(onTiming.mock.calls).toEqual([
+      ["clean_observed", "work-opaque-1"],
+      ["collection_published", "work-opaque-1"]
+    ]);
   });
 
   it("persists a production-shaped Asset occurrence without owner compensation", async () => {

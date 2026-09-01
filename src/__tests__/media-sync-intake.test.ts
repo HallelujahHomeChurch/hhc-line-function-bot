@@ -71,6 +71,7 @@ describe("media sync webhook intake", () => {
 
   it("records one collection publication and promotes a matching manual intent", async () => {
     const mediaStore = store();
+    const onTiming = vi.fn();
     const sessions = new InMemorySessionStore({
       now: () => new Date("2026-08-16T12:00:00.000Z")
     });
@@ -93,7 +94,8 @@ describe("media sync webhook intake", () => {
         }),
         store: mediaStore,
         sessionStore: sessions,
-        now: new Date("2026-08-16T12:00:00.000Z")
+        now: new Date("2026-08-16T12:00:00.000Z"),
+        onTiming
       })
     ).resolves.toMatchObject({ eligible: true, manual: true });
     expect(mediaStore.createIngest).toHaveBeenCalledWith(
@@ -107,6 +109,7 @@ describe("media sync webhook intake", () => {
     expect(mediaStore.attachManualIntent).toHaveBeenCalledWith(
       expect.objectContaining({ requesterUserId: "user-1" })
     );
+    expect(onTiming).toHaveBeenCalledWith("webhook_received", "work-1");
     await expect(
       sessions.findPendingAttachment({
         profileName: "helper",

@@ -47,6 +47,7 @@ import { pendingAttachmentPrompt } from "../../functions/pending-attachment.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
 import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
 import { prepareMediaSyncIntake } from "../../media-sync/intake.js";
+import { logMediaSyncTiming } from "../../media-sync/timing.js";
 import { applyMediaSyncLifecycle, mediaSyncLifecycleAction } from "../../media-sync/unsend.js";
 import { createIntroReply, introVariantForText } from "../../intro.js";
 import { verifyLineSignature } from "../../line-signature.js";
@@ -539,7 +540,8 @@ async function handleWebhook(
           event,
           store: mediaSyncStore,
           sessionStore,
-          now: new Date()
+          now: new Date(),
+          onTiming: logMediaSyncTiming
         });
         if (
           intake.eligible &&

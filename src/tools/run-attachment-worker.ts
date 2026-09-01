@@ -24,6 +24,8 @@ import {
   shouldAcknowledgeMediaSyncResult,
   type MediaSyncWorkerResult
 } from "../media-sync/worker.js";
+import { MeetingWindowClient, meetingAccessTokenScope } from "../media-sync/meeting-client.js";
+import { logMediaSyncTiming } from "../media-sync/timing.js";
 import { createRedisRuntime } from "../redis.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -156,21 +158,66 @@ export function attachmentWorkerDeadlines(startedAt: Date): {
 export async function runAttachmentWorker(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<{ exitCode: number; status: Record<string, string> }> {
-  const startedAt = new Date();
+  let runtime: Awaited<ReturnType<typeof createAttachmentWorkerRuntime>> | undefined;
+  try {
+    runtime = await createAttachmentWorkerRuntime(env);
+    const queueLease = await receiveAttachmentScanWork(runtime.queue);
+    if (!queueLease) return { exitCode: 0, status: { status: "ignored", reason: "no_message" } };
+    return await runtime.run(queueLease, false);
+  } catch {
+    return { exitCode: 1, status: { status: "failed", failureCode: "worker_failed" } };
+  } finally {
+    await runtime?.close();
+  }
+}
+
+export async function runAttachmentWorkerLoop(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { signal?: AbortSignal; sleep?: (milliseconds: number) => Promise<void> } = {}
+): Promise<void> {
+  const runtime = await createAttachmentWorkerRuntime(env);
+  const meetingUrl = requiredHttpsUrl(env, "MEETING_API_BASE_URL");
+  const meetingAudience = requiredAudience(env, "MEETING_API_AUDIENCE");
+  const warmQueueUrl = requiredHttpsUrl(env, "MEDIA_SYNC_WARM_QUEUE_URL");
+  const warmQueue = new QueueClient(warmQueueUrl, runtime.credential);
+  const meetings = new MeetingWindowClient({
+    baseUrl: meetingUrl,
+    getAccessToken: async () => {
+      const token = await runtime.credential.getToken(meetingAccessTokenScope(meetingAudience));
+      if (!token?.token) throw new Error("meeting_api_token_unavailable");
+      return token.token;
+    }
+  });
+  const sleep =
+    options.sleep ??
+    ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  try {
+    while (!options.signal?.aborted) {
+      await consumeWarmPulse(warmQueue);
+      const lease = await receiveAttachmentScanWork(runtime.queue);
+      if (!lease) {
+        await sleep(1_000);
+        continue;
+      }
+      const warm = await meetings.isWarm().catch(() => false);
+      await runtime.run(lease, warm);
+    }
+  } finally {
+    await runtime.close();
+  }
+}
+
+async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
+  const job = readAttachmentWorkerEnvironment(env);
+  const credential = new ManagedIdentityCredential(job.managedIdentityClientId);
+  const queue = new QueueClient(job.queueUrl, credential);
   let redis: Awaited<ReturnType<typeof createRedisRuntime>>;
   let postgres: Awaited<ReturnType<typeof createPostgresRuntime>>;
   try {
-    const job = readAttachmentWorkerEnvironment(env);
-    const credential = new ManagedIdentityCredential(job.managedIdentityClientId);
-    const queueLease = await receiveAttachmentScanWork(new QueueClient(job.queueUrl, credential));
-    if (!queueLease) return { exitCode: 0, status: { status: "ignored", reason: "no_message" } };
-
     const config = loadAttachmentScanWorkerConfigFromEnv(env);
     redis = await createRedisRuntime(config.redis, { onError: () => undefined });
     postgres = await createPostgresRuntime(config.database);
     if (!redis || !postgres) throw new Error("asset_job_state_unavailable");
-    const postgresRuntime = postgres;
-
     const agentJobStore = new RedisAgentJobStore({
       client: redis.client,
       keyPrefix: redis.keyPrefix
@@ -180,7 +227,7 @@ export async function runAttachmentWorker(
       keyPrefix: redis.keyPrefix,
       jobStore: agentJobStore
     });
-    const catalog = await createCatalogStore({ db: postgresRuntime.pool });
+    const catalog = await createCatalogStore({ db: postgres.pool });
     await seedCatalogSources({
       catalog,
       sources: buildCatalogSourceSeedsForProfiles(env, config.profiles)
@@ -199,43 +246,57 @@ export async function runAttachmentWorker(
       catalog,
       graph: createGraphDriveClient(config.graph)
     });
-    const deadlines = attachmentWorkerDeadlines(startedAt);
-    return await runAttachmentWorkerQueueLease(queueLease, {
-      runAttachment: (workId) =>
-        runAttachmentAssetWorker(workId, {
-          workStore,
-          assets,
-          lineContent,
-          externalBinary: createExternalBinaryClient(),
-          profiles: config.profiles,
-          publisher,
-          maxBytes: config.attachments.maxBytes,
-          lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
-          externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
-          externalMaxRedirects: config.externalResources.maxRedirects,
-          scanDeadline: deadlines.scanDeadline,
-          publicationDeadline: deadlines.publicationDeadline
-        }),
-      runMediaSync: (workId) =>
-        runMediaSyncWorker(workId, {
-          store: postgresRuntime.mediaSyncStore,
-          assets,
-          lineContent,
-          profiles: config.profiles,
-          workerLeaseMs: ATTACHMENT_SCAN_TIMING.claimLeaseMs,
-          retryDelayMs: 30_000,
-          lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
-          maxBytes: config.mediaSyncMaxBytes,
-          manualMaxBytes: config.attachments.maxBytes,
-          publisher,
-          agentJobStore
-        })
-    });
-  } catch {
-    return { exitCode: 1, status: { status: "failed", failureCode: "worker_failed" } };
-  } finally {
+    return {
+      credential,
+      queue,
+      run: (lease: AttachmentScanWorkLease, warm: boolean) => {
+        const deadlines = attachmentWorkerDeadlines(new Date());
+        return runAttachmentWorkerQueueLease(lease, {
+          runAttachment: (workId) =>
+            runAttachmentAssetWorker(workId, {
+              workStore,
+              assets,
+              lineContent,
+              externalBinary: createExternalBinaryClient(),
+              profiles: config.profiles,
+              publisher,
+              maxBytes: config.attachments.maxBytes,
+              lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
+              externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
+              externalMaxRedirects: config.externalResources.maxRedirects,
+              scanDeadline: deadlines.scanDeadline,
+              publicationDeadline: deadlines.publicationDeadline
+            }),
+          runMediaSync: (workId) =>
+            runMediaSyncWorker(workId, {
+              store: postgres!.mediaSyncStore,
+              assets,
+              lineContent,
+              profiles: config.profiles,
+              workerLeaseMs: ATTACHMENT_SCAN_TIMING.claimLeaseMs,
+              retryDelayMs: 30_000,
+              warm,
+              lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
+              maxBytes: config.mediaSyncMaxBytes,
+              manualMaxBytes: config.attachments.maxBytes,
+              publisher,
+              agentJobStore,
+              onTiming: logMediaSyncTiming
+            })
+        });
+      },
+      close: () => closeRuntime(redis, postgres)
+    };
+  } catch (error) {
     await closeRuntime(redis, postgres);
+    throw error;
   }
+}
+
+async function consumeWarmPulse(client: AttachmentScanQueueReceiver): Promise<void> {
+  const response = await client.receiveMessages({ numberOfMessages: 1, visibilityTimeout: 30 });
+  const message = response.receivedMessageItems[0];
+  if (message) await client.deleteMessage(message.messageId, message.popReceipt);
 }
 
 export async function runAttachmentWorkerQueueLease(
@@ -283,6 +344,14 @@ function requiredHttpsUrl(env: NodeJS.ProcessEnv, field: string): string {
   }
 }
 
+function requiredAudience(env: NodeJS.ProcessEnv, field: string): string {
+  const value = env[field]?.trim();
+  if (!value || !/^(?:api|https):\/\//u.test(value)) {
+    throw new Error(`${field} is required and must be an application URI`);
+  }
+  return value;
+}
+
 async function closeRuntime(
   redis: Awaited<ReturnType<typeof createRedisRuntime>> | undefined,
   postgres: Awaited<ReturnType<typeof createPostgresRuntime>> | undefined
@@ -300,6 +369,13 @@ async function closeRuntime(
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--loop")) {
+    const controller = new AbortController();
+    process.once("SIGTERM", () => controller.abort());
+    process.once("SIGINT", () => controller.abort());
+    await runAttachmentWorkerLoop(process.env, { signal: controller.signal });
+    return;
+  }
   const result = await runAttachmentWorker();
   process.stdout.write(`${JSON.stringify(result.status)}\n`);
   process.exitCode = result.exitCode;

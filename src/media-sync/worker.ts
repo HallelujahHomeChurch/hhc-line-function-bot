@@ -18,8 +18,13 @@ import type { PostgresMediaSyncStore } from "./store.js";
 import type { LineContentClient } from "../types.js";
 import type { MediaSyncIngest, MediaSyncOutboxItem, MediaSyncWork } from "./types.js";
 import { withMediaContentFile, type MediaContentFile } from "./content-file.js";
+import type { MediaSyncTimingEvent } from "./timing.js";
 
 export const MEDIA_SYNC_MAX_BYTES = 209_715_200;
+
+export function nextDelay(scanStatus: string, warm: boolean): number {
+  return (scanStatus === "pending" || scanStatus === "scanning") && warm ? 2_000 : 30_000;
+}
 
 type AssetStageStore = Pick<
   PostgresMediaSyncStore,
@@ -210,6 +215,7 @@ export async function runMediaSyncWorker(
     profiles: Array<{ name: string; channelAccessToken: string }>;
     workerLeaseMs: number;
     retryDelayMs: number;
+    warm?: boolean;
     lineDownloadTimeoutMs: number;
     maxBytes: number;
     manualMaxBytes?: number;
@@ -217,6 +223,7 @@ export async function runMediaSyncWorker(
     agentJobStore?: AgentJobStore;
     signal?: AbortSignal;
     now?: () => Date;
+    onTiming?: (event: MediaSyncTimingEvent, correlationId: string) => void;
   }
 ): Promise<MediaSyncWorkerResult> {
   if (
@@ -316,6 +323,7 @@ export async function runMediaSyncWorker(
                 },
                 { signal: options.signal }
               );
+              options.onTiming?.("upload_completed", workId);
               await requireEligibilityOrCompensateAsset(
                 current,
                 workId,
@@ -371,7 +379,10 @@ export async function runMediaSyncWorker(
       );
     }
     if (asset.scanStatus === "pending" || asset.scanStatus === "scanning") {
-      return retryWorker("scan_pending", work.ingest.sourceKey, claim.claimedUntil, now, options);
+      return retryWorker("scan_pending", work.ingest.sourceKey, claim.claimedUntil, now, {
+        ...options,
+        retryDelayMs: nextDelay(asset.scanStatus, options.warm ?? false)
+      });
     }
     if (asset.scanStatus === "infected") {
       return terminalFailure("scan_infected", workId, claim.claimedUntil, work, now, options);
@@ -394,6 +405,7 @@ export async function runMediaSyncWorker(
     if (asset.scanStatus !== "clean") {
       return terminalFailure("scan_failed", workId, claim.claimedUntil, work, now, options);
     }
+    options.onTiming?.("clean_observed", workId);
 
     const collection = work.publications.find(
       (publication) => publication.publicationType === "collection"
@@ -408,6 +420,7 @@ export async function runMediaSyncWorker(
         options
       );
     }
+    let collectionPublished = false;
     if (collection.targetId && collection.state === "pending") {
       if (
         !(await options.store.finalizeCollectionPublication({
@@ -420,6 +433,7 @@ export async function runMediaSyncWorker(
         return { status: "contention" };
       }
       collection.state = "published";
+      collectionPublished = true;
     } else if (!collection.targetId) {
       const sourceRevision = work.ingest.checksumSha256 ?? asset.etag ?? work.ingest.assetEtag;
       if (!sourceRevision) {
@@ -457,7 +471,9 @@ export async function runMediaSyncWorker(
         await compensateOccurrence(workId, work.ingest.collectionId, mutation.item.id, options);
         return { status: "contention" };
       }
+      collectionPublished = true;
     }
+    if (collectionPublished) options.onTiming?.("collection_published", workId);
     const manual = work.publications.find(
       (publication) => publication.publicationType === "manual"
     );

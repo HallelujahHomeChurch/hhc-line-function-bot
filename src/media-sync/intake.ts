@@ -5,6 +5,7 @@ import type { PendingAttachmentSession, SessionStore } from "../state/session-st
 import type { BotProfileConfig, LineEvent, LineMessage } from "../types.js";
 import type { PostgresMediaSyncStore } from "./store.js";
 import type { MediaSyncMediaKind } from "./types.js";
+import type { MediaSyncTimingEvent } from "./timing.js";
 import { mediaSyncSourceKey } from "./unsend.js";
 
 const MANUAL_SESSION_TTL_MS = 10 * 60 * 1000;
@@ -16,6 +17,7 @@ export async function prepareMediaSyncIntake(input: {
   store: PostgresMediaSyncStore;
   sessionStore?: SessionStore;
   now: Date;
+  onTiming?: (event: MediaSyncTimingEvent, correlationId: string) => void;
 }): Promise<{ eligible: boolean; manual?: boolean; workId?: string; sourceKey?: string }> {
   const message = eligibleMessage(input.profile, input.event);
   const groupId = input.event.source.groupId;
@@ -40,6 +42,7 @@ export async function prepareMediaSyncIntake(input: {
   if (result.tombstoned) {
     return { eligible: true, manual: false, sourceKey };
   }
+  input.onTiming?.("webhook_received", result.ingest.workId);
 
   let manual = false;
   if (

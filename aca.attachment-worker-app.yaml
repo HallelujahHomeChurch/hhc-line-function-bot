@@ -1,22 +1,17 @@
 name: hhc-line-bot-attachment-worker
-type: Microsoft.App/jobs
+type: Microsoft.App/containerApps
 location: PLACEHOLDER_AZURE_REGION
 identity:
   type: UserAssigned
   userAssignedIdentities:
     PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}
 properties:
-  environmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
+  managedEnvironmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
   configuration:
+    activeRevisionsMode: Single
     registries:
       - server: alive.azurecr.io
         identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
-    triggerType: Manual
-    replicaTimeout: 1800
-    replicaRetryLimit: 1
-    manualTriggerConfig:
-      parallelism: 1
-      replicaCompletionCount: 1
     secrets:
       - name: line-helper-channel-access-token
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
@@ -27,16 +22,37 @@ properties:
       - name: redis-url
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
   template:
+    scale:
+      minReplicas: 0
+      maxReplicas: 1
+      pollingInterval: 1
+      cooldownPeriod: 120
+      rules:
+        - name: attachment-work
+          custom:
+            type: azure-queue
+            metadata:
+              accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
+              queueName: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
+              queueLength: "1"
+            identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
+        - name: media-sync-warm
+          custom:
+            type: azure-queue
+            metadata:
+              accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
+              queueName: PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME
+              queueLength: "1"
+            identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
     containers:
       - name: attachment-worker
         image: alive.azurecr.io/alive/hhc-line-function-bot:latest
         args:
           - dist/tools/run-attachment-worker.js
+          - --loop
         env:
           - name: SERVICE_NAME
             value: hhc-line-bot-attachment-worker
-          - name: TIME_ZONE
-            value: Asia/Taipei
           - name: PROFILE_CONFIG_PATH
             value: /app/config/profiles.json
           - name: LINE_HELPER_CHANNEL_ACCESS_TOKEN
@@ -51,10 +67,16 @@ properties:
             value: hhc-line-function-bot
           - name: ATTACHMENT_SCAN_QUEUE_URL
             value: https://PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME.queue.core.windows.net/PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
+          - name: MEDIA_SYNC_WARM_QUEUE_URL
+            value: https://PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME.queue.core.windows.net/PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME
           - name: ASSET_API_URL
             value: PLACEHOLDER_ASSET_API_URL
           - name: ASSET_API_AUDIENCE
             value: PLACEHOLDER_ASSET_API_AUDIENCE
+          - name: MEETING_API_BASE_URL
+            value: PLACEHOLDER_MEETING_API_URL
+          - name: MEETING_API_AUDIENCE
+            value: PLACEHOLDER_MEETING_API_AUDIENCE
           - name: AZURE_CLIENT_ID
             value: PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID
           - name: MAX_ATTACHMENT_BYTES

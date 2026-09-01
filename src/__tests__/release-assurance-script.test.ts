@@ -61,7 +61,9 @@ describe("release assurance shell transaction", () => {
     const flattened = calls.map((args) => args.join(" ")).join("\n");
 
     expect(result.status, diagnostic(result, calls)).not.toBe(0);
-    expect(result.stderr).toContain("Required ACA environment reference is unavailable");
+    expect(result.stderr, diagnostic(result, calls)).toContain(
+      "Required ACA environment reference is unavailable"
+    );
     expect(flattened).toContain("properties.template.containers[0].env");
     expect(flattened).not.toContain("properties.latestReadyRevisionName");
     expect(flattened).not.toMatch(
@@ -76,7 +78,7 @@ describe("release assurance shell transaction", () => {
     const flattened = calls.map((args) => args.join(" ")).join("\n");
 
     expect(result.status, diagnostic(result, calls)).not.toBe(0);
-    expect(result.stderr).toContain("LINE Provider Console checkpoint");
+    expect(result.stderr, diagnostic(result, calls)).toContain("LINE Provider Console checkpoint");
     expect(flattened).not.toContain("properties.latestReadyRevisionName");
     expect(flattened).not.toMatch(
       /containerapp (?:secret set|update|create|revision copy)|containerapp env storage set|containerapp job (?:update|create)/u
@@ -393,10 +395,7 @@ describe("release assurance shell transaction", () => {
           "update",
           "--name",
           "hhc-line-bot-attachment-worker",
-          "--container-name",
-          "attachment-worker",
-          "--image",
-          `registry.example/fixture-secret/scan@${GOOD_SCAN_DIGEST}`
+          "--yaml"
         ])
       );
       expect(calls).toContainEqual(
@@ -502,7 +501,7 @@ describe("release assurance shell transaction", () => {
     );
   }, 15_000);
 
-  it("restores only the Terraform-owned worker image and verifies its definition", async () => {
+  it("restores the worker definition and verifies it", async () => {
     const fixture = await createFixture("worker_restore_definition_mismatch");
     const result = fixture.run();
     const calls = await fixture.calls();
@@ -515,10 +514,7 @@ describe("release assurance shell transaction", () => {
         args.slice(0, 3).join(" ") === "containerapp job update" &&
         args.includes("hhc-line-bot-attachment-worker")
     );
-    expect(update).toEqual(
-      expect.arrayContaining(["--container-name", "attachment-worker", "--image"])
-    );
-    expect(update).not.toContain("--yaml");
+    expect(update).toContain("--yaml");
   }, 15_000);
 
   it("does not report restored when a job keeps the wrong image", async () => {
@@ -666,6 +662,8 @@ async function createDeployFixture(scenario: string) {
         "aca.searxng.containerapp.yaml",
         "aca.catalog-sync-job.yaml",
         "aca.attachment-worker-job.yaml",
+        "aca.attachment-worker-app.yaml",
+        "aca.media-sync-warmer-job.yaml",
         "aca.release-probe-job.yaml",
         "aca.periodic-assurance-job.yaml"
       ].map((name) => copyFile(path.join(ROOT, name), path.join(directory, name)))
@@ -698,11 +696,15 @@ export RESOURCE_GROUP="fixture-resource-group"
 export CONTAINER_APP_NAME="fixture-bot"
 export CATALOG_SYNC_JOB_NAME="fixture-catalog"
 export ATTACHMENT_SCAN_JOB_NAME="fixture-scan"
+export ATTACHMENT_WORKER_APP_NAME="fixture-scan-app"
+export MEDIA_SYNC_WARMER_JOB_NAME="fixture-warmer"
 export RELEASE_PROBE_JOB_NAME="fixture-release-probe"
 export PERIODIC_ASSURANCE_JOB_NAME="fixture-periodic"
 export ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME="fixture-attachments"
 export ATTACHMENT_SCAN_QUEUE_NAME="fixture-queue"
+export MEDIA_SYNC_WARM_QUEUE_NAME="fixture-warm-queue"
 export ASSET_API_AUDIENCE="api://fixture-asset"
+export MEETING_API_AUDIENCE="api://fixture-meeting"
 export LINE_PROVIDER_CONSOLE_VERIFIED_ID="${scenario === "provider_console_mismatch" ? "provider-2" : "provider-1"}"
 export RELEASE_REPORT_PATH="${toBashPath(reportPath)}"
 export RELEASE_ID="fixture-early-failure"
@@ -743,6 +745,7 @@ else if (command("containerapp", "show") && name === "fixture-bot" && query === 
 else if (command("identity", "show") && query === "id") output("/identities/fixture-jobs");
 else if (command("identity", "show")) output({ id: "/identities/fixture-attachment", clientId: "attachment-client", principalId: "attachment-principal" });
 else if (command("containerapp", "show") && name === "asset-api") output("asset.internal.example");
+else if (command("containerapp", "show") && name === "hhc-web-api") output("meeting.internal.example");
 else if (command("storage", "account", "show")) output("/storage/fixture-attachments");
 else if (command("acr", "show")) output("/acr/fixture");
 else if (command("role", "assignment", "list")) output("1");
@@ -891,6 +894,8 @@ export CONTAINER_APP_NAME="fixture-bot"
 export SEARXNG_CONTAINER_APP_NAME="fixture-searxng"
 export CATALOG_SYNC_JOB_NAME="hhc-line-bot-catalog-sync"
 export ATTACHMENT_SCAN_JOB_NAME="hhc-line-bot-attachment-worker"
+export ATTACHMENT_WORKER_APP_NAME="hhc-line-bot-attachment-worker-app"
+export MEDIA_SYNC_WARMER_JOB_NAME="hhc-line-bot-media-sync-warmer"
 export RELEASE_PROBE_JOB_NAME="hhc-line-bot-release-probe"
 export PERIODIC_ASSURANCE_JOB_NAME="hhc-line-bot-periodic-assurance"
 export managed_environment_name="fixture-env"
@@ -950,6 +955,7 @@ RELEASE_TARGET_REVISION="bot--target"
 RELEASE_TARGET_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 RELEASE_TARGET_SCAN_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 RELEASE_TARGET_ATTACHMENT_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
+RELEASE_TARGET_ATTACHMENT_APP_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="attachment-exec-current"
 if ! run_release_gates; then
   exit 42
@@ -1027,12 +1033,14 @@ const query = value("--query");
 const oldImages = {
   "hhc-line-bot-catalog-sync": "registry.example/fixture-secret/catalog@${GOOD_CATALOG_DIGEST}",
   "hhc-line-bot-attachment-worker": "registry.example/fixture-secret/scan@${GOOD_SCAN_DIGEST}",
+  "hhc-line-bot-media-sync-warmer": "registry.example/fixture-secret/scan@${GOOD_SCAN_DIGEST}",
   "hhc-line-bot-release-probe": "registry.example/fixture-secret/release@${GOOD_RELEASE_PROBE_DIGEST}",
   "hhc-line-bot-periodic-assurance": "registry.example/fixture-secret/periodic@${GOOD_PERIODIC_DIGEST}"
 };
 const targetImages = {
   "hhc-line-bot-catalog-sync": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
   "hhc-line-bot-attachment-worker": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
+  "hhc-line-bot-media-sync-warmer": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
   "hhc-line-bot-release-probe": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
   "hhc-line-bot-periodic-assurance": "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 };
@@ -1052,7 +1060,7 @@ if (command("containerapp", "exec")) {
 
 if (command("containerapp", "list")) {
   if (scenario === "searxng_list_failure") process.exit(105);
-  output("fixture-searxng");
+  output(/name=='([^']+)'/.exec(query ?? "")?.[1] ?? "");
   process.exit(0);
 }
 
@@ -1107,6 +1115,22 @@ if (command("containerapp", "show") && name === "fixture-bot") {
             }
     });
   } else process.exit(91);
+  process.exit(0);
+}
+
+if (command("containerapp", "show") && name === "hhc-line-bot-attachment-worker-app") {
+  if (query === "properties.template.containers[0].image") {
+    output("registry.example/fixture-secret/scan@${GOOD_SCAN_DIGEST}");
+  } else if (query === "{image:properties.template.containers[0].image,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,poll:properties.template.scale.pollingInterval,cooldown:properties.template.scale.cooldownPeriod,rules:properties.template.scale.rules}") {
+    output({
+      image: "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
+      min: scenario === "scan_scaler_mismatch" ? 1 : 0,
+      max: 1,
+      poll: 1,
+      cooldown: 120,
+      rules: [{ name: "attachment-work" }, { name: "media-sync-warm" }]
+    });
+  } else process.exit(109);
   process.exit(0);
 }
 
@@ -1296,24 +1320,10 @@ if (command("containerapp", "job", "show")) {
       volumes: []
     },
     "hhc-line-bot-attachment-worker": {
-      triggerType: "Event",
+      triggerType: "Manual",
       replicaTimeout: 1800,
       replicaRetryLimit: 1,
-      event: {
-        parallelism: 1,
-        replicaCompletionCount: 1,
-        scale: {
-          minExecutions: 0,
-          maxExecutions: 1,
-          rules: [
-            {
-              type: "azure-queue",
-              metadata: { queueLength: "1" },
-              identity: "/subscriptions/fixture/resourceGroups/alive/providers/Microsoft.ManagedIdentity/userAssignedIdentities/hhc-line-bot-attachment"
-            }
-          ]
-        }
-      },
+      manual: { parallelism: 1, replicaCompletionCount: 1 },
       args: ["dist/tools/run-attachment-worker.js"],
       env: [
         { name: "ATTACHMENT_SCAN_QUEUE_URL", value: "https://queue.example/scan" },
@@ -1324,6 +1334,28 @@ if (command("containerapp", "job", "show")) {
         { name: "MAX_ATTACHMENT_BYTES", value: "26214400" }
       ],
       resources: { cpu: 0.5, memory: "1Gi" },
+      volumeMounts: [],
+      volumes: []
+    },
+    "hhc-line-bot-media-sync-warmer": {
+      triggerType: "Schedule",
+      replicaTimeout: 120,
+      replicaRetryLimit: 1,
+      schedule: {
+        cronExpression: "*/1 * * * *",
+        parallelism: 1,
+        replicaCompletionCount: 1
+      },
+      args: ["dist/tools/run-media-sync-warmer.js"],
+      env: [
+        { name: "MEETING_API_BASE_URL", value: "https://meeting.internal.example" },
+        { name: "MEETING_API_AUDIENCE", value: "api://meeting-api" },
+        { name: "MEDIA_SYNC_WARM_QUEUE_URL", value: "https://queue.example/warm" },
+        { name: "MEDIA_SYNC_WARM_LEAD", value: "5m" },
+        { name: "MEDIA_SYNC_WARM_TAIL", value: "10m" },
+        { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" }
+      ],
+      resources: { cpu: 0.25, memory: "0.5Gi" },
       volumeMounts: [],
       volumes: []
     },
@@ -1385,7 +1417,6 @@ if (command("containerapp", "job", "show")) {
   if (scenario === "catalog_image_mismatch" && name === "hhc-line-bot-catalog-sync") definition.image = "registry.example/fixture-secret/bot@sha256:${"7".repeat(64)}";
   if (scenario === "catalog_hmac_env_mismatch" && name === "hhc-line-bot-catalog-sync") definition.env = [];
   if (scenario === "scan_definition_failure" && name === "hhc-line-bot-attachment-worker") definition.replicaTimeout = 1;
-  if (scenario === "scan_scaler_mismatch" && name === "hhc-line-bot-attachment-worker") definition.event.scale.minExecutions = 1;
   if (scenario === "scan_resources_mismatch" && name === "hhc-line-bot-attachment-worker") definition.resources.memory = "4Gi";
   if (scenario === "scan_mount_mismatch" && name === "hhc-line-bot-attachment-worker") definition.volumes.push({ name: "unexpected", storageType: "AzureFile", storageName: "unexpected" });
   if (scenario === "scan_clamav_env_mismatch" && name === "hhc-line-bot-attachment-worker") definition.env.push({ name: "CLAMAV_SIGNATURE_MANIFEST_PATH", value: "/retired" });
@@ -1519,13 +1550,7 @@ if (command("containerapp", "revision", "copy")) {
 
 if (command("containerapp", "job", "update")) {
   if (!oldImages[name]) process.exit(99);
-  if (name === "hhc-line-bot-attachment-worker") {
-    if (
-      args.includes("--yaml") ||
-      value("--container-name") !== "attachment-worker" ||
-      value("--image") !== oldImages[name]
-    ) process.exit(99);
-  } else if (!args.includes("--yaml")) process.exit(99);
+  if (!args.includes("--yaml")) process.exit(99);
   writeFileSync(path.join(state, "restored-" + name), "1");
   process.exit(0);
 }

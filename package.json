@@ -21,6 +21,7 @@
     "eval:retrieval-product": "vitest run src/__tests__/retrieval-product-evals.test.ts",
     "catalog:sync": "tsx src/tools/sync-catalog.ts",
     "attachment-worker:run": "node dist/tools/run-attachment-worker.js",
+    "media-sync-warmer:run": "node dist/tools/run-media-sync-warmer.js",
     "config:validate": "tsx src/tools/check-profile-config.ts",
     "smoke:webhook": "tsx src/tools/smoke-webhook.ts",
     "check:notion": "tsx src/tools/check-notion-service-schedule.ts",
