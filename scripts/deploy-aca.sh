@@ -15,11 +15,15 @@ required_release_environment=(
   CONTAINER_APP_NAME
   CATALOG_SYNC_JOB_NAME
   ATTACHMENT_SCAN_JOB_NAME
+  ATTACHMENT_WORKER_APP_NAME
+  MEDIA_SYNC_WARMER_JOB_NAME
   RELEASE_PROBE_JOB_NAME
   PERIODIC_ASSURANCE_JOB_NAME
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
   ATTACHMENT_SCAN_QUEUE_NAME
+  MEDIA_SYNC_WARM_QUEUE_NAME
   ASSET_API_AUDIENCE
+  MEETING_API_AUDIENCE
   LINE_PROVIDER_CONSOLE_VERIFIED_ID
 )
 for required_name in "${required_release_environment[@]}"; do
@@ -35,6 +39,7 @@ done
 : "${CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs}"
 : "${ATTACHMENT_JOB_IDENTITY_NAME:=hhc-line-bot-attachment}"
 : "${ASSET_API_CONTAINER_APP_NAME:=asset-api}"
+: "${MEETING_API_CONTAINER_APP_NAME:=hhc-web-api}"
 : "${AZURE_OPENAI_EMBEDDING_RESOURCE_NAME:=bible-text-embedding-resource}"
 : "${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:=text-embedding-3-small}"
 : "${AZURE_OPENAI_EMBEDDING_API_VERSION:=2024-10-21}"
@@ -54,17 +59,26 @@ searxng_settings_template="${script_dir}/../infra/searxng/settings.yml"
 catalog_job_manifest_template="${script_dir}/../aca.catalog-sync-job.yaml"
 release_probe_job_manifest_template="${script_dir}/../aca.release-probe-job.yaml"
 periodic_assurance_job_manifest_template="${script_dir}/../aca.periodic-assurance-job.yaml"
+attachment_worker_job_manifest_template="${script_dir}/../aca.attachment-worker-job.yaml"
+attachment_worker_app_manifest_template="${script_dir}/../aca.attachment-worker-app.yaml"
+media_sync_warmer_job_manifest_template="${script_dir}/../aca.media-sync-warmer-job.yaml"
 bot_manifest="$(mktemp)"
 searxng_manifest="$(mktemp)"
 catalog_job_manifest="$(mktemp)"
 release_probe_job_manifest="$(mktemp)"
 periodic_assurance_job_manifest="$(mktemp)"
+attachment_worker_job_manifest="$(mktemp)"
+attachment_worker_app_manifest="$(mktemp)"
+media_sync_warmer_job_manifest="$(mktemp)"
 RELEASE_CLEANUP_FILES=(
   "${bot_manifest}"
   "${searxng_manifest}"
   "${catalog_job_manifest}"
   "${release_probe_job_manifest}"
   "${periodic_assurance_job_manifest}"
+  "${attachment_worker_job_manifest}"
+  "${attachment_worker_app_manifest}"
+  "${media_sync_warmer_job_manifest}"
 )
 
 if [[ ! -f "${bot_manifest_template}" \
@@ -72,7 +86,10 @@ if [[ ! -f "${bot_manifest_template}" \
   || ! -f "${searxng_settings_template}" \
   || ! -f "${catalog_job_manifest_template}" \
   || ! -f "${release_probe_job_manifest_template}" \
-  || ! -f "${periodic_assurance_job_manifest_template}" ]]; then
+  || ! -f "${periodic_assurance_job_manifest_template}" \
+  || ! -f "${attachment_worker_job_manifest_template}" \
+  || ! -f "${attachment_worker_app_manifest_template}" \
+  || ! -f "${media_sync_warmer_job_manifest_template}" ]]; then
   echo "Missing deployment configuration"
   exit 1
 fi
@@ -140,6 +157,18 @@ if [[ -z "${asset_api_fqdn}" ]]; then
 fi
 asset_api_url="https://${asset_api_fqdn}"
 
+meeting_api_fqdn="$(az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${MEETING_API_CONTAINER_APP_NAME}" \
+  --query properties.configuration.ingress.fqdn \
+  --output tsv \
+  --only-show-errors)"
+if [[ -z "${meeting_api_fqdn}" ]]; then
+  echo "Could not resolve internal ingress for ${MEETING_API_CONTAINER_APP_NAME}" >&2
+  exit 1
+fi
+meeting_api_url="https://${meeting_api_fqdn}"
+
 attachment_storage_id="$(az storage account show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
@@ -147,6 +176,7 @@ attachment_storage_id="$(az storage account show \
   --output tsv \
   --only-show-errors)"
 attachment_queue_scope="${attachment_storage_id}/queueServices/default/queues/${ATTACHMENT_SCAN_QUEUE_NAME}"
+warm_queue_scope="${attachment_storage_id}/queueServices/default/queues/${MEDIA_SYNC_WARM_QUEUE_NAME}"
 acr_id="$(az acr show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${ACR_NAME}" \
@@ -174,6 +204,17 @@ if [[ "$(az role assignment list \
   echo "Attachment Job identity is missing its queue processor, queue reader, or ACR pull role" >&2
   exit 1
 fi
+for warm_role in "Storage Queue Data Message Processor" "Storage Queue Data Reader" "Storage Queue Data Message Sender"; do
+  if [[ "$(az role assignment list \
+    --scope "${warm_queue_scope}" \
+    --assignee-object-id "${attachment_job_principal_id}" \
+    --query "[?roleDefinitionName=='${warm_role}'] | length(@)" \
+    --output tsv \
+    --only-show-errors)" != "1" ]]; then
+    echo "Attachment identity is missing ${warm_role} on the media-sync warm queue" >&2
+    exit 1
+  fi
+done
 if ! verify_asset_access_contract \
   "${RESOURCE_GROUP}" \
   "${ASSET_API_CONTAINER_APP_NAME}" \
@@ -555,6 +596,7 @@ RELEASE_TARGET_REVISION="${target_revision}"
 RELEASE_TARGET_IMAGE="${image_ref}"
 RELEASE_TARGET_SCAN_IMAGE="${image_ref}"
 RELEASE_TARGET_ATTACHMENT_IMAGE="${image_ref}"
+RELEASE_TARGET_ATTACHMENT_APP_IMAGE="${image_ref}"
 
 bot_fqdn="$(az containerapp show \
   --resource-group "${RESOURCE_GROUP}" \
@@ -619,8 +661,11 @@ render_job_manifest() {
   ATTACHMENT_JOB_CLIENT_ID="${attachment_job_client_id}" \
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME="${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
   ATTACHMENT_SCAN_QUEUE_NAME="${ATTACHMENT_SCAN_QUEUE_NAME}" \
+  MEDIA_SYNC_WARM_QUEUE_NAME="${MEDIA_SYNC_WARM_QUEUE_NAME}" \
   ASSET_API_URL="${asset_api_url}" \
   ASSET_API_AUDIENCE="${ASSET_API_AUDIENCE}" \
+  MEETING_API_URL="${meeting_api_url}" \
+  MEETING_API_AUDIENCE="${MEETING_API_AUDIENCE}" \
   BOT_SECRETS_JSON="${bot_secrets_json}" \
   BOT_ENV_JSON="${bot_env_json}" \
   ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING="${attachment_scan_queue_connection_string}" \
@@ -699,8 +744,11 @@ substitutions = {
         "ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME"
     ],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME": os.environ["ATTACHMENT_SCAN_QUEUE_NAME"],
+    "PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME": os.environ["MEDIA_SYNC_WARM_QUEUE_NAME"],
     "PLACEHOLDER_ASSET_API_URL": os.environ["ASSET_API_URL"],
     "PLACEHOLDER_ASSET_API_AUDIENCE": os.environ["ASSET_API_AUDIENCE"],
+    "PLACEHOLDER_MEETING_API_URL": os.environ["MEETING_API_URL"],
+    "PLACEHOLDER_MEETING_API_AUDIENCE": os.environ["MEETING_API_AUDIENCE"],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": os.environ[
         "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING"
     ],
@@ -779,6 +827,21 @@ start_release_job() {
 }
 
 render_job_manifest \
+  "${attachment_worker_job_manifest_template}" \
+  "${attachment_worker_job_manifest}" \
+  "${ATTACHMENT_SCAN_JOB_NAME}" \
+  "${image_ref}"
+render_job_manifest \
+  "${attachment_worker_app_manifest_template}" \
+  "${attachment_worker_app_manifest}" \
+  "${ATTACHMENT_WORKER_APP_NAME}" \
+  "${image_ref}"
+render_job_manifest \
+  "${media_sync_warmer_job_manifest_template}" \
+  "${media_sync_warmer_job_manifest}" \
+  "${MEDIA_SYNC_WARMER_JOB_NAME}" \
+  "${image_ref}"
+render_job_manifest \
   "${catalog_job_manifest_template}" \
   "${catalog_job_manifest}" \
   "${CATALOG_SYNC_JOB_NAME}" \
@@ -795,20 +858,23 @@ render_job_manifest \
   "${image_ref}"
 
 mark_release_job_mutated "${ATTACHMENT_SCAN_JOB_NAME}"
-az containerapp job update \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${ATTACHMENT_SCAN_JOB_NAME}" \
-  --container-name attachment-worker \
-  --image "${image_ref}" \
-  --cpu 0.5 \
-  --memory 1Gi \
-  --only-show-errors \
-  --output none
+deploy_job "${ATTACHMENT_SCAN_JOB_NAME}" "${attachment_worker_job_manifest}" "${attachment_job_identity_id}"
 start_release_job \
   "${ATTACHMENT_SCAN_JOB_NAME}" \
   attachment_worker_job \
   attachment_bootstrap_start_failed
 RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"
+mark_release_attachment_app_mutated
+if az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${ATTACHMENT_WORKER_APP_NAME}" \
+  --only-show-errors --output none 2>/dev/null; then
+  az containerapp update --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --yaml "${attachment_worker_app_manifest}" --only-show-errors --output none
+else
+  az containerapp create --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --yaml "${attachment_worker_app_manifest}" --only-show-errors --output none
+fi
+mark_release_job_mutated "${MEDIA_SYNC_WARMER_JOB_NAME}"
+deploy_job "${MEDIA_SYNC_WARMER_JOB_NAME}" "${media_sync_warmer_job_manifest}" "${attachment_job_identity_id}"
 mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
 mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"

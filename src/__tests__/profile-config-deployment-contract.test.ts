@@ -165,11 +165,9 @@ describe("production profile configuration deployment contract", () => {
       botDeploy
     );
     const renderJobs = deployment.indexOf(
-      'render_job_manifest \\\n  "${catalog_job_manifest_template}"'
+      'render_job_manifest \\\n  "${attachment_worker_job_manifest_template}"'
     );
-    const scanDeploy = deployment.indexOf(
-      'az containerapp job update \\\n  --resource-group "${RESOURCE_GROUP}"'
-    );
+    const scanDeploy = deployment.indexOf('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
     const catalogDeploy = deployment.indexOf('deploy_job "${CATALOG_SYNC_JOB_NAME}"');
 
     for (const position of [
@@ -875,18 +873,18 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain('RELEASE_TARGET_SCAN_IMAGE="${image_ref}"');
     for (const jobName of [
       "ATTACHMENT_SCAN_JOB_NAME",
+      "MEDIA_SYNC_WARMER_JOB_NAME",
       "CATALOG_SYNC_JOB_NAME",
       "RELEASE_PROBE_JOB_NAME",
       "PERIODIC_ASSURANCE_JOB_NAME"
     ]) {
       const mutation = deployment.indexOf(`mark_release_job_mutated "\${${jobName}}"`);
-      const deploy =
-        jobName === "ATTACHMENT_SCAN_JOB_NAME"
-          ? deployment.indexOf('--name "${ATTACHMENT_SCAN_JOB_NAME}"', mutation)
-          : deployment.search(new RegExp(`deploy_job(?:\\\\|\\s)+"\\$\\{${jobName}\\}"`, "u"));
+      const deploy = deployment
+        .slice(mutation)
+        .search(new RegExp(`deploy_job(?:\\\\|\\s)+"\\$\\{${jobName}\\}"`, "u"));
       expect(mutation).toBeGreaterThanOrEqual(0);
       expect(deploy).toBeGreaterThanOrEqual(0);
-      expect(mutation).toBeLessThan(deploy);
+      expect(deploy).toBeGreaterThan(0);
     }
     expect(deployment).not.toContain("trap 'rm -f");
     expect(helper).toContain("RELEASE_POLL_ATTEMPTS:=30");
@@ -906,7 +904,7 @@ describe("production profile configuration deployment contract", () => {
     };
 
     expect(worker).toContain("name: hhc-line-bot-attachment-worker");
-    expect(worker).toContain("triggerType: Event");
+    expect(worker).toContain("triggerType: Manual");
     expect(worker).toContain("dist/tools/run-attachment-worker.js");
     expect(worker).toContain("cpu: 0.5");
     expect(worker).toContain("memory: 1Gi");
@@ -921,21 +919,20 @@ describe("production profile configuration deployment contract", () => {
       expect(contents).not.toMatch(/clamav|freshclam/iu);
     }
     expect(workflow).not.toContain("SCAN_IMAGE_REPOSITORY");
-    expect(deployment).toContain("az containerapp job update");
-    expect(deployment).toContain("--container-name attachment-worker");
-    expect(deployment).toContain("--image");
-    const workerMutation = deployment.indexOf(
-      'mark_release_job_mutated "${ATTACHMENT_SCAN_JOB_NAME}"'
-    );
-    const workerUpdate = deployment.slice(
-      deployment.indexOf("az containerapp job update", workerMutation),
-      deployment.indexOf("start_release_job", workerMutation)
-    );
-    expect(workerUpdate).toContain("--cpu 0.5");
-    expect(workerUpdate).toContain("--memory 1Gi");
+    expect(deployment).toContain('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
     expect(deployment).toContain(
       'start_release_job \\\n  "${ATTACHMENT_SCAN_JOB_NAME}" \\\n  attachment_worker_job'
     );
+    const workerApp = readProjectFile("aca.attachment-worker-app.yaml");
+    expect(workerApp).toContain("minReplicas: 0");
+    expect(workerApp).toContain("pollingInterval: 1");
+    expect(workerApp).toContain("cooldownPeriod: 120");
+    expect(workerApp).toContain("name: attachment-work");
+    expect(workerApp).toContain("name: media-sync-warm");
+    expect(workerApp).toContain("- --loop");
+    const warmer = readProjectFile("aca.media-sync-warmer-job.yaml");
+    expect(warmer).toContain('cronExpression: "*/1 * * * *"');
+    expect(warmer).toContain("dist/tools/run-media-sync-warmer.js");
     expect(deployment).not.toContain("az containerapp env storage set");
   });
 

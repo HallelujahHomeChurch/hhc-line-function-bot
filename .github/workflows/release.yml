@@ -20,6 +20,8 @@ on:
       - aca.searxng.containerapp.yaml
       - aca.catalog-sync-job.yaml
       - aca.attachment-worker-job.yaml
+      - aca.attachment-worker-app.yaml
+      - aca.media-sync-warmer-job.yaml
       - aca.release-probe-job.yaml
       - aca.periodic-assurance-job.yaml
       - infra/searxng/**
@@ -54,11 +56,15 @@ jobs:
       CONTAINER_APP_NAME: hhc-line-function-bot
       CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
       ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker
+      ATTACHMENT_WORKER_APP_NAME: hhc-line-bot-attachment-worker-app
+      MEDIA_SYNC_WARMER_JOB_NAME: hhc-line-bot-media-sync-warmer
       RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe
       PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
       ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME: ${{ vars.ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME }}
       ATTACHMENT_SCAN_QUEUE_NAME: ${{ vars.ATTACHMENT_SCAN_QUEUE_NAME }}
+      MEDIA_SYNC_WARM_QUEUE_NAME: media-sync-warm
       ASSET_API_AUDIENCE: ${{ vars.ASSET_API_AUDIENCE }}
+      MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}
       LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}
       RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
     steps:

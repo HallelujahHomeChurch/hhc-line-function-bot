@@ -16,6 +16,8 @@ RELEASE_ROLLBACK_REVISION="${RELEASE_ROLLBACK_REVISION:-}"
 RELEASE_ROLLBACK_IMAGE="${RELEASE_ROLLBACK_IMAGE:-}"
 RELEASE_CATALOG_JOB_MUTATED="${RELEASE_CATALOG_JOB_MUTATED:-false}"
 RELEASE_SCAN_JOB_MUTATED="${RELEASE_SCAN_JOB_MUTATED:-false}"
+RELEASE_WARMER_JOB_MUTATED="${RELEASE_WARMER_JOB_MUTATED:-false}"
+RELEASE_ATTACHMENT_APP_MUTATED="${RELEASE_ATTACHMENT_APP_MUTATED:-false}"
 RELEASE_PROBE_JOB_MUTATED="${RELEASE_PROBE_JOB_MUTATED:-false}"
 RELEASE_PERIODIC_JOB_MUTATED="${RELEASE_PERIODIC_JOB_MUTATED:-false}"
 RELEASE_SEARXNG_MUTATED="${RELEASE_SEARXNG_MUTATED:-false}"
@@ -140,6 +142,8 @@ capture_known_good_state() {
   : "${CONTAINER_APP_NAME:?CONTAINER_APP_NAME is required}"
   : "${CATALOG_SYNC_JOB_NAME:?CATALOG_SYNC_JOB_NAME is required}"
   : "${ATTACHMENT_SCAN_JOB_NAME:?ATTACHMENT_SCAN_JOB_NAME is required}"
+  : "${ATTACHMENT_WORKER_APP_NAME:?ATTACHMENT_WORKER_APP_NAME is required}"
+  : "${MEDIA_SYNC_WARMER_JOB_NAME:?MEDIA_SYNC_WARMER_JOB_NAME is required}"
   : "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"
   : "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"
   : "${SEARXNG_CONTAINER_APP_NAME:?SEARXNG_CONTAINER_APP_NAME is required}"
@@ -171,10 +175,20 @@ capture_known_good_state() {
 
   if ! capture_release_job_snapshot CATALOG "${CATALOG_SYNC_JOB_NAME}" \
     || ! capture_release_job_snapshot SCAN "${ATTACHMENT_SCAN_JOB_NAME}" \
+    || ! capture_release_job_snapshot WARMER "${MEDIA_SYNC_WARMER_JOB_NAME}" \
     || ! capture_release_job_snapshot PROBE "${RELEASE_PROBE_JOB_NAME}" \
     || ! capture_release_job_snapshot PERIODIC "${PERIODIC_ASSURANCE_JOB_NAME}"; then
     set_release_failure known_good_snapshot_failed
     return 1
+  fi
+  RELEASE_KNOWN_GOOD_ATTACHMENT_APP_EXISTS="$(release_containerapp_exists "${ATTACHMENT_WORKER_APP_NAME}")" || {
+    set_release_failure known_good_snapshot_failed
+    return 1
+  }
+  RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE=""
+  if [[ "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_EXISTS}" == "true" ]]; then
+    RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE="$(az containerapp show --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --query properties.template.containers[0].image --output tsv --only-show-errors)" || return 1
+    RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE="$(resolve_release_image "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE}")" || return 1
   fi
   local searxng_exists
   if ! searxng_exists="$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")"; then
@@ -386,6 +400,11 @@ mark_release_searxng_mutated() {
   mark_release_mutated
 }
 
+mark_release_attachment_app_mutated() {
+  RELEASE_ATTACHMENT_APP_MUTATED=true
+  mark_release_mutated
+}
+
 mark_release_job_mutated() {
   local job_name="$1"
   case "${job_name}" in
@@ -394,6 +413,9 @@ mark_release_job_mutated() {
       ;;
     "${ATTACHMENT_SCAN_JOB_NAME}")
       RELEASE_SCAN_JOB_MUTATED=true
+      ;;
+    "${MEDIA_SYNC_WARMER_JOB_NAME}")
+      RELEASE_WARMER_JOB_MUTATED=true
       ;;
     "${RELEASE_PROBE_JOB_NAME}")
       RELEASE_PROBE_JOB_MUTATED=true
@@ -425,6 +447,7 @@ run_release_gates() {
   : "${RELEASE_TARGET_IMAGE:?RELEASE_TARGET_IMAGE is required}"
   : "${RELEASE_TARGET_SCAN_IMAGE:?RELEASE_TARGET_SCAN_IMAGE is required}"
   : "${RELEASE_TARGET_ATTACHMENT_IMAGE:?RELEASE_TARGET_ATTACHMENT_IMAGE is required}"
+  : "${RELEASE_TARGET_ATTACHMENT_APP_IMAGE:?RELEASE_TARGET_ATTACHMENT_APP_IMAGE is required}"
   : "${RELEASE_EXPECTED_SEARXNG_IMAGE:?RELEASE_EXPECTED_SEARXNG_IMAGE is required}"
   : "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME:?RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME is required}"
 
@@ -432,8 +455,12 @@ run_release_gates() {
   release_check_account_preflight || return
   release_check_searxng || return
   release_check_job_definition \
-    "${ATTACHMENT_SCAN_JOB_NAME}" Event 1800 1 event \
+    "${ATTACHMENT_SCAN_JOB_NAME}" Manual 1800 1 manual \
     "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_worker_job worker_definition_mismatch false || return
+  release_check_job_definition \
+    "${MEDIA_SYNC_WARMER_JOB_NAME}" Schedule 120 1 schedule \
+    "${RELEASE_TARGET_ATTACHMENT_APP_IMAGE}" media_sync_warmer_job worker_definition_mismatch false || return
+  release_check_attachment_worker_app || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
     "${RELEASE_TARGET_IMAGE}" catalog_job catalog_definition_mismatch false || return
@@ -450,6 +477,32 @@ run_release_gates() {
     attachment_worker_job attachment_bootstrap_failed attachment_queue_failed || return
   release_check_recent_catalog_success || return
   release_run_probe || return
+}
+
+release_check_attachment_worker_app() {
+  local observed
+  observed="$(az containerapp show \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${ATTACHMENT_WORKER_APP_NAME}" \
+    --query '{image:properties.template.containers[0].image,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,poll:properties.template.scale.pollingInterval,cooldown:properties.template.scale.cooldownPeriod,rules:properties.template.scale.rules}' \
+    --output json --only-show-errors)" || return 1
+  RELEASE_ATTACHMENT_APP_STATE="${observed}" RELEASE_ATTACHMENT_APP_IMAGE="${RELEASE_TARGET_ATTACHMENT_APP_IMAGE}" python3 - <<'PY'
+import json
+import os
+
+state = json.loads(os.environ["RELEASE_ATTACHMENT_APP_STATE"])
+rules = state.get("rules") or []
+names = {rule.get("name") for rule in rules if isinstance(rule, dict)}
+valid = (
+    state.get("image") == os.environ["RELEASE_ATTACHMENT_APP_IMAGE"]
+    and state.get("min") == 0
+    and state.get("max") == 1
+    and state.get("poll") == 1
+    and state.get("cooldown") == 120
+    and names == {"attachment-work", "media-sync-warm"}
+)
+raise SystemExit(0 if valid else 1)
+PY
 }
 
 release_check_account_preflight() {
@@ -787,9 +840,6 @@ if check_name == "catalog_job":
         ]
     )
 elif check_name == "attachment_worker_job":
-    scale = trigger.get("scale") or {}
-    rules = scale.get("rules")
-    rule = rules[0] if isinstance(rules, list) and len(rules) == 1 else {}
     env_names = {
         entry.get("name")
         for entry in (env if isinstance(env, list) else [])
@@ -802,13 +852,6 @@ elif check_name == "attachment_worker_job":
     }
     valid = (
         valid
-        and scale.get("minExecutions") == 0
-        and scale.get("maxExecutions") == 1
-        and rule.get("type") == "azure-queue"
-        and rule.get("metadata", {}).get("queueLength") == "1"
-        and isinstance(rule.get("identity"), str)
-        and bool(rule.get("identity"))
-        and not rule.get("auth")
         and args == ["dist/tools/run-attachment-worker.js"]
         and {
             "ATTACHMENT_SCAN_QUEUE_URL",
@@ -822,6 +865,26 @@ elif check_name == "attachment_worker_job":
         and env_by_name.get("MAX_ATTACHMENT_BYTES", {}).get("value") == "26214400"
         and not any(name and name.startswith("CLAMAV_") for name in env_names)
         and resources == {"cpu": 0.5, "memory": "1Gi"}
+        and not mounts
+        and not volumes
+    )
+elif check_name == "media_sync_warmer_job":
+    valid = (
+        valid
+        and trigger.get("cronExpression") == "*/1 * * * *"
+        and args == ["dist/tools/run-media-sync-warmer.js"]
+        and env_contract(
+            env,
+            {
+                "MEETING_API_BASE_URL": {"value": None},
+                "MEETING_API_AUDIENCE": {"value": None},
+                "MEDIA_SYNC_WARM_QUEUE_URL": {"value": None},
+                "MEDIA_SYNC_WARM_LEAD": {"value": "5m"},
+                "MEDIA_SYNC_WARM_TAIL": {"value": "10m"},
+                "AZURE_CLIENT_ID": {"value": None},
+            },
+        )
+        and resources == {"cpu": 0.25, "memory": "0.5Gi"}
         and not mounts
         and not volumes
     )
@@ -1304,12 +1367,23 @@ PY
       || rollback_ok=false
   fi
   if [[ "${RELEASE_SCAN_JOB_MUTATED}" == "true" ]]; then
-    restore_changed_job_image_only \
+    restore_changed_job \
       "${ATTACHMENT_SCAN_JOB_NAME}" \
       "${RELEASE_KNOWN_GOOD_SCAN_EXISTS}" \
       "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" \
       "${RELEASE_KNOWN_GOOD_SCAN_MANIFEST}" \
       || rollback_ok=false
+  fi
+  if [[ "${RELEASE_WARMER_JOB_MUTATED}" == "true" ]]; then
+    restore_changed_job \
+      "${MEDIA_SYNC_WARMER_JOB_NAME}" \
+      "${RELEASE_KNOWN_GOOD_WARMER_EXISTS}" \
+      "${RELEASE_KNOWN_GOOD_WARMER_IMAGE}" \
+      "${RELEASE_KNOWN_GOOD_WARMER_MANIFEST}" \
+      || rollback_ok=false
+  fi
+  if [[ "${RELEASE_ATTACHMENT_APP_MUTATED}" == "true" ]]; then
+    restore_attachment_worker_app || rollback_ok=false
   fi
   if [[ "${RELEASE_PROBE_JOB_MUTATED}" == "true" ]]; then
     restore_changed_job \
@@ -1500,6 +1574,20 @@ restore_changed_job() {
   RELEASE_CLEANUP_FILES+=("${observed_manifest}")
   normalize_release_job_manifest "${observed_json}" "${observed_image}" "${observed_manifest}" || return
   cmp -s -- "${known_manifest}" "${observed_manifest}"
+}
+
+restore_attachment_worker_app() {
+  if [[ "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_EXISTS}" == "false" ]]; then
+    az containerapp delete --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --yes --only-show-errors --output none
+    [[ "$(release_containerapp_exists "${ATTACHMENT_WORKER_APP_NAME}")" == "false" ]]
+    return
+  fi
+  az containerapp update \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${ATTACHMENT_WORKER_APP_NAME}" \
+    --container-name attachment-worker \
+    --image "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE}" \
+    --only-show-errors --output none
 }
 
 write_release_report() {
