@@ -18,7 +18,7 @@ import type { PostgresMediaSyncStore } from "./store.js";
 import type { LineContentClient } from "../types.js";
 import type { MediaSyncIngest, MediaSyncOutboxItem, MediaSyncWork } from "./types.js";
 import { withMediaContentFile, type MediaContentFile } from "./content-file.js";
-import type { MediaSyncTimingEvent } from "./timing.js";
+import type { MediaSyncTimingDimensions, MediaSyncTimingEvent } from "./timing.js";
 
 export const MEDIA_SYNC_MAX_BYTES = 209_715_200;
 
@@ -223,7 +223,11 @@ export async function runMediaSyncWorker(
     agentJobStore?: AgentJobStore;
     signal?: AbortSignal;
     now?: () => Date;
-    onTiming?: (event: MediaSyncTimingEvent, correlationId: string) => void;
+    onTiming?: (
+      event: MediaSyncTimingEvent,
+      correlationId: string,
+      dimensions?: MediaSyncTimingDimensions
+    ) => void;
   }
 ): Promise<MediaSyncWorkerResult> {
   if (
@@ -323,7 +327,11 @@ export async function runMediaSyncWorker(
                 },
                 { signal: options.signal }
               );
-              options.onTiming?.("upload_completed", workId);
+              options.onTiming?.("upload_completed", workId, {
+                assetId: current.id,
+                contentVersion: current.etag,
+                sizeBytes: file.sizeBytes
+              });
               await requireEligibilityOrCompensateAsset(
                 current,
                 workId,
@@ -405,7 +413,12 @@ export async function runMediaSyncWorker(
     if (asset.scanStatus !== "clean") {
       return terminalFailure("scan_failed", workId, claim.claimedUntil, work, now, options);
     }
-    options.onTiming?.("clean_observed", workId);
+    const timingDimensions = {
+      assetId: asset.id,
+      contentVersion: asset.etag ?? work.ingest.assetEtag,
+      sizeBytes: asset.sizeBytes ?? work.ingest.sizeBytes
+    };
+    options.onTiming?.("clean_observed", workId, timingDimensions);
 
     const collection = work.publications.find(
       (publication) => publication.publicationType === "collection"
@@ -421,6 +434,7 @@ export async function runMediaSyncWorker(
       );
     }
     let collectionPublished = false;
+    let publishedItemId: string | undefined;
     if (collection.targetId && collection.state === "pending") {
       if (
         !(await options.store.finalizeCollectionPublication({
@@ -434,6 +448,7 @@ export async function runMediaSyncWorker(
       }
       collection.state = "published";
       collectionPublished = true;
+      publishedItemId = collection.targetId;
     } else if (!collection.targetId) {
       const sourceRevision = work.ingest.checksumSha256 ?? asset.etag ?? work.ingest.assetEtag;
       if (!sourceRevision) {
@@ -472,8 +487,14 @@ export async function runMediaSyncWorker(
         return { status: "contention" };
       }
       collectionPublished = true;
+      publishedItemId = mutation.item.id;
     }
-    if (collectionPublished) options.onTiming?.("collection_published", workId);
+    if (collectionPublished) {
+      options.onTiming?.("collection_published", workId, {
+        ...timingDimensions,
+        collectionItemId: publishedItemId
+      });
+    }
     const manual = work.publications.find(
       (publication) => publication.publicationType === "manual"
     );
