@@ -884,7 +884,10 @@ elif check_name == "media_sync_warmer_job":
                 "AZURE_CLIENT_ID": {"value": None},
             },
         )
-        and resources == {"cpu": 0.25, "memory": "0.5Gi"}
+        and isinstance(resources, dict)
+        and resources.get("cpu") == 0.25
+        and resources.get("memory") == "0.5Gi"
+        and resources.get("ephemeralStorage", "") == ""
         and not mounts
         and not volumes
     )

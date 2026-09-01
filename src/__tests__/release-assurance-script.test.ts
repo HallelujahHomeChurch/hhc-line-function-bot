@@ -1355,7 +1355,7 @@ if (command("containerapp", "job", "show")) {
         { name: "MEDIA_SYNC_WARM_TAIL", value: "10m" },
         { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" }
       ],
-      resources: { cpu: 0.25, memory: "0.5Gi" },
+      resources: { cpu: 0.25, memory: "0.5Gi", ephemeralStorage: "" },
       volumeMounts: [],
       volumes: []
     },
