@@ -459,7 +459,7 @@ run_release_gates() {
     "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_worker_job worker_definition_mismatch false || return
   release_check_job_definition \
     "${MEDIA_SYNC_WARMER_JOB_NAME}" Schedule 120 1 schedule \
-    "${RELEASE_TARGET_ATTACHMENT_APP_IMAGE}" media_sync_warmer_job worker_definition_mismatch false || return
+    "${RELEASE_TARGET_ATTACHMENT_APP_IMAGE}" media_sync_warmer_job worker_definition_mismatch || return
   release_check_attachment_worker_app || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
@@ -884,7 +884,10 @@ elif check_name == "media_sync_warmer_job":
                 "AZURE_CLIENT_ID": {"value": None},
             },
         )
-        and resources == {"cpu": 0.25, "memory": "0.5Gi"}
+        and isinstance(resources, dict)
+        and resources.get("cpu") == 0.25
+        and resources.get("memory") == "0.5Gi"
+        and resources.get("ephemeralStorage", "") == ""
         and not mounts
         and not volumes
     )
@@ -945,6 +948,9 @@ else:
 raise SystemExit(0 if valid else 1)
 PY
   then
+    if [[ -n "${definition_json}" ]]; then
+      printf 'Release definition mismatch for %s: %s\n' "${check_name}" "${definition_json}" >&2
+    fi
     fail_release_check "${check_name}" "${failure_reason}" http_mismatch
     return
   fi
@@ -1675,6 +1681,7 @@ check_names = {
     "release_probe",
     "catalog_job",
     "attachment_worker_job",
+    "media_sync_warmer_job",
     "periodic_assurance_job",
     "bot_health",
     "bot_readiness",

@@ -894,7 +894,7 @@ export CONTAINER_APP_NAME="fixture-bot"
 export SEARXNG_CONTAINER_APP_NAME="fixture-searxng"
 export CATALOG_SYNC_JOB_NAME="hhc-line-bot-catalog-sync"
 export ATTACHMENT_SCAN_JOB_NAME="hhc-line-bot-attachment-worker"
-export ATTACHMENT_WORKER_APP_NAME="hhc-line-bot-attachment-worker-app"
+export ATTACHMENT_WORKER_APP_NAME="hhc-line-bot-attachment-app"
 export MEDIA_SYNC_WARMER_JOB_NAME="hhc-line-bot-media-sync-warmer"
 export RELEASE_PROBE_JOB_NAME="hhc-line-bot-release-probe"
 export PERIODIC_ASSURANCE_JOB_NAME="hhc-line-bot-periodic-assurance"
@@ -1118,7 +1118,7 @@ if (command("containerapp", "show") && name === "fixture-bot") {
   process.exit(0);
 }
 
-if (command("containerapp", "show") && name === "hhc-line-bot-attachment-worker-app") {
+if (command("containerapp", "show") && name === "hhc-line-bot-attachment-app") {
   if (query === "properties.template.containers[0].image") {
     output("registry.example/fixture-secret/scan@${GOOD_SCAN_DIGEST}");
   } else if (query === "{image:properties.template.containers[0].image,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,poll:properties.template.scale.pollingInterval,cooldown:properties.template.scale.cooldownPeriod,rules:properties.template.scale.rules}") {
@@ -1355,7 +1355,7 @@ if (command("containerapp", "job", "show")) {
         { name: "MEDIA_SYNC_WARM_TAIL", value: "10m" },
         { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" }
       ],
-      resources: { cpu: 0.25, memory: "0.5Gi" },
+      resources: { cpu: 0.25, memory: "0.5Gi", ephemeralStorage: "" },
       volumeMounts: [],
       volumes: []
     },
