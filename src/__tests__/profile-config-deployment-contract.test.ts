@@ -919,6 +919,7 @@ describe("production profile configuration deployment contract", () => {
       expect(contents).not.toMatch(/clamav|freshclam/iu);
     }
     expect(workflow).not.toContain("SCAN_IMAGE_REPOSITORY");
+    expect(workflow).toContain("ATTACHMENT_WORKER_APP_NAME: hhc-line-bot-attachment-app");
     expect(deployment).toContain('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
     expect(deployment).toContain(
       'start_release_job \\\n  "${ATTACHMENT_SCAN_JOB_NAME}" \\\n  attachment_worker_job'

@@ -56,7 +56,7 @@ jobs:
       CONTAINER_APP_NAME: hhc-line-function-bot
       CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
       ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker
-      ATTACHMENT_WORKER_APP_NAME: hhc-line-bot-attachment-worker-app
+      ATTACHMENT_WORKER_APP_NAME: hhc-line-bot-attachment-app
       MEDIA_SYNC_WARMER_JOB_NAME: hhc-line-bot-media-sync-warmer
       RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe
       PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
