@@ -210,6 +210,8 @@ describe("media sync Asset and collection stage", () => {
 
   it("uploads the temp file once and persists a pending Asset before scheduling retry", async () => {
     const fixture = createAssetFixture();
+    const onTiming = vi.fn();
+    fixture.options.onTiming = onTiming;
     fixture.assets.createUpload.mockResolvedValue({
       asset: asset({ uploadStatus: "created", scanStatus: "pending" }),
       uploadTarget: { url: "https://blob.invalid/opaque", method: "PUT", headers: {} }
@@ -255,6 +257,11 @@ describe("media sync Asset and collection stage", () => {
         lastErrorCategory: "scan_pending"
       })
     );
+    expect(onTiming).toHaveBeenCalledWith("upload_completed", "work-opaque-1", {
+      assetId: "asset-1",
+      contentVersion: "etag-1",
+      sizeBytes: 5
+    });
   });
 
   it.each([
@@ -402,8 +409,21 @@ describe("media sync Asset and collection stage", () => {
       expectedClaimedUntil: fixture.claim.claimedUntil
     });
     expect(onTiming.mock.calls).toEqual([
-      ["clean_observed", "work-opaque-1"],
-      ["collection_published", "work-opaque-1"]
+      [
+        "clean_observed",
+        "work-opaque-1",
+        { assetId: "asset-1", contentVersion: "etag-1", sizeBytes: 5 }
+      ],
+      [
+        "collection_published",
+        "work-opaque-1",
+        {
+          assetId: "asset-1",
+          collectionItemId: "occurrence-actual-1",
+          contentVersion: "etag-1",
+          sizeBytes: 5
+        }
+      ]
     ]);
   });
 
