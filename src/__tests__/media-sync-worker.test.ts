@@ -23,9 +23,9 @@ import type { LineContentClient } from "../types.js";
 const pptxBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]);
 
 describe("media sync cadence", () => {
-  it("retries pending scans in 2 seconds only while warm", () => {
-    expect(nextDelay("pending", true)).toBe(2_000);
-    expect(nextDelay("scanning", true)).toBe(2_000);
+  it("makes pending scans immediately dispatchable only while warm", () => {
+    expect(nextDelay("pending", true)).toBe(0);
+    expect(nextDelay("scanning", true)).toBe(0);
     expect(nextDelay("pending", false)).toBe(30_000);
     expect(nextDelay("clean", true)).toBe(30_000);
   });
@@ -286,7 +286,7 @@ describe("media sync Asset and collection stage", () => {
     }
   );
 
-  it("reschedules a warm pending scan after 2 seconds", async () => {
+  it("makes a warm pending scan immediately dispatchable", async () => {
     const fixture = createAssetFixture();
     fixture.work.ingest.assetId = "asset-1";
     fixture.work.ingest.assetEtag = "etag-1";
@@ -298,7 +298,7 @@ describe("media sync Asset and collection stage", () => {
       reason: "scan_pending"
     });
     expect(fixture.store.retryOutbox).toHaveBeenCalledWith(
-      expect.objectContaining({ availableAt: new Date("2026-08-16T00:00:02.000Z") })
+      expect.objectContaining({ availableAt: new Date("2026-08-16T00:00:00.000Z") })
     );
   });
 

@@ -23,7 +23,7 @@ import type { MediaSyncTimingDimensions, MediaSyncTimingEvent } from "./timing.j
 export const MEDIA_SYNC_MAX_BYTES = 209_715_200;
 
 export function nextDelay(scanStatus: string, warm: boolean): number {
-  return (scanStatus === "pending" || scanStatus === "scanning") && warm ? 2_000 : 30_000;
+  return (scanStatus === "pending" || scanStatus === "scanning") && warm ? 0 : 30_000;
 }
 
 type AssetStageStore = Pick<
