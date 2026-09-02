@@ -9,6 +9,8 @@ import {
   type AttachmentAssetWorkerResult
 } from "../attachments/asset-worker.js";
 import { ATTACHMENT_SCAN_TIMING } from "../attachments/scan-timing.js";
+import { startWarmMediaSyncOutboxDispatcher } from "../attachments/scan-outbox.js";
+import { AzureAttachmentScanQueue } from "../attachments/scan-queue.js";
 import { loadAttachmentScanWorkerConfigFromEnv } from "../attachments/scan-worker-config.js";
 import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
@@ -191,6 +193,10 @@ export async function runAttachmentWorkerLoop(
   const sleep =
     options.sleep ??
     ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const stopMediaSyncOutbox = startWarmMediaSyncOutboxDispatcher({
+    store: runtime.mediaSyncStore,
+    queue: new AzureAttachmentScanQueue(runtime.queue)
+  });
   try {
     while (!options.signal?.aborted) {
       await consumeWarmPulse(warmQueue);
@@ -203,6 +209,7 @@ export async function runAttachmentWorkerLoop(
       await runtime.run(lease, warm);
     }
   } finally {
+    stopMediaSyncOutbox();
     await runtime.close();
   }
 }
@@ -249,6 +256,7 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
     return {
       credential,
       queue,
+      mediaSyncStore: postgres.mediaSyncStore,
       run: (lease: AttachmentScanWorkLease, warm: boolean) => {
         const deadlines = attachmentWorkerDeadlines(new Date());
         return runAttachmentWorkerQueueLease(lease, {
