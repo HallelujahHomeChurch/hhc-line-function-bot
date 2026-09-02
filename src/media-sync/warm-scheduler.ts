@@ -6,6 +6,8 @@ export async function runWarmScheduler(
   now = new Date()
 ): Promise<{ status: "cold" | "pulsed" }> {
   if (!(await options.isWarm(now))) return { status: "cold" };
-  await options.sendPulse({ ttlSeconds: 120 });
+  for (let pulse = 0; pulse < 20; pulse += 1) {
+    await options.sendPulse({ ttlSeconds: 120 });
+  }
   return { status: "pulsed" };
 }

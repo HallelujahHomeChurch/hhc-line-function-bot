@@ -3,11 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { runWarmScheduler } from "../media-sync/warm-scheduler.js";
 
 describe("runWarmScheduler", () => {
-  it("sends one bounded pulse only inside the meeting window", async () => {
+  it("sends a bounded pulse batch only inside the meeting window", async () => {
     const sendPulse = vi.fn().mockResolvedValue(undefined);
     await expect(
       runWarmScheduler({ isWarm: async () => true, sendPulse }, new Date("2026-09-06T01:00:00Z"))
     ).resolves.toEqual({ status: "pulsed" });
+    expect(sendPulse).toHaveBeenCalledTimes(20);
     expect(sendPulse).toHaveBeenCalledWith({ ttlSeconds: 120 });
 
     sendPulse.mockClear();
