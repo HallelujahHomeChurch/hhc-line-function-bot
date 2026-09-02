@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import * as scanOutbox from "../attachments/scan-outbox.js";
+
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAttachmentScanQueue } from "../attachments/scan-queue.js";
 import {
@@ -34,6 +36,31 @@ async function createPendingWork(store: AttachmentScanWorkStore) {
 }
 
 describe("attachment scan durable outbox", () => {
+  it("polls media-sync retries every second only until the warm worker stops", async () => {
+    vi.useFakeTimers();
+    const store = {
+      claimOutboxForDispatch: vi.fn().mockResolvedValue([]),
+      markOutboxDispatched: vi.fn()
+    };
+    const queue = { enqueue: vi.fn() };
+    const start = Reflect.get(scanOutbox, "startWarmMediaSyncOutboxDispatcher") as unknown;
+
+    expect(start).toBeTypeOf("function");
+    if (typeof start !== "function") return;
+
+    const stop = start({ store, queue });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.claimOutboxForDispatch).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(store.claimOutboxForDispatch).toHaveBeenCalledTimes(2);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(store.claimOutboxForDispatch).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it("dispatches committed media-sync operations by opaque ID and exact reservation lease", async () => {
     const claimedUntil = "2099-01-01T00:00:30.000Z";
     const store = {

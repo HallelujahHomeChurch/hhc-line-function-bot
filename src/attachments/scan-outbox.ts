@@ -117,3 +117,9 @@ export function startMediaSyncOutboxDispatcher(options: {
   timer.unref();
   return () => clearInterval(timer);
 }
+
+export function startWarmMediaSyncOutboxDispatcher(
+  options: Pick<Parameters<typeof startMediaSyncOutboxDispatcher>[0], "store" | "queue">
+): () => void {
+  return startMediaSyncOutboxDispatcher({ ...options, intervalMs: 1_000 });
+}
