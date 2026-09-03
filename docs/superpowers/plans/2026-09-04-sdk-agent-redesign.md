@@ -23,7 +23,7 @@
 - 外部歌譜保留首次 consent；其後同一查找可自主換詞與讀頁。匯入仍需確認和有效保存權限。
 - 附件沿用 opaque work ID → durable outbox → worker → Asset → clean → publication；不得新增 binary publish path。
 - 工程預設：對話 idle TTL 沿用 `agentRuntime.taskFrameSeconds`（預設600秒），5分鐘週期清除完整逾期 checkpoint chain；群組喚醒60秒；顯式 memory 30天。
-- 初始預算測量值為每回合4次模型、6次工具呼叫；不是已驗證效能承諾。使用 SDK limits，跨 retry/resume 不重置總額。
+- Mechanics probe的多步找譜實際用了5次模型、4次工具；live gate起點為每回合最多6次模型、6次工具、write tool最多1次。使用SDK limits，跨retry/resume不重置總額，最終值依live品質與延遲下修。
 - Runtime state 可含必要授權內容；diagnostic trace 不得包含原文、人物、檔名、URL、秘密或 SDK payload。
 - 未授權部署；本計劃的完成交付為 verified branch/PR 與評測。Merge deploy-triggering PR 需另有部署授權。
 
@@ -91,6 +91,8 @@ git commit -m "test(agent): define cross-source and web-search acceptance"
 **Files:** 新增 spike CLI、`sdk-runtime.ts`、`sdk-agent.test.ts`；修改 `package.json`、`pnpm-lock.yaml`、`src/architecture/dependency-rules.ts` 中必要的 SDK 依賴邊界。
 
 **Interfaces:** 對接 SDK `messages`、tool call/result 與 `invoke`／`Command(resume)`；沿用既有 domain `FunctionHandler(args, context)`，spike 只注入 synthetic read tools 與無副作用的 approval tool。正式 `save_*` 不在 spike 工具集合。
+
+**已有研究證據：** [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)的throwaway mechanics probe以正式SDK套件完成14/14項；Task 2仍需把相同契約做成repo tests，並跑真實DeepSeek及選定讀頁provider，不能直接勾選完成。
 
 - [ ] 在 npm 已發布版本中解析相容 peer dependency 組合，鎖定 exact versions；檢查 Node 24、Zod4、ESM、build 與官方 Postgres saver 相容性。記錄 lockfile，禁止依賴未發布 GitHub main API。
 - [ ] 用最小官方組合起步，工具以 Task 1 fixture 回傳 evidence；下面是初始化形狀，參數以鎖定發布版型別為準，不額外自建 runtime interface：

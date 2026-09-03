@@ -1,6 +1,6 @@
 # SDK agent harness 改造設計與分析
 
-日期：2026-09-04。狀態：主要產品方向已確認；SDK 與外部讀頁整合須經 spike 驗證；實作尚未開始。分階段工作見 [implementation plan](../plans/2026-09-04-sdk-agent-redesign.md)。
+日期：2026-09-04。狀態：主要產品方向已確認；SDK mechanics probe 14/14通過，真實DeepSeek品質仍待live key。實作尚未開始。證據見 [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)，分階段工作見 [implementation plan](../plans/2026-09-04-sdk-agent-redesign.md)。
 
 分析基準：`origin/main` 的 `04d085646bb40f4386afa4243401542926b5f39b`。2026-09-04 再次比對遠端 main，仍為相同 commit。分析分支：`codex/hermes-agent-redesign-analysis`。
 
@@ -118,7 +118,7 @@ Guardrail 的權威是 server，可被模型理解，但不依模型服從才生
 3. **工具 schema 定義業務資料。** 日期範圍、筆數、enum、修改欄位依 schema 驗證；錯誤作為可修正的 tool result。模型可重試一次修正參數，但沒有無限循環。
 4. **寫入需要 server-bound approval。** 模型不能傳 `confirm: true` 取得授權。預覽綁定完整參數、requester、來源、revision、期限；LINE 確認原子消耗一次，再 resume。修改預覽後必須重新確認。SDK approval 本身不代表 Account 授權或 exactly-once。
 5. **不可信內容只當資料。** Wikipedia、Notion、記憶不能改寫系統規則或授權。工具出口限制來源、內容大小及欄位；不提供任意 HTTP/shell/SQL 工具。Prompt injection 測試驗證權限邊界，即使模型被誘導也不能越權。
-6. **有界執行。** 使用官方 model/tool call limit、timeout、取消與摘要 middleware。第一個 spike 以每回合最多 4 次模型呼叫、6 次工具呼叫作測量起點；包括重試、平行呼叫、resume 後的累計都要驗證。這是暫定值，不是既有效能承諾。[Prebuilt middleware](https://docs.langchain.com/oss/javascript/langchain/middleware/built-in)
+6. **有界執行。** 使用官方 model/tool call limit、timeout、取消與摘要 middleware。實際SDK多步找譜probe需要5次模型呼叫；第一個live gate改以每回合最多6次模型、6次工具呼叫作測量起點，write tool仍最多1次。包括重試、平行呼叫、resume後的累計都要驗證。這是暫定值，不是既有效能承諾。[Prebuilt middleware](https://docs.langchain.com/oss/javascript/langchain/middleware/built-in)
 7. **結果與 telemetry 分開。** 模型可以收到已授權、必要的資料片段；一般 trace 僅記工具名、狀態、耗時、token、拒絕原因。不得把整個 SDK run／prompt／tool result 直接送入 log。
 
 新工具結果可包含 `status`、有界 evidence、來源種類、更新時間與 opaque references。`not_found`、`unavailable`、`ambiguous`、`stale` 必須區別，不能解析使用者回覆文字判斷成功與否。分享網址由 server 在送出時生成／驗證，不放入 checkpoint，避免存入過期連結。
@@ -191,7 +191,7 @@ Admin/system actions 另行整理：保留登入、註冊、help、診斷、invi
 
 實作優先沿用 SearXNG 搜尋，並在 spike 選一個成熟的公開頁面讀取整合，避免自製 crawler。可評估 LangChain 的 `TavilyExtract`／Tavily JS SDK，其提供 URL 內容擷取；這是額外的搜尋／讀頁服務，需 API key 與成本評估，尚未選用或安裝，不改變 DeepSeek 是唯一語意模型 provider 的要求。[Tavily JS SDK](https://docs.tavily.com/sdk/javascript/quick-start)、[LangChain TavilyExtract](https://docs.langchain.com/oss/javascript/integrations/tools/tavily_extract)
 
-若真實案例證明需要 JavaScript 互動才能取得公開資料，再評估成熟 browser tool；第一版不預設架設完整瀏覽器服務。現有一次性外部搜尋 summarizer 在 agent 統一閱讀／回答後退役。原本每回合4次模型、6次工具的測量起點需用多步找譜案例檢驗；耗時任務走既有結果領取方式，不能為硬塞 inline reply 而退回一次搜尋。
+若真實案例證明需要 JavaScript 互動才能取得公開資料，再評估成熟 browser tool；第一版不預設架設完整瀏覽器服務。現有一次性外部搜尋 summarizer 在 agent 統一閱讀／回答後退役。多步找譜probe實際用了5次模型、4次工具，live起點改為6/6；耗時任務走既有結果領取方式，不能為硬塞 inline reply 而退回一次搜尋。
 
 ## 7. 刪除與保留清單
 
