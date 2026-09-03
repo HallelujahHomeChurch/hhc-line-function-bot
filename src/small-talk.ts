@@ -126,7 +126,8 @@ function buildSmallTalkPrompt(
 ): string {
   const prompting = profile.smallTalk?.prompting;
   return [
-    prompting?.personaPrompt?.trim(),
+    profile.agent?.personaPrompt.trim() ?? prompting?.personaPrompt?.trim(),
+    profile.agent?.memoryPolicyPrompt.trim(),
     maxChars === undefined
       ? undefined
       : `請根據使用者訊息回覆一句繁體中文，最多 ${maxChars} 個字。`,

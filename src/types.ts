@@ -310,6 +310,10 @@ export interface BotProfileConfig extends ProfileFunctionPolicy {
   directAccessPolicy?: DirectAccessPolicy;
   groupAccessPolicy?: GroupAccessPolicy;
   registration?: RegistrationConfig;
+  agent?: {
+    personaPrompt: string;
+    memoryPolicyPrompt: string;
+  };
   smallTalk?: SmallTalkConfig;
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;

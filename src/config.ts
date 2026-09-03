@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { z } from "zod";
 
@@ -50,6 +51,13 @@ const accountLinkPresentationSchema = z
     displayName: z.string().trim().min(1).max(80),
     lineIdEnv: environmentReferenceSchema,
     providerIdEnv: environmentReferenceSchema
+  })
+  .strict();
+
+const agentPromptFilesSchema = z
+  .object({
+    personaFile: z.string().regex(/^agents\/[a-z0-9_-]+\/PERSONA\.md$/u),
+    memoryPolicyFile: z.string().regex(/^agents\/[a-z0-9_-]+\/MEMORY\.md$/u)
   })
   .strict();
 
@@ -188,6 +196,7 @@ const profileSchema = z.object({
       enabled: z.boolean().default(false)
     })
     .default({ enabled: false }),
+  agent: agentPromptFilesSchema.optional(),
   smallTalk: z
     .object({
       mode: z.enum(["template", "llm"]).default("template"),
@@ -294,7 +303,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   assertCompleteGroup(env, graphRequiredKeys, "Incomplete Graph configuration");
   assertCompleteGroup(env, notionRequiredKeys, "Incomplete Notion configuration");
   const llmProvider = readModelProvider(env.LLM_PROVIDER, "deepseek");
-  const normalizedProfiles = profiles.map((profile) => normalizeProfile(profile, env));
+  const profileDirectory = dirname(env.PROFILE_CONFIG_PATH!.trim());
+  const normalizedProfiles = profiles.map((profile) =>
+    normalizeProfile(profile, env, profileDirectory)
+  );
   assertSharedAccountLinkProvider(normalizedProfiles);
   validateProviderPolicy(normalizedProfiles, llmProvider);
   validateAccessConfig(normalizedProfiles, env);
@@ -472,10 +484,15 @@ type NormalizedProfile = Omit<
   | "accountLink"
   | "permissionRequiredFunctions"
   | "smallTalk"
+  | "agent"
 > & {
   channelSecret: string;
   channelAccessToken: string;
   smallTalk: SmallTalkConfig;
+  agent?: {
+    personaPrompt: string;
+    memoryPolicyPrompt: string;
+  };
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
   providerPolicy: ProviderPolicy;
@@ -487,8 +504,12 @@ type NormalizedProfile = Omit<
   };
 };
 
-function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): NormalizedProfile {
-  const { accountLink, channelSecretEnv, channelAccessTokenEnv, ...profileConfig } = profile;
+function normalizeProfile(
+  profile: ParsedProfile,
+  env: NodeJS.ProcessEnv,
+  profileDirectory: string
+): NormalizedProfile {
+  const { accountLink, agent, channelSecretEnv, channelAccessTokenEnv, ...profileConfig } = profile;
   const allowedProviders = uniqueProviders(profile.allowedProviders ?? ["deepseek"]);
   const channelSecret = resolveRequiredProfileValue(
     profile.name,
@@ -509,6 +530,7 @@ function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): Norma
     channelSecret,
     channelAccessToken,
     permissionRequiredFunctions: profile.permissionRequiredFunctions ?? [],
+    ...(agent ? { agent: readAgentPrompts(profile.name, agent, profileDirectory) } : {}),
     ...(accountLink ? { accountLink: normalizeAccountLinkPresentation(profile, env) } : {}),
     smallTalk: normalizeSmallTalkConfig(profile.smallTalk),
     allowedProviders,
@@ -521,6 +543,32 @@ function normalizeProfile(profile: ParsedProfile, env: NodeJS.ProcessEnv): Norma
       profile.directAccessPolicy ?? (profile.allowDirectUser ? "managed" : "blocked"),
     groupAccessPolicy: profile.groupAccessPolicy ?? "blocked"
   };
+}
+
+function readAgentPrompts(
+  profileName: string,
+  files: NonNullable<ParsedProfile["agent"]>,
+  profileDirectory: string
+): NonNullable<NormalizedProfile["agent"]> {
+  const expectedDirectory = `agents/${profileName}/`;
+  if (
+    !files.personaFile.startsWith(expectedDirectory) ||
+    !files.memoryPolicyFile.startsWith(expectedDirectory)
+  ) {
+    throw new Error(`Profile ${profileName} agent prompt files must stay in its profile directory`);
+  }
+  return {
+    personaPrompt: readAgentPrompt(profileDirectory, files.personaFile),
+    memoryPolicyPrompt: readAgentPrompt(profileDirectory, files.memoryPolicyFile)
+  };
+}
+
+function readAgentPrompt(profileDirectory: string, relativePath: string): string {
+  const content = readFileSync(join(profileDirectory, relativePath), "utf8").trim();
+  if (!content || content.length > 12_000) {
+    throw new Error(`Agent prompt file ${relativePath} must contain 1 to 12000 characters`);
+  }
+  return content;
 }
 
 function normalizeAccountLinkPresentation(
@@ -877,6 +925,7 @@ function assertProductionSafeProfiles(profiles: ParsedProfile[]): void {
       );
     }
     if (profile.smallTalk.mode === "llm") {
+      if (profile.agent) continue;
       const prompting = profile.smallTalk.prompting;
       for (const key of [
         "personaPrompt",

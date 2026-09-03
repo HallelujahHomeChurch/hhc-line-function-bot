@@ -1,5 +1,5 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -88,6 +88,53 @@ async function withJsonFile<T>(
 }
 
 describe("config", () => {
+  it("loads helper persona and memory policy from bounded profile files", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "secret",
+          channelAccessToken: "token",
+          agent: {
+            personaFile: "agents/helper/PERSONA.md",
+            memoryPolicyFile: "agents/helper/MEMORY.md"
+          }
+        }
+      ],
+      async (path) => {
+        const directory = join(path, "..", "agents", "helper");
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, "PERSONA.md"), "PERSONA", "utf8");
+        await writeFile(join(directory, "MEMORY.md"), "MEMORY POLICY", "utf8");
+
+        expect(loadConfigFromEnv({ PROFILE_CONFIG_PATH: path }).profiles[0]?.agent).toEqual({
+          personaPrompt: "PERSONA",
+          memoryPolicyPrompt: "MEMORY POLICY"
+        });
+      }
+    );
+  });
+
+  it("rejects agent prompt paths outside the profile config directory", () => {
+    expect(() =>
+      loadConfigFromEnv({
+        ...profilesEnv([
+          {
+            name: "helper",
+            webhookPath: "/api/line/webhook/helper",
+            channelSecret: "secret",
+            channelAccessToken: "token",
+            agent: {
+              personaFile: "../PERSONA.md",
+              memoryPolicyFile: "agents/helper/MEMORY.md"
+            }
+          }
+        ])
+      })
+    ).toThrow();
+  });
+
   it("loads catalog sync dependencies without unrelated profile LINE credentials", () => {
     const config = loadCatalogSyncConfigFromEnv({
       ...profilesEnv([
