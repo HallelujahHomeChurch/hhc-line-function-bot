@@ -106,6 +106,13 @@ Live probe 由使用者建立的主 checkout `.env` 注入 `DEEPSEEK_API_KEY`；
 - admin/system action catalog/policy/audit，以及provider-free main。
 - `not_found`/`unavailable`/`stale`/`ambiguous` typed results、response-only links與privacy-safe telemetry。
 
+### Persona 與 Memory Audit
+
+- Repo目前沒有`personal.md`、`PERSONA.md`或`MEMORY.md`。Helper身份分散在profile `identityLine`、四段small-talk prompt與template replies；完整persona只送入small-talk generator，SDK切換時需統一成helper system prompt。
+- 現有文字memory已具private/group visibility、30天expiry、preview/confirm、owner/admin deletion與requester filtering，適合保留成domain store。
+- README與AGENTS明確禁止自動群聊記錄；目前conversation window也只收bot已受理、profile/source/requester-scoped的短期回合。把「某人最常問什麼」加入durable memory會把功能記憶變成個人行為側寫，不應作為預設。
+- 建議`PERSONA.md`只描述bot身份、語氣與可信度；`MEMORY.md`只描述記憶選擇及禁區。兩者版本控制且唯讀，runtime內容仍存PostgreSQL。群組可自動做無人物、無原文的能力使用量聚合；個人偏好只能本人direct opt-in。
+
 這個界線表示會保留本專案約束，但不再保留「先用我們的router判斷能不能讓agent看工具」的第二套語意代理人。薄adapter的判斷依profile/source/auth/schema，不依中文phrase/confidence。
 
 ## Ponytail Repo-wide Findings

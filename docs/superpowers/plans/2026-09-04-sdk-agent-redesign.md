@@ -140,13 +140,17 @@ pnpm build
 
 **Go/no-go:** Spike 的唯讀案例子集達服事≥95%、全體≥90%；能多步找譜，無副作用的確認／恢復／取消案例有效，沒有舊 planner 依賴。報告須列清本階段使用 fixture 的部分；正式 domain 寫入、完整授權及持久化安全由 Task 3–7 驗證，Task 9 才計算全產品 gate。測試不足或 provider 不可用不算成功。失敗先歸因資料、tool contract、模型或 SDK；必要時對次選 SDK 重做同一 spike，不開始 Task 3–8。
 
-## Task 3：把工具結果與執行 guardrails 接到 SDK
+## Task 3：統一 helper persona、memory policy 與工具 guardrails
 
-**Files:** 新增 `sdk-tools.ts`、`sdk-tools.test.ts`；修改 `src/application/contracts/function-execution.ts`、`src/function-arguments.ts`、`src/functions/definitions.ts`、`src/actions/policy.ts`，沿用現有有效權限解析。
+**Files:** 新增 `config/agents/helper/PERSONA.md`、`config/agents/helper/MEMORY.md`、`sdk-tools.ts`、`sdk-tools.test.ts`；修改profile config schema/loader、`src/small-talk.ts`、intro presentation、`src/application/contracts/function-execution.ts`、`src/function-arguments.ts`、`src/functions/definitions.ts`、`src/actions/policy.ts`，沿用現有有效權限解析。
 
 **Interfaces:** 工具仍呼叫現有 domain handler；SDK tool schema 只含業務參數。`FunctionHandlerContext` 的 profile/event/requester 由 transport 注入；`activeTask` 語意欄位最後刪除。工具的錯誤結果用有界 reason code，不直接 serialize exception。
 
-- [ ] 先加工具層反例：停用子能力、group 禁用 action、使用者變更、opaque ref 過期、參數帶 `confirm`／別人的 ID／未知欄位。
+- [ ] 先加人設與工具層反例：intro／small talk／tool success／not-found／unavailable均使用同一身份；不冒充牧者、不代表教會立場。另測停用子能力、group禁用action、使用者變更、opaque ref過期、參數帶`confirm`／別人的ID／未知欄位。
+- [ ] 將現有四段small-talk prompt拆成一份短的`PERSONA.md`與一份`MEMORY.md`政策；profile以受限relative path引用，啟動時fail-fast驗證。Main不載入helper檔案，也不建立模型client。
+- [ ] `MEMORY.md`只進system prompt，不寫入runtime內容。保留PostgreSQL作為memory store；加入測試證明Git/container檔案不會被對話追加或修改。
+- [ ] 第一版維持explicit-only durable memory。群組中反覆發問不得產生具名偏好／行為memory；未對bot說話的訊息不進checkpoint。本人private preference需direct opt-in、可列出與刪除，若未實作完整控制就不先加入。
+- [ ] 若後續加入agent主動記憶建議，只能對被喚醒回合的非敏感共同作業事實產生`save_memory` preview，最多一次且零副作用；仍需當下有效寫入權限、明示group visibility及一次確認。
 - [ ] 使用 Zod strict schema，server 組建授權工具集合並於每次執行重新檢查。`search_files`／`search_information` 合併後仍按原 function permission 篩選子操作；admin tools 只在已驗證 direct admin context 中提供。
 - [ ] 讀取結果新增一致的 evidence 欄位；以下是必要資訊範例，保留既有 domain payload，不建立任意 plugin schema 系統：
 
@@ -168,7 +172,7 @@ pnpm build
 - [ ] 區分 `not_found`、`unavailable`、`ambiguous`、`stale`；URL、分享連結、SDK payload 不進診斷 log。資料片段可進授權模型 context，需留 source revision 以失效。
 - [ ] 執行 `pnpm exec vitest run src/__tests__/sdk-tools.test.ts`、`pnpm typecheck`，提交 `refactor(agent): enforce scoped tool execution`。
 
-**交付 gate:** 刪掉語意准入不會放寬授權；模型不能透過輸入欄位控制身份或確認狀態。
+**交付 gate:** Intro、聊天與工具回覆的人設一致；沒有自動具名側寫或未確認durable memory。刪掉語意准入不會放寬授權；模型不能透過輸入欄位控制身份或確認狀態。
 
 ## Task 4：改造跨來源資訊與內部檔案檢索
 

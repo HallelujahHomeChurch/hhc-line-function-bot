@@ -34,6 +34,46 @@
 
 目前未取得上述失敗的去識別化實際 transcript 與當時資料快照，因此以下是**靜態程式支持的原因分析**，不是對特定 production event 的已重現診斷。
 
+### Helper 人設重新審核
+
+目前沒有 `personal.md`、`PERSONA.md` 或 `MEMORY.md`。Helper 人設分散在 `config/profiles.json` 的 `identityLine`、四段 `smallTalk.prompting`，以及 `src/small-talk.ts` 的 template replies；完整 persona 只送入 small-talk generation。改成單一 SDK agent 後若直接沿用，工具回合、一般聊天與 deterministic intro 可能呈現不同角色。
+
+現有人設的優點是繁體中文、第一人稱、溫暖簡短、不說教、不編造教會立場。需要修正的地方：
+
+- 「熟悉家教會文化、像成熟教會同工」容易讓人誤以為它擁有未查證的內部知識或牧養身分；應明示它是數位協作助理，不代表牧者、同工或教會正式立場。
+- persona、conversation、safety、format規則目前混在一起。未來全域persona若直接沿用「不要網址／Markdown」，會和檔案連結、來源引用、結構化工具結果衝突。
+- 人設只規範small talk，沒有統一「查不到資料、正式來源與筆記衝突、工具失敗、等待掃描」時的說話方式。
+- `identityLine`、template copy及LLM prompt有重複身份文字，修改時容易漂移。
+
+實作時建立 `config/agents/helper/PERSONA.md` 作為 helper 唯一的LLM角色與語氣來源；使用 `PERSONA` 而非 `PERSONAL`，因為檔案描述bot角色，不存個人資料。內容維持短而可測：
+
+1. **身份：** 小哈是家教會的數位協作助理，協助找資料、整理、提醒限制與執行經批准的動作；不假裝是人、牧者或正式發言人。
+2. **語氣：** 溫暖、穩定、簡潔、務實，以第一人稱「我」回覆；不裝熟、不過度稱呼姓名、不主動講道。
+3. **可信度：** 區分模型常識、正式資料、群組筆記與推測。沒有工具證據時不聲稱查過；來源矛盾時說明差異。
+4. **關係邊界：** 可以同理及提供一般建議，不診斷、不下屬靈權威判斷、不代表教會對個人的評價。
+5. **工具行為：** 自然選工具及澄清；檔案、寫入、掃描、發布等狀態由server projection表達。
+
+Profile config引用該檔，並保留供deterministic intro使用的短`identityLine`與非人格執行設定；loader限制在版本控制的 `config/agents` 目錄，啟動時驗證檔案存在且非空。測試鎖定intro、一般聊天與agent system prompt的身份一致。Main維持provider-free，不載入helper persona。工具權限、確認與資料安全仍由code/domain控制，不移進prompt檔。
+
+### `MEMORY.md` 與群組記憶設計
+
+`config/agents/helper/MEMORY.md` 是版本控制的**記憶政策**，不是持續追加的資料檔。Runtime memory仍存PostgreSQL並沿用scope、visibility、expiry、deletion與audit；容器或Git內不得累積使用者內容。
+
+| 層次                     | 是否自動 | Scope與期限                               | 用途                                                              |
+| ------------------------ | -------- | ----------------------------------------- | ----------------------------------------------------------------- |
+| Working conversation     | 是       | profile/source/requester；idle約10分鐘    | 只保存bot已受理的direct或被喚醒group回合，支援當下追問            |
+| Explicit factual memory  | 否       | private預設；group需明示；30天            | 使用者要求記住的集合、安排、偏好或補充資訊，preview/confirm後保存 |
+| Personal preference      | 否       | requester-private；可查看、修改、刪除     | 本人選擇的回覆語言、長短、常用查詢偏好；群組內不得向他人揭露      |
+| Aggregate product metric | 可       | profile/group aggregate；無原文、姓名、ID | 計算哪類能力常被使用，供產品改善；不作為agent答案或個人評價       |
+
+「某某人最常問什麼問題」不應預設自動保存。它是可歸因的行為側寫，群組成員通常不會預期bot建立或向他人揭露；也容易把正常求助誤解為個人特徵。替代設計：
+
+- 若目的是讓bot更適合本人，使用者在direct chat明確選擇私人偏好，例如「記住我通常要簡短版」。本人可列出、刪除或關閉；在群組中只影響回覆方式，不揭露偏好內容。
+- 若目的是改善產品，只記錄無法回推出個人的群組／profile層級function counts，例如「最近常查服事表」，不記誰問、原句、LINE ID或答案內容。
+- 若群組直接對bot說出穩定的共同作業事實，agent最多提出一個`save_memory`預覽；只有具寫入權限的人確認後才保存為group memory。第一版仍採explicit-only，取得實際噪音與價值證據後才啟用主動提案。
+
+禁止自動形成或推斷：健康／心理／財務／家庭／關係／信仰狀態、未成年人資訊、個人能力評價、誰最常求助、誰較少參與、群組成員排名，以及未直接對bot說話的群聊內容。`MEMORY.md`不能放寬這些code-level限制。
+
 ## 3. 現況與主要問題
 
 | 現況                                                        | 程式證據                                                                                                    | 改善含義                                                      |
@@ -278,6 +318,9 @@ Admin/system actions 另行整理：保留登入、註冊、help、診斷、invi
 | timeout／工具 unavailable／模型無效參數     | 有界退出，區分無資料與不可用，不聲稱已完成                   |
 | Wikipedia 歧義與後續追問                    | 能選正確頁面並提供來源，不取得任意網域                       |
 | main 下載週報／修改自己姓名                 | 維持 provider-free、self-service 與既有安全行為              |
+| intro、一般聊天、工具成功與工具失敗         | 呈現同一helper身份，不冒充牧者或宣稱未查證的教會立場         |
+| 群組成員反覆詢問同類問題                    | 不建立具名行為側寫；只允許匿名聚合或本人opt-in私人偏好       |
+| 群組直接提供長期共用資訊                    | 第一版不自動保存；明確保存時仍需授權、group preview與確認    |
 
 外部歌譜另納入下列端到端情境：
 
@@ -329,5 +372,6 @@ Admin/system actions 另行整理：保留登入、註冊、help、診斷、invi
 3. **從訊息產生服事表草稿。** Agent把自然語言或已掃描乾淨的文字內容轉成`save_schedule` preview，逐欄顯示差異後確認；沿用既有寫入工具，不建立第二條import path。
 4. **使用者可讀的來源與狀態說明。** 回答「你根據什麼？」或「檔案送掃了嗎？」時，從typed evidence與work status產生簡短說明。這主要是response projection，不需要新agent framework。
 5. **受控admin維護。** 把已有knowledge source sync、診斷或invite等動作逐項接成direct-admin-only tools；每項仍走action catalog、audit與必要確認。只有確定管理需求高頻時才做。
+6. **私人回覆偏好。** 在direct chat讓本人選擇是否保存語言、長短及常用查詢偏好；這是opt-in memory，不由群組行為推斷。
 
 暫不排入第一批：任意瀏覽器操作、shell、登入網站、購買、主動push提醒、subagent與通用MCP marketplace。它們會擴大權限、狀態或營運成本；等核心agent的實際使用資料證明需求後再評估。
