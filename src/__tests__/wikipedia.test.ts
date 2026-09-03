@@ -133,6 +133,45 @@ describe("Wikipedia lookup handler", () => {
     expect(JSON.stringify(result.agentResult)).not.toMatch(/馬丁|Martin Luther|wikipedia\.org/iu);
   });
 
+  it("returns bounded article evidence without a nested summary in SDK tool mode", async () => {
+    const summarize = vi.fn();
+    const handler = createWikipediaLookupHandler({
+      client: {
+        search: vi.fn().mockResolvedValue([
+          {
+            language: "zh",
+            title: "馬丁・路德",
+            snippet: "宗教改革者",
+            articleUrl: "https://zh.wikipedia.org/wiki/Martin_Luther"
+          }
+        ]),
+        getIntro: vi.fn().mockResolvedValue({
+          language: "zh",
+          title: "馬丁・路德",
+          extract: "馬丁・路德是宗教改革的重要人物。",
+          articleUrl: "https://zh.wikipedia.org/wiki/Martin_Luther"
+        })
+      },
+      summarize
+    });
+
+    const result = await handler({ query: "馬丁路德" }, { ...context, agentTool: true });
+
+    expect(summarize).not.toHaveBeenCalled();
+    expect(result.responseData).toEqual({
+      kind: "wikipedia_evidence",
+      fields: {},
+      records: [
+        {
+          sourceKind: "wikipedia",
+          title: "馬丁・路德",
+          excerpt: "馬丁・路德是宗教改革的重要人物。",
+          sourceUrl: "https://zh.wikipedia.org/wiki/Martin_Luther"
+        }
+      ]
+    });
+  });
+
   it("falls back to English Wikipedia only after Chinese has no results", async () => {
     const search = vi
       .fn()

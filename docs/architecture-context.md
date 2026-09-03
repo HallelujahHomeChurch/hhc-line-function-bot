@@ -11,38 +11,18 @@ It is intentionally not an open-ended chatbot. User messages are allowed to feel
 natural, but execution is limited to configured profiles, access policy, enabled
 functions, and admin gates.
 
-The service is lane-based and authority-first for controlled routing:
+The service uses separate routing paths per profile while keeping authority server-side:
 
-- Every enabled semantic lane uses DeepSeek as its sole provider. The public `main` profile declares `allowedProviders: []` and makes no semantic-provider request.
-- `deepseek` uses `DEEPSEEK_API_KEY`.
-- The repository has no workstation auxiliary-service runtime. External search
-  is an internal ACA app, while attachment malware scanning and signature
-  refresh belong to Asset API.
-- Provider runtimes may reason and generate text, but this bot owns authority:
-  profile policy, function toggles, tool execution, memory writes, and deny or
-  clarify flows remain server-side.
-- The line bot does not expose provider OAuth callback routes or store LLM
-  tokens in PostgreSQL. Remote provider API keys live in ACA secrets or local
-  `.env` only.
-- The helper controlled planner is enabled with three deterministic candidates
-  and a `0.65` minimum confidence. Provider output is advisory; deterministic
-  validation owns function/source policy, evidence, arguments, and execution.
-- The provider-free main planner returns local `providers_disabled`; deterministic validation may still execute its one explicit Weekly Paper read candidate.
-- Unresolved provider failure, low confidence, or ambiguous evidence fails
-  closed to clarification. One unambiguous explicit request may use the
-  definition-owned deterministic recovery path.
-- Function execution remains controlled by server-side policy and registered
-  handlers.
-- Agent memory is controlled and explicit: file results store metadata only,
-  text memory is saved only when requested, and short-lived links are regenerated.
-- User-provided external links can be saved as scoped resource memories only
-  when the user explicitly asks the bot to remember them.
-- Runtime context is selective: safety context plus same-requester recent turns,
-  not full group chat transcripts.
-- Production profile configuration, including persona, conversation, safety,
-  and format prompting, is versioned in `config/profiles.json` and loaded from
-  `PROFILE_CONFIG_PATH=/app/config/profiles.json`. ACA supplies only the
-  credential values named by that file; it must not supply profile JSON.
+- `helper` runs one LangChain JS `createAgent` path with `ChatDeepSeek`, LangGraph checkpointing, and official model/tool call limits. `deepseek` is its only semantic provider and reads `DEEPSEEK_API_KEY`.
+- `main` remains provider-free (`allowedProviders: []`) and uses the existing deterministic Weekly Paper and own-profile workflows without invoking the SDK model.
+- Profile policy, effective function projection, Account authorization, source scope, strict tool schemas, write confirmation, and domain handlers remain server-owned.
+- The helper model receives only tools valid for the current profile/source/requester. Authorization is checked again immediately before each handler call.
+- Existing pending confirmation, selection, slot-collection, attachment, and admin stages run before the helper SDK agent. The old candidate/planner/validator code remains only for `main` compatibility and those deterministic workflows; it is not a second helper semantic path.
+- Helper conversation threads use the official PostgreSQL checkpointer in production, are HMAC-scoped by profile/source/requester, serialize same-thread turns, and expire after the configured idle TTL. A group without requester identity gets no thread.
+- `config/agents/helper/PERSONA.md` and `MEMORY.md` are read-only prompt policy. Explicit memory remains in the database; group chat does not create automatic named profiles or ingest unaddressed messages.
+- Knowledge, visible memory, and Wikipedia return bounded evidence directly in SDK tool mode, avoiding nested model summarizers. Temporary sharing links and internal knowledge anchors stay outside checkpointed tool output.
+- External sheet-music search is consent-only. The agent may iteratively search and read bounded public HTTPS pages, while direct-file import continues through the existing confirmation, durable outbox, Asset malware scan, and clean-only publication path.
+- Provider OAuth callback routes and database token storage do not exist. Remote API keys live in ACA secrets or local `.env` only.
 
 ## Modular Monolith Boundaries
 
@@ -79,64 +59,20 @@ add new behavior to the compatibility catch-all `src/types.ts`.
 
 For normal LINE webhook messages, read the flow in this order:
 
-1. `src/index.ts` loads configuration and starts the runtime built by
-   `src/bootstrap/create-production-runtime.ts`.
-2. `src/transport/line/webhook-routes.ts` receives the Fastify webhook route;
-   `src/server.ts` is only a compatibility re-export.
-3. LINE signature and profile path select the `BotProfileConfig`.
-4. Rollback-only native `accountLink` events finalize before ordinary entrance work. Reserved signed completion text uses a separate byte-exact `HHC_ACCOUNT_LINK_V1:` parser, applies the bounded rate limiter, bypasses ordinary dedupe, and terminates locally on every valid or malformed reserved-family message.
-5. Ordinary events pass the structural source/message gate, webhook dedupe, and rate limit before optional dependency lookups. Shared help/login/whoami surfaces use one bounded Account request. Other turns authorize only bounded protected candidates or requester-scoped continuations; public Weekly Paper and unknown turns make no Account lookup.
-6. Access policy checks direct user, group, and registration; optional LINE display-name lookup follows admission.
-7. Group engagement decides whether the bot was actually addressed.
-8. A short requester-scoped group conversation window may allow the same user to
-   continue without repeating the wake word.
-9. Slash commands are adapted under `src/transport/line/*`; normal text turns
-   enter `src/application/turn/runtime.ts` through the compatibility export in
-   `src/agent/turn-runtime.ts`.
-10. Text continuation handlers declare a controlled workflow stage. The kernel
-    orders pending confirmation/cancellation and slot collection first, then
-    capability/entity selection and attachment workflow. Registration or object
-    iteration order is never authority. There is no pre-route resource-recall
-    bypass; replay and field follow-ups use the normal task-frame candidate,
-    planner, validator, and exact-reference path. A bare
-    confirmation stays with its current pending write.
-11. Intro, small-talk, shared help/account identity, and account-login system actions can respond without function execution.
-12. The runtime rechecks any protected active task, slot collection, preview, confirmation, capability-resolution candidate, or explicit function switch before its continuation handler. A protected capability-resolution session is not consumed until the Account decision allows the selection. In controlled mode, it then reads the independently expiring,
-    requester-scoped version-2 task frame and generates at most the configured number of
-    candidates from declarative function contracts.
-13. Candidate generation keeps the configured profile ceiling separate from the public effective projection, batches only protected candidates through Account authorization, and removes denied candidates before planner input. Explicit `permissionRequiredFunctions` require `allowedFunctions`; configured writes outside the public projection require `administrator: true` from the same response. `src/agent/planner.ts` then asks the `function_routing` provider for a bounded
-    semantic proposal when the profile enables providers. DeepSeek is the only semantic provider.
-14. `src/agent/plan-validator.ts` treats that proposal as untrusted: it
-    rechecks current-message evidence, task-frame authority, effective function
-    policy, side effects, source, confidence, schema, and required slots.
-15. Definition-driven validation separates `collect` from `execute`. Missing
-    slots create requester-scoped collection state regardless of whether the
-    model proposed execute, clarify, chat, low confidence, or no plan.
-    Ambiguity remains clarification. The model cannot invent a function, make a
-    write authoritative, or carry an undeclared value from old context.
-16. After a validated file-search plan, agent memory can resolve explicit aliases
-    before an expensive provider search.
-17. The turn runtime applies in-flight locks, calls only the registered handler,
-    records a sanitized result envelope, and transitions task-frame state only
-    from a successful structured read result.
-18. Slow turns can be stored as long-running jobs and returned through a
-    requester-scoped LINE postback.
-19. Successful file handlers can record resource metadata for later recall.
-20. Handler output is replied through the LINE client.
+1. `src/index.ts` loads configuration and starts `src/bootstrap/create-production-runtime.ts`.
+2. `src/transport/line/webhook-routes.ts` verifies the LINE signature, selects the canonical profile path, applies webhook dedupe/rate limits, access policy, registration, admin commands, and group engagement.
+3. Public slash commands, account linking, intro/help, and deterministic `main` behavior can finish before any semantic provider.
+4. Existing requester-scoped pending workflows run through `src/application/turn/runtime.ts` with routing disabled. Confirmation/cancellation, slot collection, selections, attachment intake, and natural-language admin actions therefore keep their established policy and storage contracts.
+5. A remaining `helper` turn enters `src/agent/sdk-turn-runtime.ts`. It derives an opaque profile/source/requester thread ID and builds the current effective profile with one bounded Account authorization result.
+6. `src/agent/sdk-tools.ts` exposes only enabled, registered, source-valid tools. Each call repeats authorization, injects trusted context, validates strict Zod arguments, and invokes the existing domain handler with `agentTool: true`.
+7. `src/agent/sdk-runtime.ts` composes the official `createAgent` loop, DeepSeek model, checkpointer, and six-call model/tool limits. The model may combine formal schedule, visible memory, knowledge, Wikipedia, and file evidence, but it never owns identity, permission, confirmation, or publication state.
+8. A write tool can only create a preview. The next LINE event is consumed by the existing continuation workflow, which rechecks live authorization and revision state before the handler commits.
+9. For consented external sheet-music discovery, SearXNG results become invocation-local opaque references. `src/clients/public-page.ts` can read only validated public HTTPS pages/direct files; any direct PDF/image candidate enters the existing import selection and Asset worker path.
+10. A typed domain result containing a write preview, Quick Replies, or resource link is authoritative. Otherwise the SDK model produces the final bounded response. The transport sends it through the LINE reply client and refreshes the requester-scoped group conversation window.
 
-Controlled routing is the only production text-routing path. Deprecated
-`controlledAgent.enabled` and `controlledAgent.shadow` configuration is rejected
-at startup so a deployment cannot silently return to the removed router.
+Production checkpoint state uses `PostgresSaver` plus `agent_sdk_threads`. A PostgreSQL advisory transaction lock serializes each thread across replicas; the configured 600-second idle TTL and five-minute cleanup delete the full checkpoint chain. Redis retains webhook idempotency, selections, confirmation, jobs, cache, and conversation-window responsibilities.
 
-The main entrance behavior lives in `src/transport/line/*`; tests for it live
-mostly in `src/__tests__/entrance.test.ts`.
-
-For provider diagnostics, an Account-authorized admin sends `/llm-use` or
-`/llm-status` in direct chat. Profile provider policy decides which providers
-may be used. Remote API providers such as `deepseek` are configured through
-secrets and profile allowlists.
-`/llm-status` includes the current profile's lane policy, so route debugging can
-distinguish cheap local classification from remote smart-talk generation.
+`main` never enters steps 5-9. Its provider-free compatibility runtime remains covered by entrance and Kernel regression tests.
 
 ## Action Types
 
@@ -176,53 +112,21 @@ When debugging "why did the bot ignore this?", check:
 
 ## Routing And Intro
 
-Routing is deliberately layered:
+Routing remains layered, with one semantic owner per profile:
 
-- `src/engagement.ts`: cheap group prefilter for addressed vs third-person
-  mentions, intro, and small talk.
-- `src/intro.ts`: deterministic identity/capability replies and quick replies.
-- `src/application/access/effective-access.ts`: application-owned resolution of
-  current profile/source/requester authority after transport entrance checks.
-- `src/application/capabilities/*`: pure projection and deterministic
-  presentation of only the resolved effective reads and writes. Registration,
-  `/help`, capability introduction, and their Quick Replies consume this one
-  model; the projector never grants access.
-- `src/application/turn/result-guidance.ts`: post-decision Traditional Chinese
-  guidance for controlled outcomes without changing envelopes, reply data, or
-  task authority.
-- `src/small-talk.ts`: controlled short chat, optionally generated by the LLM
-  with strict sanitization. Its persona, conversation, safety, and format
-  rules are profile-owned configuration; code owns only operational limits and
-  provider invocation.
-- `src/application/turn/runtime.ts` and `src/application/turn/stages/*`: shared
-  text-turn coordinator and focused workflow stages for pending workflows,
-  admin natural-language actions, controlled routing, resolver selection, slot
-  clarification, in-flight locks, function execution, active-task transitions,
-  and sanitized traces.
-- `src/agent/capability-candidates.ts`: deterministic, bounded candidates from
-  enabled function contracts, active-task evidence, and approved read-only
-  evidence providers.
-- `src/agent/planner.ts`: bounded semantic proposal through the profile's single
-  configured DeepSeek `function_routing` provider. Production semantic routing
-  does not invoke a fallback model.
-- `src/agent/plan-validator.ts`: deterministic authority boundary that grounds
-  arguments/references and rejects unsupported plans.
-- `src/agent/active-task.ts` and `src/agent/active-task-transition.ts`:
-  requester-scoped active-task state derived only from successful structured
-  results.
-- `src/agent/slot-clarification.ts`: required-slot handling driven by function
-  definition metadata.
-- `src/agent/resolution.ts` and `src/functions/pending-resolution.ts`:
-  reusable multi-domain resolution plus requester/source-scoped continuation of
-  the original grounded arguments.
-- `src/clients/deepseek.ts`: DeepSeek chat/text provider.
-- `src/function-arguments.ts` and `src/functions/argument-normalization.ts`:
-  slot validation and cleanup.
+- `src/engagement.ts`, `src/intro.ts`, and `src/application/access/effective-access.ts` handle group engagement, deterministic identity/help, and the effective capability projection before the model.
+- `src/application/turn/runtime.ts` remains the deterministic continuation engine. `src/agent/sdk-turn-runtime.ts` calls it first with `allowRouting: false`, then invokes the SDK only if no pending workflow consumed the helper turn.
+- `src/agent/sdk-runtime.ts` is the thin official agent composition. It contains no hand-written tool loop or semantic graph.
+- `src/agent/sdk-tools.ts` adapts existing handlers into a small tool set. Tool construction and execution both enforce profile, source, requester, and Account authorization.
+- `src/agent/sdk-state.ts` owns only scoped thread identity, TTL, cleanup, and same-thread serialization around the official checkpointer. It does not serialize messages itself.
+- `src/clients/public-page.ts` is the bounded SSRF-safe reader used only after sheet-music search consent.
+- `src/agent/capability-candidates.ts`, `planner.ts`, `controlled-agent-router.ts`, and `plan-validator.ts` are legacy compatibility code for provider-free `main`, deterministic diagnostics/evals, and existing workflows. Helper semantic turns do not call them.
 
-If a behavior is "the bot answered when it should not", start with
-`engagement.ts` and entrance tests. If a behavior is "the wrong function ran",
-start with `agent/capability-candidates.ts`, `agent/controlled-agent-router.ts`,
-`agent/plan-validator.ts`, function definitions, and agent eval cases.
+The helper tool surface intentionally groups related reads: `search_information` covers dynamic knowledge and visible explicit memory; `search_files` covers presentations, sheet music, and general catalog resources. Formal schedules and Wikipedia keep dedicated tools. Writes keep dedicated preview-only tools because their schemas and policy differ.
+
+Intro/help stays deterministic so it cannot expose unavailable tools or implementation details. General helper chat, follow-up reasoning, and cross-source decisions use the same persona and memory policy as tool-driven answers. `main` loads neither helper policy file nor a semantic model path.
+
+If helper chooses a wrong tool, start with `src/agent/sdk-tools.ts`, the function definition/schema, and `src/__tests__/sdk-tools.test.ts`. If an existing preview/selection does not continue, start with `src/application/turn/runtime.ts` and the owning function/session handler. If `main` regresses, inspect the legacy candidate/planner/validator path and entrance tests.
 
 ## Function Cookbook
 
@@ -231,13 +135,12 @@ To add or change a user function:
 1. Add the name to `FUNCTION_NAMES`.
 2. Add a capability slice in `src/capabilities/<name>/*` containing its
    definition, eval cases, narrow ports, handler, and module factory.
-3. For every enabled read function, declare `agentCapability`: current-message
-   intents/hints, operations, entity types, refinable fields, ambiguity policy,
-   and field-local active-evidence rules. Add a bounded read-only evidence
-   provider only when metadata alone cannot establish a candidate.
+3. For every helper function, add it to the smallest appropriate SDK tool and
+   expose only current effective sub-operations. Keep `agentCapability` metadata
+   while legacy `main` or shared result-envelope code still consumes it.
 4. Add argument schema and normalization. Add a source-technology adapter only
    when integrating a genuinely new storage/API format; keep that adapter behind
-   the existing product capability and out of the generic planner/turn runtime.
+   the existing product capability and out of the SDK wrapper/turn runtime.
 5. Aggregate its metadata in `src/functions/definitions.ts` and
    `src/functions/modules.ts`; do not put capability behavior there.
 6. Construct the module explicitly in
@@ -248,194 +151,57 @@ To add or change a user function:
    evidence text, or temporary links in active-task state.
 8. Add clarification state if required slots can be missing.
 9. Add postback or numeric selection if multiple results are possible.
-10. Add tests for candidate generation, validator rejection, enabled, disabled,
-    unclear, missing-slot, typo/fuzzy, deny, result-envelope lifecycle,
-    requester isolation, and multi-result behavior.
+10. Add tests for SDK tool visibility/schema/authorization/evidence plus enabled,
+    disabled, missing-slot, typo/fuzzy, deny, requester isolation, and
+    multi-result behavior. Preserve legacy router cases for `main` compatibility.
 11. Update README and AGENTS if the user/admin surface changes.
 
 High-value tests:
 
 - entrance/access behavior: `src/__tests__/entrance.test.ts`
-- controlled routing behavior: `src/__tests__/controlled-agent-router.test.ts`
-- deterministic planner and validator evals: `src/__tests__/agent-planner-eval.test.ts`
+- helper SDK behavior: `src/__tests__/sdk-agent.test.ts`, `sdk-tools.test.ts`,
+  `sdk-state.test.ts`, and `sdk-turn-runtime.test.ts`
+- legacy deterministic planner/validator behavior: `src/__tests__/controlled-agent-router.test.ts`
 - function behavior: function-specific test files
 
-Run `pnpm eval:agent` after changing function routing.
+Run `pnpm eval:sdk-agent` after changing helper routing. Run `pnpm eval:agent`
+when the legacy `main` compatibility path or shared contracts change.
 
 ## Agent Runtime Cookbook
 
-The controlled agent runtime uses kernel contracts in `src/agent/*`, focused
-stages in `src/application/turn/*`, and production wiring in
-`src/bootstrap/create-production-runtime.ts`.
+Use the SDK agent for helper behavior that needs conversation, cross-source reasoning, or multiple tool calls. Keep business work in the existing domain handlers:
 
-The generic turn contract is:
+1. Project current source/requester authority and build only effective tools.
+2. Let `createAgent` choose and sequence those tools.
+3. Reauthorize each tool call, validate strict arguments, and invoke the registered handler.
+4. Return bounded typed evidence to the model; retain raw authoritative results separately for LINE previews, Quick Replies, and resource links.
+5. Let existing continuation stages own all later confirmation, selection, attachment, and commit events.
 
-1. Generate a bounded candidate set only from effective enabled functions and
-   each definition's `agentCapability` metadata.
-2. Let DeepSeek propose semantics over that set.
-   The planner receives bounded contracts and safe task-frame summaries, not
-   arbitrary source content or execution authority.
-3. Deterministically validate capability choice, source, side effects,
-   confidence, current-message evidence, task-frame evidence, arguments,
-   references, and required slots.
-4. Enter `collect` for missing slots, execute one registered handler only when
-   complete, or return a controlled chat/clarify/deny outcome.
-5. Consume the handler's structured result envelope and update a task frame
-   only for a successful result with operations allowed by both the function
-   contract and result.
+Do not add candidate ranking, phrase-specific routing, or a hand-written graph to the SDK wrapper. A new storage technology belongs behind an existing handler. A genuinely new product action gets one definition, handler, strict tool schema, authorization tests, and an SDK acceptance case.
 
-Use it for cross-function agent behavior that should not belong to one function
-handler:
+`search_information` deliberately queries both visible explicit memory and eligible dynamic knowledge when available. In `agentTool` mode those handlers skip their former nested answer generator and return capped excerpts with a source kind. Formal schedule results remain distinct, so the model must label a visible note as unconfirmed rather than present it as the official roster. Wikipedia uses the same pattern: the handler fetches a bounded introduction and the SDK agent writes the answer once.
 
-- text-turn orchestration after access and engagement checks
-- definition-driven missing-slot clarification
-- in-flight duplicate protection for long-running lookups
-- requester-scoped conversation windows for natural follow-up messages
-  (default 60 seconds; each handled reply refreshes the requester window)
-- structured task-frame state containing handler-confirmed canonical anchors,
-  declared entities, and safe references; it has an independent absolute expiry, does not extend
-  with ordinary conversation turns, and cannot be inherited by another group requester
-- bounded runtime context building and compression
-- capability-owned postbacks and long-running job result retrieval, with current Account reauthorization before handler execution or result delivery
-- task-frame file replay such as "再給我一次", routed through the same
-  candidate/planner/validator path with exact safe references
-- scope-local aliases such as "以後 X 就用這份"
-- explicit external resource links such as "幫我記住這份投影片 https://..."
-- explicit text memories such as "幫我記住..."
-- profile-shared structured text-only schedule memories such as morning-prayer
-  family schedules and street-sign service schedules. These use shared schedule
-  tables with a `schedule_type` discriminator, one-year retention, and one
-  canonical record per schedule type and month.
-- capability-gated memory commands such as `/memories`, `/forget-memory <id>`, and
-  `/memory-status`
-- sanitized turn diagnostics through `/last-agent-turns`, correlated with `/last-routes` and `/last-errors` by opaque support ID
-- response-only retrieval diagnostics for execution mode, task/resource age, source revision marker, freshness, and keyed query/reference equality fingerprints
-- privacy-safe product events for registration, clarification, result class, write completion, latency, and retry
-- an atomic, scope-bound `first_success` marker and event after the first
-  successful controlled function; it stores no prompt, result, LINE ID, or
-  content
+Dynamic knowledge still uses the existing `knowledge_*` read model, profile/source eligibility, lexical plus pgvector retrieval, atomic snapshot publication, and stale/unavailable semantics. The SDK sees answer evidence only; it does not receive source IDs, document IDs, section anchors, routing metadata, or provider payloads. Arbitrary topics continue to reuse `query_knowledge` instead of gaining domain-specific tools.
 
-Result envelopes use the shared statuses `success`, `not_found`, `ambiguous`,
-and `unavailable`. Entity types must be declared by the capability contract.
-Anchors and references must be canonical, bounded, and safe to persist. A
-missing, failed, not-found, or unavailable envelope cannot manufacture a new
-task frame. Task frames have a 600-second absolute TTL separate from the conversation
-window and are keyed by profile, LINE source, and requester. Successful writes
-may nominate a declared read capability through a contract handoff, but the
-target must still be effective for the requester and source.
+Thread/checkpoint scope is `(profile, source type/id, requester user id)`. The value is HMAC-derived and contains no LINE identifier. A group without requester identity does not run the SDK. Production state uses `PostgresSaver`; local state uses `MemorySaver`. `agent_sdk_threads` stores only thread ID and expiry timestamps. Same-thread `run` holds a PostgreSQL advisory transaction lock; expiry deletes the metadata row and calls the official checkpointer's `deleteThread`.
 
-Presentation is downstream of those decisions. The result-guidance policy
-distinguishes permission denied, missing input, genuine ambiguity, not found,
-unavailable, stale-but-allowed, focused success, and safe error. It preserves
-the handler envelope and response data, permits at most one bounded next action
-for a non-success result, never retries automatically, and offers a full-result
-action only when the capability contract declares `view_full`.
+The helper system prompt concatenates the checked-in persona, checked-in memory policy, current time, source-separation rules, untrusted-page rule, and preview-only write rule. `MEMORY.md` is policy, not writable memory. Runtime checkpoints have the short agent TTL; explicit text memory retains its existing 30-day lifecycle and visibility rules.
 
-Effective capability discovery follows the same downstream rule. The
-application access service resolves profile defaults, Account administrator
-status, and source policy. Account permission filtering then intersects the
-full configured ceiling while preserving the distinction between explicit
-`allowedFunctions` grants and Account-administrator-only configured writes. The pure capability
-projector then filters that already-effective set by function metadata and
-source, groups reads and writes, and selects at most three deterministic
-onboarding reads in schedule, sheet-music, slide, then canonical order.
-Registration recomputes authority after the principal commit. `/help` and
-natural-language capability introduction render the same complete projection;
-the help command section additionally observes source type, registration, and
-effective memory capabilities. Identity-only introduction remains short. A write is never presented without
-current effective write authority.
+Writes stay minimal and server-bound. `save_schedule`, `save_memory`, and `save_resource` tool schemas omit `confirm` and `cancel`, so they can only create an existing preview session. Confirmation arrives in another LINE event and reuses the established requester/source scope, Account check, revision guard, audit, idempotency, and handler. A bare confirmation is consumed before the SDK sees it.
 
-Administrator group summaries reuse the same configured profile read defaults;
-legacy grant/role rows do not affect the summary.
-They show display name, active state, effective function display names, and the
-latest successful function/timestamp only. Catalog and knowledge source views
-show owner and freshness responsibility only on administrator-gated surfaces;
-ordinary help and function results do not receive those fields.
+External sheet-music tools exist only after an existing consent session is atomically consumed. Search results are mapped to invocation-local `web-N` references. The reader accepts only those references, validates public HTTPS/DNS/redirects, caps content, strips active HTML, and marks text untrusted. Direct PDF/JPEG/PNG candidates are copied into the existing external-import selection; the attachment worker remains the sole download/scan/publish path.
 
-Dynamic knowledge uses a separate `knowledge_*` read model rather than catalog
-items or schedule rows. Admin direct-chat actions register Notion roots, the sync
-service recursively reads blocks and prepares the complete chunk/vector set before publication, and
-`query_knowledge` combines lexical and pgvector retrieval before a grounded LLM
-answer. The existing Bible Azure AI Services `text-embedding-3-small`
-deployment produces 1536-dimensional vectors;
-PostgreSQL stores only vectors and version metadata. Bounded routing summaries come only
-from the promoted last-known-good snapshot: staged administrator fields plus
-document titles and headings from the latest successful sync. Failed syncs
-preserve the previous live content, core/lifecycle fields, and routing snapshot, and never-successfully-synced rows remain visible
-to admins but ineligible for routing, anchors, and retrieval. Read functions can
-declare a retrieval-evidence provider and capability-specific stop words; the
-kernel projects a bounded query without wake words and request wrappers before
-the provider probe, while preserving identity/date/topic conditions. The
-knowledge provider makes one read-only, profile-scoped probe over at most 20
-promoted sources and returns only bounded candidate evidence. Task-frame entities, routing metadata, knowledge capability
-hints, and retrieval evidence share the engagement classifier and centralized
-write-intent guard whenever the current message has no explicit knowledge intent.
-Disabled functions fail closed. Retrieval provider failure is reported as
-temporarily unavailable rather than conflated with no-match or unclear intent.
-The controlled planner never receives source ids or
-names, titles, chunks, URLs, or answer content. Successful results persist
-opaque source/document/hashed-section ids with generic labels and ordinals;
-follow-ups fall back section to document to source, never profile-wide, unless the
-same capped metadata provider proves one unique source switch. Initial body-only
-queries search only that capped eligible source set. Memory keeps one maximum per
-source in one scan and PostgreSQL uses one windowed query; source maxima use the
-same ordinal boost as final retrieval and are compared before the eight-chunk answer
-context is selected. Unique top-source evidence is
-answered, while a tied cross-source top score creates an existing generic,
-requester-scoped selection session that maps numeric/postback choices to opaque
-source ids. PostgreSQL publishes source documents, tombstones, chunks, embeddings,
-promoted metadata, lifecycle/core fields, sync health, and a rotated staging
-revision in one transaction; the memory store exposes the same one-operation
-snapshot contract. Failure health updates require the invocation's expected
-revision, so stale admin or scheduled syncs cannot overwrite a newer ready snapshot.
-The staging initialization marker runs the legacy live-to-staged copy once and
-preserves a later staged permanent (`NULL`) expiry across restarts.
+Keep diagnostics separate from checkpoints. Operational traces remain bounded metadata and must never serialize SDK messages, system prompts, evidence, URLs, people, filenames, or provider payloads. Checkpoints are business state with explicit TTL and deletion behavior, not observability records.
 
-Schedule sources follow the same adapter boundary. The Notion roster adapter
-and structured text schedule store normalize their input into one schedule-item
-model before query refinement, preserving distinct role assignments instead of
-asking the planner to understand source formatting. Administrator-added
-knowledge is different: every topic or content domain—including a trip, SOP,
-policy, ministry material, or future church knowledge—reuses the existing
-dynamic-source metadata, `query_knowledge`, and its structured result. A new
-storage/API technology may require a source adapter behind that same capability;
-it does not justify a per-domain function. Add a new capability contract only
-for genuinely separate product behavior with a different interaction or data
-contract.
+Verification ownership:
 
-Agent traces are allowlist-sanitized by construction. They contain phase,
-bounded capability names/count, provider/disposition/confidence bucket,
-validator reason, result status/anchor count/entity types, and task lifecycle
-only. Raw messages, people, prompts, filenames, URLs, source titles/IDs,
-retrieval evidence, tokens, and sharing links are never used as a diagnostic
-fallback; fields that cannot be safely normalized are omitted. Trace writes are
-best-effort and never acquire routing authority. Production uses a bounded Redis
-list when `REDIS_URL` is present, so replica changes and restarts do not erase the
-latest sanitized decision traces.
-
-Do not use it for unrestricted chat logging. Normal group chatter must not be
-saved. Temporary Graph sharing links must not be saved; store drive/item ids and
-regenerate links on demand. External resource memories store user-provided URLs
-and do not verify continued access. LINE attachment download/storage is allowed
-only through the controlled `save_resource` workflow below.
-
-Successful PPT and sheet-music lookups are the one controlled read-function
-metadata exception: they may store short-lived, scope-local resource metadata for
-recall and aliasing. This does not authorize user-authored saved content. Any
-explicit "remember/save/store" behavior, including external links, text memory,
-or structured schedule memory, remains a write action and must pass the normal
-function permission rules. Schedule replacement and entry mutation always use a
-preview-and-confirm flow.
-
-When adding resource memory for a function:
-
-1. Return `agentResource` from the successful function result.
-2. Include only stable storage metadata, not generated sharing links.
-3. Use `graph` storage for files that can regenerate links, or
-   `external_link` storage for user-provided URLs.
-4. Add tests that cover direct handler execution and entrance-level recall.
-5. Keep requester-scoped recall for group conversations unless the user
-   explicitly asks for a shared alias.
+- SDK loop and official middleware: `src/__tests__/sdk-agent.test.ts`
+- tool visibility, schemas, authorization, and projections: `src/__tests__/sdk-tools.test.ts`
+- scope, serialization, and expiry: `src/__tests__/sdk-state.test.ts`
+- helper/main dispatch and pending-flow precedence: `src/__tests__/sdk-turn-runtime.test.ts`
+- public page trust boundary: `src/__tests__/public-page.test.ts`
+- real PostgreSQL checkpoint restart/cleanup: `pnpm eval:kernel:integration`
+- live DeepSeek tool calling: `pnpm eval:sdk-agent --live`
 
 ## Admin Cookbook
 
@@ -458,8 +224,9 @@ multiple replicas or restarts matter.
 
 - `src/state/*`: pending clarifications and selection sessions.
 - `src/cache/*`: shared short-lived state caches. Resource query results are not stored in an unversioned cache; any future query cache must bind profile, source, capability contract, normalized query/options, and source publication revision.
-- `src/agent/*`: controlled recent resources, aliases, explicit text memories,
-  and Postgres/in-memory memory stores.
+- `src/agent/sdk-state.ts`: helper checkpointer scope, same-thread serialization,
+  consent TTL, and checkpoint cleanup. Other `src/agent/*` files retain explicit
+  text/resource memory and the `main` compatibility runtime.
 - `src/in-flight/*`: duplicate in-flight function locks.
 - `src/idempotency/*`: profile-scoped LINE `webhookEventId` deduplication.
 - `src/agent/jobs.ts`: requester-scoped long-running job results.
@@ -479,34 +246,28 @@ In-flight locks currently protect long-running function requests by
 `profileName + sourceKey + action + queryHash`. With Redis configured, this is
 cross-instance using Redis `NX` and `PX`. Without Redis, it is process-local.
 
-Current explicit query evidence outranks active tasks and remembered metadata.
-Only a validated `active_task_refinement` receives a task reference. Legacy
-resource aliases are cleared by migration and are never consulted before
-execution. One-shot selections use an atomic take, and resource-memory rows are
-deduplicated by storage identity with verification, revision, and tombstone
-metadata. Redis makes selection and webhook-event consumption cross-replica;
-the memory fallback is single-process only.
+Helper checkpoint context never grants authority. Tool construction and every
+call use the current effective profile, so permission revocation or source
+disablement takes effect before another handler execution. One-shot selections
+use an atomic take, and resource-memory rows are deduplicated by storage
+identity with verification, revision, and tombstone metadata. Redis makes
+selection and webhook-event consumption cross-replica; PostgreSQL separately
+persists and serializes SDK checkpoints.
 
 Long-running job results are separate from in-flight locks. They are keyed by a
 random job id but can only be read from the same profile, LINE source, and
 requester user id. With Redis configured, job results survive app restarts until
 their TTL expires.
 
-General public web lookup is intentionally not supported. The external
-knowledge function is `query_wikipedia`, which uses the Wikipedia API with a
-fixed language fallback and never fetches arbitrary user-supplied URLs. Sheet
-music has a separate not-found fallback: when local catalog/OneDrive lookup
-returns nothing, the bot may ask the requester for consent and then call the
-configured internal SearXNG endpoint. That fallback only uses returned
-title/snippet/url fields, passes them to the `web_summarization` provider for
-ranking/summary, and never downloads or saves results automatically. A
-requester with effective `save_resource` permission may explicitly select and
-confirm one direct HTTPS PDF/JPEG/PNG result. Confirmation persists and queues
-only an opaque work ID. Inside the finite attachment worker, each request and redirect
-is DNS-resolved, checked for private/reserved addresses, and pinned to the
-validated address; HTML, credentials, cookies, and page crawling are rejected.
-Clean confirmed bytes enter the same shared binary publisher as LINE
-attachments.
+General public web lookup is intentionally not supported. `query_wikipedia`
+uses the fixed Wikipedia API. Sheet music has one consented exception: after a
+local miss, the helper SDK may iteratively call internal SearXNG and read the
+opaque public HTTPS references it returned. The page reader permits bounded
+HTML/text and direct PDF/JPEG/PNG detection, revalidates/pins public DNS and
+redirects, strips active markup, and exposes no arbitrary URL parameter to the
+model. Reading never saves a result. An authorized requester may select and
+confirm a detected direct file; the finite attachment worker then performs the
+actual download and the existing Asset scan/publication lifecycle.
 
 Catalog-backed lookups are separated from user-facing function names. The
 canonical functions are `find_ppt_slides`, `find_sheet_music`, and
@@ -516,11 +277,10 @@ folders such as weekly report audio should be added as a `catalog_sources` row,
 an item kind value, resolver aliases, and tests; they must not add another
 OneDrive crawl/search implementation.
 
-The controlled candidate and validation contracts handle explicit domains such
-as service schedules, slides, sheet music, church resources, weekly report
-audio, and Wikipedia. If a user names a capability but omits the required
-topic/title/date, definition-driven slot clarification asks instead of letting
-the planner invent a query.
+SDK tool schemas handle service schedules, slides, sheet music, church
+resources, weekly report audio, and Wikipedia. Existing slot sessions still ask
+for required topic/title/date values when a preview or continuation owns the
+turn; strict schemas reject model-invented extra fields.
 
 Service schedules are intentionally separated from file catalog items. Notion
 media-team schedule sources are registered through the same source config, but
@@ -529,9 +289,9 @@ the scheduled sync job writes them into `schedule_items` as read-model rows with
 live Notion. LINE-created schedules remain write-controlled through the schedule
 memory flow and must not write back to Notion-origin rows.
 
-`query_schedule` is also the first adopter of the reusable field-interpretation
-and domain-resolution contracts. Router-provided arguments remain useful LLM
-evidence, while the field interpreter deterministically fills recognizable
+`query_schedule` uses the reusable field-interpretation and domain-resolution
+contracts. SDK-provided arguments remain advisory input, while the handler's
+field interpreter deterministically fills recognizable
 dates, months, meetings, roles, and participants without selecting storage.
 The profile registry exposes product concepts and bindings rather than storage
 implementation names. One grounded match selects a domain; multiple matches
@@ -612,7 +372,10 @@ Function dependencies are intentionally behind ports/clients:
 - Asset API attachment client and finite worker: `src/clients/asset-api.ts` and
   `src/tools/run-attachment-worker.ts`
 - SearXNG web search: `src/clients/searxng.ts`
-- DeepSeek provider: `src/clients/deepseek.ts`
+- consented public page reader: `src/clients/public-page.ts`
+- helper DeepSeek SDK model: `@langchain/deepseek` in
+  `src/bootstrap/create-production-runtime.ts`
+- legacy/admin DeepSeek provider: `src/clients/deepseek.ts`
 - Azure OpenAI embeddings: `src/clients/azure-openai-embedding.ts`
 - Microsoft Graph: `src/clients/graph.ts`
 - Notion: `src/clients/notion.ts`
@@ -633,9 +396,9 @@ Use this map for common issues:
   `groupRequireWakeWord`, `src/engagement.ts`.
 - Bot responds when merely mentioned in third person: `src/engagement.ts` and
   entrance tests for `third_person`.
-- Wrong function route: `src/agent/capability-candidates.ts`,
-  `src/agent/controlled-agent-router.ts`, `src/agent/plan-validator.ts`,
-  `src/functions/definitions.ts`, and agent eval cases.
+- Wrong helper function or missing cross-source evidence: `src/agent/sdk-tools.ts`,
+  the owning function definition/handler, and SDK tests. For `main`, inspect the
+  legacy candidate/planner/validator path.
 - Missing query or wrong slot: `src/function-arguments.ts`,
   `src/functions/argument-normalization.ts`, `src/agent/slot-clarification.ts`,
   and clarification tests.
@@ -651,8 +414,9 @@ Use this map for common issues:
   `src/transport/line/webhook-routes.ts`.
 - Wikipedia lookup has no result: `src/wikipedia/client.ts` and
   `src/wikipedia/lookup.ts`.
-- Follow-up recall or aliases fail: `src/agent/agent-runtime.ts`,
-  `src/agent/*memory-store.ts`, and `src/__tests__/agent-memory.test.ts`.
+- Helper follow-up state fails: `src/agent/sdk-state.ts`, PostgreSQL checkpoint
+  tables, and `src/__tests__/sdk-state.test.ts`. Explicit memory failures remain
+  in `src/agent/*memory-store.ts` and memory tests.
 - Admin command denied: account-api LINE binding, Account `admin` role,
   `adminDirectOnly`, admin command parser, action policy tests.
 - DeepSeek provider does not work: verify `DEEPSEEK_API_KEY`, profile provider
@@ -675,12 +439,16 @@ pnpm test
 pnpm config:validate
 pnpm eval:admin
 pnpm eval:agent
+pnpm eval:sdk-agent
 pnpm eval:retrieval-product
+pnpm eval:kernel
+pnpm eval:kernel:integration
 pnpm build
 ```
 
-Run `pnpm eval:agent:live` manually when DeepSeek credentials are available. It
-is an acceptance check, not a CI dependency.
+Run `pnpm eval:sdk-agent --live` manually when DeepSeek credentials are
+available. It is a bounded helper acceptance check, not a CI dependency. The
+legacy `eval:agent:live` remains only for the compatibility router.
 
 Run `pnpm eval:kernel:local-live` manually for the disposable signed-webhook
 Kernel gate. It composes only synthetic local app/PostgreSQL/Redis state, uses
@@ -708,7 +476,10 @@ pipeline and YAML definition have been removed.
 
 ## R5.0 Release Assurance
 
-R4.1 production verification is complete. R5.0 production acceptance is complete. The project is now in Stable Maintenance; no R5.1/R5.2, SaaS, or local-model follow-up is planned.
+R4.1 production verification and R5.0 production acceptance describe the prior
+controlled-agent release. The authorized helper SDK redesign is a new change
+and requires its own PR CI, release, and production acceptance before those
+claims apply to it. No SaaS or local-model expansion is implied.
 
 The deploy transaction snapshots a known-good revision and image, deploys the
 target, and writes `artifacts/release-assurance/report.json`. Its release probe

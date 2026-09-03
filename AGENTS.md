@@ -3,10 +3,10 @@
 ## Startup Context
 
 - This repo is `hhc-line-function-bot`, a TypeScript/Fastify LINE webhook service.
-- The bot is a restricted church helper, not an open-ended chat bot.
-- It should feel smart inside explicitly enabled functions, but deny or clarify requests outside those functions.
+- `helper` is a conversational church agent whose actions are limited to explicitly enabled, authorized tools.
+- `main` remains a restricted provider-free bot for deterministic public and self-service functions.
 - Runtime behavior is controlled by bot profiles, function toggles, access control, and state stores.
-- Every semantic lane uses DeepSeek as its sole provider. Remote DeepSeek access uses `DEEPSEEK_API_KEY`.
+- Helper semantic conversation/tool calling uses LangChain JS `createAgent`, LangGraph, and DeepSeek only. Remote DeepSeek access uses `DEEPSEEK_API_KEY`.
 - Group follow-up context is requester-scoped and short-lived; never feed raw whole-group chat into the model.
 - Slow tasks may be stored as long-running jobs and returned through a LINE postback button; do not use LINE push quota for those results.
 - Public `/healthz` is minimal liveness. Public `/readyz` checks only Postgres and Redis.
@@ -18,7 +18,7 @@ Read these first when starting work:
 1. `README.md` for product behavior, configuration, commands, and deployment context.
 2. `docs/architecture-context.md` for the request flow, subsystem map, and debug entry points.
 3. `src/server.ts` for LINE entrance behavior, admin commands, access checks, and postback routing.
-4. `src/agent/capability-candidates.ts`, `src/agent/controlled-agent-router.ts`, `src/agent/plan-validator.ts`, and `src/function-arguments.ts` for controlled routing and argument handling.
+4. `src/agent/sdk-runtime.ts`, `src/agent/sdk-turn-runtime.ts`, `src/agent/sdk-tools.ts`, `src/agent/sdk-state.ts`, and `src/function-arguments.ts` for helper routing, tools, checkpoint scope, and arguments.
 5. `src/functions/definitions.ts`, `src/functions/registry.ts`, and `src/functions/modules.ts` for function registration.
 6. `src/access/*` for managed user/group/admin registration and PostgreSQL/in-memory stores.
 7. `src/state/*`, `src/cache/*`, and `src/redis.ts` for session/cache persistence.
@@ -30,14 +30,14 @@ Read these first when starting work:
 - Profile names must be lowercase URL-safe names, and `webhookPath` must equal `/api/line/webhook/{profileName}`. Do not reintroduce `/line/{profile}/webhook`.
 - Each profile has its own LINE credential references, access policy, wake-word behavior, enabled functions, and bootstrap `adminUserId`.
 - The intended split is:
-  - `helper`: managed direct users, managed groups, registration enabled.
+  - `helper`: managed direct users/groups, registration enabled, DeepSeek SDK agent.
   - `main`: public direct users, groups blocked, registration disabled, provider-free, with public Weekly Paper download and Account-authorized own-profile updates.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
 - `adminUserId` is the single bootstrap superadmin. Legacy `adminUserIds`, `allowedUserIds`, and `allowedGroupIds` should not be reintroduced.
 - Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv`, `channelAccessTokenEnv`, and `adminUserIdEnv`; do not put real LINE credentials or bootstrap user IDs in the file.
 - The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`; use API keys from ACA/local secrets for remote providers.
 - Remote API providers such as `deepseek` are profile-scoped; `main` intentionally keeps an empty provider allowlist.
-- Small-talk prompt behavior is profile config, not code personality. Production LLM profiles require `smallTalk.prompting.personaPrompt`, `conversationRulesPrompt`, `safetyRulesPrompt`, and `formatRulesPrompt`; do not add helper persona/safety fallback prompts in code. Keep house-church quote/golden-sentence behavior out of small talk; it should become a separate function if needed.
+- Helper persona and memory rules come from `config/agents/helper/PERSONA.md` and `MEMORY.md`, loaded through restricted profile-relative paths. Treat them as read-only prompt policy and never append runtime content. Keep house-church quote/golden-sentence behavior out of the persona; it should become a separate function if needed.
 
 ## Function Surface
 
@@ -66,14 +66,14 @@ When adding or changing a function:
 - Include capability metadata: `displayName`, `shortDescription`, `examples`, `requires`, `scope`, `sideEffectLevel`, `allowedSources`, `requiredSlots`, `resourcePolicy`, `memoryPolicy`, and `clarificationPrompt`.
 - Every enabled read function must declare an `agentCapability` contract with bounded intents/hints, allowed operations, entity types, refinable fields, ambiguity policy, and field-local active-evidence rules. Retrieval-evidence providers must be declarative, read-only, bounded, and content-free.
 - Read handlers must return a structured `agentResult` envelope for success, not-found, ambiguity, and unavailable outcomes. Successful envelopes may expose only declared safe entity types, canonical anchors, opaque references, supported operations, clarification metadata, and reply data.
-- Arbitrary administrator-added knowledge domains—including trips, SOPs, policies, and ministry material—must reuse dynamic-source metadata plus `query_knowledge`; do not add per-domain adapters or capabilities. Add a source adapter only for a genuinely new storage/API technology behind the existing product capability, and add a new capability contract only for genuinely separate product behavior. Never add function-specific branches to the generic controlled router, planner, validator, or top-level active-task flow.
+- Arbitrary administrator-added knowledge domains—including trips, SOPs, policies, and ministry material—must reuse dynamic-source metadata plus `query_knowledge`; do not add per-domain adapters or capabilities. Add a source adapter only for a genuinely new storage/API technology behind the existing product capability, and add a new capability contract only for genuinely separate product behavior. Never add function-specific branches to the helper SDK wrapper or top-level workflow flow.
 - For a required value that users can omit by naming only the capability, declare `genericRequest.phrases` on that required slot (and `clearArguments` for related model-inferred fields). Do not add function-specific generic-request checks in routers or handlers.
 - Register the function module.
-- Update routing and argument extraction.
+- Update the helper SDK tool adapter/schema and any legacy `main` argument path that owns the function.
 - Add clarification behavior for missing required slots.
 - Add postback/numeric selection behavior if multiple results are possible.
 - Add tests for enabled, disabled, unclear, deny, missing-slot, and multi-result cases.
-- Add controlled-agent tests for candidate generation, argument/reference grounding, validator rejection, result-envelope lifecycle, stale active tasks, and group requester isolation.
+- Add SDK tests for tool visibility, strict arguments, authorization recheck, bounded evidence, checkpoint isolation, and write preview behavior. Keep legacy controlled-agent tests when `main` or shared workflow contracts are affected.
 - Update README and this file if the behavior changes how agents should work.
 
 When adding or changing an admin action:
@@ -92,7 +92,7 @@ When adding or changing an admin action:
 - `src/testing/*`: explicit in-memory test construction; production code must not import it.
 - `src/transport/http/*` and `src/transport/line/*`: health/readiness, LINE webhook entrance, access/admin commands, postbacks, and transport contracts.
 - `src/application/contracts/*`: cross-capability execution and routing contracts.
-- `src/application/turn/*`: controlled turn coordinator and focused workflow stages.
+- `src/application/turn/*`: deterministic continuation coordinator for pending writes, selections, attachments, and admin actions.
 - `src/capabilities/query-schedule/*`: reference vertical capability slice with definition, evals, ports, handler, and module factory.
 - `src/architecture/dependency-rules.ts`: mechanically enforced module dependency direction used by `pnpm architecture:check`.
 - `src/config.ts`: env parsing and profile validation.
@@ -100,11 +100,15 @@ When adding or changing an admin action:
 - `src/server.ts`: compatibility re-export for the LINE Fastify app; do not add behavior here.
 - `src/router.ts`: primary model routing and router result model.
 - `src/llm/provider-runtime.ts` and `src/llm/provider-metadata.ts`: provider allowlist/runtime metadata.
-- `src/agent/capability-candidates.ts`, `src/agent/controlled-agent-router.ts`, and `src/agent/plan-validator.ts`: bounded candidates, advisory model planning, and deterministic authority validation.
+- `src/agent/sdk-runtime.ts`: thin LangChain `createAgent` composition with official limits.
+- `src/agent/sdk-turn-runtime.ts`: helper dispatch, existing workflow precedence, model invocation, and authoritative result selection.
+- `src/agent/sdk-tools.ts`: strict, authorization-rechecked adapters over existing domain handlers.
+- `src/agent/sdk-state.ts`: official checkpointer scope, same-thread serialization, consent TTL, and cleanup.
+- `src/agent/capability-candidates.ts`, `src/agent/controlled-agent-router.ts`, and `src/agent/plan-validator.ts`: legacy compatibility path for `main`, diagnostics, and existing evals; helper semantic turns must not call it.
 - `src/function-arguments.ts`: argument extraction and slot handling.
 - `src/functions/*`: compatibility aggregation and capabilities not yet migrated to vertical slices.
 - `src/agent/turn-runtime.ts`: compatibility re-export for the application turn runtime.
-- `src/agent/capability-candidates.ts`, `src/agent/planner.ts`, and `src/agent/plan-validator.ts`: deterministic candidate generation, advisory semantic planning, and the server-owned authority boundary.
+- `src/agent/capability-candidates.ts`, `src/agent/planner.ts`, and `src/agent/plan-validator.ts`: legacy `main` candidate/planner compatibility.
 - `src/agent/active-task.ts` and `src/agent/active-task-transition.ts`: compatibility filenames for requester-scoped version-2 task-frame state derived from successful structured results. `currentCapability` is the single authority field; do not add a duplicate legacy capability field or version-1 behavior.
 - `src/agent/context-manager.ts`: runtime context budget/compression plus requester-scoped conversation windows.
 - `src/agent/jobs.ts`: long-running job results scoped by profile/source/requester.
@@ -113,17 +117,12 @@ When adding or changing an admin action:
 - `src/agent/trace-store.ts`: sanitized recent agent turn diagnostics for `/last-agent-turns`, persisted as a bounded Redis list when `REDIS_URL` is configured.
 - `src/agent/*`: controlled agent runtime, resource metadata memory, explicit text memory, aliases, and Postgres/in-memory stores.
 
-The controlled turn state machine owns workflow state; model output does not.
-Every text continuation handler must declare a `turnStage`; execution order is
-the stage order, never registry insertion order.
-Its precedence is pending confirmation/cancellation, resolver selection,
-required-slot collection, attachment workflow, explicit function switch,
-active-task continuation, then a new plan. A bare confirmation such as `保存`
-belongs to the current pending write and must not switch to generic memory. A validated function
-with missing required slots produces `collect`, never `execute`, even when the
-planner returns chat, clarify, low confidence, or no plan. Keep this behavior
-definition-driven and do not add function-specific collection branches to
-routers.
+The existing turn state machine owns pending workflow state; model output does
+not. Every text continuation handler declares a `turnStage`, and helper runs
+these stages with routing disabled before entering the SDK agent. A bare
+confirmation such as `保存` therefore belongs to its pending write and never
+becomes a new model-controlled memory action. SDK write schemas omit confirmation
+fields; only the next scoped LINE event may commit through the existing handler.
 
 - `src/clients/*`: external service clients for LINE, DeepSeek, Azure OpenAI embeddings, Graph, and Notion.
 - `src/access/*`: access principals, Redis-backed registration invite codes, audit events, and stores.
@@ -163,11 +162,12 @@ routers.
 
 - Every `FUNCTION_NAMES` entry must have a matching `FUNCTION_MODULES` module and function definition.
 - Every enabled read definition must have an `agentCapability`, and every entity type emitted by its `agentResult` must be declared by that contract.
-- A planner proposal never grants authority. Deterministic validation must recheck the effective enabled-function set, LINE source, side-effect policy, current-message evidence, active-task authority, confidence, schema, and required slots before execution.
-- Active tasks are profile/source/requester scoped, expire independently of conversation turns, and may be created or replaced only by successful structured results whose operations intersect the definition contract.
+- A helper model proposal never grants authority. The server builds tools from the effective enabled-function set and rechecks LINE source, Account authorization, strict schema, and side-effect policy immediately before every handler call. Legacy `main` planner proposals retain deterministic validation.
+- Helper checkpoints and legacy active tasks are profile/source/requester scoped and expire independently. Checkpoint content never expands the current effective tool set.
 - Each module owns its router eval cases. Include positive, missing-slot, typo, negative, disabled, and cross-function cases.
 - Use `expected: { type: "execute", ... }` or `expected: { type: "deny", ... }` so evals can check both allowed and blocked behavior.
 - Keep `pnpm eval:agent` deterministic and offline. Use `pnpm eval:agent:live` only for manual live-model checks.
+- Keep `pnpm eval:sdk-agent` deterministic and offline. Use `pnpm eval:sdk-agent --live` only for the manual helper DeepSeek check.
 - Keep `pnpm eval:retrieval-product` deterministic and offline. Add lifecycle regressions there when changing retrieval, task reuse, cache, or catalog behavior.
 
 ## State And Persistence
@@ -179,6 +179,7 @@ routers.
 - Redis rate limiting must use atomic counters, not read-modify-write JSON buckets.
 - PostgreSQL backs managed access principals and audit events when registration is enabled.
 - PostgreSQL backs agent memory when configured. The app creates access and agent memory tables on startup.
+- PostgreSQL also backs the official helper LangGraph checkpointer and the short-lived `agent_sdk_threads` TTL index. Delete expired checkpoint chains; never treat checkpoints as audit logs or durable user memory.
 - PostgreSQL must not store remote provider API keys, access tokens, or refresh tokens. Use it only for policy, registry, audit, and memory/catalog metadata.
 - Remote provider API keys belong in ACA secrets or local `.env`, never in PostgreSQL or committed files.
 - Agent memory must not store temporary sharing links. Store Graph drive/item metadata and regenerate short-lived links on demand.
@@ -188,22 +189,22 @@ routers.
 - Legacy automatic resource aliases are retired and must never execute before a function handler. A new explicit lookup always searches; only a validator-authorized active-task refinement may replay a prior opaque reference. Resource memory is deduplicated candidate metadata, not an authoritative response cache. Catalog full and delta syncs publish items, tombstones, cursor, source revision, and health atomically. Retrieval must distinguish fresh, stale-but-allowed, unavailable, and genuine not-found. Resource memory may only rank currently authorized catalog/provider candidates, and Graph items must be validated immediately before creating a sharing link. Do not add unversioned resource-query or negative caches.
 - Structured schedules are profile-shared, not requester/source-scoped. The same helper schedule can be queried from managed direct chats and groups.
 - Dynamic knowledge sources are profile-shared. They default to permanent; an explicit expiry disables search immediately and schedules purge after 30 days. The existing Bible Azure AI Services `text-embedding-3-small` deployment produces 1536-dimensional embeddings; PostgreSQL stores vectors, not model files.
-- Dynamic knowledge core/lifecycle fields and routing metadata are staged and promoted only by a successful atomic snapshot publication after fetch, chunk, and embedding preparation. Document/node/chunk replacement, tombstones, embeddings, promoted routing metadata, live core/lifecycle fields, sync health, and a rotated staging revision become visible in one memory operation or PostgreSQL transaction; failure health updates require the invocation's expected revision, so stale admin/scheduled sync failures do not overwrite a newer ready snapshot. The staging migration marker must preserve a later staged permanent (`NULL`) expiry across restarts. A failed sync preserves the prior live snapshot, and re-adding a disabled/expired source does not reactivate it before promotion. Never-successfully-synced sources cannot route, anchor, or search. Never expose display names, aliases, titles, headings, chunks, URLs, answer content, or person values through knowledge result/active-task envelopes or the controlled planner; use opaque source/document/hashed-section IDs and generic labels. A body-only pre-planner retrieval probe must remain declarative, read-only, profile-scoped, and capped at 20 eligible sources. Every non-explicit knowledge-evidence path (active-task entity, metadata, knowledge hint, and retrieval evidence) must use the same engagement small-talk classifier and centralized write-intent guard; explicit knowledge intent remains authoritative. Follow-ups fall back section to document to source, never profile-wide, and switch only on one unique match from the same capped eligible metadata provider used for candidates. Initial body-only queries compare one top result per capped eligible source with the same ordinal boost as final retrieval before applying the answer-context limit; answer unique top-source evidence and use the existing requester-scoped numeric/postback selection state for genuine cross-source ties.
+- Dynamic knowledge core/lifecycle fields and routing metadata are staged and promoted only by a successful atomic snapshot publication after fetch, chunk, and embedding preparation. Document/node/chunk replacement, tombstones, embeddings, promoted routing metadata, live core/lifecycle fields, sync health, and a rotated staging revision become visible in one memory operation or PostgreSQL transaction; failure health updates require the invocation's expected revision, so stale admin/scheduled sync failures do not overwrite a newer ready snapshot. The staging migration marker must preserve a later staged permanent (`NULL`) expiry across restarts. A failed sync preserves the prior live snapshot, and re-adding a disabled/expired source does not reactivate it before promotion. Never-successfully-synced sources cannot route, anchor, or search. Legacy result/active-task/planner envelopes must not expose display names, aliases, titles, headings, chunks, URLs, answer content, or person values. Helper SDK tool mode may receive only capped authorized excerpts with a generic `knowledge` source kind; do not include source/document/section IDs, titles, URLs, or provider payloads. Genuine cross-source ambiguity continues through the existing requester-scoped selection state.
 - Structured schedule replacement and entry add/update/delete require preview and confirmation. The same schedule type and month has one active canonical record.
 - Schedule domains belong in the profile-scoped `schedulePolicy.domains` registry. Add an existing-schema domain by changing registry/binding data; do not add domain-specific router or `query_schedule`/`save_schedule` branches. Multiple domain matches must clarify. Write previews are bound to the domain revision and canonical schedule-source refreshes publish atomically.
 - Do not add automatic group-chat recording. Text memory must be explicit user intent.
 - LINE attachment download/storage is allowed only through the controlled `save_resource` pending-attachment flow. Direct chat may create a short-lived requester/source-scoped pending attachment session. A group must first receive a requester-scoped, two-minute, one-shot upload intent from an explicit activation phrase; unrelated group attachments remain silent. The requester must opt in, choose one of the four declared purposes, enter a title, review the preview, and explicitly confirm. Final confirmation may persist and enqueue only one opaque work ID through the durable outbox. The event-driven ACA attachment worker leases one queue message and claims work with a bounded token lease; expired pre-publication claims are reclaimable, stale tokens cannot mutate a newer claim, and queue delivery is acknowledged only after a durable completed, permanent-failure, or missing outcome. Persist the non-secret Asset upload descriptor before upload. Once work has an Asset ID, retry through Asset get/wait/grant/download and validate the persisted checksum, size, and detected MIME without redownloading LINE or external content. If Asset completion succeeded before the Asset ID was recorded, replay the same idempotent create before considering another source download. Transient dependencies and pending scans release the live claim atomically and remain unacknowledged. Never reclaim or blindly replay expired `publishing` work; expose it as `publication_abandoned` because Graph/catalog may already have committed. Do not download in the bot process, pass queue content to the scaler, or add another binary publish path.
 - The attachment ACA Job has no ingress, one replica per execution, `0.5 CPU / 1 GiB`, a bounded timeout, and no storage mounts. It downloads the source, delegates malware scanning and signature assurance to Asset API, and publishes only a durable `clean` asset.
-- Agent turn traces are diagnostic metadata only. Do not store raw user text, file names, invite codes, secrets, or generated sharing links in traces.
+- Agent turn traces are diagnostic metadata only. Do not store raw user text, file names, invite codes, secrets, generated sharing links, SDK messages, prompts, or tool payloads in traces.
 - Controlled-agent traces are allowlist-only. Record phases, bounded capability names/counts, provider/disposition/confidence bucket, validator reason, result status/anchor count/entity types, and lifecycle outcome. Never fall back to serializing raw prompts, messages, people, URLs, source titles/IDs, retrieval evidence, or provider payloads.
-- Resource replay and response-field follow-ups must use requester-scoped task-frame evidence plus the normal candidate/planner/validator path. Do not reintroduce pre-route latest-resource lookup or phrase-specific execution shortcuts.
+- Helper resource replay and response-field follow-ups must use its scoped checkpoint plus a currently authorized tool call. Legacy `main` task-frame continuation keeps the candidate/planner/validator path. Do not reintroduce a pre-route latest-resource lookup or phrase-specific execution shortcut.
 - LINE `webhookEventId` processing and one-shot selections are atomic with Redis. Without Redis these guarantees are process-local only and must not be described as restart-safe or multi-replica-safe.
 - Do not assume multi-replica safety without Redis for sessions/cache/invite codes.
 - Group and room clarification/selection sessions are requester-scoped. They require the same `source.userId` to continue, and should not be created or matched when LINE does not provide a requester user id.
 - Long-running job result retrieval follows the same requester/source rule. A group user must not be able to fetch another user's job result.
 - Soft display-name personalization is for task-state replies such as "what title?" or "please choose"; avoid adding names to final data-heavy function results unless the user asks.
 - Conversational bot-authored self-reference uses first person (`我`), not third-person `小哈`. Keep `小哈` only where it is the product identity (`我是小哈`), a wake word or user-facing example, a registration phrase, or a proper destination name such as `小哈資料庫`.
-- SearXNG is only a sheet-music not-found fallback after requester consent. It must not become a general web browsing function and must not save results automatically. An authorized requester with effective `save_resource` permission may explicitly select and confirm a direct HTTPS PDF/JPEG/PNG result. The bot may queue only the confirmed opaque work ID; the finite attachment worker owns the safe download, must reject HTML, private/reserved addresses, unsafe redirects, and authenticated downloads, then publish through Asset API's malware-scanned lifecycle and the sole shared binary publisher.
+- SearXNG is only a sheet-music not-found fallback after requester consent. It must not become a general web browsing function or save results automatically. The helper agent may read only bounded public HTTPS pages referenced by the current search result; every DNS result and redirect is revalidated/pinned, and page text is untrusted. An authorized requester may explicitly select and confirm a detected direct PDF/JPEG/PNG result. The bot queues only the confirmed opaque work ID; the finite attachment worker owns the safe file download, rejects HTML/private addresses/unsafe redirects/authentication, and publishes through the sole Asset-scanned binary path.
 
 ## Workflow
 
@@ -217,10 +218,10 @@ routers.
   - `pnpm build`
 - For controlled routing behavior changes, also run `pnpm eval:agent` when relevant.
 - For controlled-agent candidate/planner/validator/result changes, also run `pnpm eval:agent`.
+- For helper SDK model/tool/state changes, run `pnpm eval:sdk-agent`; run its `--live` form manually when `DEEPSEEK_API_KEY` is available.
 - For behavior changes after R3, add or update a versioned Kernel case and run `pnpm eval:kernel`. Diagnose a regression from its failed boundary ID and shared contract; do not patch the example phrase or add function-specific branches to the generic flow.
 - For Redis/PostgreSQL state, lifecycle, migration, or publication changes, also run `pnpm eval:kernel:integration`; it must own and remove its disposable Compose dependencies and may never skip an unavailable dependency.
-- Run `pnpm eval:agent:live` manually when DeepSeek credentials are available; do not add it to CI.
-- For live planner validation, run `pnpm eval:agent:live` manually; do not add it to CI.
+- Keep both live agent checks manual; never add provider calls to CI.
 - For admin natural-language routing changes, also run `pnpm eval:admin`.
 - For webhook entrance changes, consider `pnpm smoke:webhook` against a local dev server or deployed URL.
 - Update tests when changing routing, LINE webhook entrance behavior, access control, admin commands, or function execution behavior.
@@ -229,7 +230,8 @@ routers.
 Testing map:
 
 - Entrance/access/admin behavior: `src/__tests__/entrance.test.ts`.
-- Router and fallback behavior: `src/__tests__/router.test.ts`, `src/__tests__/router-evals.test.ts`, and fixtures.
+- Helper agent behavior: `src/__tests__/sdk-agent.test.ts`, `sdk-tools.test.ts`, `sdk-state.test.ts`, and `sdk-turn-runtime.test.ts`.
+- Legacy `main` router behavior: `src/__tests__/router.test.ts`, `src/__tests__/router-evals.test.ts`, and fixtures.
 - Function implementations: `src/__tests__/functions.test.ts`, `src/__tests__/sheet-music.test.ts`, and Graph/Notion-related tests.
 - Store behavior: `src/__tests__/access-store.test.ts`, `src/__tests__/stores.test.ts`.
 - Config validation: `src/__tests__/config.test.ts`.
@@ -245,8 +247,8 @@ Testing map:
 - Treat merging a deploy-triggering pull request as a production deployment action. Do not enable auto-merge for deploy-triggering changes unless the user asked to deploy or confirmed that deploying is acceptable.
 - If the user asks for code changes but not deployment, leave the verified branch/PR unmerged and report that production release is intentionally pending.
 - GitHub Actions is the sole CI/CD system. Do not restore Azure DevOps or add a second automatic deployment path.
-- Controlled routing is always authoritative. Do not reintroduce runtime switches, shadow routing, a second router, or a semantic fallback provider; roll back through a reviewed application deployment while retaining the DeepSeek-only lane policy.
-- R4.1 production verification is complete. R5.0 production acceptance is complete. The project is now in Stable Maintenance; do not add R5.1/R5.2, SaaS, or local-model follow-up work.
+- Helper SDK routing is the sole helper semantic path; the legacy controlled router is compatibility-only for `main`, diagnostics, and existing workflow tests. Do not add a shadow router or semantic fallback provider. Roll back through a reviewed application deployment while retaining DeepSeek-only helper policy.
+- R4.1/R5.0 acceptance describes the prior controlled-agent release. The authorized helper SDK redesign requires its own PR, release, and production acceptance. Do not infer SaaS or local-model follow-up work.
 - Release assurance is provider-free: after the provider-free job definitions are verified, the signed empty webhook probe and release report attest `providerRequests: { deepseek: 0, embedding: 0 }`; an earlier failed report omits that unverified attestation. It proves gateway/Dapr/bot reachability only, never LINE delivery or reply-token behavior. The normal rollback copies the known-good revision while pinning its resolved OCI digest into a new revision; use a manual image change only as bounded emergency fallback.
 
 ## Deployment Context

@@ -111,26 +111,39 @@ export function createRetrieveMemoryHandler(options: AgentMemoryFunctionOptions)
         agentResult: { status: "not_found", replyText: "我目前找不到符合的記憶。" }
       };
     }
-    const answer = await groundedMemoryAnswer(
-      options.textGenerator,
-      context.profile.name,
-      args.query,
-      memories
-    );
+    const answer = context.agentTool
+      ? "記憶查詢完成。"
+      : await groundedMemoryAnswer(
+          options.textGenerator,
+          context.profile.name,
+          args.query,
+          memories
+        );
     return {
       ok: true,
       replyText: answer,
-      responseData: {
-        kind: "memory",
-        fields: {
-          answer,
-          ...(memories.length === 1 ? { title: memories[0].title ?? "已保存資訊" } : {})
-        },
-        records: memories.map((memory) => ({
-          title: memory.title ?? "已保存資訊",
-          answer: memory.content
-        }))
-      },
+      responseData: context.agentTool
+        ? {
+            kind: "memory_evidence",
+            fields: {},
+            records: memories.map((memory) => ({
+              sourceKind: "visible_note",
+              excerpt: memory.content,
+              updatedAt: memory.createdAt,
+              expiresAt: memory.expiresAt
+            }))
+          }
+        : {
+            kind: "memory",
+            fields: {
+              answer,
+              ...(memories.length === 1 ? { title: memories[0].title ?? "已保存資訊" } : {})
+            },
+            records: memories.map((memory) => ({
+              title: memory.title ?? "已保存資訊",
+              answer: memory.content
+            }))
+          },
       agentResult: {
         status: "success",
         replyText: "記憶查詢完成。",

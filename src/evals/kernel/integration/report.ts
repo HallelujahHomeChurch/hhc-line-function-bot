@@ -26,6 +26,10 @@ export const KERNEL_INTEGRATION_CASE_CONTRACTS = [
   { caseId: "postgres/catalog/concurrent-publication", boundary: "freshness_invalidation" },
   { caseId: "postgres/catalog/rollback-and-visibility", boundary: "adapter_retrieval" },
   { caseId: "postgres/knowledge/rollback-and-stale-failure", boundary: "adapter_retrieval" },
+  {
+    caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
+    boundary: "active_task_lifecycle"
+  },
   { caseId: "harness/namespace-cleanup", boundary: "deployment_configuration" },
   { caseId: "harness/compose-cleanup", boundary: "deployment_configuration" }
 ] as const;

@@ -208,6 +208,31 @@ describe("query_knowledge", () => {
     expect(JSON.stringify(result.agentResult)).not.toMatch(
       /https?:|日月潭|notion|八月出遊|第一天|trip|Uowner/iu
     );
+
+    completeText.mockClear();
+    const evidenceResult = await handler(
+      { query: "第一個地點是哪裡", ordinal: 0 },
+      {
+        profile,
+        agentTool: true,
+        event: {
+          type: "message",
+          source: { type: "user", userId: "u" },
+          message: { type: "text", text: "第一個地點是哪裡" }
+        }
+      }
+    );
+    expect(completeText).not.toHaveBeenCalled();
+    expect(evidenceResult.responseData).toEqual({
+      kind: "knowledge_evidence",
+      fields: {},
+      records: [
+        expect.objectContaining({
+          sourceKind: "knowledge",
+          excerpt: "第一個地點是日月潭。"
+        })
+      ]
+    });
   });
 
   it("falls back to lexical retrieval and a controlled excerpt when providers fail", async () => {

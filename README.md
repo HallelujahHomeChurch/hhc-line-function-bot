@@ -7,16 +7,16 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Fastify webhook server with LINE signature validation.
 - Multiple bot profiles in one service, each on its own webhook path.
 - Per-profile access policy, wake words, message type filtering, and function toggles.
-- Controlled semantic planner that uses DeepSeek as the sole LLM provider for profiles that enable providers; the public `main` profile is provider-free.
+- LangChain/LangGraph tool-calling agent for `helper`, using DeepSeek as its sole model; the public `main` profile remains provider-free.
 - Action catalog that separates user functions, admin actions, and system actions.
 - Policy gate and admin action registry for natural-language admin operations.
-- Deterministic candidate generation and validation when model providers fail, without a second legacy router.
+- Server-owned tool allowlists, live Account authorization, strict schemas, and existing write confirmations around every helper tool call.
 - LINE Quick Reply suggestions for clarification and result selection.
 - Postback-based selection state for multi-result flows, currently used by PPT and sheet music search.
 - Hermes-compatible numeric selection replies, so users can tap a Quick Reply or reply with `1`, `2`, `3`.
 - Definition-driven clarification state for missing slots. A generic capability request such as `查投影片`, `查流行歌譜`, `查維基百科`, or `查服事表` never runs a lookup; the bot asks for the missing value first.
 - Friendly intro/help replies for `小哈`, `小哈可以幹嘛`, `help`, and related prompts without exposing internal function names or backing services.
-- Contract-driven agent kernel for bounded capability candidates, validated semantic plans, requester-scoped task frames, explicit workflow stages, in-flight locks, focused replies, and explicit text/resource memories.
+- Requester-scoped SDK checkpoints plus the existing workflow stages, in-flight locks, explicit text/resource memories, and typed domain handlers.
 - Requester-scoped short conversation windows, so group follow-up messages can continue naturally without letting other users inherit context.
 - Long-running task handoff: slow turns can reply with a "check result" postback instead of using LINE push quota.
 - Free Wikipedia-only lookup: Chinese Wikipedia first, English fallback, then source-bounded summary generation.
@@ -117,7 +117,7 @@ Provision both credential pairs in ACA before deployment and require
 `pnpm config:validate` to pass.
 Profile names must use lowercase letters, numbers, dash, or underscore. The `webhookPath` must match the profile name exactly; for example, profile `helper` must use `/api/line/webhook/helper`.
 
-`channelSecretEnv` and `channelAccessTokenEnv` resolve LINE credentials from ACA secrets at startup. Admin authorization is not profile configuration: the bot calls account-api through Dapr and trusts the linked account's `admin` role. LLM small-talk profiles must configure all four `smallTalk.prompting` layers in `config/profiles.json`; the runtime does not supply a helper-specific persona or safety fallback. Legacy LINE admin settings and static allowlists are rejected.
+`channelSecretEnv` and `channelAccessTokenEnv` resolve LINE credentials from ACA secrets at startup. Admin authorization is not profile configuration: the bot calls account-api through Dapr and trusts the linked account's `admin` role. The helper profile loads its checked-in [`PERSONA.md`](config/agents/helper/PERSONA.md) and [`MEMORY.md`](config/agents/helper/MEMORY.md) through restricted profile-relative paths. These files define behavior and memory policy only; runtime conversation and saved memory never write back to them. Legacy LINE admin settings and static allowlists are rejected.
 
 `accountLink` keeps only public display copy plus environment references in the
 profile file. The bot runtime resolves each canonical `@` LINE account ID and
@@ -187,25 +187,27 @@ The application resolves this authority once and projects the exact effective ca
 
 ## Routing
 
-Provider selection is lane-based. Every enabled semantic lane uses DeepSeek as its sole provider, including function routing, admin routing, memory routing, smart talk, general-agent generation, context compression, and web summarization. A profile with `allowedProviders: []` has no enabled semantic lane.
+The `helper` profile has one production semantic path: LangChain JS `createAgent` with `ChatDeepSeek`, LangGraph checkpointing, and the SDK's model/tool call-limit middleware. `DEEPSEEK_API_KEY` is read from local or ACA secrets; provider OAuth routes and database token storage do not exist.
 
-The DeepSeek provider calls the OpenAI-compatible `/chat/completions` API with `DEEPSEEK_API_KEY`; it does not require provider login routes, mounted auth state, or PostgreSQL token storage.
+Before every helper turn, the server completes any existing confirmation, selection, slot-collection, attachment, or admin workflow. A turn that is not consumed enters the SDK agent. The old candidate/planner/validator path is not invoked for helper semantic routing; it remains only as a compatibility path for provider-free `main` and existing deterministic workflow handlers.
 
-Provider access is profile-scoped. Every LLM-enabled profile must list `deepseek` in `allowedProviders`.
+The model receives only tools assembled for the current profile, LINE source, requester, and Account authorization. Every invocation rechecks authorization and calls the existing registered domain handler with a strict Zod schema. The initial tool surface is deliberately small:
 
-Provider-enabled profiles declare lane policy with `providerPolicy`. Their lanes use `primary: "deepseek"`, and semantic fallbacks are rejected during configuration validation. Provider-free main uses an empty policy.
+- `query_schedule` and `query_wikipedia` for formal schedule and public encyclopedia lookup.
+- `search_information` for the caller-visible `query_knowledge` and `retrieve_memory` sources.
+- `search_files` for authorized presentations, sheet music, and general catalog resources.
+- `save_schedule`, `save_memory`, and `save_resource` for preview-only writes.
+- `search_sheet_music_web` and `read_sheet_music_page` only while an explicit sheet-music web-search consent is active.
 
-The helper profile enables the controlled agent with at most three candidates and a minimum planner confidence of `0.65`. Candidate generation is deterministic and keeps the full configured profile ceiling separate from the public effective projection, with a declarative `agentCapability` contract for each function. Restricted candidates are removed unless Account authorizes them before planner input. Each contract declares semantic scope, required slots, allowed operations, safe evidence providers, output fields, ambiguity behavior, and successful write-to-read handoffs. Evidence can come from explicit current-message intent, declared argument patterns, a live requester-scoped task frame, promoted dynamic-knowledge metadata, or a bounded read-only retrieval probe. No provider may invent a capability or expand the effective function set.
+Tool output distinguishes formal schedules, visible notes, knowledge, Wikipedia, files, and availability states. Knowledge and memory handlers return bounded evidence directly in SDK mode instead of making a second model call. Temporary sharing links and raw handler replies stay outside checkpointed tool output. The final LINE result still comes from the authoritative domain result when it contains a write preview, Quick Replies, or a resource link.
 
-Write capabilities use a narrower path: they enter the candidate set only from explicit, unnegated current-message intent after Account permission is resolved. Natural shorthand such as `幫我記服事表` and `記服事表` is write intent; passive recall such as `你記得服事表嗎` is not. Domain writes such as `save_schedule` suppress both read candidates and the generic `save_memory` fallback when both match. The validator grounds the payload in the current message, and the handler still requires requester-scoped preview and confirmation. Active tasks, slot collection, previews, and confirmations recheck restricted permission before continuation.
+Write schemas never expose `confirm` or `cancel` to the model. The model can create a preview, while a later requester-scoped LINE event uses the existing atomic confirmation path, live Account check, revision checks, audit, and idempotent handler. Attachment and external sheet-music imports continue through opaque work ID, durable outbox, finite worker, Asset malware scan, clean-only publication, and catalog upsert.
 
-DeepSeek is the sole `function_routing` planner. The model proposes only semantics over a bounded candidate set; it does not own workflow state or execute tools. The server then revalidates the proposal against the candidate set, source policy, function toggle, side-effect policy, current-message evidence, active-task authority, required slots, argument schema, and the `0.65` threshold. A missing required slot becomes the deterministic `collect` state even if the model proposed execute, clarify, chat, low confidence, or no plan. Unsupported or ungrounded values are discarded, ambiguity becomes clarification, and disabled or unauthorized capabilities are denied. When DeepSeek is unavailable, an unambiguous explicit request may still use the deterministic definition contract; unresolved evidence fails closed to clarification rather than guessing.
+A local catalog miss may offer public sheet-music search. After the requester accepts, the agent can iteratively change search terms and read only the opaque references returned by SearXNG. The page reader permits public HTTPS HTML/text/PDF/JPEG/PNG only, pins validated DNS for the request, revalidates redirects, limits time and bytes, and treats page text as untrusted data. Direct PDF/image candidates enter the existing selection and confirmation workflow; arbitrary URLs are never accepted from the model.
 
-Read capabilities may declaratively opt into a bounded retrieval-evidence provider. Before probing, the contract removes only declared wake words, request wrappers, and capability nouns while preserving the user's identity, date, and topic conditions. The knowledge provider probes at most 20 promoted sources in the current profile and returns only a candidate reason to the planner—never source IDs/names, titles, URLs, or content. Provider failure is distinct from no-match and returns a temporary-unavailable reply instead of pretending the request was unclear. Every non-explicit knowledge-evidence path—task-frame entities, routing metadata, knowledge capability hints, and retrieval evidence—uses the same conservative small-talk and write-intent guard. Explicit knowledge queries remain eligible. DeepSeek proposals remain advisory: they never bypass deterministic profile policy, function toggles, argument validation, clarification, access control, or registered handler execution.
+PostgreSQL uses the official LangGraph `PostgresSaver`. Thread IDs are HMAC-derived from profile, LINE source, and requester; a group without a requester ID receives no agent thread. Same-thread turns are serialized across replicas with a PostgreSQL advisory transaction lock. The idle TTL follows `agentRuntime.taskFrameSeconds` (600 seconds in the production helper profile); a five-minute cleanup removes expired metadata and the full checkpoint chain. Local development without PostgreSQL uses `MemorySaver` and has process-local durability only.
 
-Controlled routing is always authoritative. The removed `controlledAgent.enabled` and `controlledAgent.shadow` fields are rejected during configuration validation so production cannot silently return to a second routing flow. Keep every enabled semantic lane on DeepSeek-only policy; do not add a fallback lane for provider-free main.
-
-If DeepSeek returns invalid JSON, times out, or is unavailable, the runtime does not invoke a second semantic model. Only one unambiguous, revalidated high-confidence capability may be recovered from the same declarative contract; unresolved evidence fails closed. Small talk generation is bounded by `LLM_GENERAL_MAX_OUTPUT_TOKENS`.
+`main` keeps `allowedProviders: []` and stays on the existing deterministic Weekly Paper and own-profile update path. It never invokes the SDK model. Helper persona and memory rules live in the checked-in profile files; group traffic is recorded only after the bot is addressed, and durable text memory remains explicit, scoped, previewed, and confirmed. No automatic named behavior profile is created from group chat.
 
 Relevant env vars:
 
@@ -215,40 +217,11 @@ DEEPSEEK_API_KEY=...
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_TIMEOUT_MS=8000
-LLM_RUNTIME_CONTEXT_BUDGET_TOKENS=2000
-LLM_CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.75
 LLM_GENERAL_MAX_OUTPUT_TOKENS=160
 LLM_ROUTE_MAX_OUTPUT_TOKENS=256
 ```
 
-Bootstrap superadmin direct-chat commands for LLM provider operations:
-
-```text
-/llm-use
-/llm-status
-```
-
-`/llm-use` reports the active legacy default provider and the provider names accepted by the current profile. `/llm-status` reports the current profile's lane policy. Provider selection is controlled by profile/env configuration; LINE commands do not persist provider changes.
-
-Deterministic capability hints are intentionally narrow:
-
-- `find_ppt_slides`: `投影片`, `ppt`, `powerpoint`, `slides`, `keynote`, `odp`
-- `query_schedule`: `服事表`, `服事`
-- `find_sheet_music`: `流行歌譜`, `詩歌歌譜`, `樂譜`, `歌譜`, `sheet music`
-- `find_resource`: `教會資料`, `小哈資料庫`, and explicit catalog aliases such as `週報音檔`
-- `save_schedule`: `記住晨更`, `記住舉牌`, or pasted text schedules with date rows.
-
-Candidate generation does not treat `詩歌` or `流行歌` alone as PPT requests. PPT fuzzy matching happens inside `find_ppt_slides`; for example, `奇易恩點` can match `奇異恩典.pptx`.
-
-For sheet music requests, the planner can extract the song title, optional artist, requested file type, and fuzzy/exact match preference. Candidate generation stays conservative and only offers this capability when current-message evidence supports it.
-
-Sheet music lookup remains catalog/local-first. If no local sheet music matches and `SEARXNG_BASE_URL` is configured, the bot asks the requester whether to search public web results. It calls SearXNG only after explicit consent, sends only the query to SearXNG, and passes only returned title/snippet/url fields to the `web_summarization` provider. Results are never fetched or saved automatically. An authorized requester with effective `save_resource` permission may explicitly select and confirm one direct HTTPS PDF/JPEG/PNG result for import into the shared pop or hymn catalog. Confirmation queues an opaque work ID; only the finite attachment worker performs the SSRF-safe download and publishes through Asset API's malware-scanned lifecycle. HTML pages, authenticated downloads, and crawling remain prohibited.
-
-The candidate generator and validator guard model output when the user names an explicit domain. For example, `查維基百科` with no topic asks for the missing topic instead of letting a model invent one, and `查週報音檔` resolves to internal catalog search rather than Wikipedia when `find_resource` is enabled.
-
-The controlled planner has a separate acceptance corpus. `pnpm eval:agent` runs offline with deterministic stub proposals and exercises the real candidate generator and plan validator, including schedule continuation, dynamic knowledge, cross-function switching, ambiguity, disabled functions, stale state, and argument-injection rejection. `pnpm eval:kernel` runs the deterministic R0-R4.1 product gate through the real controlled turn runtime and application contracts. Its versioned product journeys cover exact direct, group, Account-authorized-user, and admin discovery; registration-to-first-read; provider-free Weekly Paper and own-profile flows; every controlled result-guidance class; unavailable-write exclusion; and requester-scoped interaction state. The gate uses stub planners and in-memory fixtures only—no DeepSeek or Azure embedding call—and writes privacy-safe reports to `artifacts/kernel-v1/report.json` and `artifacts/kernel-v1/report.md`. Exit code `0` means every required metric passed, while a non-zero exit means at least one metric, case, or corpus-completeness rule failed. `pnpm eval:kernel:integration` owns a disposable loopback-only Redis AOF and pgvector PostgreSQL Compose project, exercises two real clients, restarts the actual Redis server, and writes the allowlisted result to `artifacts/kernel-v1/integration-report.json`. It fails rather than skipping when Docker, a dependency, restart, or cleanup is unavailable. `case_execution_failed` identifies a case whose evaluator could not complete, not a user-facing result. `pnpm eval:agent:live` uses the configured `helper` (or `AGENT_EVAL_PROFILE`) DeepSeek-only `function_routing` policy and reports semantic proposal accuracy separately from final validated-plan accuracy. The live command exits non-zero when any final validated case fails and is intentionally not part of CI.
-
-`pnpm eval:kernel:local-live` is the manual, bounded Kernel v1 live-provider gate. It requires a clean worktree so the reported commit is the exact Docker build input, creates disposable local app/PostgreSQL/Redis containers, sends signed synthetic LINE webhooks through the real controlled runtime, and permits outbound calls only to DeepSeek and the existing Azure `text-embedding-3-small` deployment. The host reads only `deepseek-api-key` and `azure-openai-embedding-key` from the `hhc-line-function-bot` Container App, stages them in memory-backed mode-`0600` files, enforces the declared per-case limits, at most one DeepSeek request per webhook turn, and exact successful suite evidence of 9 DeepSeek requests and 3 embedding batches under the absolute 10/3 authority cap with no automatic retry. Any failed or budget-exhausted provider observation fails the case. The runner writes allowlisted reports under `artifacts/kernel-v1` and removes the Compose project, volumes, Redis namespace, and secret files on every exit. Run one declared case with `bash scripts/run-kernel-local-live.sh --case <case-id>` only for bounded diagnosis; do not add this command to CI or a scheduler.
+`pnpm eval:sdk-agent` runs the offline SDK loop acceptance probe. Run `pnpm eval:sdk-agent --live` manually with `DEEPSEEK_API_KEY` for a bounded live tool-calling check. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies official checkpoint restart, expiry, and cleanup as part of its fixed report contract. The legacy `pnpm eval:agent` and Kernel corpus remain regression gates for the compatibility workflow and domain contracts while `main` still uses that path.
 
 ## Time Zone
 
@@ -263,7 +236,7 @@ Redis and PostgreSQL durability have explicit boundaries:
 - With `REDIS_URL`, app-process restart and cross-replica workflow state are supported until each record's TTL. A configured production Redis that is unavailable at startup fails readiness/startup policy instead of silently becoming durable in memory.
 - Without Redis, state is only supported for single-process local development and is lost on restart. Webhook deduplication and one-shot selection are then process-local, not multi-replica safe.
 - The integration gate proves Redis server restart against its owned AOF volume. Production Redis server recovery and data-loss guarantees still depend on the deployed persistence, replication, backup, and failover configuration.
-- With `DATABASE_URL`, catalog, schedules, knowledge, access records, and explicit memory survive app restart. Without PostgreSQL, in-memory catalog and memory implementations are development-only and are lost on restart.
+- With `DATABASE_URL`, catalog, schedules, knowledge, access records, explicit memory, and helper LangGraph checkpoints survive app restart. Without PostgreSQL, in-memory catalog, memory, and SDK checkpoints are development-only and are lost on restart.
 
 Run the complete disposable dependency gate with Docker/Compose available:
 
@@ -309,15 +282,15 @@ The webhook service should stay on `node dist/index.js`; do not run recurring sy
 
 ## Agent Runtime And Memory
 
-The agent turn runtime centralizes natural-language task execution after LINE entrance checks. Every text continuation handler declares a controlled workflow stage; the kernel sorts those stages explicitly instead of relying on registration or object iteration order. Its precedence is pending confirmation/cancellation or slot collection, capability/entity selection, attachment workflow, an explicit function switch, task-frame continuation, then a new plan. There is no pre-route recent-file shortcut. `再給我一次`, `剛剛那份`, declared response-field requests such as `連結呢`, and schedule/knowledge follow-ups all pass bounded candidate generation, planner advice, deterministic validation, and exact task-frame references. A bare `保存` therefore confirms the current write instead of starting generic text memory, and a resolver answer resumes the grounded original arguments without asking the LLM to plan again.
+After LINE entrance and access checks, helper text first passes the existing deterministic continuation stages. Pending confirmation/cancellation, numeric or postback selection, slot collection, attachment intake, and admin actions retain their current ownership and can finish without a model call. Other addressed helper turns enter the SDK agent, which owns conversation messages and the model/tool loop.
 
-Admin `/last-agent-turns` diagnostics include controlled phases for task-frame state, bounded capability names/count, planner provider/disposition/confidence bucket, validator reason, result-envelope status/anchor count/entity types, task-frame lifecycle outcome, and retrieval execution mode/age/freshness. `/last-errors`, `/last-routes`, and `/last-agent-turns` share a stable opaque support ID; function failures return that support code to the requester. With `REDIS_URL`, the bounded trace and route lists survive replica changes and restarts; local development otherwise uses in-memory stores. These diagnostics never retain raw messages, people, prompts, filenames, URLs, evidence, tokens, source titles/IDs, LINE IDs, or temporary sharing links. See `docs/operations/controlled-agent-support.md`.
+The SDK thread is scoped by profile, LINE source, and requester. Same-thread events run in order; another requester or group receives a different thread, and a group event without `source.userId` cannot create one. Checkpoint retention is short-lived and independent of explicit 30-day memory. Expired threads are deleted before reuse and by scheduled cleanup, including their child checkpoint records.
 
-Successful read handlers return an `agentResult` envelope in addition to their user-facing reply. The envelope has a controlled status (`success`, `not_found`, `ambiguous`, or `unavailable`) and may contain only declared entity types, canonical anchors, opaque evidence references, supported continuation operations, and a clarification payload. Ephemeral reply data is projected through the capability contract: the default is only the field the user requested, while `完整`, `全部`, `整份`, or `全文` requests the full reply. Only a successful envelope can create or replace a version-2 task frame. Not-found, unavailable, failed, or missing envelopes preserve the last valid frame unless an explicit function switch requires clearing it. Task frames have their own 600-second absolute TTL and are scoped by profile, LINE source, and requester, so a second group member cannot inherit another member's context.
+The server remains the authority boundary. It calculates the effective function set, exposes only matching tools, rechecks Account authorization at execution, and passes trusted identity and source context directly to handlers. A model cannot choose another requester, add a disabled function, confirm its own write, or supply an arbitrary web URL. Tool/model execution is bounded to six calls of each per turn.
 
-After authority, workflow, and handler decisions are complete, one deterministic Traditional Chinese guidance policy presents permission denied, missing input, genuine ambiguity, not found, unavailable, stale-but-allowed, success, and error outcomes. It preserves the controlled envelope and focused response data. Non-success outcomes offer at most one bounded next action; stale data is labeled without automatic retry, and `查看完整結果` appears only when the capability contract supports `view_full`.
+Read handlers preserve typed success, not-found, ambiguous, and unavailable outcomes. SDK mode returns only the evidence needed to answer, with source type and bounded excerpts where appropriate; raw provider payloads, internal knowledge anchors, temporary sharing links, and errors are not checkpointed or logged. Persona and memory rules come from the helper's checked-in files, while runtime content stays in PostgreSQL-backed checkpoints and the existing memory store.
 
-This keeps new functions on one generic contract: declare `agentCapability`, normalize and schema-check arguments, define any required slots and active-evidence rules, register the handler, and return a structured `agentResult` for successful reads. A genuinely new source technology may need an adapter behind an existing capability, and genuinely separate product behavior may need a new capability contract. Arbitrary administrator-added knowledge topics do neither: trips, SOPs, policies, ministry material, and other church knowledge all reuse dynamic-source metadata and `query_knowledge`. No adapter may leak source parsing back into the router as one-off keywords or top-level continuation branches.
+Admin `/last-agent-turns`, `/last-errors`, and `/last-routes` remain allowlist-only operational diagnostics with opaque support IDs. They do not serialize SDK messages, prompts, tool results, people, URLs, filenames, LINE IDs, tokens, or secrets.
 
 The memory layer adds controlled memory without making the bot an unrestricted chat recorder. Explicit group memories are private to the requester by default; group sharing must be explicit. Writes are confirmed and audited, owner/admin deletion is enforced, and expired records are physically purged.
 
@@ -357,7 +330,7 @@ Redis provides cross-replica atomic selection consumption and seven-day LINE `we
 
 Set `REDIS_URL` to move sessions, cache, recent errors, rate-limit state, conversation windows, webhook idempotency, and long-running job results to Redis. If `REDIS_URL` is unset, the app uses in-memory stores. If `REDIS_URL` is set but Redis cannot connect, startup fails.
 
-Set `DATABASE_URL` to persist access state and agent memory. If PostgreSQL is configured, the app creates both access tables and agent memory tables on startup. Agent resource storage supports Graph file metadata and user-provided external links. If PostgreSQL is missing, agent memory falls back to in-memory and is lost on restart.
+Set `DATABASE_URL` to persist access state, explicit memory, and helper SDK checkpoints. If PostgreSQL is configured, the app creates those tables on startup. Agent resource storage supports Graph file metadata and user-provided external links. If PostgreSQL is missing, local development uses in-memory memory/checkpoints that are lost on restart.
 
 Sheet music search reads a fresh PostgreSQL catalog snapshot when available. A proven fresh miss can proceed to the existing consent-based web fallback; a never-published or unavailable snapshot may perform a current provider lookup instead of treating stale state as a definitive miss. The old unversioned 30-minute provider index cache is removed, so a later query can see newly added files.
 
@@ -439,17 +412,17 @@ For the current HHC media service schedule database, use these property mappings
 
 The production catalog sync job also registers the media team service schedule as a Notion `schedule` source and writes rows into the PostgreSQL `schedule_items` read model. Notion database reads follow every result cursor before syncing, so the read model is not limited to the first page. `query_schedule` checks that read model before any live Notion fallback, so users only ask for a service schedule; they never need to choose Notion or PostgreSQL. LINE-created schedules remain separate write-controlled schedule records and do not write back to Notion.
 
-Schedule lookup combines validated planner arguments with a storage-neutral field interpreter and the profile's declarative domain resolver. `query_schedule` remains the only user-facing schedule function. The resolver uses only current-message aliases/hints, an explicit selection, or a valid requester-scoped task frame; one match selects, multiple matches always clarify, and no match queries eligible domains before deciding whether clarification is needed. The handler then executes a generic domain loop over canonical or saved-schedule bindings, so media, morning prayer, street service, children's Sunday, prayer meeting, and future domains reuse the same flow without router branches. The selected `domainKey` is stored in the requester-scoped task frame. `save_schedule` binds previews to the domain key and revision, applies the domain's write policy, and rejects confirmation if that contract changed. Notion publication first normalizes the complete source and then atomically replaces the visible snapshot; validation or publication failure leaves the prior snapshot visible. Only a new storage technology or genuinely separate product behavior should add an adapter or capability.
+Schedule lookup combines SDK-provided arguments with a storage-neutral field interpreter and the profile's declarative domain resolver. `query_schedule` remains the only user-facing schedule function. The handler executes one generic domain loop over canonical or saved-schedule bindings, so media, morning prayer, street service, children's Sunday, prayer meeting, and future domains reuse the same flow without SDK branches. `save_schedule` binds previews to the domain key and revision, applies the domain write policy, and rejects confirmation if that contract changed. Notion publication first normalizes the complete source and then atomically replaces the visible snapshot; validation or publication failure leaves the prior snapshot visible.
 
 ## Dynamic Knowledge Sources
 
 `query_knowledge` answers from profile-shared pages or databases registered by an admin. An admin adds a shared page by saying `加入知識來源 <page URL> 名稱 <display name>` in direct chat; optional bounded `aliases`, `topics`, and `sampleQueries` improve routing, while `expiresAt` makes it temporary. Administrator core, lifecycle, and routing fields are staged separately from the promoted last-known-good snapshot. A one-time schema marker preserves an intentionally staged permanent (`NULL`) expiry across later startup migrations. Remote fetch, chunking, and embedding preparation finish before one atomic publication replaces documents, chunks, embeddings, lifecycle/core fields, routing metadata, sync health, and the staging revision. A failed synchronization therefore preserves the complete previous live snapshot, and a failure from an older revision cannot mark a newer ready publication failed. Re-adding a disabled or expired source does not reactivate it before successful publication. A source that has never synchronized successfully is never routed or searched. Sources default to permanent, can be listed/synchronized/enabled/disabled, and destructive removal requires `/confirm <code>`. The page must first be shared with the configured integration.
 
-Knowledge synchronization preserves page hierarchy, tables, lists, properties, and order in PostgreSQL. It chunks by heading, stores full-text data, and uses pgvector plus the existing Azure AI Services `text-embedding-3-small` deployment for hybrid retrieval. Exact title/date/ordinal evidence outranks semantic similarity. Embedding failure atomically publishes the complete lexical snapshot as `embedding_pending`; answer generation failure returns a controlled source excerpt. A body-only question may create a controlled candidate through the content-free retrieval probe, then searches only the deterministic capped eligible source set. Retrieval first keeps one top result per eligible source, using the same ordinal boost as final retrieval, before applying the eight-chunk answer-context limit. A unique highest-evidence source is answered directly; a genuine top-score cross-source tie creates a requester-scoped numeric/postback selection whose persisted mapping contains opaque source IDs. Expired temporary sources leave search immediately and are purged after 30 days.
+Knowledge synchronization preserves page hierarchy, tables, lists, properties, and order in PostgreSQL. It chunks by heading, stores full-text data, and uses pgvector plus the existing Azure AI Services `text-embedding-3-small` deployment for hybrid retrieval. Exact title/date/ordinal evidence outranks semantic similarity. Embedding failure atomically publishes the complete lexical snapshot as `embedding_pending`. In helper SDK mode, `query_knowledge` returns at most eight authorized excerpts with a generic knowledge source kind and does not make its former nested answer-generation call. Internal source/document/section IDs and titles stay out of SDK tool output. Expired temporary sources leave search immediately and are purged after 30 days.
 
 Configure `EMBEDDING_PROVIDER=azure_openai`, `AZURE_OPENAI_EMBEDDING_API_KEY`, `AZURE_OPENAI_EMBEDDING_ENDPOINT=https://bible-text-embedding-resource.cognitiveservices.azure.com/`, `AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small`, `AZURE_OPENAI_EMBEDDING_API_VERSION=2024-10-21`, `EMBEDDING_MODEL=text-embedding-3-small`, `EMBEDDING_BATCH_SIZE=16`, and `EMBEDDING_TIMEOUT_MS=30000`. Production deployment reuses the Bible Azure AI Services account and copies an account key directly into a workload-scoped ACA secret without printing or rotating it. The embedding model and its 1536 dimensions are a fixed contract; `EMBEDDING_DIMENSIONS` and retired direct-OpenAI settings are rejected. PostgreSQL must already have the `vector` extension; the app validates it but never installs extensions.
 
-Requester-scoped task-frame state records the last successful capability plus canonical anchors, declared entities, safe references, supported operations, and available response fields returned by the handler. `currentCapability` is the single authority field; the deprecated duplicate capability field and version-1 behavior are removed. Schedule follow-ups therefore keep the confirmed date, meeting, source, and role evidence from read-model, saved-schedule, or live Notion results. Short role questions such as `導播` or `音控是誰` are resolved against those entities instead of being treated as small talk, and unlisted roles do not require a hard-coded vocabulary. A focused single-meeting role answer is compact (`直播：銹姐、家睿`); multiple matching meetings retain date and meeting context per line. Only current-message evidence or declaratively bound task-frame evidence may fill arguments. `那下一場呢` advances after the returned date, while a complete request such as `下一場服事表的前攝影是誰` resolves from now. Knowledge follow-ups search the opaque section key first, then the same document, then the same source; missing or stale sources fail closed. Task frames have the profile-configured independent absolute expiry (600 seconds in helper), and group state is isolated by profile, group, and requester.
+Helper follow-up state is the requester-scoped LangGraph checkpoint described above. It may remember prior questions and bounded tool evidence, but it never grants authority; every later tool is rebuilt and authorized from the current profile/source/requester. Schedule and knowledge follow-ups therefore ask their handlers again with current arguments instead of treating stored content as authoritative. `main` keeps its legacy short-lived task frame only for its provider-free deterministic path.
 
 ## LINE Attachment Save Gate
 
@@ -527,7 +500,7 @@ Agents should create a `codex/*` branch, push it, open a PR, and request auto-me
 
 ### R5.0 release assurance status
 
-R4.1 production verification is complete. R5.0 production acceptance is complete. The project is now in Stable Maintenance; this roadmap does not create R5.1/R5.2, SaaS, or local-model follow-up work.
+R4.1 production verification and R5.0 production acceptance describe the prior controlled-agent release. The authorized helper SDK redesign requires a new PR, release, and production acceptance; it does not add SaaS or a local model.
 
 `Production Release` records its provider-free deployment transaction in `artifacts/release-assurance/report.json`. The `hhc-line-bot-release-probe` sends separately signed empty `events: []` webhooks through the public gateway to `helper` and `main`. It records the explicit `gateway_helper_signed_empty_webhook` and `gateway_main_signed_empty_webhook` checks, while the report attests `providerRequests: { deepseek: 0, embedding: 0 }`. These checks prove the Gateway→Dapr→selected-profile route, configured signature acceptance, and empty-batch early return. They do not prove LINE platform delivery, LINE Console secret correctness, reply-token behavior, or provider availability during normal turns; the provider count is an attestation for this provider-free release path, not runtime telemetry. The weekly `hhc-line-bot-periodic-assurance` job writes `artifacts/release-assurance/periodic-report.json` with dependency evidence independent of release acceptance. Its Asset check uses a fixed tiny clean-text payload with a unique assurance owner and restricted visibility, grants only service read, verifies downloaded bytes, and always revokes and owner-verifies the exact soft-delete. Cleanup failure fails the assurance. It does not publish a public URL or touch LINE, Graph, or the catalog.
 
@@ -556,14 +529,15 @@ pnpm test
 pnpm config:validate
 pnpm eval:admin
 pnpm eval:agent
+pnpm eval:sdk-agent
 pnpm eval:retrieval-product
 pnpm eval:kernel
 pnpm eval:kernel:integration
 pnpm build
 ```
 
-Optional live DeepSeek planner check:
+Optional live helper SDK check:
 
 ```powershell
-pnpm eval:agent:live
+pnpm eval:sdk-agent --live
 ```

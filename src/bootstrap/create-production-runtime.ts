@@ -1,3 +1,7 @@
+import { ChatDeepSeek } from "@langchain/deepseek";
+import { MemorySaver } from "@langchain/langgraph";
+import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
+
 import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
 import { createDeepSeekProvider } from "../clients/deepseek.js";
 import { createAccountAdminClient } from "../account/account-admin-client.js";
@@ -13,6 +17,8 @@ import { createAgentMemoryStore } from "../agent/create-agent-memory-store.js";
 import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
 import { createAgentRuntime } from "../agent/agent-runtime.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
+import { createSdkAgentTurnRuntime } from "../agent/sdk-turn-runtime.js";
+import { createPostgresSdkAgentState, createSdkAgentState } from "../agent/sdk-state.js";
 import { createAgentPlanner } from "../agent/planner.js";
 import { createControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import {
@@ -51,6 +57,7 @@ import {
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { createSearxngClient } from "../clients/searxng.js";
+import { createPublicPageReader } from "../clients/public-page.js";
 import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
 import { createPostgresRuntime } from "../db/postgres.js";
@@ -127,6 +134,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const agentPlanner = createAgentPlanner({
     primary: functionRoutingPrimary,
     providersEnabledForProfile: (profileName) =>
+      profileName !== "helper" &&
       config.profiles.some(
         (profile) => profile.name === profileName && profile.allowedProviders.length > 0
       )
@@ -171,6 +179,13 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     ? createSearxngClient({
         baseUrl: config.webSearch.searxngBaseUrl,
         timeoutMs: config.webSearch.timeoutMs
+      })
+    : undefined;
+  const publicPageReader = webSearch
+    ? createPublicPageReader({
+        maxBytes: 512 * 1024,
+        maxRedirects: config.externalResources.maxRedirects,
+        timeoutMs: config.externalResources.downloadTimeoutMs
       })
     : undefined;
   const registrationInviteCodeStore = redis
@@ -359,7 +374,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     )
   );
   const applicationAgentRuntime = createAgentRuntime({ memoryStore, graph, accessStore });
-  const agentTurnRuntime = createAgentTurnRuntime({
+  const legacyAgentTurnRuntime = createAgentTurnRuntime({
     functionRegistry: registries.functions,
     textMessageHandlers: registries.textMessages,
     adminActionRouter,
@@ -380,6 +395,55 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     observabilityHmacKey: config.observability?.hmacKey,
     timeZone: config.timeZone
   });
+  const helperProfile = config.profiles.find(
+    (profile) => profile.name === "helper" && profile.agent
+  );
+  let stopSdkStateCleanup: (() => void) | undefined;
+  let agentTurnRuntime = legacyAgentTurnRuntime;
+  if (helperProfile) {
+    let sdkState;
+    if (postgres?.pool) {
+      const checkpointer = new PostgresSaver(postgres.pool);
+      await checkpointer.setup();
+      const postgresState = createPostgresSdkAgentState({
+        pool: postgres.pool,
+        checkpointer,
+        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
+        ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
+      });
+      await postgresState.setup();
+      await postgresState.cleanupExpired();
+      const timer = setInterval(
+        () => void postgresState.cleanupExpired().catch(() => undefined),
+        300_000
+      );
+      timer.unref();
+      stopSdkStateCleanup = () => clearInterval(timer);
+      sdkState = postgresState;
+    } else {
+      sdkState = createSdkAgentState({
+        checkpointer: new MemorySaver(),
+        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
+        ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
+      });
+    }
+    agentTurnRuntime = createSdkAgentTurnRuntime({
+      fallback: legacyAgentTurnRuntime,
+      functionRegistry: registries.functions,
+      model: new ChatDeepSeek({
+        apiKey: config.llm.deepseekApiKey,
+        model: config.llm.deepseekModel,
+        temperature: 0,
+        maxRetries: 1,
+        timeout: config.llm.deepseekTimeoutMs,
+        configuration: { baseURL: config.llm.deepseekBaseUrl }
+      }),
+      state: sdkState,
+      sessionStore,
+      webSearch,
+      pageReader: publicPageReader
+    });
+  }
   const app = createApp(config, {
     adminActionRegistry: knowledgeAdminActionRegistry,
     postbackHandlers: registries.postbacks,
@@ -420,6 +484,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     async close() {
       clearInterval(memoryPurgeTimer);
       clearInterval(knowledgePurgeTimer);
+      stopSdkStateCleanup?.();
       stopAttachmentScanOutbox?.();
       stopMediaSyncOutbox?.();
       await app.close();

@@ -13,7 +13,7 @@
     "architecture:check": "tsx src/tools/check-dependency-boundaries.ts",
     "format": "prettier --write .",
     "eval:admin": "tsx src/tools/eval-admin-actions.ts",
-    "eval:agent": "tsx src/tools/eval-agent-planner.ts",
+    "eval:agent": "tsx src/tools/eval-agent-planner.ts && tsx src/tools/eval-sdk-agent.ts",
     "eval:agent:live": "tsx src/tools/eval-agent-planner-live.ts",
     "eval:sdk-agent": "tsx src/tools/eval-sdk-agent.ts",
     "eval:kernel": "tsx src/tools/eval-kernel.ts",

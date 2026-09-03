@@ -58,6 +58,8 @@ export interface FunctionHandlerContext {
   requestId?: string;
   requesterDisplayName?: string;
   requesterIsAdmin?: boolean;
+  /** The SDK agent consumes bounded evidence and owns the final wording. */
+  agentTool?: boolean;
   activeTask?: {
     capability: FunctionName;
     anchors: JsonRecord;

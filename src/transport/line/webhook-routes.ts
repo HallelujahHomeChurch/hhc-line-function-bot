@@ -1235,7 +1235,11 @@ async function handleWebhook(
       }
       continue;
     }
-    if (groupEngagement?.kind === "small_talk" && groupEngagement.smallTalkCategory) {
+    if (
+      profile.name !== "helper" &&
+      groupEngagement?.kind === "small_talk" &&
+      groupEngagement.smallTalkCategory
+    ) {
       const result = await createControlledSmallTalkReply({
         profile: effectiveProfile,
         text: event.message.text,

@@ -170,6 +170,24 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
 
     const groundedResults = results;
 
+    if (context.agentTool) {
+      return {
+        ok: true,
+        executedAction: "query_knowledge",
+        agentResult: knowledgeSuccessEnvelope(groundedResults),
+        responseData: {
+          kind: "knowledge_evidence",
+          fields: {},
+          records: groundedResults.slice(0, 8).map((result) => ({
+            sourceKind: "knowledge",
+            excerpt: result.content,
+            updatedAt: result.source.lastSyncedAt
+          }))
+        },
+        replyText: "知識查詢完成。"
+      };
+    }
+
     const answer = await groundedAnswer(
       options.textGenerator,
       context.profile.name,

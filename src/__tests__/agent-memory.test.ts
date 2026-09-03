@@ -43,6 +43,38 @@ function context(): FunctionHandlerContext {
 }
 
 describe("agent memory", () => {
+  it("returns authorized memory evidence without a second model summary for SDK tools", async () => {
+    const store = new InMemoryAgentMemoryStore();
+    await store.saveTextMemory({
+      profileName: "helper",
+      source: { type: "group", groupId: "C1", userId: "U1" },
+      createdBy: "U1",
+      visibility: "group",
+      title: "待確認服事",
+      content: "2026-09-06 敬拜是同工甲"
+    });
+    const completeText = vi.fn(async () => "should not run");
+    const toolContext = context();
+    toolContext.agentTool = true;
+
+    const result = await createRetrieveMemoryHandler({
+      memoryStore: store,
+      textGenerator: { completeText }
+    })({ query: "敬拜" }, toolContext);
+
+    expect(completeText).not.toHaveBeenCalled();
+    expect(result.responseData).toEqual({
+      kind: "memory_evidence",
+      fields: {},
+      records: [
+        expect.objectContaining({
+          sourceKind: "visible_note",
+          excerpt: "2026-09-06 敬拜是同工甲"
+        })
+      ]
+    });
+  });
+
   it("deduplicates resource metadata by stable storage identity and refreshes verification", async () => {
     let now = new Date("2026-07-16T12:00:00Z");
     const store = new InMemoryAgentMemoryStore({ now: () => now });

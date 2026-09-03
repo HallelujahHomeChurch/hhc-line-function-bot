@@ -10,6 +10,8 @@
 
 **Spec:** [SDK agent harness 改造設計與分析](../specs/2026-09-04-sdk-agent-redesign-analysis.md)。執行前完整閱讀；包含12個 function 的處置與安全契約。
 
+**Implementation scope update:** 使用者確認 `main` 不可受影響，因此 Task 8 的「刪除 legacy」縮限為從 `helper` production semantic path 移除。Legacy candidate/planner/validator 與 deterministic turn runtime 暫時保留給 provider-free `main`、既有 pending/admin workflow 及其回歸測試；helper 沒有 shadow router 或 runtime switch。等 `main` 另案遷移後才可物理刪除這些共享檔案。
+
 ## Global Constraints
 
 - 分析基準為 `04d085646bb40f4386afa4243401542926b5f39b`；執行時重新核對 latest `origin/main`、worktree 與既有 PR。
@@ -246,10 +248,10 @@ pnpm build
 
 - [ ] 在新入口先跑 LINE access、group wake、一般對話→工具、寫入確認、main provider-free 的實際 transport 測試。
 - [ ] 只在helper profile composition建立SDK agent與DeepSeek client。main不建立agent checkpoint、不暴露helper tools，並以provider request counter鎖定DeepSeek與embedding皆為0。
-- [ ] 由 composition root 切換 helper。同步移除 candidate/planner/semantic validation/active-task orchestration，保留抽出的 schema/auth/ref validation；不要把舊碼改名藏進 middleware。
-- [ ] 移除舊 maxCandidates/minPlannerConfidence、無用 provider lanes/fallback、未用 context builder與只測舊機制的 fixtures。保留現用 wake-window store、DB legacy grants tables、worker與media-sync。
-- [ ] 將 spike CLI 成果合併進 `pnpm eval:agent`／`pnpm eval:agent:live`，刪獨立 CLI。遷移 Kernel boundary/report version，保留可比較的產品／安全案例，更新 architecture dependency rules。
-- [ ] 明示一次性短期狀態 migration：切換後過期或舊版 selection 請使用者重新選擇；pending write 不自動批准。已有 attachment work／job 繼續，不能因新runtime刪除。
+- [ ] 由 composition root 切換 helper，讓 candidate/planner/semantic validation/active-task orchestration離開helper production semantic path。因 `main` 必須維持現況，仍被它與既有pending/admin workflow引用的共享檔案不得假裝刪除或改名藏進middleware。
+- [ ] 移除只供helper舊路徑使用的配置與provider呼叫；`main`仍需要的 maxCandidates/minPlannerConfidence、context builder與fixtures保留到另案遷移。保留wake-window store、DB legacy grants tables、worker與media-sync。
+- [ ] 將SDK offline gate納入 `pnpm eval:agent`，保留 `pnpm eval:sdk-agent --live` 作helper專用手動檢查。擴充Kernel integration固定報告以驗證PostgreSQL checkpoint restart/expiry/cleanup。
+- [ ] 既有selection、pending write、attachment work與job由原workflow繼續，不自動批准或刪除；只有helper semantic conversation改用新checkpoint。
 - [ ] 執行舊依賴掃描，逐個說明残留引用或刪除；檢查實際 production import graph，不能只靠檔名搜索宣稱完成：
 
 ```sh
@@ -262,7 +264,7 @@ pnpm eval:admin
 
 - [ ] 更新 README/AGENTS 中的 controlled-authority 舊指示、不存在的 router 路徑、Account 身份描述與 function tool mapping，提交 `refactor(agent): replace controlled runtime with SDK harness`。
 
-**交付 gate:** Production 沒有第二 router/shadow/runtime switch；源碼、配置、測試、文件的權威一致；回滾透過已知良好部署，不靠保留舊 runtime 開關。
+**交付 gate:** Helper production 沒有第二 semantic router/shadow/runtime switch；legacy的每個殘留引用都屬於`main`或既有workflow相容責任。源碼、配置、測試、文件的權威一致；回滾透過已知良好部署。
 
 ## Task 9：整體驗收與未部署交付
 

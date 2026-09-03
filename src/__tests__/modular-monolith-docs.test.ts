@@ -124,12 +124,14 @@ describe("R5.0 release-assurance documentation", () => {
     for (const [name, content] of [
       ["README.md", readme],
       ["AGENTS.md", agents],
-      ["docs/architecture-context.md", architecture],
-      ["docs/runbooks/production-operations.md", operations]
+      ["docs/architecture-context.md", architecture]
     ]) {
-      expect(content, name).toContain("R5.0");
-      expect(content, name).toContain("Stable Maintenance");
-      expect(content, name).toContain("R5.0 production acceptance is complete.");
+      const normalized = content.replace(/\s+/gu, " ");
+      expect(normalized, name).toContain("R5.0");
+      expect(normalized, name).toContain("prior controlled-agent release");
+      expect(normalized, name).toMatch(/helper SDK redesign.*(?:new PR|own PR)/iu);
     }
+    expect(operations).toContain("R5.0 production acceptance is complete.");
+    expect(operations).toContain("Stable Maintenance");
   });
 });
