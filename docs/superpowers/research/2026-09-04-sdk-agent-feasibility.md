@@ -4,11 +4,11 @@
 
 ## 結論
 
-**可以確認 SDK 能取代自製 agent orchestration 的大部分機械結構。尚不能確認真實 DeepSeek 已改善 production 的中文判斷品質。**
+**可以確認 LangChain/LangGraph 能取代自製 agent orchestration 的大部分機械結構，而且真實 DeepSeek 已在小型 live gate 中完成預期的跨工具選擇、一般聊天與寫入暫停。完整 production 品質仍須在實際 adapters 完成後，用30個案例各跑3次驗收。**
 
-實際使用已發布的 LangChain JS `createAgent`、DeepSeek adapter、LangGraph InMemorySaver／PostgresSaver 與官方 middleware，完成14項 synthetic probe，14項通過。證明 SDK 可以擁有工具循環、多工具結果、history、thread、interrupt/resume、limits 與 checkpoint，無需保留自製候選→planner→validator→active-task 流程。
+實際使用已發布的 LangChain JS `createAgent`、DeepSeek adapter、LangGraph InMemorySaver／PostgresSaver 與官方 middleware，完成14項 mechanics probe，14項通過。另以真實 `deepseek-chat` 跑4個去識別化情境各3次。這證明 SDK 可以擁有工具循環、多工具結果、history、thread、interrupt/resume、limits 與 checkpoint，無需保留自製候選→planner→validator→active-task 流程。
 
-尚缺的最後證據是使用真實 DeepSeek 跑同一批去識別化案例。Production ACA 確認存在 `deepseek-api-key` secret 名稱，但目前 Azure CLI只回傳名稱，不回傳值；本機 process 與專案 `.env`/`.env.local` 都沒有 `DEEPSEEK_API_KEY`。沒有實際模型請求，因此不能把工具選擇成功率或95%服事情境目標標記為通過。
+Live probe 由使用者建立的主 checkout `.env` 注入 `DEEPSEEK_API_KEY`；沒有輸出、複製或提交 key，分析 worktree 也沒有建立 `.env`。小型 gate 足以核准選型方向，不能用來宣稱95%服事情境目標或完整 product acceptance 已通過。
 
 ## 調查涵蓋範圍
 
@@ -24,16 +24,17 @@
 
 ### 環境
 
-| 項目                                       | 值                                                                                                     |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| Node                                       | 24.14.1                                                                                                |
-| `langchain`                                | 1.5.10                                                                                                 |
-| `@langchain/deepseek`                      | 1.1.11                                                                                                 |
-| `@langchain/langgraph-checkpoint-postgres` | 1.0.5                                                                                                  |
-| `pg`                                       | 8.23.0                                                                                                 |
-| `zod`                                      | 4.5.4                                                                                                  |
-| PostgreSQL                                 | isolated `postgres:16-alpine` container                                                                |
-| 模型 endpoint                              | local scripted OpenAI-compatible endpoint；真實 SDK request/response parsing，0次真實 DeepSeek request |
+| 項目                                       | 值                                                                           |
+| ------------------------------------------ | ---------------------------------------------------------------------------- |
+| Node                                       | 24.14.1                                                                      |
+| `langchain`                                | 1.5.10                                                                       |
+| `@langchain/deepseek`                      | 1.1.11                                                                       |
+| `@langchain/langgraph-checkpoint-postgres` | 1.0.5                                                                        |
+| `pg`                                       | 8.23.0                                                                       |
+| `zod`                                      | 4.5.4                                                                        |
+| PostgreSQL                                 | isolated `postgres:16-alpine` container                                      |
+| Mechanics 模型 endpoint                    | local scripted OpenAI-compatible endpoint；真實 SDK request/response parsing |
+| Live 模型                                  | `deepseek-chat`；由未提交的 local env 注入 key                               |
 
 套件安裝在 `/tmp/hhc-sdk-feasibility.vvQqJQ`，使用 `npm install --ignore-scripts --save-exact`，沒有加入專案 dependencies。所有 tool data 和人名都是 synthetic。PostgreSQL container 只存 probe checkpoint及 synthetic operation ID。
 
@@ -57,6 +58,21 @@
 | `deleteThread`                    | PASS                              | `checkpoints`、`checkpoint_blobs`、`checkpoint_writes`該thread均為0 |
 
 初次 probe 曾失敗，原因是 scripted provider 每個 response 使用同一 message ID，SDK reducer將後續AI message當成前一個的更新。改成每個回應唯一ID後，14項全部通過。這是 probe fixture 問題，也形成一個 production contract：模型/provider response ID 必須保留唯一性，不能由自製 adapter壓成常數；加入回歸測試。
+
+### 真實 DeepSeek 小型 Live Gate
+
+四個案例全部使用 synthetic 名稱與資料，不接 production function、資料庫或寫入 handler。前導輪原始斷言把模型回覆文字也視為檔案生命週期權威，因此是3/4；這個失敗沒有被忽略，而是形成 server projection 的硬性要求。修正量測方式後另跑三輪，同時記錄 raw model wording 和 authoritative projection，三輪均為4/4。
+
+| 情境                                 | 3輪結果         | 觀察                                                  |
+| ------------------------------------ | --------------- | ----------------------------------------------------- |
+| 正式服事表查無→補查可見筆記          | 3/3             | 每輪皆依序呼叫 `query_schedule`、`search_information` |
+| 一般聊天不呼叫工具                   | 3/3             | 每輪0 tool call                                       |
+| 歌詞頁→換詞→找到SATB歌譜候選         | 3/3工具序列正確 | 每輪2次search＋2次read；0 download                    |
+| `save_schedule` proposal             | 3/3             | 每輪都停在SDK interrupt；approval前0 write            |
+| 模型自行正確描述「候選／未送掃」狀態 | 2/3             | 正式3輪中1輪過度承諾；前導輪也發生相同問題            |
+| server authoritative projection      | 3/3             | 固定依domain stage表達候選、未下載、未掃描、未保存    |
+
+正式三輪合計 input 14,343 tokens、output 2,665 tokens；另有一輪前導測試用來揭露生命週期文案問題。這批數據顯示 DeepSeek 能做本案需要的多步工具選擇，也顯示 prompt 無法可靠保證副作用或檔案狀態用語。正式回覆必須由 domain result 與 server projection 覆蓋這些欄位；模型只負責說明與整理。
 
 ### Probe揭露的必要 guardrails
 
@@ -109,11 +125,11 @@
 
 net: 約-4,000到-5,500 production lines，-0 deps possible；SDK migration預計增加3個direct SDK packages及其transitive dependencies。
 
-## 最後尚缺的 Gate
+## 實作前後仍需完成的 Gate
 
-1. 從使用者指定、可在本機process安全讀取的位置注入`DEEPSEEK_API_KEY`；不在對話、command output、檔案或報告中暴露值。
-2. 使用完全synthetic資料跑4個live案例：正式表→可見筆記、一般聊天無tool、多步歌譜、寫入proposal在approval前停止。至少每題3次，再擴成設計中的30題×3次。
-3. 實際source adapters與tool descriptions整合後重跑，因scripted tool outputs只證明runtime mechanics，不證明資料檢索或模型選擇品質。
-4. 通過後才開始大幅刪除；若失敗，先歸因DeepSeek、tool contract、SDK或資料，不回頭加phrase router。
+1. 把 throwaway mechanics 與4-case live probe 做成 repo 內可重跑、預設 offline 的測試；鎖定 exact versions 與 lockfile。
+2. 實際 source adapters 與 tool descriptions 整合後，將設計中的30個案例各跑3次；小型 synthetic outputs不證明資料檢索與完整模型品質。
+3. 所有檔案、分享與寫入回覆由 server projection 驗證 lifecycle；加入「模型說已完成但domain仍是candidate／pending」反例。
+4. 上述 gate 通過後才大幅刪除；若失敗，先歸因DeepSeek、tool contract、SDK或資料，不回頭加phrase router。
 
-因此，調查現在可以肯定「SDK取代大部分自製harness在技術上可行」；要肯定「真的改善大部分使用者狀況」，仍需最後的真實DeepSeek live gate。
+因此，選型與架構調查已足以決定採用 LangChain/LangGraph 作為 helper agent harness；它是本專案目前最佳適配，不是所有 agent 專案的普遍最佳答案。完整產品改善仍以實際 adapters、30×3 live suite、LINE smoke及安全驗收為準。

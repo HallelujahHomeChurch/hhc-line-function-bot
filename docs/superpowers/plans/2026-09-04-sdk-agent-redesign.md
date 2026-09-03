@@ -92,7 +92,7 @@ git commit -m "test(agent): define cross-source and web-search acceptance"
 
 **Interfaces:** 對接 SDK `messages`、tool call/result 與 `invoke`／`Command(resume)`；沿用既有 domain `FunctionHandler(args, context)`，spike 只注入 synthetic read tools 與無副作用的 approval tool。正式 `save_*` 不在 spike 工具集合。
 
-**已有研究證據：** [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)的throwaway mechanics probe以正式SDK套件完成14/14項；Task 2仍需把相同契約做成repo tests，並跑真實DeepSeek及選定讀頁provider，不能直接勾選完成。
+**已有研究證據：** [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)的throwaway mechanics probe以正式SDK套件完成14/14項；真實DeepSeek的4個synthetic情境各跑3次，跨來源、tool-free chat、多步找譜與寫入interrupt均符合預期。Task 2仍需把相同契約做成repo tests、接實際adapters、選定讀頁provider並完成30×3 gate，不能直接勾選完成。
 
 - [ ] 在 npm 已發布版本中解析相容 peer dependency 組合，鎖定 exact versions；檢查 Node 24、Zod4、ESM、build 與官方 Postgres saver 相容性。記錄 lockfile，禁止依賴未發布 GitHub main API。
 - [ ] 用最小官方組合起步，工具以 Task 1 fixture 回傳 evidence；下面是初始化形狀，參數以鎖定發布版型別為準，不額外自建 runtime interface：
@@ -208,6 +208,7 @@ pnpm build
 - [ ] 建立「自然語言改排班→預覽→權限撤銷→確認被拒」「預覽後資料 revision 改變」「重送同一確認」「其他群組／使用者確認」反例。
 - [ ] 將 preview 建立與 commit 分離。Approval 綁定 scope、canonical arguments、target revision、到期；確認時重新授權，原子消耗。多工具批次中每個寫入需各自有效批准，不以一次 yes 批准未展示的新增動作。
 - [ ] `save_resource` 明確區分 `bookmark` 與 `import`；沿用 HTTPS 書籤30天／visibility。選擇操作不改變執行權限，bookmark 不下載，import 不繞過 worker。
+- [ ] 檔案／分享／寫入的最終LINE回覆使用authoritative server projection；即使模型文字聲稱已完成，只要domain result仍是candidate／pending／not-clean，就不能顯示已下載、已送掃、已發布或已保存。
 - [ ] 拒絕、取消或修改 preview 時使舊 approval 無效；修改後重建預覽。SDK 回合恢復前不接受模型自行產生的 approval decision。
 - [ ] 對寫入已成功但 checkpoint 未寫入的 crash window 執行重放測試：取得原業務結果，不能再次寫入／發布。現有 `saveTextMemory` 等若只有隨機新 ID，需將 server approval 的 operation ID 納入唯一約束，與 domain 寫入及結果記錄在同一交易提交；重播回傳原結果。保留原 worker/outbox 的 idempotency，不再包一層發布機制。僅原子消耗確認 token 不足以宣稱 crash 後可恢復成功結果。
 - [ ] 執行相關 Vitest、`pnpm eval:kernel:integration`，提交 `refactor(agent): bind SDK approvals to domain writes`。
@@ -237,6 +238,7 @@ pnpm build
 **Interfaces:** Production 只有 SDK agent 入口；admin/system actions 仍走 catalog/policy/audit。舊 selection／task-frame 不轉成已批准的新 SDK action；既有 durable work 使用原資料格式完成。
 
 - [ ] 在新入口先跑 LINE access、group wake、一般對話→工具、寫入確認、main provider-free 的實際 transport 測試。
+- [ ] 只在helper profile composition建立SDK agent與DeepSeek client。main不建立agent checkpoint、不暴露helper tools，並以provider request counter鎖定DeepSeek與embedding皆為0。
 - [ ] 由 composition root 切換 helper。同步移除 candidate/planner/semantic validation/active-task orchestration，保留抽出的 schema/auth/ref validation；不要把舊碼改名藏進 middleware。
 - [ ] 移除舊 maxCandidates/minPlannerConfidence、無用 provider lanes/fallback、未用 context builder與只測舊機制的 fixtures。保留現用 wake-window store、DB legacy grants tables、worker與media-sync。
 - [ ] 將 spike CLI 成果合併進 `pnpm eval:agent`／`pnpm eval:agent:live`，刪獨立 CLI。遷移 Kernel boundary/report version，保留可比較的產品／安全案例，更新 architecture dependency rules。

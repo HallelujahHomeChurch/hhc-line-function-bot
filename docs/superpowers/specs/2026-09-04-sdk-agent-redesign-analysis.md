@@ -1,16 +1,16 @@
 # SDK agent harness 改造設計與分析
 
-日期：2026-09-04。狀態：主要產品方向已確認；SDK mechanics probe 14/14通過，真實DeepSeek品質仍待live key。實作尚未開始。證據見 [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)，分階段工作見 [implementation plan](../plans/2026-09-04-sdk-agent-redesign.md)。
+日期：2026-09-04。狀態：主要產品方向已確認；SDK mechanics probe 14/14通過，真實DeepSeek 4個synthetic情境各跑3次，工具選擇與寫入暫停均符合預期。實作尚未開始。證據見 [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)，分階段工作見 [implementation plan](../plans/2026-09-04-sdk-agent-redesign.md)。
 
 分析基準：`origin/main` 的 `04d085646bb40f4386afa4243401542926b5f39b`。2026-09-04 再次比對遠端 main，仍為相同 commit。分析分支：`codex/hermes-agent-redesign-analysis`。
 
 ## 1. 建議決策
 
-以 **LangChain JS `createAgent` + LangGraph checkpointer + DeepSeek 原生 tool calling** 作為第一個驗證方案。SDK 負責模型／工具循環、訊息狀態、暫停恢復與標準 middleware；本專案維護 LINE 入口、Account 授權、工具的業務實作與資料安全。
+採用 **LangChain JS `createAgent` + LangGraph checkpointer + DeepSeek 原生 tool calling** 作為 helper 的 agent harness。SDK 負責模型／工具循環、訊息狀態、暫停恢復與標準 middleware；本專案維護 LINE 入口、Account 授權、工具的業務實作與資料安全。
 
 不再維護候選函式排名、一次性 JSON planner、語意信心門檻、單一 capability 對話狀態機。也不以手寫 LangGraph 節點重做同一套路由器。新增的是 SDK 整合與必要的業務邊界，移除的是自製 agent orchestration。
 
-這是基於目前程式、官方文件和已發布套件的推薦，**尚未用真實 DeepSeek 跑過新架構**。先通過第 8 節的短期驗證，才確定採用；不因框架名稱或測試數量宣稱改善成功。
+這是本專案的最佳適配，而不是抽象上的唯一最佳框架。已發布套件的14項 mechanics probe全部通過；真實DeepSeek小型live gate也證明跨正式表／筆記、一般聊天、多步找譜與寫入暫停可行。完整產品改善仍需實際 adapters 與30×3驗收，不能只因框架名稱或小型測試宣稱完成。
 
 使用者已確認：Hermes、OpenCode、OpenClaw、Codex、Claude 是 agent 體驗的範例，並非指定移植某個產品。終局是成熟開源 SDK 支撐的 agent，加上 guardrails 與必要工具。
 
@@ -53,11 +53,11 @@
 
 ## 4. SDK／framework 選型
 
-2026-09-04 查詢 npm metadata，並下載以下正式發布套件以唯讀方式檢查 manifest、型別及實作；未加入專案依賴、未執行套件 scripts。版本是研究快照，不代表相容組合已驗證。
+2026-09-04 查詢 npm metadata，並將以下正式發布套件安裝在 throwaway 目錄檢查 manifest、型別及實作；未加入專案依賴。LangChain、DeepSeek adapter、PostgresSaver、Node 24與Zod 4組合已完成 mechanics/live probe；正式實作仍須寫入專案 lockfile並通過完整 build。
 
 | 方案                                   | 研究版本／license                 | 能接手的工作                                                              | 本專案判斷                                                                                             |
 | -------------------------------------- | --------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| LangChain JS `createAgent` + LangGraph | `langchain@1.5.10`／MIT           | 模型工具循環、messages state、HITL、checkpoint、middleware                | **首選驗證**。有現成執行架構，能嵌入 Fastify；避免自建 graph routing                                   |
+| LangChain JS `createAgent` + LangGraph | `langchain@1.5.10`／MIT           | 模型工具循環、messages state、HITL、checkpoint、middleware                | **採用**。已通過本案mechanics與小型DeepSeek live gate；能嵌入Fastify並取代自建graph routing            |
 | Vercel AI SDK `ToolLoopAgent`          | `ai@7.0.91`／Apache-2.0           | 模型工具循環、工具 approval、停止條件、provider 整合                      | 次選。API 精簡，但本案跨 LINE event 的持久狀態、恢复與生命週期仍需較多整合                             |
 | Mastra                                 | `@mastra/core@1.64.0`／Apache-2.0 | Agent、memory、workflow、approval、平台整合                               | 若需要整套 agent 平台再考慮；目前 LINE／Fastify／DB 已存在，需避免再建一套服務與狀態體系               |
 | Deep Agents JS                         | `deepagents@1.13.2`／MIT          | LangChain/LangGraph 上的 harness，含檔案系統、subagent、摘要與可選 skills | 功能完整，但第一版查詢／寫入工具不需要檔案工作區與委派。可以限制內建工具，卻仍要理解並維護額外預設堆疊 |
@@ -81,6 +81,7 @@ OpenCode SDK 主要是控制 OpenCode server 的 client；直接使用會把完�
 - 第一個驗證維持非 thinking 模式，減少同時變動。若品質不達標，再用同一評測比較 thinking 的效果、延遲及成本；不是增加另一個 fallback provider。
 - 現有 Azure embedding 用於索引檢索，與對話 provider 是不同職責；此改造不要求重建 embedding／pgvector。
 - 不要求 LangSmith、模型 gateway 或託管 agent 平台；預設不啟用會外傳內容的 tracing。
+- SDK agent 僅在 `helper` profile composition 建立。`main` 不建立模型 client、不看 agent tools、不寫 checkpoint，原有週報下載與本人資料更新仍走 provider-free deterministic path；以 `providerRequests: { deepseek: 0, embedding: 0 }` 回歸鎖定。
 
 ## 5. 目標架構與 guardrails
 
@@ -120,6 +121,7 @@ Guardrail 的權威是 server，可被模型理解，但不依模型服從才生
 5. **不可信內容只當資料。** Wikipedia、Notion、記憶不能改寫系統規則或授權。工具出口限制來源、內容大小及欄位；不提供任意 HTTP/shell/SQL 工具。Prompt injection 測試驗證權限邊界，即使模型被誘導也不能越權。
 6. **有界執行。** 使用官方 model/tool call limit、timeout、取消與摘要 middleware。實際SDK多步找譜probe需要5次模型呼叫；第一個live gate改以每回合最多6次模型、6次工具呼叫作測量起點，write tool仍最多1次。包括重試、平行呼叫、resume後的累計都要驗證。這是暫定值，不是既有效能承諾。[Prebuilt middleware](https://docs.langchain.com/oss/javascript/langchain/middleware/built-in)
 7. **結果與 telemetry 分開。** 模型可以收到已授權、必要的資料片段；一般 trace 僅記工具名、狀態、耗時、token、拒絕原因。不得把整個 SDK run／prompt／tool result 直接送入 log。
+8. **生命週期文字由 server 投影。** 真實DeepSeek正式三輪找譜中有1輪過度承諾「已找到可下載」，前導輪也發生同樣問題。候選、已送掃、clean、已發布、已寫入與分享連結一律依typed domain result生成；模型不能覆寫該狀態。
 
 新工具結果可包含 `status`、有界 evidence、來源種類、更新時間與 opaque references。`not_found`、`unavailable`、`ambiguous`、`stale` 必須區別，不能解析使用者回覆文字判斷成功與否。分享網址由 server 在送出時生成／驗證，不放入 checkpoint，避免存入過期連結。
 
@@ -138,7 +140,7 @@ Guardrail 的權威是 server，可被模型理解，但不依模型服從才生
 
 ## 6. 全部 function 的處置建議
 
-「合併」指模型使用的工具與重複實作；不代表合併不同權限或直接搬動資料表。未取得功能使用量，因此以下退役项先列為提案，不宣稱無人在用。
+「合併」指模型使用的工具與重複實作；不代表合併不同權限或直接搬動資料表。這是經repo-wide dependency/complexity audit後的最小合理 surface，但未取得功能使用量，也尚未接實際 adapters，因此是執行目標，不宣稱已達最終實測最佳值。
 
 | 現有 function           | 建議                                                           | 必要改善與保留邊界                                                                                                                 |
 | ----------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -155,7 +157,7 @@ Guardrail 的權威是 server，可被模型理解，但不依模型服從才生
 | `download_weekly_paper` | **保留 main 的固定入口**                                       | 公開週報下載不需要模型；維持 provider-free                                                                                         |
 | `update_own_profile`    | **保留 main 的自助入口**                                       | direct-only、linked active caller、即時 Account check、preview/confirm；第一版不搬入 helper agent                                  |
 
-Helper 原有功能整理為 `query_schedule`、`search_information`、`search_files`、`query_wikipedia`、`save_schedule`、`save_memory`、`save_resource`。依新增確認的 agent 歌譜查找需求，再提供外部搜尋與讀頁兩個唯讀工具，初步共 **6 個讀取 + 3 個寫入**。公開 main 的兩個功能及管理動作分開。工具名稱與合併方式以相容性 spike 結果定案，不為維持原先「7個」提案而把多步搜尋藏回大型 handler。
+Helper 原有功能整理為 `query_schedule`、`search_information`、`search_files`、`query_wikipedia`、`save_schedule`、`save_memory`、`save_resource`。依 agent 歌譜查找需求，再提供外部搜尋與讀頁兩個唯讀工具，共 **6 個讀取 + 3 個寫入**。公開 main 的兩個功能及管理動作分開。不要為追求更少工具，把search/read或不同副作用重新藏回大型handler；實作後以tool telemetry決定是否還能合併或應拆分。
 
 合併工具時必須按子操作保留原授權：例如只啟用投影片、不啟用歌譜的 profile，`search_files` 仍不可搜尋歌譜；`search_information` 也只查当下启用與可見的資料來源。不要因工具名稱較少而放大權限。
 
@@ -294,15 +296,17 @@ Admin/system actions 另行整理：保留登入、註冊、help、診斷、invi
 
 ## 10. 本次已完成與仍待確認
 
-本次完成：最新 main 靜態盤點、全部12個 function 的處置草案、SDK官方資料與發布套件比對、原版本離線基準。
+本次完成：最新 main 靜態盤點、全部12個 function 的處置草案、SDK官方資料與發布套件比對、原版本離線基準、14項SDK mechanics probe，以及真實DeepSeek 4個synthetic情境各3次的小型live gate。
 
-| 已執行檢查         | 結果                                             | 證據限制                                      |
-| ------------------ | ------------------------------------------------ | --------------------------------------------- |
-| `pnpm test`        | 151 files passed；1,897 tests passed；39 skipped | 原版本單元／整合測試集合，不是新 agent 成效   |
-| `pnpm eval:agent`  | candidates20/20、proposals14/20、validated20/20  | deterministic offline，不是真實 DeepSeek 決策 |
-| `pnpm eval:kernel` | PASS，115 cases                                  | 原 kernel 契約；不代表使用者不再遇到誤判      |
+| 已執行檢查          | 結果                                             | 證據限制                                      |
+| ------------------- | ------------------------------------------------ | --------------------------------------------- |
+| `pnpm test`         | 151 files passed；1,897 tests passed；39 skipped | 原版本單元／整合測試集合，不是新 agent 成效   |
+| `pnpm eval:agent`   | candidates20/20、proposals14/20、validated20/20  | deterministic offline，不是真實 DeepSeek 決策 |
+| `pnpm eval:kernel`  | PASS，115 cases                                  | 原 kernel 契約；不代表使用者不再遇到誤判      |
+| SDK mechanics probe | 14/14 PASS                                       | throwaway環境；證明loop/HITL/checkpoint機制   |
+| DeepSeek live gate  | 3輪工具選擇與HITL皆符合預期                      | 4個synthetic情境；不是30×3完整產品驗收        |
 
-尚未執行：新 SDK spike、live DeepSeek benchmark、資料遷移、production 變更、release／LINE smoke。
+尚未執行：repo內SDK實作與實際adapter整合、30×3 live benchmark、資料遷移、production變更、release／LINE smoke。
 
 已確認：helper 可一般對話與常識回答；保留 LINE 直接新增／修改正式服事表的 `save_schedule`；保留外部歌譜搜尋與匯入並改為 agent 多步查找；找到檔案後沿用既有送掃與發布流程。工具與資料權限仍由 server 強制執行。這些是產品需求決策，其餘功能退役、實作或部署仍依本計劃處理。
 
@@ -314,4 +318,16 @@ Admin/system actions 另行整理：保留登入、註冊、help、診斷、invi
 4. 外部查找保留首次 consent；同一查找內 agent 自行換詞與讀頁。只在匯入時再次要求寫入確認。
 5. 去識別化失敗對話可持續補充，但目前例子已足夠建立第一批驗收，不以缺少更多例句拖延規劃。
 
-技術選型 gate：SDK 的 DeepSeek／checkpoint／HITL 相容性，以及成熟讀頁工具的品質、部署與 key 成本，均由 spike 提供證據。未通過時不能宣稱工具式 agent 已改善產品，也不能進入大規模刪除與正式切換。下一步依 implementation plan 執行；本文件不是已完成實作或已授權 production deployment 的證明。
+技術選型 gate中的DeepSeek／checkpoint／HITL相容性已由throwaway probe通過。成熟讀頁provider、實際domain adapters、30×3品質與安全gate仍待實作驗證；未通過不能進入production切換。下一步依implementation plan執行；本文件不是已完成實作或已授權production deployment的證明。
+
+## 11. 核心改造穩定後可追加的能力
+
+依YAGNI排序，先利用同一agent組合既有工具；能以多工具流程完成的需求不新增function。
+
+1. **公開網頁研究。** 將目前限歌譜的search/read guardrail擴成一般唯讀公開網頁搜尋，回答附來源；仍封鎖private/reserved address、登入、任意下載與內部資料外送。這是最值得追加的新工具能力。
+2. **跨來源比較與摘要。** 例如「比較正式服事表、筆記與知識庫後列出本週差異」或「整理聚會前briefing」。這由現有工具組合完成，不新增function或排程服務。
+3. **從訊息產生服事表草稿。** Agent把自然語言或已掃描乾淨的文字內容轉成`save_schedule` preview，逐欄顯示差異後確認；沿用既有寫入工具，不建立第二條import path。
+4. **使用者可讀的來源與狀態說明。** 回答「你根據什麼？」或「檔案送掃了嗎？」時，從typed evidence與work status產生簡短說明。這主要是response projection，不需要新agent framework。
+5. **受控admin維護。** 把已有knowledge source sync、診斷或invite等動作逐項接成direct-admin-only tools；每項仍走action catalog、audit與必要確認。只有確定管理需求高頻時才做。
+
+暫不排入第一批：任意瀏覽器操作、shell、登入網站、購買、主動push提醒、subagent與通用MCP marketplace。它們會擴大權限、狀態或營運成本；等核心agent的實際使用資料證明需求後再評估。
