@@ -4,9 +4,9 @@
 
 **Goal:** 以成熟 SDK 取代自製 controlled-agent orchestration，讓 helper 能自然對話、跨來源查詢、編輯正式服事表與多步找歌譜，所有讀寫保留業務 guardrails。
 
-**Architecture:** 首選 LangChain JS `createAgent`、LangGraph checkpoint 和 DeepSeek 原生 tool calling。LINE／Account／檢索 adapter／Asset worker 沿用；模型工具結果回到同一 agent，server 擁有身份、授權、確認、scope 與發布權威。先通過 SDK spike，再接完整工具及切換；不建立第二個 production router。
+**Architecture:** 核定採用 LangChain JS `createAgent`、LangGraph checkpoint 和 DeepSeek 原生 tool calling。LINE／Account／檢索 adapter／Asset worker 沿用；模型工具結果回到同一 agent，server 擁有身份、授權、確認、scope 與發布權威。先通過 SDK spike，再接完整工具及切換；不建立第二個 production router。
 
-**Tech Stack:** TypeScript、Node 24、pnpm、Fastify、Zod、PostgreSQL、Redis、DeepSeek；候選 `langchain@1.5.10`、`@langchain/deepseek@1.1.11`、`@langchain/langgraph-checkpoint-postgres@1.0.5`，其餘 peer dependencies 以 spike 的相容 lockfile 為準。
+**Tech Stack:** TypeScript、Node 24、pnpm、Fastify、Zod、PostgreSQL、Redis、DeepSeek；研究驗證版本為 `langchain@1.5.10`、`@langchain/deepseek@1.1.11`、`@langchain/langgraph-checkpoint-postgres@1.0.5`，實作以相容 lockfile 鎖定 exact versions。
 
 **Spec:** [SDK agent harness 改造設計與分析](../specs/2026-09-04-sdk-agent-redesign-analysis.md)。執行前完整閱讀；包含12個 function 的處置與安全契約。
 
@@ -16,6 +16,8 @@
 - 使用 `codex/*` 隔離分支；保留其他工作；不得直接 push main。
 - DeepSeek 是唯一語意模型 provider；`DEEPSEEK_API_KEY` 只由 secret/env 注入。現有 embedding 不變。
 - Helper 可一般對話；main 維持 provider-free 的週報下載與本人姓名修改。
+- Helper使用版本控制的`PERSONA.md`統一LLM身份，使用唯讀`MEMORY.md`定義記憶政策；main不載入兩者。
+- 群組不自動建立具名行為側寫；durable memory維持scope、授權、預覽與確認，runtime內容只存既有受控store。
 - `save_schedule` 必須保留。外部歌譜搜尋與匯入必須保留並改為 agent 多步查找；送掃照舊。
 - Profile/source/requester 隔離；無 requester 的群組不建立續接狀態；不記錄 raw whole-group chat。
 - 官方 SDK 擁有 loop/messages/interrupt/checkpoint；不以手寫 graph 或 middleware 重建候選排名／語意路由器。
@@ -39,6 +41,7 @@
 | 新增 `src/tools/eval-sdk-agent.ts`                                                   | 僅 spike 使用的受控 CLI；切換後併入既有 eval 命令並刪除此入口                               |
 | 新增 `src/evals/kernel/cases/sdk-journeys.ts`                                        | 新產品案例及期待證據；原 Kernel case ID 能沿用者沿用並提升版本                              |
 | 新增 `src/__tests__/sdk-agent.test.ts`、`sdk-tools.test.ts`、`sdk-state.test.ts`     | 分別驗證 loop、工具邊界、持久狀態；沿用 Vitest，不建另一測試框架                            |
+| 新增 `config/agents/helper/PERSONA.md`、`MEMORY.md`                                  | Helper的LLM人設與記憶政策；版本控制且唯讀，不保存runtime使用者內容                          |
 | 修改現有 function handlers                                                           | 回傳 typed evidence，移除多餘模型摘要；不重寫 storage adapters                              |
 | 修改 `src/bootstrap/create-production-runtime.ts`、`src/application/turn/runtime.ts` | 組裝與切換；transport 從有效 identity 進入 agent，再送 LINE reply                           |
 | 修改 `src/transport/line/webhook-routes.ts`、現有 pending handlers                   | 保留入口與權限；將確認連回 SDK interrupt，刪受替換的語意階段                                |
@@ -293,7 +296,8 @@ pnpm eval:admin
 
 - [x] 全部12個原 function 有處置；`save_schedule`、外部找譜及送掃依使用者確認保留。
 - [x] 一般對話、跨來源查詢、寫入、外部頁面讀取、state、LINE、admin、legacy removal 均有對應 task。
-- [x] 先取得 SDK／產品證據，再大幅替換；成本與key尚未取得不會被當作已驗證。
+- [x] Helper persona與memory policy已核定：`PERSONA.md`統一身份，`MEMORY.md`只定義規則；不自動建立群組成員具名側寫。
+- [x] 已取得mechanics與小型DeepSeek live證據；實際adapter與30×3產品gate仍在大幅替換前執行。
 - [x] Runtime安全與資料管線保留；沒有為減碼刪除確認、掃描、scope或atomicity。
 - [x] 部署與實作完成狀態分明；目前本計劃的 Task 1–9 均未執行。
 

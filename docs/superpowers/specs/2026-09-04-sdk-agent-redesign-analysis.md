@@ -1,6 +1,6 @@
 # SDK agent harness 改造設計與分析
 
-日期：2026-09-04。狀態：主要產品方向已確認；SDK mechanics probe 14/14通過，真實DeepSeek 4個synthetic情境各跑3次，工具選擇與寫入暫停均符合預期。實作尚未開始。證據見 [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)，分階段工作見 [implementation plan](../plans/2026-09-04-sdk-agent-redesign.md)。
+日期：2026-09-04。狀態：**設計已由使用者核定，待實作**。SDK mechanics probe 14/14通過，真實DeepSeek 4個synthetic情境各跑3次，工具選擇與寫入暫停均符合預期。實作尚未開始。證據見 [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)，分階段工作見 [implementation plan](../plans/2026-09-04-sdk-agent-redesign.md)。
 
 分析基準：`origin/main` 的 `04d085646bb40f4386afa4243401542926b5f39b`。2026-09-04 再次比對遠端 main，仍為相同 commit。分析分支：`codex/hermes-agent-redesign-analysis`。
 
@@ -36,6 +36,8 @@
 
 ### Helper 人設重新審核
 
+**已確認（2026-09-04）：** 採用 `PERSONA.md` 統一helper的LLM身份與語氣；不使用容易被誤解為個人資料的`personal.md`。Main不載入helper persona。
+
 目前沒有 `personal.md`、`PERSONA.md` 或 `MEMORY.md`。Helper 人設分散在 `config/profiles.json` 的 `identityLine`、四段 `smallTalk.prompting`，以及 `src/small-talk.ts` 的 template replies；完整 persona 只送入 small-talk generation。改成單一 SDK agent 後若直接沿用，工具回合、一般聊天與 deterministic intro 可能呈現不同角色。
 
 現有人設的優點是繁體中文、第一人稱、溫暖簡短、不說教、不編造教會立場。需要修正的地方：
@@ -56,6 +58,8 @@
 Profile config引用該檔，並保留供deterministic intro使用的短`identityLine`與非人格執行設定；loader限制在版本控制的 `config/agents` 目錄，啟動時驗證檔案存在且非空。測試鎖定intro、一般聊天與agent system prompt的身份一致。Main維持provider-free，不載入helper persona。工具權限、確認與資料安全仍由code/domain控制，不移進prompt檔。
 
 ### `MEMORY.md` 與群組記憶設計
+
+**已確認（2026-09-04）：** 採用唯讀、版本控制的`MEMORY.md`作為記憶政策；runtime資料仍存PostgreSQL。群組不自動建立具名行為側寫，durable memory維持授權、預覽與確認。
 
 `config/agents/helper/MEMORY.md` 是版本控制的**記憶政策**，不是持續追加的資料檔。Runtime memory仍存PostgreSQL並沿用scope、visibility、expiry、deletion與audit；容器或Git內不得累積使用者內容。
 
