@@ -140,3 +140,7 @@ net: 約-4,000到-5,500 production lines，-0 deps possible；SDK migration預�
 4. 上述 gate 通過後才大幅刪除；若失敗，先歸因DeepSeek、tool contract、SDK或資料，不回頭加phrase router。
 
 因此，選型與架構調查已足以決定採用 LangChain/LangGraph 作為 helper agent harness；它是本專案目前最佳適配，不是所有 agent 專案的普遍最佳答案。完整產品改善仍以實際 adapters、30×3 live suite、LINE smoke及安全驗收為準。
+
+## Repo 內 Spike 結果
+
+2026-09-04 已將發布版 SDK 鎖進 repo：`langchain@1.5.10`、`@langchain/deepseek@1.1.11`、`@langchain/langgraph@1.4.13`、`@langchain/langgraph-checkpoint-postgres@1.0.5`。離線 Vitest 覆蓋原生多工具 loop、strict schema 修正、未知工具拒絕、HITL approve 前零寫入、run limits 與兩次搜尋／兩次讀頁。repo 內 synthetic eval 通過，另以本機 secret 跑真實 `deepseek-chat`，依序呼叫 `query_schedule`、`search_information` 並通過；沒有把 key 或 provider payload寫入輸出。Task 2 的 SDK go gate 通過，production adapters、持久 state與完整產品 gate仍由後續 task 驗證。
