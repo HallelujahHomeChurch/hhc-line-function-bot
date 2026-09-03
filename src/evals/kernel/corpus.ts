@@ -5,6 +5,7 @@ import { SECURITY_AND_STATE_KERNEL_CASES } from "./cases/security-and-state.js";
 import { REAL_JOURNEY_KERNEL_CASES } from "./cases/real-journeys.js";
 import { REMOTE_RUNTIME_KERNEL_CASES } from "./cases/remote-runtime.js";
 import { PRODUCT_EXPERIENCE_KERNEL_CASES } from "./cases/product-experience.js";
+export { SDK_AGENT_ACCEPTANCE_CASES } from "./cases/sdk-journeys.js";
 
 export const KERNEL_ACCEPTANCE_CASES: KernelAcceptanceCase[] = [
   ...SCHEDULE_KERNEL_CASES,

@@ -6,7 +6,11 @@ import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { InMemoryScheduleStore } from "../schedules/store.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import { RECURRENCE_FAMILIES } from "../evals/kernel/contracts.js";
-import { KERNEL_ACCEPTANCE_CASES, validateKernelCorpus } from "../evals/kernel/corpus.js";
+import {
+  KERNEL_ACCEPTANCE_CASES,
+  SDK_AGENT_ACCEPTANCE_CASES,
+  validateKernelCorpus
+} from "../evals/kernel/corpus.js";
 import { PRODUCT_EXPERIENCE_KERNEL_CASES } from "../evals/kernel/cases/product-experience.js";
 import { REMOTE_RUNTIME_KERNEL_CASES } from "../evals/kernel/cases/remote-runtime.js";
 import { SCHEDULE_KERNEL_CASES } from "../evals/kernel/cases/schedule.js";
@@ -358,6 +362,41 @@ describe("Kernel v1 versioned acceptance corpus", () => {
     );
 
     expect(registration?.recurrenceFamily).toBe("write_safety_bypass");
+  });
+});
+
+describe("SDK agent product acceptance corpus", () => {
+  it("covers at least thirty multi-turn journeys and twenty cross-source cases", () => {
+    expect(SDK_AGENT_ACCEPTANCE_CASES.length).toBeGreaterThanOrEqual(30);
+    expect(SDK_AGENT_ACCEPTANCE_CASES.every(({ messages }) => messages.length >= 2)).toBe(true);
+    expect(
+      SDK_AGENT_ACCEPTANCE_CASES.filter(({ category }) => category === "cross_source")
+    ).toHaveLength(20);
+  });
+
+  it("keeps expected writes and provider usage explicit", () => {
+    expect(SDK_AGENT_ACCEPTANCE_CASES.filter(({ expected }) => expected.writes === 0)).toHaveLength(
+      28
+    );
+    expect(
+      SDK_AGENT_ACCEPTANCE_CASES.find(({ id }) => id === "sdk-v1/main/provider-free@1")
+    ).toEqual(
+      expect.objectContaining({
+        profile: "main",
+        expected: expect.objectContaining({ providerCalls: 0, writes: 0 })
+      })
+    );
+    expect(
+      SDK_AGENT_ACCEPTANCE_CASES.find(({ id }) => id === "sdk-v1/schedule/saved-note@1")
+    ).toEqual(
+      expect.objectContaining({
+        expected: expect.objectContaining({
+          evidenceSource: "visible_note",
+          distinguishFromFormalSchedule: true,
+          securityViolations: []
+        })
+      })
+    );
   });
 });
 

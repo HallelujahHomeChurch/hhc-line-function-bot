@@ -77,6 +77,26 @@ export interface KernelAcceptanceCase {
   run(context: KernelCaseContext): Promise<KernelCaseObservation>;
 }
 
+export type SdkAgentCaseCategory =
+  "conversation" | "cross_source" | "isolation" | "sheet_music" | "write";
+
+export interface SdkAgentAcceptanceCase {
+  id: `sdk-v1/${string}@1`;
+  profile: "helper" | "main";
+  category: SdkAgentCaseCategory;
+  now: string;
+  messages: readonly [string, string, ...string[]];
+  expected: {
+    writes: 0 | 1;
+    providerCalls: 0 | "bounded";
+    securityViolations: readonly SecurityViolation[];
+    evidenceSource?: "formal_schedule" | "visible_note" | "knowledge" | "none";
+    distinguishFromFormalSchedule?: boolean;
+    requiredTools?: readonly string[];
+    approvalRequired?: boolean;
+  };
+}
+
 export interface KernelMetric {
   numerator: number;
   denominator: number;
