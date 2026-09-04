@@ -9,6 +9,8 @@ import {
   RedisRegistrationInviteCodeStore
 } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
+import { createAgentRuntime } from "../agent/agent-runtime.js";
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import {
   createFunctionCompletionObserver,
   type FunctionCompletionObserver
@@ -24,6 +26,7 @@ import { signLineBody } from "../line-signature.js";
 import { runMediaSyncMigrations } from "../media-sync/migrations.js";
 import { PostgresMediaSyncStore } from "../media-sync/store.js";
 import { InMemoryFirstSuccessStore } from "../observability/first-success-store.js";
+import { createProfileRuntimeDispatcher } from "../runtime/profile-runtime.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
@@ -6361,6 +6364,8 @@ describe("LINE entrance", () => {
     });
     const textMessageHandlers: TextMessageHandlerRegistry = {
       ppt_numeric_selection: {
+        turnStage: "resolution",
+        capability: "find_ppt_slides",
         matches: matchesNumericSelection,
         handle: handleNumericSelection
       }
@@ -6418,6 +6423,8 @@ describe("LINE entrance", () => {
     const handleNumericSelection = vi.fn().mockResolvedValue(undefined);
     const textMessageHandlers: TextMessageHandlerRegistry = {
       ppt_numeric_selection: {
+        turnStage: "resolution",
+        capability: "find_ppt_slides",
         matches: matchesNumericSelection,
         handle: handleNumericSelection
       }
@@ -6516,6 +6523,90 @@ describe("LINE entrance", () => {
       expect.objectContaining({ event: expect.objectContaining({ source }) })
     );
     expect(replyText).toHaveBeenCalledOnce();
+  });
+
+  it("runs deterministic resolution and attachment continuations before a production-shaped profile dispatcher", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    helper.enabledFunctions = ["find_sheet_music", "find_ppt_slides", "save_resource"];
+    helper.permissionRequiredFunctions = [];
+    const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+    const handlers = {
+      sheet_music_numeric_selection: {
+        turnStage: "resolution" as const,
+        capability: "find_sheet_music" as const,
+        matches: ({ text }: { text: string }) => text === "上網找",
+        handle: vi.fn(async () => ({
+          ok: true,
+          replyText: "外部歌譜",
+          executedAction: "find_sheet_music" as const,
+          agentResource: {
+            resourceType: "sheet_music" as const,
+            title: "歌譜",
+            storage: { provider: "external_link" as const, url: "https://example.test/music.pdf" }
+          }
+        }))
+      },
+      ppt_numeric_selection: {
+        turnStage: "resolution" as const,
+        capability: "find_ppt_slides" as const,
+        matches: ({ text }: { text: string }) => text === "1",
+        handle: vi.fn(async () => ({
+          ok: true,
+          replyText: "投影片 1",
+          executedAction: "find_ppt_slides" as const
+        }))
+      },
+      pending_attachment_answer: {
+        turnStage: "attachment" as const,
+        capability: "save_resource" as const,
+        matches: ({ text }: { text: string }) => text === "是",
+        handle: vi.fn(async () => ({ ok: true, replyText: "請選用途" }))
+      }
+    };
+    const memoryStore = new InMemoryAgentMemoryStore();
+    const agentRuntime = createAgentRuntime({ memoryStore });
+    const afterFunctionResult = vi.spyOn(agentRuntime, "afterFunctionResult");
+    const complete = vi.fn<FunctionCompletionObserver["complete"]>(async ({ result }) => result);
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      profileRuntime: createProfileRuntimeDispatcher({
+        helper: { handleTextTurn: profileTurn }
+      }),
+      textMessageHandlers: handlers,
+      agentRuntime,
+      completionObserver: { complete },
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    for (const [index, text] of ["上網找", "1", "是"].entries()) {
+      const body = lineBody({
+        type: "message",
+        replyToken: `continuation-${index}`,
+        source: { type: "user", userId: "Uroot" },
+        message: { type: "text", text }
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: helper.webhookPath,
+        headers: signedHeaders(body, helper.channelSecret),
+        payload: body
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    expect(handlers.sheet_music_numeric_selection.handle).toHaveBeenCalledOnce();
+    expect(handlers.ppt_numeric_selection.handle).toHaveBeenCalledOnce();
+    expect(handlers.pending_attachment_answer.handle).toHaveBeenCalledOnce();
+    expect(profileTurn).not.toHaveBeenCalled();
+    expect(afterFunctionResult).toHaveBeenCalledOnce();
+    await expect(memoryStore.summary()).resolves.toMatchObject({ resources: 1 });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(replyText.mock.calls.map(([, text]) => text)).toEqual([
+      "外部歌譜",
+      "投影片 1",
+      "請選用途"
+    ]);
   });
 
   it("observes a freshly committed helper review once and skips completion on replay", async () => {

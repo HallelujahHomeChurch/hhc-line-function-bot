@@ -30,6 +30,7 @@ import {
 import { resolveEffectiveAccessContext } from "../../application/access/effective-access.js";
 import type { EffectiveAccessContext } from "../../application/access/effective-access.js";
 import type { FunctionCompletionObserver } from "../../application/turn/completion-observer.js";
+import { matchTextContinuation } from "../../application/turn/stages/text-continuation-stage.js";
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import {
   type AccountSurfacePresentation,
@@ -54,7 +55,7 @@ import {
   allowedProvidersForProfile,
   providerIsAllowedForProfile
 } from "../../llm/provider-runtime.js";
-import { messages } from "../../messages.js";
+import { messages, requestFailedMessage } from "../../messages.js";
 import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
 import { emitProductEvent } from "../../observability/product-events.js";
@@ -1315,26 +1316,39 @@ async function handleWebhook(
             requesterUserId: event.source.userId
           })
         : undefined;
-    if (/^\d+$/u.test(event.message.text.trim())) {
-      const numeric = await handleNumericSelection(
-        event,
-        effectiveProfile,
-        textMessageHandlers,
-        requesterDisplayName,
-        requesterIsAdmin,
-        turnAccountAuthorization.allowedFunctions,
-        profile.enabledFunctions
-      );
-      if (numeric.matched) {
-        if (numeric.result) {
-          await line.replyText(
-            event.replyToken,
-            numeric.result.replyText,
-            numeric.result.quickReplies ? { quickReplies: numeric.result.quickReplies } : undefined
-          );
-        }
-        continue;
+    const continuation = await executeDeterministicTextContinuation({
+      event,
+      profile: effectiveProfile,
+      configuredFunctions: profile.enabledFunctions,
+      handlers: textMessageHandlers,
+      requesterDisplayName,
+      requesterIsAdmin,
+      authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+      agentRuntime,
+      completionObserver,
+      accessStore,
+      routeObserver,
+      lastErrorStore,
+      lastRouteStore,
+      requestId
+    });
+    if (continuation.matched) {
+      if (continuation.result) {
+        await line.replyText(
+          event.replyToken,
+          continuation.result.replyText,
+          continuation.result.quickReplies
+            ? { quickReplies: continuation.result.quickReplies }
+            : undefined
+        );
+        await recordConversationReply(
+          conversationWindowStore,
+          effectiveProfile,
+          event,
+          continuation.result
+        );
       }
+      continue;
     }
     const groupEngagement =
       event.source.type === "group"
@@ -1485,39 +1499,134 @@ async function handleWebhook(
   });
 }
 
-async function handleNumericSelection(
-  event: LineEvent,
-  profile: BotProfileConfig,
-  handlers: TextMessageHandlerRegistry,
-  requesterDisplayName: string | undefined,
-  requesterIsAdmin: boolean,
-  authorizeFunctions: (names: readonly FunctionName[]) => Promise<readonly FunctionName[]>,
-  configuredFunctions: readonly FunctionName[]
-): Promise<{ matched: boolean; result?: FunctionExecutionResult }> {
-  const text = event.message?.text;
-  if (!text) return { matched: false };
-  for (const name of [
-    "ppt_numeric_selection",
-    "knowledge_numeric_selection",
-    "sheet_music_numeric_selection"
-  ]) {
-    const handler = handlers[name];
-    if (!handler) continue;
-    const capability = handler.capability;
-    if (capability && !configuredFunctions.includes(capability)) continue;
-    if (
-      capability &&
-      profile.permissionRequiredFunctions.includes(capability) &&
-      !(await authorizeFunctions([capability])).includes(capability)
-    ) {
-      continue;
+async function executeDeterministicTextContinuation(input: {
+  event: LineEvent;
+  profile: BotProfileConfig;
+  configuredFunctions: readonly FunctionName[];
+  handlers: TextMessageHandlerRegistry;
+  requesterDisplayName?: string;
+  requesterIsAdmin: boolean;
+  authorizeFunctions(names: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  agentRuntime?: AgentRuntime;
+  completionObserver: FunctionCompletionObserver;
+  accessStore: AccessStore;
+  routeObserver?: RouteObserver;
+  lastErrorStore: LastErrorStore;
+  lastRouteStore: LastRouteStore;
+  requestId: string;
+}): Promise<{ matched: boolean; result?: FunctionExecutionResult }> {
+  const handlers = Object.fromEntries(
+    Object.entries(input.handlers).filter(([, handler]) =>
+      ["resolution", "attachment"].includes(handler.turnStage)
+    )
+  );
+  const matched = await matchTextContinuation(
+    input.event,
+    input.profile,
+    handlers,
+    input.requesterDisplayName,
+    input.requesterIsAdmin,
+    input.authorizeFunctions,
+    input.configuredFunctions
+  );
+  if (!matched) return { matched: false };
+  const startedAt = Date.now();
+  const context = {
+    profile: matched.profile,
+    event: input.event,
+    requestId: input.requestId,
+    requesterDisplayName: input.requesterDisplayName,
+    requesterIsAdmin: input.requesterIsAdmin
+  };
+  try {
+    const result = await matched.handler.handle({ text: input.event.message?.text ?? "" }, context);
+    if (!result) return { matched: true };
+    const action = result.executedAction ?? matched.handler.capability;
+    const durationMs = elapsedMs(startedAt);
+    await emitRouteEvent(input.routeObserver, {
+      kind: "text_handler",
+      profileName: input.profile.name,
+      sourceType: input.event.source.type,
+      requestId: input.requestId,
+      handler: matched.name,
+      action,
+      ok: result.ok,
+      durationMs
+    });
+    if (result.executedAction) {
+      await recordDeterministicFunctionWriteAudit(
+        input.accessStore,
+        context,
+        result.executedAction,
+        result
+      );
     }
-    const context = { profile, event, requesterDisplayName, requesterIsAdmin };
-    if (!(await handler.matches({ text }, context))) continue;
-    const result = await handler.handle({ text }, context);
-    return { matched: true, ...(result ? { result } : {}) };
+    if (action && result.agentResource) {
+      await input.agentRuntime?.afterFunctionResult({
+        context,
+        action,
+        arguments: {},
+        result
+      });
+    }
+    const completed = result.executedAction
+      ? await input.completionObserver.complete({
+          context,
+          action: result.executedAction,
+          result,
+          durationMs,
+          clarificationCount: 0
+        })
+      : result;
+    await input.lastRouteStore.record({
+      requestId: input.requestId,
+      occurredAt: new Date().toISOString(),
+      profileName: input.profile.name,
+      sourceType: input.event.source.type,
+      phase: "function",
+      action,
+      ok: result.ok,
+      durationMs
+    });
+    return { matched: true, result: completed };
+  } catch (error) {
+    await input.lastErrorStore.record({
+      requestId: input.requestId,
+      occurredAt: new Date().toISOString(),
+      profileName: input.profile.name,
+      sourceType: input.event.source.type,
+      phase: "function",
+      action: matched.handler.capability,
+      errorName: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return {
+      matched: true,
+      result: { ok: false, replyText: requestFailedMessage(input.requestId) }
+    };
   }
-  return { matched: false };
+}
+
+async function recordDeterministicFunctionWriteAudit(
+  accessStore: AccessStore,
+  context: {
+    profile: BotProfileConfig;
+    event: LineEvent;
+  },
+  action: FunctionName,
+  result: FunctionExecutionResult
+): Promise<void> {
+  const definition = getFunctionDefinition(action);
+  const actorUserId = context.event.source.userId;
+  if (!actorUserId || !result.ok || !definition || definition.sideEffectLevel === "read") return;
+  await accessStore.recordAudit({
+    profileName: context.profile.name,
+    actorUserId,
+    action: `function.${definition.sideEffectLevel}.${result.writePhase ?? "preview"}`,
+    targetType: "function",
+    targetId: action,
+    metadata: { sourceType: context.event.source.type }
+  });
 }
 
 function parseWebhookPayload(body: Buffer): LineWebhookPayload | null {

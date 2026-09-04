@@ -116,6 +116,16 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
       if (!text) return undefined;
       const requesterUserId = input.event.source.userId;
       if (!requesterUserId) return undefined;
+      if (
+        input.profile.enabledFunctions.includes("download_weekly_paper") &&
+        matchesWeeklyPaper(text)
+      ) {
+        await abandonOwnProfileUpdate(input, requesterUserId);
+        return options.handlers.download_weekly_paper?.(
+          normalizeFunctionArguments("download_weekly_paper", {}, { text }),
+          handlerContext(input)
+        );
+      }
       const review = await options.sessions.findActionReview({
         profileName: "main",
         source: input.event.source,
@@ -130,15 +140,6 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
             text
           })
         )?.result;
-      }
-      if (
-        input.profile.enabledFunctions.includes("download_weekly_paper") &&
-        matchesWeeklyPaper(text)
-      ) {
-        return options.handlers.download_weekly_paper?.(
-          normalizeFunctionArguments("download_weekly_paper", {}, { text }),
-          handlerContext(input)
-        );
       }
       const pending = await options.sessions.findPendingFunction({
         profileName: "main",
@@ -245,6 +246,33 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
         buildPostbackQuickReply("取消", reviewPostbackData(reviewId, "reject", job.id), "取消")
       ]
     };
+  }
+
+  async function abandonOwnProfileUpdate(input: ProfileTurnInput, requesterUserId: string) {
+    const review = await options.sessions.findActionReview({
+      profileName: "main",
+      source: input.event.source,
+      requesterUserId
+    });
+    if (review) {
+      const taken = await options.sessions.takeActionReview({
+        id: review.id,
+        profileName: "main",
+        source: input.event.source,
+        requesterUserId
+      });
+      if (taken) {
+        if (taken.threadId) await options.sessions.delete(taken.threadId);
+        await options.jobs.fail(taken.resultJobId, "review_abandoned");
+      }
+    }
+    const pending = await options.sessions.findPendingFunction({
+      profileName: "main",
+      source: input.event.source,
+      requesterUserId,
+      action: "update_own_profile"
+    });
+    if (pending) await options.sessions.delete(pending.id);
   }
 }
 

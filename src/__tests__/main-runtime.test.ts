@@ -68,6 +68,12 @@ describe("main runtime", () => {
 
   it("collects name slots before creating a reviewed update", async () => {
     const sessions = new InMemorySessionStore();
+    const jobs = new InMemoryAgentJobStore();
+    const weekly = vi.fn<FunctionHandler>(async () => ({
+      ok: true,
+      replyText: "週報",
+      executedAction: "download_weekly_paper"
+    }));
     const update = vi.fn<FunctionHandler>(async (args) => ({
       ok: true,
       replyText:
@@ -77,9 +83,9 @@ describe("main runtime", () => {
       writePhase: args.confirm === true ? "commit" : "preview"
     }));
     const runtime = createMainRuntime({
-      handlers: { update_own_profile: update },
+      handlers: { download_weekly_paper: weekly, update_own_profile: update },
       sessions,
-      jobs: new InMemoryAgentJobStore(),
+      jobs,
       idFactory: () => "review-1"
     });
 
@@ -120,5 +126,53 @@ describe("main runtime", () => {
       { firstName: "家睿", lastName: "王", confirm: true },
       expect.objectContaining({ agentTool: true, requestId: "review-1" })
     );
+  });
+
+  it("abandons a stale profile review when the user explicitly requests Weekly Paper", async () => {
+    const sessions = new InMemorySessionStore();
+    const jobs = new InMemoryAgentJobStore();
+    const update = vi.fn<FunctionHandler>(async (args) => ({
+      ok: true,
+      replyText: args.confirm === true ? "updated" : "preview",
+      writePhase: args.confirm === true ? "commit" : "preview"
+    }));
+    const weekly = vi.fn<FunctionHandler>(async () => ({
+      ok: true,
+      replyText: "最新週報",
+      executedAction: "download_weekly_paper"
+    }));
+    const runtime = createMainRuntime({
+      handlers: { download_weekly_paper: weekly, update_own_profile: update },
+      sessions,
+      jobs,
+      idFactory: () => "stale-review"
+    });
+
+    await runtime.handleTextTurn(input("修改姓名"));
+    await runtime.handleTextTurn(input("家睿"));
+    await runtime.handleTextTurn(input("王"));
+    const review = await sessions.findActionReview({
+      profileName: "main",
+      source,
+      requesterUserId: source.userId
+    });
+    if (!review?.threadId) throw new Error("missing linked review");
+
+    await expect(runtime.handleTextTurn(input("下載最新週報"))).resolves.toMatchObject({
+      replyText: "最新週報"
+    });
+    await expect(
+      sessions.findActionReview({
+        profileName: "main",
+        source,
+        requesterUserId: source.userId
+      })
+    ).resolves.toBeUndefined();
+    await expect(sessions.get(review.threadId)).resolves.toBeUndefined();
+    await expect(runtime.handleTextTurn(input("確認"))).resolves.toMatchObject({
+      replyText: "目前不支援這個請求。"
+    });
+    expect(weekly).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledOnce();
   });
 });
