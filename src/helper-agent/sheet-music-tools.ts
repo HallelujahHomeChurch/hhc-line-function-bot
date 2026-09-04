@@ -41,6 +41,7 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
 
   const references = new Map<string, { title: string; url: string }>();
   let directFileFound = false;
+  let readInFlight = false;
   let searchResultNeedsInspection = false;
   let nextReference = 1;
   const remember = (title: string, url: string) => {
@@ -67,7 +68,7 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
             instruction: "Stop searching and reply with the existing direct file candidate."
           });
         }
-        if (searchResultNeedsInspection) {
+        if (readInFlight || searchResultNeedsInspection) {
           return fitResearchResult({
             status: "denied",
             reason: "inspect_current_candidates_before_new_search"
@@ -117,16 +118,21 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
             reason: "unknown_or_expired_reference"
           });
         }
+        if (readInFlight) {
+          return fitResearchResult({ status: "denied", reason: "page_read_in_progress" });
+        }
+        readInFlight = true;
         try {
           const page = await options.pageReader.read(reference.url);
           const links = page.links.slice(0, MAX_RESULTS).map(fitCandidate);
-          directFileFound = page.kind === "direct_file" || links.length > 0;
-          searchResultNeedsInspection = directFileFound;
+          const hasDirectFile = page.kind === "direct_file" || links.length > 0;
           const candidates = [
             ...(page.kind === "direct_file" ? [fitCandidate(reference)] : []),
             ...links
           ].slice(0, MAX_RESULTS);
           if (candidates.length) await options.onDirectFileCandidates?.(candidates);
+          directFileFound = hasDirectFile;
+          searchResultNeedsInspection = hasDirectFile;
           return fitResearchResult({
             status: directFileFound ? "complete" : "success",
             kind: page.kind,
@@ -150,6 +156,8 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
           });
         } catch {
           return fitResearchResult({ status: "unavailable", reason: "page_read_failed" });
+        } finally {
+          readInFlight = false;
         }
       },
       {

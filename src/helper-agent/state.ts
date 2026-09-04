@@ -53,8 +53,8 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
     threadId: createThreadId(options.hmacKey),
     run: (input) =>
       withMemoryThreadLock(locks, input.threadId, async () => {
-        const cleanupAt = now().getTime();
-        const expired = (expiresAt.get(input.threadId) ?? Number.POSITIVE_INFINITY) <= cleanupAt;
+        const observedAt = now().getTime();
+        const expired = (expiresAt.get(input.threadId) ?? Number.POSITIVE_INFINITY) <= observedAt;
         const policyChanged =
           policyKeys.has(input.threadId) && policyKeys.get(input.threadId) !== input.policyKey;
         if (expired || policyChanged) {
@@ -62,7 +62,6 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
           externalSearchExpiresAt.delete(input.threadId);
         }
         try {
-          const observedAt = now().getTime();
           const result = await input.task({
             externalSheetMusicAllowed:
               (externalSearchExpiresAt.get(input.threadId) ?? 0) > observedAt
@@ -87,9 +86,11 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
           policyKeys
         })
       ),
-    async allowExternalSheetMusic(threadId, _source, expiration) {
-      externalSearchExpiresAt.set(threadId, expiration.getTime());
-    },
+    allowExternalSheetMusic: (threadId, source, expiration) =>
+      withMemoryThreadLock(locks, threadId, async () => {
+        externalSearchExpiresAt.set(threadId, expiration.getTime());
+        expiresAt.set(threadId, now().getTime() + helperThreadIdleTtlMs(source));
+      }),
     async externalSheetMusicAllowed(threadId) {
       return (externalSearchExpiresAt.get(threadId) ?? 0) > now().getTime();
     }
@@ -116,6 +117,7 @@ export function createPostgresHelperAgentState(
     },
     async run(input) {
       const outcome = await withPgThreadLock(options.lockPool, input.threadId, async () => {
+        const observedAt = now();
         const current = await options.pool.query<{
           expires_at: Date;
           policy_key: string | null;
@@ -126,10 +128,9 @@ export function createPostgresHelperAgentState(
           [input.threadId]
         );
         let metadata: (typeof current.rows)[number] | undefined = current.rows[0];
-        const cleanupAt = now();
         if (
           metadata &&
-          (metadata.expires_at.getTime() <= cleanupAt.getTime() ||
+          (metadata.expires_at.getTime() <= observedAt.getTime() ||
             (metadata.policy_key !== null && metadata.policy_key !== input.policyKey))
         ) {
           await options.checkpointer.deleteThread(input.threadId);
@@ -139,7 +140,6 @@ export function createPostgresHelperAgentState(
           metadata = undefined;
         }
         try {
-          const observedAt = now();
           const result = await input.task({
             externalSheetMusicAllowed:
               (metadata?.external_search_expires_at?.getTime() ?? 0) > observedAt.getTime()

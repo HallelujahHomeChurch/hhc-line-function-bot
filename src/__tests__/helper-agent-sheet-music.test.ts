@@ -111,14 +111,12 @@ describe("helper sheet-music research tools", () => {
     });
   });
 
-  it("keeps the inspection guard while a page read is in flight", async () => {
+  it("serializes page reads and keeps search blocked while a read is in flight", async () => {
     let resolveRead!: (value: { kind: "html"; text: string; links: [] }) => void;
-    const read = vi.fn(
-      () =>
-        new Promise<{ kind: "html"; text: string; links: [] }>((resolve) => {
-          resolveRead = resolve;
-        })
-    );
+    const readGate = new Promise<{ kind: "html"; text: string; links: [] }>((resolve) => {
+      resolveRead = resolve;
+    });
+    const read = vi.fn(() => readGate);
     const search = vi.fn(async () => [
       { title: "Candidate", url: "https://scores.example.test/candidate" }
     ]);
@@ -133,6 +131,7 @@ describe("helper sheet-music research tools", () => {
     };
     const reading = tools[1]!.invoke({ ref: first.results[0]!.ref });
     await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    const duplicateRead = tools[1]!.invoke({ ref: first.results[0]!.ref });
 
     await expect(tools[0]!.invoke({ query: "parallel search" })).resolves.toEqual({
       status: "denied",
@@ -142,6 +141,11 @@ describe("helper sheet-music research tools", () => {
 
     resolveRead({ kind: "html", text: "lyrics", links: [] });
     await reading;
+    await expect(duplicateRead).resolves.toEqual({
+      status: "denied",
+      reason: "page_read_in_progress"
+    });
+    expect(read).toHaveBeenCalledOnce();
     await tools[0]!.invoke({ query: "next search" });
     expect(search).toHaveBeenCalledTimes(2);
   });

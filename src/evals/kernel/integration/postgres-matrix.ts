@@ -115,7 +115,9 @@ const MATRIX_FAILURE_CODES = new Set([
   "helper_direct_ttl_invalid",
   "helper_group_ttl_invalid",
   "helper_checkpoint_not_deleted",
+  "helper_expired_research_exposed",
   "helper_failed_run_metadata_retained",
+  "helper_observation_instant_invalid",
   "helper_state_pool_deadlock",
   "helper_data_pool_not_saturated"
 ]);
@@ -196,12 +198,18 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
   try {
     const checkpointer = new PostgresSaver(pool);
     let now = new Date("2026-09-04T00:00:00.000Z");
+    let countObservation = false;
+    let observationCalls = 0;
     const state = createPostgresHelperAgentState({
       pool,
       lockPool: environment.pools[1],
       checkpointer,
       hmacKey: "kernel-helper-agent-state-key",
-      now: () => now
+      now: () => {
+        if (!countObservation) return now;
+        observationCalls += 1;
+        return new Date(now.getTime() + observationCalls);
+      }
     });
     await checkpointer.setup();
     await state.setup();
@@ -261,6 +269,21 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
       task: async (snapshot) => snapshot.externalSheetMusicAllowed
     });
     if (expiredResearchAllowed) throw new Error("helper_research_snapshot_not_expired");
+
+    await state.allowExternalSheetMusic(group, groupSource, new Date("2026-09-04T00:30:00.000Z"));
+    now = new Date("2026-09-04T00:17:00.000Z");
+    countObservation = true;
+    const researchAfterIdleExpiry = await state.run({
+      threadId: group,
+      policyKey: "kernel-policy-v1",
+      source: groupSource,
+      task: async (snapshot) => {
+        if (observationCalls !== 1) throw new Error("helper_observation_instant_invalid");
+        return snapshot.externalSheetMusicAllowed;
+      }
+    });
+    countObservation = false;
+    if (researchAfterIdleExpiry) throw new Error("helper_expired_research_exposed");
 
     await state.reset(group);
     const checkpoint = await pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [

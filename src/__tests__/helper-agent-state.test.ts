@@ -188,6 +188,96 @@ describe("helper agent state", () => {
     await expect(next).resolves.toBe(false);
   });
 
+  it("refreshes an expired idle thread when fresh research consent is granted", async () => {
+    let now = new Date("2026-09-04T00:00:00.000Z");
+    const state = createHelperAgentState(testStateOptions(new MemorySaver(), () => now));
+    const source = { type: "group", groupId: "G1", userId: "U1" } as const;
+    await state.run({
+      threadId: "helper-a",
+      policyKey: "find_sheet_music",
+      source,
+      task: async () => undefined
+    });
+
+    now = new Date("2026-09-04T00:16:00.000Z");
+    await state.allowExternalSheetMusic("helper-a", source, new Date("2026-09-04T00:20:00.000Z"));
+
+    await expect(
+      state.run({
+        threadId: "helper-a",
+        policyKey: "find_sheet_music",
+        source,
+        task: async (snapshot) => snapshot.externalSheetMusicAllowed
+      })
+    ).resolves.toBe(true);
+  });
+
+  it("orders consent with a concurrent reset and next run on the same thread lock", async () => {
+    const state = createHelperAgentState(testStateOptions(new MemorySaver()));
+    const source = { type: "user", userId: "U1" } as const;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = state.run({
+      threadId: "helper-a",
+      policyKey: "find_sheet_music",
+      source,
+      task: async () => gate
+    });
+    const reset = state.reset("helper-a");
+    const consent = state.allowExternalSheetMusic(
+      "helper-a",
+      source,
+      new Date("2099-09-04T00:01:00.000Z")
+    );
+    const next = state.run({
+      threadId: "helper-a",
+      policyKey: "find_sheet_music",
+      source,
+      task: async (snapshot) => snapshot.externalSheetMusicAllowed
+    });
+
+    release();
+
+    await Promise.all([first, reset, consent]);
+    await expect(next).resolves.toBe(true);
+  });
+
+  it("uses one post-lock observation for idle cleanup and research consent", async () => {
+    const initial = new Date("2026-09-04T00:00:00.000Z");
+    let observeDecision = false;
+    let decisionCalls = 0;
+    const state = createHelperAgentState(
+      testStateOptions(new MemorySaver(), () => {
+        if (!observeDecision) return initial;
+        decisionCalls += 1;
+        return new Date(initial.getTime() + (15 * 60_000 + decisionCalls));
+      })
+    );
+    const source = { type: "group", groupId: "G1", userId: "U1" } as const;
+    await state.run({
+      threadId: "helper-a",
+      policyKey: "find_sheet_music",
+      source,
+      task: async () => undefined
+    });
+    await state.allowExternalSheetMusic("helper-a", source, new Date("2026-09-04T00:20:00.000Z"));
+    observeDecision = true;
+
+    await expect(
+      state.run({
+        threadId: "helper-a",
+        policyKey: "find_sheet_music",
+        source,
+        task: async (snapshot) => {
+          expect(decisionCalls).toBe(1);
+          return snapshot.externalSheetMusicAllowed;
+        }
+      })
+    ).resolves.toBe(false);
+  });
+
   it("resets only the current requester thread", async () => {
     const checkpointer = new MemorySaver();
     const deleteThread = vi.spyOn(checkpointer, "deleteThread");
