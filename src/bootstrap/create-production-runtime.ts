@@ -286,6 +286,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     attachmentScanWorkStore,
     attachmentScanQueue,
     mediaSyncStore: postgres?.mediaSyncStore,
+    externalResearchEnabled: Boolean(webSearch && publicPageReader),
     wikipediaSummarizer: createWikipediaSummarizer({
       primary: wikipediaSummaryPrimary
     })
@@ -354,6 +355,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       jobs: agentJobStore,
       webSearch,
       pageReader: publicPageReader,
+      resourceMemory,
       lastErrorStore,
       traceStore: agentTraceStore,
       routeObserver,

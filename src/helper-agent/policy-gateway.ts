@@ -17,7 +17,11 @@ export interface HelperToolGatewayOptions {
   context: FunctionHandlerContext;
   handlers: FunctionRegistry;
   authorize?: (name: CapabilityName) => Promise<boolean>;
-  onDomainResult?: (name: CapabilityName, result: FunctionExecutionResult) => void;
+  onDomainResult?: (
+    name: CapabilityName,
+    args: JsonRecord,
+    result: FunctionExecutionResult
+  ) => void;
 }
 
 export function createHelperToolGateway(options: HelperToolGatewayOptions) {
@@ -60,7 +64,7 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
       } catch {
         return unavailable(sourceType);
       }
-      options.onDomainResult?.(name, result);
+      options.onDomainResult?.(name, parsedArgs, result);
       return projectToolResult(result, sourceType);
     }
   };

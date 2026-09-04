@@ -5,10 +5,7 @@ import type { AgentMemoryStore } from "../agent/memory-store.js";
 import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import type { CacheStore } from "../cache/cache-store.js";
-import {
-  createDownloadWeeklyPaperTextMessageHandler,
-  downloadWeeklyPaper
-} from "../capabilities/download-weekly-paper.js";
+import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
 import { createQueryScheduleHandler } from "../capabilities/query-schedule/handler.js";
 import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import { createCatalogAdminHandlers } from "../catalog/admin-handlers.js";
@@ -82,6 +79,7 @@ export interface CapabilityCompositionDependencies {
   now?: () => Date;
   requestIdFactory?: () => string;
   fetchImpl?: typeof fetch;
+  externalResearchEnabled?: boolean;
 }
 
 export interface CapabilityComposition {
@@ -159,6 +157,7 @@ export function composeCapabilities(
       allowedExtensions: config.graph.sheetMusicAllowedExtensions,
       memoryStore: clients.memoryStore,
       sessionStore: clients.sessionStore,
+      externalResearchEnabled: clients.externalResearchEnabled,
       now: clients.now,
       requestIdFactory: clients.requestIdFactory
     });
@@ -177,9 +176,7 @@ export function composeCapabilities(
   }
 
   const postbacks: PostbackHandlerRegistry = {};
-  const textMessages: TextMessageHandlerRegistry = {
-    main_weekly_paper: createDownloadWeeklyPaperTextMessageHandler(clients.fetchImpl ?? fetch)
-  };
+  const textMessages: TextMessageHandlerRegistry = {};
   if (clients.graph) {
     postbacks.select_ppt = {
       capability: "find_ppt_slides",

@@ -15,7 +15,7 @@ import {
   createFunctionCompletionObserver,
   type FunctionCompletionObserver
 } from "../observability/function-completion.js";
-import { InMemoryAgentJobStore } from "../agent/jobs.js";
+import { buildAgentJobScope, InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
@@ -26,7 +26,9 @@ import { runMediaSyncMigrations } from "../media-sync/migrations.js";
 import { PostgresMediaSyncStore } from "../media-sync/store.js";
 import { InMemoryFirstSuccessStore } from "../observability/first-success-store.js";
 import { createProfileRuntimeDispatcher } from "../runtime/profile-runtime.js";
+import { createMainRuntime } from "../runtime/main-runtime.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
+import { createTestFunctionRegistries } from "../testing/create-test-function-registries.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   AppConfig,
@@ -265,6 +267,122 @@ function providerFreeMainConfig(): AppConfig {
 }
 
 describe("LINE entrance", () => {
+  it("lets the production-composed main runtime exclusively own Weekly Paper interruption", async () => {
+    const config = providerFreeMainConfig();
+    const main = config.profiles[0]!;
+    main.enabledFunctions = ["download_weekly_paper", "update_own_profile"];
+    main.permissionRequiredFunctions = ["update_own_profile"];
+    const sessions = new InMemorySessionStore();
+    const jobs = new InMemoryAgentJobStore();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      Response.json({
+        data: {
+          issueNumber: 1733,
+          locale: "zh-Hant",
+          issueDate: "2026-09-01",
+          title: "週報",
+          subtitle: "",
+          downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
+          downloadFileName: "1733-weekly.pdf",
+          publishedAt: "2026-09-01T00:00:00.000Z",
+          version: 1
+        },
+        error: null,
+        meta: {}
+      })
+    );
+    const registries = createTestFunctionRegistries(config, {
+      sessionStore: sessions,
+      agentJobStore: jobs,
+      fetchImpl
+    });
+    registries.functions.update_own_profile = vi.fn(async (args) => ({
+      ok: true,
+      replyText: args.confirm === true ? "updated" : "preview",
+      writePhase: args.confirm === true ? "commit" : "preview"
+    }));
+    const ids = ["owner-review", "other-review"];
+    const mainRuntime = createMainRuntime({
+      handlers: registries.functions,
+      sessions,
+      jobs,
+      idFactory: () => ids.shift() ?? "unexpected-review"
+    });
+    const owner = { type: "user" as const, userId: "Uadmin" };
+    const other = { type: "user" as const, userId: "Uother" };
+    const runtimeInput = (text: string, source: typeof owner) => ({
+      profile: main,
+      event: { type: "message" as const, source, message: { type: "text" as const, text } },
+      requestId: `setup-${source.userId}-${text}`,
+      configuredFunctions: [...main.enabledFunctions],
+      authorizeFunctions: async (names: typeof main.enabledFunctions) => names
+    });
+    for (const source of [owner, other]) {
+      await mainRuntime.handleTextTurn(runtimeInput("修改姓名", source));
+      await mainRuntime.handleTextTurn(runtimeInput("家睿", source));
+      await mainRuntime.handleTextTurn(runtimeInput("王", source));
+    }
+    const ownerReview = await sessions.findActionReview({
+      profileName: "main",
+      source: owner,
+      requesterUserId: owner.userId
+    });
+    const otherReview = await sessions.findActionReview({
+      profileName: "main",
+      source: other,
+      requesterUserId: other.userId
+    });
+    if (!ownerReview?.threadId || !otherReview?.threadId) throw new Error("missing review setup");
+    const ownerScope = buildAgentJobScope("main", owner);
+    const otherScope = buildAgentJobScope("main", other);
+    if (!ownerScope || !otherScope) throw new Error("missing job scope");
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      sessionStore: sessions,
+      agentJobStore: jobs,
+      textMessageHandlers: registries.textMessages,
+      profileRuntime: createProfileRuntimeDispatcher({ main: mainRuntime }),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: owner,
+      message: { type: "text", text: "下載最新週報" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: main.webhookPath,
+      headers: signedHeaders(body, main.channelSecret),
+      payload: body
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    await expect(
+      sessions.findActionReview({
+        profileName: "main",
+        source: owner,
+        requesterUserId: owner.userId
+      })
+    ).resolves.toBeUndefined();
+    await expect(sessions.get(ownerReview.threadId)).resolves.toBeUndefined();
+    await expect(jobs.get(ownerReview.resultJobId, ownerScope)).resolves.toMatchObject({
+      status: "failed"
+    });
+    await expect(
+      sessions.findActionReview({
+        profileName: "main",
+        source: other,
+        requesterUserId: other.userId
+      })
+    ).resolves.toEqual(otherReview);
+    await expect(sessions.get(otherReview.threadId)).resolves.toBeDefined();
+    await expect(jobs.get(otherReview.resultJobId, otherScope)).resolves.toMatchObject({
+      status: "pending"
+    });
+  });
+
   it("acknowledges a signed empty event batch without creating a reply client or entering turn execution", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const completeText = vi.fn<TextGenerationProvider["completeText"]>();

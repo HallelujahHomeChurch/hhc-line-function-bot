@@ -13,6 +13,7 @@ import {
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
 import type { RouteObserver } from "../application/contracts/routing.js";
 import type { AgentTraceStore } from "../agent/trace-store.js";
+import type { ResourceMemoryObserver } from "../agent/resource-memory.js";
 import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
 import { getFunctionDefinition } from "../capabilities/catalog.js";
 import { requestFailedMessage } from "../messages.js";
@@ -57,6 +58,7 @@ export interface HelperRuntimeOptions {
   jobs?: AgentJobStore;
   webSearch?: WebSearchClient;
   pageReader?: PublicPageReader;
+  resourceMemory?: ResourceMemoryObserver;
   lastErrorStore?: LastErrorStore;
   traceStore?: AgentTraceStore;
   routeObserver?: RouteObserver;
@@ -180,7 +182,11 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           requesterDisplayName: input.requesterDisplayName,
           requesterIsAdmin: input.accountAdministrator?.() || input.requesterIsAdmin
         };
-        const domainResults: Array<{ name: CapabilityName; result: FunctionExecutionResult }> = [];
+        const domainResults: Array<{
+          name: CapabilityName;
+          args: Record<string, unknown>;
+          result: FunctionExecutionResult;
+        }> = [];
         const authorize = input.authorizeFunctions
           ? async (name: CapabilityName) =>
               isUnrestrictedRead(input.profile, name) ||
@@ -204,7 +210,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
               context,
               handlers: options.handlers,
               authorize,
-              onDomainResult: (name, result) => domainResults.push({ name, result })
+              onDomainResult: (name, args, result) => domainResults.push({ name, args, result })
             });
             const writeTools =
               options.sessions && actionExecutor
@@ -304,14 +310,21 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         const agentState = turn.state;
         const authoritative = [...domainResults]
           .reverse()
-          .map(({ result }) => result)
-          .find(isAuthoritativeResult);
+          .find(({ result }) => isAuthoritativeResult(result));
         const replyText = agentState.messages.at(-1)?.text.trim();
         const result =
-          authoritative ??
+          authoritative?.result ??
           (replyText
             ? { ok: true, replyText: replyText.slice(0, 5_000) }
             : (domainResults.at(-1)?.result ?? failed(input.requestId)));
+        if (authoritative && options.resourceMemory) {
+          await options.resourceMemory.afterFunctionResult({
+            context,
+            action: authoritative.name,
+            arguments: authoritative.args,
+            result: authoritative.result
+          });
+        }
         metrics.contextEdited = agentState.messages.some(
           (message) =>
             ToolMessage.isInstance(message) &&

@@ -43,6 +43,7 @@ import { createValidatedSharingLink } from "./validated-sharing-link.js";
 const POSTBACK_ACTION = "select_sheet_music";
 const MAX_CANDIDATES = 5;
 const SELECTION_TTL_MS = 10 * 60 * 1000;
+const EXTERNAL_SEARCH_CONSENT_TTL_MS = 10 * 60 * 1000;
 const MIN_FUZZY_SCORE = 0.42;
 const INVALID_SELECTION_MESSAGE = "請只回覆清單中的數字，例如：1。不要加上其他字。";
 
@@ -58,6 +59,7 @@ export interface FindPopSheetMusicOptions {
   sessionStore?: SessionStore;
   now?: () => Date;
   requestIdFactory?: () => string;
+  externalResearchEnabled?: boolean;
 }
 
 export interface FindPopSheetMusicPostbackOptions {
@@ -189,7 +191,15 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     }
 
     if (options.catalog && catalogResult.status === "not_found") {
-      return createSheetMusicNotFoundResult();
+      return createSheetMusicNotFoundResult({
+        args,
+        context,
+        externalResearchEnabled: options.externalResearchEnabled,
+        now,
+        query: rawQuery,
+        requestIdFactory,
+        sessionStore
+      });
     }
 
     let root: { driveId: string; itemId: string };
@@ -214,7 +224,15 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
     ).slice(0, MAX_CANDIDATES);
 
     if (candidates.length === 0) {
-      return createSheetMusicNotFoundResult();
+      return createSheetMusicNotFoundResult({
+        args,
+        context,
+        externalResearchEnabled: options.externalResearchEnabled,
+        now,
+        query: rawQuery,
+        requestIdFactory,
+        sessionStore
+      });
     }
 
     if (candidates.length === 1) {
@@ -262,8 +280,45 @@ export function createFindPopSheetMusicHandler(options: FindPopSheetMusicOptions
   };
 }
 
-function createSheetMusicNotFoundResult(): FunctionExecutionResult {
+async function createSheetMusicNotFoundResult(options: {
+  args: FindPopSheetMusicArguments;
+  context: FunctionHandlerContext;
+  externalResearchEnabled?: boolean;
+  now: () => Date;
+  query: string;
+  requestIdFactory: () => string;
+  sessionStore: SessionStore;
+}): Promise<FunctionExecutionResult> {
   const replyText = "找不到符合的流行歌曲樂譜，請提供更完整英文歌名或歌手。";
+  if (
+    options.externalResearchEnabled &&
+    canCreateRequesterScopedSession(options.context.event.source)
+  ) {
+    await options.sessionStore.set({
+      id: options.requestIdFactory(),
+      type: "external_search_consent",
+      action: "sheet_music_external_search",
+      profileName: options.context.profile.name,
+      requesterUserId: options.context.event.source.userId,
+      source: options.context.event.source,
+      query: options.query,
+      arguments: options.args,
+      expiresAt: new Date(options.now().getTime() + EXTERNAL_SEARCH_CONSENT_TTL_MS).toISOString()
+    });
+    const consentReply = [
+      "本地歌譜資料庫找不到符合的結果。",
+      "要不要上網找公開搜尋結果？外部網頁內容不受信任，找到檔案後仍需由你選擇並確認匯入。"
+    ].join("\n");
+    return {
+      ok: true,
+      replyText: consentReply,
+      quickReplies: [
+        { label: "上網找", action: { type: "message", label: "上網找", text: "上網找" } },
+        { label: "不用", action: { type: "message", label: "不用", text: "不用" } }
+      ],
+      agentResult: { status: "not_found", replyText: consentReply }
+    };
+  }
   return {
     ok: true,
     replyText,

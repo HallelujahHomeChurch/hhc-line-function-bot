@@ -31,6 +31,7 @@ export function createTestFunctionRegistries(
     attachmentScanWorkStore: overrides.attachmentScanWorkStore,
     now: overrides.now,
     requestIdFactory: overrides.requestIdFactory,
-    fetchImpl: overrides.fetchImpl
+    fetchImpl: overrides.fetchImpl,
+    externalResearchEnabled: overrides.externalResearchEnabled
   });
 }

@@ -90,6 +90,70 @@ async function currentItemById(_driveId: string, itemId: string) {
 }
 
 describe("find_sheet_music", () => {
+  it("offers requester-scoped external research consent only when research is configured", async () => {
+    const now = new Date("2026-09-05T10:00:00.000Z");
+    const sessions = new InMemorySessionStore({ now: () => now });
+    const handler = createFindPopSheetMusicHandler({
+      graph: { listFolderChildren: vi.fn().mockResolvedValue([]), createSharingLink: vi.fn() },
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pdf"],
+      externalResearchEnabled: true,
+      sessionStore: sessions,
+      now: () => now,
+      requestIdFactory: () => "consent-1"
+    });
+
+    const result = await handler({ query: "missing song", fileType: "pdf" }, handlerContext());
+
+    expect(result.replyText).toContain("要不要上網找公開搜尋結果");
+    expect(result.quickReplies?.map(({ label }) => label)).toEqual(["上網找", "不用"]);
+    await expect(sessions.get("consent-1")).resolves.toMatchObject({
+      type: "external_search_consent",
+      action: "sheet_music_external_search",
+      requesterUserId: "U1",
+      query: "missing song",
+      arguments: { query: "missing song", fileType: "pdf" },
+      expiresAt: "2026-09-05T10:10:00.000Z"
+    });
+  });
+
+  it("keeps plain not-found when external research or requester identity is unavailable", async () => {
+    const sessions = new InMemorySessionStore();
+    const graph = { listFolderChildren: vi.fn().mockResolvedValue([]), createSharingLink: vi.fn() };
+    const disabled = createFindPopSheetMusicHandler({
+      graph,
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pdf"],
+      sessionStore: sessions
+    });
+    const requesterMissing = createFindPopSheetMusicHandler({
+      graph,
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pdf"],
+      externalResearchEnabled: true,
+      sessionStore: sessions
+    });
+
+    const plain = await disabled({ query: "missing song" }, handlerContext());
+    const noRequester = await requesterMissing(
+      { query: "missing song" },
+      {
+        ...handlerContext(),
+        event: {
+          ...handlerContext().event,
+          source: { type: "group", groupId: "Cgroup" }
+        }
+      }
+    );
+
+    expect(plain.replyText).not.toContain("上網找");
+    expect(noRequester.replyText).not.toContain("上網找");
+    await expect(sessions.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
   it("reports provider failures as unavailable instead of not found", async () => {
     const handler = createFindPopSheetMusicHandler({
       graph: {

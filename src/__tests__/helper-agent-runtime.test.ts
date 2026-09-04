@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
+import type { ResourceMemoryObserver } from "../agent/resource-memory.js";
+import { createFindPopSheetMusicHandler } from "../functions/find-pop-sheet-music.js";
 import { createHelperReadTools } from "../helper-agent/read-tools.js";
 import {
   createHelperModels,
@@ -92,6 +94,108 @@ function state(overrides: Partial<HelperAgentState> = {}): HelperAgentState {
 }
 
 describe("helper profile runtime", () => {
+  it("turns an internal sheet-music miss into requester-approved research mode", async () => {
+    const now = new Date("2026-09-05T10:00:00.000Z");
+    const sessions = new InMemorySessionStore({ now: () => now });
+    const helperState = createHelperAgentState({
+      checkpointer: new MemorySaver(),
+      hmacKey: "research-state",
+      now: () => now
+    });
+    const model = new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "find_sheet_music", args: { query: "missing song" }, id: "sheet-1" }],
+        [],
+        []
+      ]
+    });
+    const bindTools = vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const findSheetMusic = createFindPopSheetMusicHandler({
+      graph: { listFolderChildren: vi.fn().mockResolvedValue([]), createSharingLink: vi.fn() },
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pdf"],
+      externalResearchEnabled: true,
+      sessionStore: sessions,
+      now: () => now,
+      requestIdFactory: () => "consent-1"
+    });
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: helperState,
+      handlers: { find_sheet_music: findSheetMusic },
+      sessions,
+      webSearch: { search: vi.fn(async () => []) },
+      pageReader: { read: vi.fn() },
+      now: () => now
+    });
+
+    await expect(runtime.handleTextTurn(input("找 missing song 歌譜"))).resolves.toMatchObject({
+      agentResult: { status: "not_found" }
+    });
+    await expect(runtime.acceptSheetMusicResearch?.(input("上網找"))).resolves.toEqual({
+      kind: "accepted"
+    });
+    await runtime.handleTextTurn(input("繼續搜尋"));
+
+    expect(bindTools.mock.calls.at(-1)?.[0].map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["search_sheet_music_web", "read_sheet_music_page"])
+    );
+  });
+
+  it("records only the authoritative helper resource result with validated arguments", async () => {
+    const model = new FakeToolCallingModel({
+      toolCalls: [
+        [
+          { name: "find_presentation", args: { query: "青年聚會" }, id: "ppt-1" },
+          { name: "find_sheet_music", args: { query: "奇異恩典" }, id: "sheet-1" }
+        ],
+        []
+      ]
+    });
+    vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const resourceMemory: ResourceMemoryObserver = { afterFunctionResult: vi.fn() };
+    const presentation = vi.fn(async () => ({
+      ok: true,
+      replyText: "投影片完成",
+      agentResult: { status: "success" as const, replyText: "投影片完成" },
+      agentResource: {
+        resourceType: "presentation" as const,
+        title: "青年聚會.pptx",
+        storage: { provider: "graph" as const, driveId: "drive", itemId: "ppt" }
+      }
+    }));
+    const sheetMusic = vi.fn(async () => ({
+      ok: true,
+      replyText: "歌譜完成",
+      agentResult: { status: "success" as const, replyText: "歌譜完成" },
+      agentResource: {
+        resourceType: "sheet_music" as const,
+        title: "奇異恩典.pdf",
+        storage: { provider: "graph" as const, driveId: "drive", itemId: "sheet" }
+      }
+    }));
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: state(),
+      handlers: { find_ppt_slides: presentation, find_sheet_music: sheetMusic },
+      resourceMemory
+    });
+
+    await runtime.handleTextTurn(input("找青年聚會投影片和奇異恩典歌譜"));
+
+    expect(resourceMemory.afterFunctionResult).toHaveBeenCalledOnce();
+    expect(resourceMemory.afterFunctionResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "find_sheet_music",
+        arguments: { query: "奇異恩典" },
+        result: expect.objectContaining({ replyText: "歌譜完成" })
+      })
+    );
+  });
+
   it("continues a schedule-domain ambiguity through the scoped checkpoint with a fresh tool call", async () => {
     const model = new FakeToolCallingModel({
       toolCalls: [
