@@ -5,7 +5,7 @@ import type {
   JsonRecord,
   LineSource
 } from "../types.js";
-import { requesterMatchesForSource } from "./session-safety.js";
+import { lineSourcesEqual, requesterMatchesForSource } from "./session-safety.js";
 
 export type SelectionItem = Pick<DriveItem, "id" | "name" | "driveId"> & {
   memoryResource?: AgentResourceReference;
@@ -154,6 +154,7 @@ export interface ActionReviewSession {
   toolName: HelperWriteToolName;
   argumentsHash: string;
   policyKey: string;
+  resultJobId: string;
   expiresAt: string;
 }
 
@@ -225,6 +226,7 @@ export interface SessionStore {
   findExternalSheetMusicImport(
     lookup: PptSelectionLookup
   ): Promise<ExternalSheetMusicImportSession | undefined>;
+  findActionReview(lookup: PptSelectionLookup): Promise<ActionReviewSession | undefined>;
   takeActionReview(lookup: ActionReviewLookup): Promise<ActionReviewSession | undefined>;
   summary(): Promise<SessionStoreSummary>;
   clear(): Promise<number>;
@@ -408,12 +410,24 @@ export class InMemorySessionStore implements SessionStore {
       session?.type !== "action_review" ||
       session.profileName !== lookup.profileName ||
       session.requesterUserId !== lookup.requesterUserId ||
-      !sourceMatchesExact(session.source, lookup.source)
+      !lineSourcesEqual(session.source, lookup.source)
     ) {
       return undefined;
     }
     this.sessions.delete(session.id);
     return session;
+  }
+
+  async findActionReview(lookup: PptSelectionLookup): Promise<ActionReviewSession | undefined> {
+    return Array.from(this.sessions.values())
+      .map((session) => this.liveSession(session))
+      .filter((session): session is ActionReviewSession => session?.type === "action_review")
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => lineSourcesEqual(session.source, lookup.source))
+      .filter((session) => session.requesterUserId === lookup.requesterUserId)
+      .sort(
+        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+      )[0];
   }
 
   async promoteUploadIntent(
@@ -589,13 +603,4 @@ function sourceMatches(expected: LineSource, actual: LineSource): boolean {
     default:
       return false;
   }
-}
-
-function sourceMatchesExact(expected: LineSource, actual: LineSource): boolean {
-  return (
-    expected.type === actual.type &&
-    expected.userId === actual.userId &&
-    expected.groupId === actual.groupId &&
-    expected.roomId === actual.roomId
-  );
 }

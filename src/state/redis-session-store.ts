@@ -20,7 +20,7 @@ import type {
   UploadIntentSession
 } from "./session-store.js";
 import type { LineSource } from "../types.js";
-import { requesterMatchesForSource } from "./session-safety.js";
+import { lineSourcesEqual, requesterMatchesForSource } from "./session-safety.js";
 
 export interface RedisSessionClient {
   get(key: string): Promise<string | null>;
@@ -302,20 +302,7 @@ export class RedisSessionStore implements SessionStore {
 
   async takeActionReview(lookup: ActionReviewLookup): Promise<ActionReviewSession | undefined> {
     const indexKey = this.interactiveIndexKey(lookup);
-    if (!indexKey) return undefined;
-    if (!this.options.client.eval) {
-      const session = await this.get(lookup.id);
-      if (
-        session?.type !== "action_review" ||
-        session.profileName !== lookup.profileName ||
-        session.requesterUserId !== lookup.requesterUserId ||
-        !sourceMatchesExact(session.source, lookup.source)
-      ) {
-        return undefined;
-      }
-      const raw = await this.options.client.getDel(this.key(lookup.id));
-      return raw ? (JSON.parse(raw) as ActionReviewSession) : undefined;
-    }
+    if (!indexKey || !this.options.client.eval) return undefined;
     const raw = await this.options.client.eval(TAKE_ACTION_REVIEW_SCRIPT, {
       keys: [indexKey, this.key(lookup.id)],
       arguments: [
@@ -330,6 +317,15 @@ export class RedisSessionStore implements SessionStore {
       ]
     });
     return typeof raw === "string" ? (JSON.parse(raw) as ActionReviewSession) : undefined;
+  }
+
+  async findActionReview(lookup: PptSelectionLookup): Promise<ActionReviewSession | undefined> {
+    const session = await this.indexedInteractiveSession(lookup);
+    return session?.type === "action_review" &&
+      session.requesterUserId === lookup.requesterUserId &&
+      lineSourcesEqual(session.source, lookup.source)
+      ? session
+      : undefined;
   }
 
   async promoteUploadIntent(
@@ -611,15 +607,6 @@ function sourceMatches(expected: LineSource, actual: LineSource): boolean {
     default:
       return false;
   }
-}
-
-function sourceMatchesExact(expected: LineSource, actual: LineSource): boolean {
-  return (
-    expected.type === actual.type &&
-    expected.userId === actual.userId &&
-    expected.groupId === actual.groupId &&
-    expected.roomId === actual.roomId
-  );
 }
 
 function lineSourceKey(source: LineSource): string {

@@ -22,6 +22,7 @@ export interface HandledPostbackEvent {
 export interface HelperReviewPostbackHandler {
   (input: {
     reviewId: string;
+    resultJobId: string;
     text: "確認" | "取消";
     profile: BotProfileConfig;
     event: LineEvent;
@@ -63,8 +64,14 @@ export async function handlePostbackEvent(
   }
   if (request.action === "helper_action_review") {
     const reviewId = request.params.reviewId;
+    const resultJobId = request.params.resultJobId;
     const decision = request.params.decision;
-    if (!reviewId || (decision !== "approve" && decision !== "reject") || !helperReviewHandler) {
+    if (
+      !reviewId ||
+      !resultJobId ||
+      (decision !== "approve" && decision !== "reject") ||
+      !helperReviewHandler
+    ) {
       return {
         result: { ok: true, replyText: messages.postbackUnsupported },
         completionEligible: false
@@ -73,6 +80,7 @@ export async function handlePostbackEvent(
     return {
       result: await helperReviewHandler({
         reviewId,
+        resultJobId,
         text: decision === "approve" ? "確認" : "取消",
         profile,
         event,

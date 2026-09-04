@@ -12,6 +12,7 @@ import {
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
 import type { RouteObserver } from "../application/contracts/routing.js";
 import type { AgentTraceStore } from "../agent/trace-store.js";
+import type { AgentJobStore } from "../agent/jobs.js";
 import { getFunctionDefinition } from "../functions/definitions.js";
 import { requestFailedMessage } from "../messages.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
@@ -29,7 +30,7 @@ import type {
 import { createHelperAgent } from "./agent.js";
 import { createBudgetedFetch, runWithAgentBudget } from "./budget.js";
 import { createHelperReadTools } from "./read-tools.js";
-import { createActionReview } from "./review.js";
+import { createActionReview, createActionReviewLifecycleObserver } from "./review.js";
 import type { HelperAgentState } from "./state.js";
 import { createHelperWriteTools } from "./write-tools.js";
 
@@ -39,6 +40,7 @@ export interface HelperRuntimeOptions {
   state: HelperAgentState;
   handlers: FunctionRegistry;
   sessions?: SessionStore;
+  jobs?: AgentJobStore;
   lastErrorStore?: LastErrorStore;
   traceStore?: AgentTraceStore;
   routeObserver?: RouteObserver;
@@ -111,14 +113,18 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           authorize,
           onDomainResult: (name, result) => domainResults.push({ name, result })
         });
-        const actionExecutor = createActionExecutor({
-          handlers: options.handlers,
-          authorize: async (name) => (await authorize?.(name)) === true,
-          currentPolicyKey: async () => helperPolicyKey(await effectiveProfile(input))
-        });
-        const writeTools = options.sessions
-          ? createHelperWriteTools({ context, executor: actionExecutor })
-          : [];
+        const actionExecutor = options.jobs
+          ? createActionExecutor({
+              handlers: options.handlers,
+              jobs: options.jobs,
+              authorize: async (name) => (await authorize?.(name)) === true,
+              currentPolicyKey: async () => helperPolicyKey(await effectiveProfile(input))
+            })
+          : undefined;
+        const writeTools =
+          options.sessions && actionExecutor
+            ? createHelperWriteTools({ context, executor: actionExecutor })
+            : [];
         const tools = [...readTools, ...writeTools];
         const runMode = (await options.state.externalSheetMusicAllowed(threadId))
           ? "sheet_music_research"
@@ -137,7 +143,9 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                 systemPrompt: helperSystemPrompt(profile, input.event.source, now()),
                 tools,
                 writeReview: writeTools.length > 0,
-                prepareWriteArguments: (name, args) => actionExecutor.prepare(name, args, context)
+                prepareWriteArguments: actionExecutor
+                  ? (name, args) => actionExecutor.prepare(name, args, context)
+                  : undefined
               }).invoke(
                 { messages: [{ role: "user", content: text }] },
                 {
@@ -146,26 +154,37 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                   callbacks: metrics.callbacks as never
                 }
               );
-              if (!options.sessions || !("__interrupt__" in state)) {
+              if (!("__interrupt__" in state)) {
                 return { kind: "complete" as const, state };
               }
+              if (!options.sessions || !options.jobs || !actionExecutor) {
+                throw new ReviewCreationFailure("execution_denied");
+              }
               const requesterUserId = input.event.source.userId;
-              if (!requesterUserId) return { kind: "denied" as const };
-              const review = await createActionReview({
-                state,
-                sessions: options.sessions,
-                profileName: profile.name,
-                source: input.event.source,
-                requesterUserId,
-                threadId,
-                policyKey: helperPolicyKey(profile),
-                now: now(),
-                preview: async (toolName, args) =>
-                  (await actionExecutor.preview(toolName, args, context))?.replyText
-              });
-              return review.status === "review"
-                ? { kind: "review" as const, result: review.result }
-                : { kind: "denied" as const };
+              if (!requesterUserId) throw new ReviewCreationFailure("execution_denied");
+              let review;
+              try {
+                review = await createActionReview({
+                  state,
+                  sessions: options.sessions,
+                  jobs: options.jobs,
+                  profileName: profile.name,
+                  source: input.event.source,
+                  requesterUserId,
+                  threadId,
+                  policyKey: helperPolicyKey(profile),
+                  now: now(),
+                  resultTtlMs: (profile.longRunningJobs?.resultTtlMinutes ?? 30) * 60_000,
+                  preview: async (toolName, args) =>
+                    (await actionExecutor.preview(toolName, args, context))?.replyText
+                });
+              } catch {
+                throw new ReviewCreationFailure("unavailable");
+              }
+              if (review.status !== "review") {
+                throw new ReviewCreationFailure("execution_denied");
+              }
+              return { kind: "review" as const, result: review.result };
             }
           })
         );
@@ -182,9 +201,6 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
             finalStatus: "review"
           });
           return turn.result;
-        }
-        if (turn.kind === "denied") {
-          return { ok: true, replyText: "這項操作目前無法建立確認，請重新提出。" };
         }
         const agentState = turn.state;
         const authoritative = [...domainResults]
@@ -209,6 +225,18 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         await recordHelperObservability(options, input, metrics, result, startedAt, now());
         return result;
       } catch (error) {
+        if (error instanceof ReviewCreationFailure) {
+          await createActionReviewLifecycleObserver({
+            routeObserver: options.routeObserver,
+            requestId: input.requestId,
+            profileName: input.profile.name,
+            source: input.event.source,
+            hmacKey: options.observabilityHmacKey
+          })({ status: error.status });
+          if (error.status === "execution_denied") {
+            return { ok: true, replyText: "這項操作目前無法建立確認，請重新提出。" };
+          }
+        }
         try {
           await options.lastErrorStore?.record({
             requestId: input.requestId,
@@ -228,6 +256,12 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
       }
     }
   };
+}
+
+class ReviewCreationFailure extends Error {
+  constructor(readonly status: "execution_denied" | "unavailable") {
+    super(status);
+  }
 }
 
 export function helperSystemPrompt(

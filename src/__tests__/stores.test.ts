@@ -176,6 +176,38 @@ describe("store factories", () => {
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 
+  it("fails closed instead of racing an action review consume when Redis eval is unavailable", async () => {
+    const store = new RedisSessionStore({
+      client: new FakeRedisClient(),
+      keyPrefix: "test",
+      now: () => new Date("2026-07-15T10:00:00.000Z")
+    });
+    await store.set({
+      id: "review-1",
+      type: "action_review",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "G1", userId: "U1" },
+      threadId: "thread-1",
+      interruptId: "interrupt-1",
+      toolName: "propose_save_memory",
+      argumentsHash: "hash",
+      policyKey: "policy",
+      resultJobId: "result-job",
+      expiresAt: "2026-07-15T10:05:00.000Z"
+    });
+
+    await expect(
+      store.takeActionReview({
+        id: "review-1",
+        profileName: "helper",
+        requesterUserId: "U1",
+        source: { type: "group", groupId: "G1", userId: "U1" }
+      })
+    ).resolves.toBeUndefined();
+    await expect(store.get("review-1")).resolves.toMatchObject({ id: "review-1" });
+  });
+
   it("uses memory stores when Redis is not configured", () => {
     expect(createSessionStore({ redis: undefined })).toBeInstanceOf(InMemorySessionStore);
     expect(createCacheStore({ redis: undefined })).toBeInstanceOf(MemoryCacheStore);

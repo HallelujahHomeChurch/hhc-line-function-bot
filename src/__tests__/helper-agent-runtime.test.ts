@@ -4,6 +4,7 @@ import { countTokensApproximately } from "langchain";
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
+import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createHelperReadTools } from "../helper-agent/read-tools.js";
 import {
   createHelperModels,
@@ -11,6 +12,7 @@ import {
   helperSystemPrompt
 } from "../helper-agent/runtime.js";
 import { createHelperAgentState, type HelperAgentState } from "../helper-agent/state.js";
+import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
@@ -120,6 +122,56 @@ describe("helper profile runtime", () => {
       replyText: expect.stringContaining("支援碼")
     });
     expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("clears a denied write interrupt so the next turn starts without the stale review", async () => {
+    const model = new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "propose_save_memory", args: { content: "remember" }, id: "write-1" }],
+        []
+      ]
+    });
+    vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const checkpointer = new MemorySaver();
+    const helperState = createHelperAgentState({ checkpointer, hmacKey: "state-key" });
+    const sessionStore = new InMemorySessionStore();
+    const writeProfile = {
+      ...profile(),
+      enabledFunctions: ["save_memory" as const],
+      permissionRequiredFunctions: ["save_memory" as const]
+    };
+    const saveMemory = vi.fn(async () => ({ ok: true, replyText: "missing preview" }));
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: helperState,
+      handlers: { save_memory: saveMemory },
+      sessions: sessionStore,
+      jobs: new InMemoryAgentJobStore()
+    });
+    const turn = {
+      ...input("記住這件事"),
+      profile: writeProfile,
+      configuredFunctions: ["save_memory" as const],
+      authorizeFunctions: async () => ["save_memory" as const]
+    };
+    const threadId = helperState.threadId({
+      profileName: "helper",
+      source: turn.event.source
+    });
+    if (!threadId) throw new Error("missing thread id");
+
+    await expect(runtime.handleTextTurn(turn)).resolves.toEqual({
+      ok: true,
+      replyText: "這項操作目前無法建立確認，請重新提出。"
+    });
+    await expect(
+      checkpointer.getTuple({ configurable: { thread_id: threadId } })
+    ).resolves.toBeUndefined();
+
+    const next = await runtime.handleTextTurn({ ...turn, event: input("你好").event });
+    expect(next?.replyText).not.toBe("這項操作目前無法建立確認，請重新提出。");
+    expect(saveMemory).toHaveBeenCalledOnce();
   });
 
   it("clears prior tool evidence before the model runs after authorization is revoked", async () => {

@@ -228,7 +228,19 @@ const HELPER_TOOL_NAMES = new Set([
   "search_saved_notes",
   "query_wikipedia"
 ]);
-const FINAL_STATUSES = new Set(["success", "not_found", "ambiguous", "unavailable", "error"]);
+const FINAL_STATUSES = new Set([
+  "success",
+  "not_found",
+  "ambiguous",
+  "unavailable",
+  "error",
+  "review",
+  "review_approved",
+  "review_rejected",
+  "review_expired_or_missing",
+  "review_execution_denied",
+  "review_unavailable"
+]);
 const SOURCE_TYPES = new Set(["user", "group", "room"]);
 const PHASES = new Set([
   "context",

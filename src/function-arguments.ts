@@ -193,6 +193,11 @@ export const saveMemoryArgumentsSchema = z
   .strip();
 export const saveMemoryAgentArgumentsSchema = saveMemoryArgumentsSchema
   .omit({ confirm: true, cancel: true })
+  .safeExtend({
+    title: z.string().trim().optional(),
+    content: z.string().trim().optional().default(""),
+    query: z.string().trim().optional()
+  })
   .strict();
 
 export const saveResourceArgumentsSchema = z
@@ -208,6 +213,11 @@ export const saveResourceArgumentsSchema = z
   .strip();
 export const saveResourceAgentArgumentsSchema = saveResourceArgumentsSchema
   .omit({ confirm: true, cancel: true })
+  .safeExtend({
+    url: z.string().trim().optional().default(""),
+    title: z.string().trim().optional(),
+    description: z.string().trim().optional()
+  })
   .strict();
 
 export const retrieveMemoryArgumentsSchema = z
@@ -273,6 +283,13 @@ export const saveScheduleMemoryArgumentsSchema = z
 export const saveScheduleArgumentsSchema = saveScheduleMemoryArgumentsSchema;
 export const saveScheduleAgentArgumentsSchema = saveScheduleMemoryArgumentsSchema
   .omit({ confirm: true, cancel: true })
+  .safeExtend({
+    title: z.string().trim().optional(),
+    content: z.string().trim().optional().default(""),
+    query: z.string().trim().optional(),
+    targetQuery: z.string().trim().optional(),
+    domainRevision: z.string().trim().min(1).max(80).optional()
+  })
   .strict();
 
 export const queryScheduleMemoryArgumentsSchema = z

@@ -359,8 +359,25 @@ async function actionReviewAtomicConsume(environment: KernelRedisEnvironment): P
     toolName: "propose_save_memory",
     argumentsHash: "hash",
     policyKey: "policy",
+    resultJobId: "result-job",
     expiresAt: EXPIRES_AT
   });
+  assert(
+    (await stores[1]!.findActionReview({
+      profileName: "helper",
+      source: { ...source, userId: "U2" },
+      requesterUserId: "U2"
+    })) === undefined
+  );
+  assert(
+    (
+      await stores[1]!.findActionReview({
+        profileName: "helper",
+        source,
+        requesterUserId: "U1"
+      })
+    )?.id === "review"
+  );
   assert(
     (await stores[1]!.takeActionReview({
       id: "review",
@@ -392,6 +409,7 @@ async function actionReviewAtomicConsume(environment: KernelRedisEnvironment): P
     toolName: "propose_save_memory",
     argumentsHash: "hash",
     policyKey: "policy",
+    resultJobId: "expired-result-job",
     expiresAt: NOW.toISOString()
   });
   assert(
