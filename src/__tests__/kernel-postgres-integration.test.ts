@@ -297,7 +297,7 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
     );
   });
 
-  it("passes the catalog and knowledge atomic publication matrix", async () => {
+  it("passes the PostgreSQL publication and SDK checkpoint matrix", async () => {
     const matrixEnvironment = await createKernelPostgresEnvironment();
     try {
       const results = await runPostgresIntegrationMatrix(matrixEnvironment);
@@ -305,7 +305,8 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
         "postgres/migrations/fresh-idempotent",
         "postgres/catalog/concurrent-publication",
         "postgres/catalog/rollback-and-visibility",
-        "postgres/knowledge/rollback-and-stale-failure"
+        "postgres/knowledge/rollback-and-stale-failure",
+        "postgres/sdk-agent/checkpoint-restart-and-expiry"
       ]);
       expect(results.filter((result) => !result.passed || result.failureCode)).toEqual([]);
     } finally {

@@ -19,7 +19,7 @@ export type {
   AgentResourceReference,
   AgentResourceStorage,
   AgentResourceType,
-  ControlledTurnStage,
+  TextContinuationStage,
   FunctionExecutionResult,
   FunctionHandler,
   FunctionHandlerContext,
@@ -211,11 +211,6 @@ export interface GeneralAgentConfig {
   conversationWindowSeconds: number;
 }
 
-export interface ControlledAgentConfig {
-  maxCandidates: number;
-  minPlannerConfidence: number;
-}
-
 export interface MeetingWindowRule {
   key: string;
   aliases: string[];
@@ -310,11 +305,14 @@ export interface BotProfileConfig extends ProfileFunctionPolicy {
   directAccessPolicy?: DirectAccessPolicy;
   groupAccessPolicy?: GroupAccessPolicy;
   registration?: RegistrationConfig;
+  agent?: {
+    personaPrompt: string;
+    memoryPolicyPrompt: string;
+  };
   smallTalk?: SmallTalkConfig;
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
   providerPolicy?: ProviderPolicy;
-  controlledAgent: ControlledAgentConfig;
   agentRuntime?: AgentRuntimeConfig;
   schedulePolicy: SchedulePolicyConfig;
   generalAgent?: GeneralAgentConfig;

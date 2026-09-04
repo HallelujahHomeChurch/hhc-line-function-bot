@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
-import { activeTaskFromResult } from "../agent/active-task.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { createSaveScheduleHandler } from "../functions/schedule-memory.js";
 import { InMemoryScheduleStore } from "../schedules/store.js";
@@ -57,15 +56,6 @@ function notionSchedulePage(
       同工: { type: "rich_text", rich_text: [{ plain_text: person }] }
     }
   };
-}
-
-function scheduleTask(result: Awaited<ReturnType<ReturnType<typeof createQueryScheduleHandler>>>) {
-  return activeTaskFromResult(
-    "query_schedule",
-    result,
-    new Date("2026-07-12T00:00:00.000Z"),
-    60_000
-  );
 }
 
 describe("query_schedule", () => {
@@ -335,45 +325,6 @@ describe("query_schedule", () => {
     expect(roleResult.replyText).toBe("音控：Ray");
   });
 
-  it("keeps a follow-up scoped to the canonical schedule source", async () => {
-    const schedules = new InMemoryScheduleStore();
-    for (const item of [
-      { sourceKey: "media_team_service_schedule", assignee: "Ray" },
-      { sourceKey: "other_team_schedule", assignee: "Wrong Person" }
-    ]) {
-      await schedules.upsertItem({
-        profileName: "helper",
-        sourceKey: item.sourceKey,
-        origin: "notion",
-        externalId: `${item.sourceKey}-1`,
-        serviceDate: "2026-07-18",
-        meeting: "主日",
-        role: "音控",
-        assignee: item.assignee
-      });
-    }
-    const query = createQueryScheduleHandler({
-      memoryStore: new InMemoryAgentMemoryStore(),
-      scheduleStore: schedules,
-      now: () => new Date("2026-07-12T00:00:00.000Z"),
-      timeZone: "Asia/Taipei"
-    });
-    const first = await query(
-      { query: "下一場影視團隊服事表", dateIntent: "next_meeting" },
-      context("下一場影視團隊服事表")
-    );
-    const followUp = await query(
-      { query: "音控是誰", date: "2026-07-18", role: "音控" },
-      {
-        ...context("音控是誰"),
-        activeTask: scheduleTask(first)
-      }
-    );
-
-    expect(followUp.replyText).toBe("音控：Ray");
-    expect(followUp.replyText).not.toContain("Wrong Person");
-  });
-
   it("keeps date and meeting context when a focused role spans multiple meetings", async () => {
     const schedules = new InMemoryScheduleStore();
     for (const [date, meeting, assignee] of [
@@ -406,7 +357,7 @@ describe("query_schedule", () => {
     expect(result.replyText).toBe("7月15日 主日｜音控：Ray\n7月16日 晨更｜音控：家睿");
   });
 
-  it("creates canonical active-task evidence when live Notion supplies the result", async () => {
+  it("creates canonical result evidence when live Notion supplies the result", async () => {
     const notion: NotionDatabaseClient = {
       queryDatabase: vi
         .fn()
@@ -574,88 +525,6 @@ describe("query_schedule", () => {
     expect(result.replyText).not.toContain("佳美");
   });
 
-  it("uses an unlisted role focus inside a canonical live Notion schedule", async () => {
-    const notion: NotionDatabaseClient = {
-      queryDatabase: vi
-        .fn()
-        .mockResolvedValue([
-          notionSchedulePage("page-live-1", "2026-07-14", "晨更", "音控", "資恆"),
-          notionSchedulePage("page-live-2", "2026-07-14", "晨更", "導播", "莘凌")
-        ])
-    };
-    const query = createQueryScheduleHandler({
-      memoryStore: new InMemoryAgentMemoryStore(),
-      scheduleStore: new InMemoryScheduleStore(),
-      notion,
-      databaseId: "database-1",
-      properties: { date: "日期", meeting: "聚會", role: "角色", person: "同工" },
-      now: () => new Date("2026-07-13T00:00:00.000Z"),
-      timeZone: "Asia/Taipei"
-    });
-
-    const result = await query(
-      { query: "導播是誰", date: "2026-07-14", meeting: "晨更" },
-      {
-        ...context("導播是誰"),
-        activeTask: {
-          version: 1,
-          capability: "query_schedule",
-          anchors: { date: "2026-07-14", meeting: "晨更" },
-          entities: [
-            { type: "role", key: "音控", label: "音控" },
-            { type: "role", key: "導播", label: "導播" }
-          ],
-          supportedOperations: ["continue", "refine", "advance"],
-          createdAt: "2026-07-13T00:00:00.000Z",
-          expiresAt: "2026-07-13T00:01:00.000Z"
-        }
-      }
-    );
-
-    expect(result.replyText).toContain("導播：莘凌");
-    expect(result.replyText).not.toContain("音控：資恆");
-  });
-
-  it("advances to the next schedule group after the canonical result", async () => {
-    const schedules = new InMemoryScheduleStore();
-    for (const [serviceDate, assignee] of [
-      ["2026-07-18", "Ray"],
-      ["2026-07-25", "Next Ray"]
-    ]) {
-      await schedules.upsertItem({
-        profileName: "helper",
-        sourceKey: "media_team_service_schedule",
-        origin: "notion",
-        externalId: `page-${serviceDate}`,
-        serviceDate,
-        meeting: "主日",
-        role: "音控",
-        assignee
-      });
-    }
-    const query = createQueryScheduleHandler({
-      memoryStore: new InMemoryAgentMemoryStore(),
-      scheduleStore: schedules,
-      now: () => new Date("2026-07-12T00:00:00.000Z"),
-      timeZone: "Asia/Taipei"
-    });
-    const first = await query(
-      { query: "下一場影視團隊服事表", dateIntent: "next_meeting" },
-      context("下一場影視團隊服事表")
-    );
-    const next = await query(
-      { query: "那下一場呢", dateIntent: "next_meeting" },
-      {
-        ...context("那下一場呢"),
-        activeTask: scheduleTask(first)
-      }
-    );
-
-    expect(next.replyText).toContain("7月25日");
-    expect(next.replyText).toContain("Next Ray");
-    expect(next.replyText).not.toContain("7月18日");
-  });
-
   it("limits next-meeting results to one meeting when two meetings share a date", async () => {
     const schedules = new InMemoryScheduleStore();
     for (const [meeting, role, assignee] of [
@@ -696,55 +565,6 @@ describe("query_schedule", () => {
       },
       entities: [expect.objectContaining({ type: "role", label: "音控" })]
     });
-  });
-
-  it("treats a complete next-meeting role question as current, not an advance", async () => {
-    const schedules = new InMemoryScheduleStore();
-    for (const [serviceDate, assignee] of [
-      ["2026-07-14", "姵穎"],
-      ["2026-07-21", "下一週同工"]
-    ]) {
-      await schedules.upsertItem({
-        profileName: "helper",
-        sourceKey: "media_team_service_schedule",
-        origin: "notion",
-        externalId: `page-${serviceDate}`,
-        serviceDate,
-        meeting: "晨更",
-        role: "前攝影",
-        assignee
-      });
-    }
-    const query = createQueryScheduleHandler({
-      memoryStore: new InMemoryAgentMemoryStore(),
-      scheduleStore: schedules,
-      now: () => new Date("2026-07-13T00:00:00.000Z"),
-      timeZone: "Asia/Taipei"
-    });
-
-    const result = await query(
-      { query: "下一場服事表的前攝影是誰", dateIntent: "next_meeting" },
-      {
-        ...context("下一場服事表的前攝影是誰"),
-        activeTask: {
-          version: 1,
-          capability: "query_schedule",
-          anchors: {
-            date: "2026-07-14",
-            meeting: "晨更",
-            sourceKeys: ["media_team_service_schedule"]
-          },
-          entities: [],
-          references: { sourceKeys: ["media_team_service_schedule"] },
-          supportedOperations: ["continue", "refine", "advance"],
-          createdAt: "2026-07-13T00:00:00.000Z",
-          expiresAt: "2026-07-13T00:01:00.000Z"
-        }
-      }
-    );
-
-    expect(result.replyText).toContain("前攝影：姵穎");
-    expect(result.replyText).not.toContain("下一週同工");
   });
 
   it("keeps a meaningful residual query for a custom saved schedule title", async () => {

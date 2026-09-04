@@ -167,7 +167,7 @@ function layerFor(filePath: string): ModuleLayer | undefined {
     return "testing";
   }
   if (
-    /^src\/(?:clients|db|state|cache|access|in-flight|idempotency)\//u.test(filePath) ||
+    /^src\/(?:clients|db|state|cache|access|idempotency)\//u.test(filePath) ||
     /^src\/(?:redis|rate-limit)\.ts$/u.test(filePath)
   ) {
     return "infrastructure";

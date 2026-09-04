@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildCapabilityCandidates } from "../agent/capability-candidates.js";
-import { validateAgentPlan } from "../agent/plan-validator.js";
 import { getFunctionDefinition } from "../functions/definitions.js";
 import { FUNCTION_MODULES } from "../functions/modules.js";
 import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
@@ -29,7 +27,6 @@ const profile: BotProfileConfig = {
   allowedProviders: [],
   allowSubscriptionProviders: false,
   providerPolicy: {},
-  controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
   schedulePolicy: { meetingWindows: [], domains: [] }
 };
 
@@ -195,60 +192,6 @@ describe("update_own_profile capability", () => {
       requiredSlots: [{ argument: "firstName" }, { argument: "lastName" }],
       resourcePolicy: { kind: "none", remember: false, alias: false },
       memoryPolicy: { kind: "none" }
-    });
-  });
-
-  it.each(["/profile", "修改個人資料", "修改姓名", "修改姓名！", "更新姓名"])(
-    "offers the shared capability for one exact intent: %s",
-    (text) => {
-      expect(
-        buildCapabilityCandidates({
-          text,
-          enabledFunctions: [action],
-          knowledgeSources: [],
-          maxCandidates: 3,
-          source: "user"
-        }).map(({ capability }) => capability)
-      ).toEqual([action]);
-    }
-  );
-
-  it.each([
-    "profile",
-    "修改 姓名",
-    "不要修改姓名",
-    "不要登入，修改姓名",
-    "請先修改姓名再下載週報",
-    "他說修改姓名",
-    "修改姓名或更新帳戶"
-  ])("does not offer the write capability for negated, embedded, or ambiguous text: %s", (text) => {
-    expect(
-      buildCapabilityCandidates({
-        text,
-        enabledFunctions: [action],
-        knowledgeSources: [],
-        maxCandidates: 3,
-        source: "user"
-      })
-    ).toEqual([]);
-  });
-
-  it("collects the first name without a provider and never executes the write directly", () => {
-    expect(
-      validateAgentPlan({
-        text: "/profile",
-        enabledFunctions: [action],
-        candidates: [{ capability: action, reason: "explicit_intent", score: 400 }],
-        proposal: { status: "no_plan", reasonCode: "providers_disabled" },
-        minConfidence: 0.65,
-        sourceType: "user"
-      })
-    ).toEqual({
-      disposition: "collect",
-      capability: action,
-      arguments: {},
-      missingSlot: "firstName",
-      reasonCode: "missing_required_slot"
     });
   });
 });

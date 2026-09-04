@@ -174,6 +174,9 @@ export const saveMemoryArgumentsSchema = z
     cancel: z.boolean().optional()
   })
   .strip();
+export const saveMemoryAgentArgumentsSchema = saveMemoryArgumentsSchema
+  .omit({ confirm: true, cancel: true })
+  .strict();
 
 export const saveResourceArgumentsSchema = z
   .object({
@@ -186,6 +189,9 @@ export const saveResourceArgumentsSchema = z
     cancel: z.boolean().optional()
   })
   .strip();
+export const saveResourceAgentArgumentsSchema = saveResourceArgumentsSchema
+  .omit({ confirm: true, cancel: true })
+  .strict();
 
 export const retrieveMemoryArgumentsSchema = z
   .object({
@@ -246,6 +252,9 @@ export const saveScheduleMemoryArgumentsSchema = z
   .strip();
 
 export const saveScheduleArgumentsSchema = saveScheduleMemoryArgumentsSchema;
+export const saveScheduleAgentArgumentsSchema = saveScheduleMemoryArgumentsSchema
+  .omit({ confirm: true, cancel: true })
+  .strict();
 
 export const queryScheduleMemoryArgumentsSchema = z
   .object({

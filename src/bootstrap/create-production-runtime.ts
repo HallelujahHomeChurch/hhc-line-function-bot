@@ -1,3 +1,7 @@
+import { ChatDeepSeek } from "@langchain/deepseek";
+import { MemorySaver } from "@langchain/langgraph";
+import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
+
 import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
 import { createDeepSeekProvider } from "../clients/deepseek.js";
 import { createAccountAdminClient } from "../account/account-admin-client.js";
@@ -13,15 +17,8 @@ import { createAgentMemoryStore } from "../agent/create-agent-memory-store.js";
 import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
 import { createAgentRuntime } from "../agent/agent-runtime.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
-import { createAgentPlanner } from "../agent/planner.js";
-import { createControlledAgentRouter } from "../agent/controlled-agent-router.js";
-import {
-  createCatalogEvidenceProvider,
-  createCombinedEvidenceProvider,
-  createMemoryEvidenceProvider,
-  createResourceMemoryEvidenceProvider,
-  createScheduleEvidenceProvider
-} from "../agent/evidence/providers.js";
+import { createSdkAgentTurnRuntime } from "../agent/sdk-turn-runtime.js";
+import { createPostgresSdkAgentState, createSdkAgentState } from "../agent/sdk-state.js";
 import { createWikipediaSummarizer } from "../wikipedia/summarizer.js";
 import { InMemoryAgentJobStore, RedisAgentJobStore } from "../agent/jobs.js";
 import { createAzureAttachmentScanQueue } from "../attachments/scan-queue.js";
@@ -51,6 +48,7 @@ import {
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { createSearxngClient } from "../clients/searxng.js";
+import { createPublicPageReader } from "../clients/public-page.js";
 import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
 import { createPostgresRuntime } from "../db/postgres.js";
@@ -58,17 +56,14 @@ import { MediaSyncManagementService } from "../media-sync/service.js";
 import { createFunctionRegistries } from "../functions/registry.js";
 import { FUNCTION_MODULES } from "../functions/modules.js";
 import { createQueryScheduleModule } from "../capabilities/query-schedule/module.js";
-import { createInFlightStore } from "../in-flight/create-in-flight-store.js";
 import { createWebhookEventStore } from "../idempotency/create-webhook-event-store.js";
 import { createKnowledgeStore } from "../knowledge/create-store.js";
-import { listKnowledgeRoutingMetadata } from "../knowledge/routing-metadata.js";
-import { createKnowledgeRetrievalEvidenceProvider } from "../knowledge/retrieval-evidence.js";
 import { createProfileAwareProvider } from "../llm/provider-runtime.js";
 import { createLastErrorStore } from "../observability/create-last-error-store.js";
 import { createLastRouteStore } from "../observability/create-last-route-store.js";
 import { createFirstSuccessStore } from "../observability/first-success-store.js";
 import { createConsoleRouteObserver } from "../observability/route-observer.js";
-import { createControlledCompletionObserver } from "../application/turn/completion-observer.js";
+import { createFunctionCompletionObserver } from "../application/turn/completion-observer.js";
 import { createRateLimiter } from "../rate-limit.js";
 import { createRedisRuntime } from "../redis.js";
 import { createScheduleStore } from "../schedules/create-schedule-store.js";
@@ -118,19 +113,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       generalMaxOutputTokens: config.llm.generalMaxOutputTokens ?? 512
     })
   };
-  const functionRoutingPrimary = createProfileAwareProvider({
-    config,
-    providers,
-    role: "primary",
-    lane: "function_routing"
-  });
-  const agentPlanner = createAgentPlanner({
-    primary: functionRoutingPrimary,
-    providersEnabledForProfile: (profileName) =>
-      config.profiles.some(
-        (profile) => profile.name === profileName && profile.allowedProviders.length > 0
-      )
-  });
   const adminRoutingPrimary = createProfileAwareProvider({
     config,
     providers,
@@ -173,6 +155,13 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
         timeoutMs: config.webSearch.timeoutMs
       })
     : undefined;
+  const publicPageReader = webSearch
+    ? createPublicPageReader({
+        maxBytes: 512 * 1024,
+        maxRedirects: config.externalResources.maxRedirects,
+        timeoutMs: config.externalResources.downloadTimeoutMs
+      })
+    : undefined;
   const registrationInviteCodeStore = redis
     ? new RedisRegistrationInviteCodeStore({ client: redis.client, keyPrefix: redis.keyPrefix })
     : new InMemoryRegistrationInviteCodeStore();
@@ -195,34 +184,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   });
   const scheduleStore = await createScheduleStore({ db: postgres?.pool });
   const knowledgeStore = await createKnowledgeStore({ db: postgres?.pool });
-  const controlledAgentRouter = createControlledAgentRouter({
-    planner: agentPlanner,
-    knowledgeMetadata: {
-      async list(profileName, limit) {
-        return listKnowledgeRoutingMetadata(knowledgeStore, profileName, limit);
-      }
-    },
-    retrievalEvidenceProviders: {
-      knowledge: createKnowledgeRetrievalEvidenceProvider(knowledgeStore),
-      schedule: createScheduleEvidenceProvider(memoryStore),
-      memory: createMemoryEvidenceProvider(memoryStore),
-      catalog_presentation: createCombinedEvidenceProvider(
-        createCatalogEvidenceProvider(catalog, {
-          domains: ["presentation"],
-          itemKinds: ["ppt_slide"]
-        }),
-        createResourceMemoryEvidenceProvider(memoryStore, ["ppt_slide"])
-      ),
-      catalog_sheet_music: createCombinedEvidenceProvider(
-        createCatalogEvidenceProvider(catalog, { domains: ["sheet_music"] }),
-        createResourceMemoryEvidenceProvider(memoryStore, ["sheet_music"])
-      ),
-      catalog_general: createCombinedEvidenceProvider(
-        createCatalogEvidenceProvider(catalog, { domains: ["general", "audio"] }),
-        createResourceMemoryEvidenceProvider(memoryStore, ["general_resource"])
-      )
-    }
-  });
   await knowledgeStore.purgeExpired(new Date());
   const knowledgePurgeTimer = setInterval(
     () => {
@@ -263,7 +224,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     knowledgeEmbedding,
     knowledgeEmbeddingBatchSize: config.knowledge?.embedding.batchSize
   });
-  const inFlightStore = createInFlightStore({ redis });
   const webhookEventStore = createWebhookEventStore(redis);
   const agentJobStore = redis
     ? new RedisAgentJobStore({ client: redis.client, keyPrefix: redis.keyPrefix })
@@ -305,7 +265,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   });
   const firstSuccessStore = createFirstSuccessStore(redis);
   const routeObserver = createConsoleRouteObserver();
-  const completionObserver = createControlledCompletionObserver({
+  const completionObserver = createFunctionCompletionObserver({
     accessStore,
     routeObserver,
     firstSuccessStore,
@@ -359,13 +319,12 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     )
   );
   const applicationAgentRuntime = createAgentRuntime({ memoryStore, graph, accessStore });
-  const agentTurnRuntime = createAgentTurnRuntime({
+  const directTurnRuntime = createAgentTurnRuntime({
     functionRegistry: registries.functions,
     textMessageHandlers: registries.textMessages,
     adminActionRouter,
     adminActionRegistry: knowledgeAdminActionRegistry,
     accessStore,
-    inFlightStore,
     sessionStore,
     agentRuntime: applicationAgentRuntime,
     traceStore: agentTraceStore,
@@ -374,12 +333,57 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     firstSuccessStore,
     routeObserver,
     completionObserver,
-    textGenerator: smartTalkPrimary,
-    conversationWindowStore,
-    controlledAgentRouter,
-    observabilityHmacKey: config.observability?.hmacKey,
-    timeZone: config.timeZone
+    observabilityHmacKey: config.observability?.hmacKey
   });
+  const helperProfile = config.profiles.find(
+    (profile) => profile.name === "helper" && profile.agent
+  );
+  let stopSdkStateCleanup: (() => void) | undefined;
+  let agentTurnRuntime = directTurnRuntime;
+  if (helperProfile) {
+    let sdkState;
+    if (postgres?.pool) {
+      const checkpointer = new PostgresSaver(postgres.pool);
+      await checkpointer.setup();
+      const postgresState = createPostgresSdkAgentState({
+        pool: postgres.pool,
+        checkpointer,
+        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
+        ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
+      });
+      await postgresState.setup();
+      await postgresState.cleanupExpired();
+      const timer = setInterval(
+        () => void postgresState.cleanupExpired().catch(() => undefined),
+        300_000
+      );
+      timer.unref();
+      stopSdkStateCleanup = () => clearInterval(timer);
+      sdkState = postgresState;
+    } else {
+      sdkState = createSdkAgentState({
+        checkpointer: new MemorySaver(),
+        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
+        ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
+      });
+    }
+    agentTurnRuntime = createSdkAgentTurnRuntime({
+      fallback: directTurnRuntime,
+      functionRegistry: registries.functions,
+      model: new ChatDeepSeek({
+        apiKey: config.llm.deepseekApiKey,
+        model: config.llm.deepseekModel,
+        temperature: 0,
+        maxRetries: 1,
+        timeout: config.llm.deepseekTimeoutMs,
+        configuration: { baseURL: config.llm.deepseekBaseUrl }
+      }),
+      state: sdkState,
+      sessionStore,
+      webSearch,
+      pageReader: publicPageReader
+    });
+  }
   const app = createApp(config, {
     adminActionRegistry: knowledgeAdminActionRegistry,
     postbackHandlers: registries.postbacks,
@@ -399,7 +403,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     agentTraceStore,
     agentJobStore,
     conversationWindowStore,
-    controlledAgentRouter,
     textGenerator: smartTalkPrimary,
     agentRuntime: applicationAgentRuntime,
     agentTurnRuntime,
@@ -420,6 +423,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     async close() {
       clearInterval(memoryPurgeTimer);
       clearInterval(knowledgePurgeTimer);
+      stopSdkStateCleanup?.();
       stopAttachmentScanOutbox?.();
       stopMediaSyncOutbox?.();
       await app.close();

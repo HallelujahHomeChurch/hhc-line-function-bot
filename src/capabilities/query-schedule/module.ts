@@ -3,7 +3,6 @@ import type {
   FunctionModuleRegistrations
 } from "../../application/contracts/function-module.js";
 import { queryScheduleDefinition } from "./definition.js";
-import { queryScheduleRouterEvalCases } from "./eval-cases.js";
 import { createQueryScheduleHandler } from "./handler.js";
 import type { QueryScheduleDependencies } from "./ports.js";
 
@@ -14,7 +13,6 @@ export function createQueryScheduleModule(dependencies: QueryScheduleDependencie
   return {
     name: "query_schedule",
     definition: queryScheduleDefinition,
-    routerEvalCases: queryScheduleRouterEvalCases,
     register: () => registrations(dependencies)
   };
 }
@@ -22,7 +20,6 @@ export function createQueryScheduleModule(dependencies: QueryScheduleDependencie
 export const queryScheduleModule: FunctionModule = {
   name: "query_schedule",
   definition: queryScheduleDefinition,
-  routerEvalCases: queryScheduleRouterEvalCases,
   register: ({ config, clients }) => {
     const typedClients = clients as unknown as QueryScheduleDependencies;
     if (!typedClients.memoryStore) return {};

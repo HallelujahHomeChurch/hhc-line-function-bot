@@ -58,8 +58,28 @@ export function createWikipediaLookupHandler(
       };
     }
 
-    const summary = await options.summarize(toSummaryInput(context.profile.name, query, article));
     const pageId = opaquePageId(article);
+    if (context.agentTool) {
+      return {
+        ok: true,
+        replyText: "維基百科查詢完成。",
+        responseData: {
+          kind: "wikipedia_evidence",
+          fields: {},
+          records: [
+            {
+              sourceKind: "wikipedia",
+              title: article.title,
+              excerpt: article.extract,
+              sourceUrl: article.articleUrl
+            }
+          ]
+        },
+        agentResult: successEnvelope(article.language, pageId)
+      };
+    }
+
+    const summary = await options.summarize(toSummaryInput(context.profile.name, query, article));
     return {
       ok: true,
       replyText: [article.title, summary.trim(), `來源：${article.articleUrl}`]
@@ -69,15 +89,19 @@ export function createWikipediaLookupHandler(
         kind: "wikipedia",
         fields: { answer: summary.trim(), summary: summary.trim() }
       },
-      agentResult: {
-        status: "success",
-        replyText: "維基百科查詢完成。",
-        anchors: { language: article.language },
-        entities: [{ type: "topic", key: pageId, label: "維基百科主題" }],
-        evidence: [{ kind: "wikipedia_page", reference: { pageId } }],
-        supportedOperations: ["continue", "refine", "view_full"]
-      }
+      agentResult: successEnvelope(article.language, pageId)
     };
+  };
+}
+
+function successEnvelope(language: "zh" | "en", pageId: string) {
+  return {
+    status: "success" as const,
+    replyText: "維基百科查詢完成。",
+    anchors: { language },
+    entities: [{ type: "topic", key: pageId, label: "維基百科主題" }],
+    evidence: [{ kind: "wikipedia_page", reference: { pageId } }],
+    supportedOperations: ["continue", "refine", "view_full"]
   };
 }
 

@@ -5,10 +5,8 @@ import type { FunctionExecutionResult, QuickReplyItem } from "../types.js";
 import { getFunctionDefinition } from "../functions/definitions.js";
 import {
   applyResultGuidance,
-  controlledResultStateForValidatorDeny,
-  type ControlledResultState
+  type FunctionResultState
 } from "../application/turn/result-guidance.js";
-import type { ValidatorDenyReason } from "../application/turn/result-guidance.js";
 
 const existingChoice: QuickReplyItem = {
   label: "第一個結果",
@@ -19,7 +17,7 @@ const existingChoice: QuickReplyItem = {
   }
 };
 
-function baseResult(state: ControlledResultState): FunctionExecutionResult {
+function baseResult(state: FunctionResultState): FunctionExecutionResult {
   const status =
     state === "ambiguous" ||
     state === "not_found" ||
@@ -49,37 +47,12 @@ function baseResult(state: ControlledResultState): FunctionExecutionResult {
 
 describe("controlled result guidance", () => {
   it.each([
-    ["function_disabled", "permission_denied", "權限", true],
-    ["source_not_allowed", "permission_denied", "權限", true],
-    ["write_evidence_missing", "write_intent_required", "明確", false],
-    ["candidate_not_allowed", "unsupported", "不支援", false],
-    ["planner_denied", "unsupported", "不支援", false],
-    ["capability_not_agent_enabled", "unavailable", "暫時無法使用", false],
-    ["invalid_policy", "error", "處理請求時發生錯誤", false]
-  ] satisfies Array<[ValidatorDenyReason, ControlledResultState, string, boolean]>)(
-    "classifies validator deny %s as %s",
-    (reason, state, phrase, hasHelp) => {
-      expect(controlledResultStateForValidatorDeny(reason)).toBe(state);
-      const guided = applyResultGuidance({
-        state: controlledResultStateForValidatorDeny(reason),
-        result: { ok: true, replyText: "" }
-      });
-
-      expect(guided.replyText).toContain(phrase);
-      expect(guided.replyText.includes("/help")).toBe(hasHelp);
-      expect(Boolean(guided.quickReplies?.some((item) => item.action.type === "message"))).toBe(
-        hasHelp
-      );
-    }
-  );
-
-  it.each([
     ["permission_denied", "/help", 1],
     ["missing_input", "請", 1],
     ["not_found", "換一個關鍵字", 1],
     ["unavailable", "稍後再試", 1],
     ["stale_allowed", "資料時間", 0]
-  ] satisfies Array<[ControlledResultState, string, number]>)(
+  ] satisfies Array<[FunctionResultState, string, number]>)(
     "gives %s a reason and no more than its bounded next action",
     (state, phrase, maxActions) => {
       const guided = applyResultGuidance({
@@ -184,7 +157,7 @@ describe("controlled result guidance", () => {
         "unavailable",
         "stale_allowed",
         "error"
-      ] satisfies ControlledResultState[]
+      ] satisfies FunctionResultState[]
     )
       .map((state) =>
         applyResultGuidance({

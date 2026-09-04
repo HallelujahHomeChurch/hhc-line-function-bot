@@ -51,10 +51,8 @@ describe("kernel Redis integration environment", () => {
 
     expect(results.map((result) => result.caseId)).toEqual([
       "redis/selection/atomic-consume",
-      "redis/task-frame/requester-restart",
       "redis/job/scope-restart",
       "redis/webhook/cross-replica-deduplication",
-      "redis/in-flight/cross-replica-lock",
       "redis/cache/cross-replica-invalidation",
       "redis/confirmation/actor-safe-consume",
       "redis/session/group-requester-isolation",

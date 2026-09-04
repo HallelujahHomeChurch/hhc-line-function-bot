@@ -1,6 +1,10 @@
+import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
+import { FakeToolCallingModel } from "langchain";
+
 import { runAccessMigrations } from "../../../access/migrations.js";
 import { runAgentMemoryMigrations } from "../../../agent/migrations.js";
-import { activeTaskFromResult } from "../../../agent/active-task.js";
+import { createSdkAgent } from "../../../agent/sdk-runtime.js";
+import { createPostgresSdkAgentState } from "../../../agent/sdk-state.js";
 import { runCatalogMigrations } from "../../../catalog/migrations.js";
 import { PostgresCatalogStore } from "../../../catalog/postgres-store.js";
 import { catalogStorageIdentity, type CatalogItemInput } from "../../../catalog/store.js";
@@ -42,6 +46,11 @@ export async function runPostgresIntegrationMatrix(
       caseId: "postgres/knowledge/rollback-and-stale-failure",
       boundary: "adapter_retrieval",
       run: async () => knowledgeRollbackAndStaleFailure(environment)
+    },
+    {
+      caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
+      boundary: "state_lifecycle",
+      run: async () => sdkAgentCheckpointRestartAndExpiry(environment)
     }
   ];
 
@@ -86,12 +95,16 @@ const MATRIX_FAILURE_CODES = new Set([
   "knowledge_ready_health_overwritten",
   "knowledge_routing_metadata_overwritten",
   "knowledge_revision_not_rotated",
-  "knowledge_active_task_missing",
-  "knowledge_active_anchor_invalid",
-  "knowledge_active_source_missing",
-  "knowledge_active_anchor_missing",
-  "knowledge_anchored_search_missing",
-  "knowledge_anchored_follow_up_unavailable"
+  "knowledge_result_anchors_missing",
+  "knowledge_result_anchor_invalid",
+  "knowledge_result_source_missing",
+  "knowledge_result_anchor_missing",
+  "knowledge_scoped_search_missing",
+  "sdk_checkpoint_not_persisted",
+  "sdk_checkpoint_not_restored",
+  "sdk_checkpoint_policy_not_invalidated",
+  "sdk_checkpoint_not_deleted",
+  "sdk_thread_metadata_not_deleted"
 ]);
 
 function boundedFailureCode(error: unknown): string {
@@ -101,6 +114,69 @@ function boundedFailureCode(error: unknown): string {
 }
 
 type KernelPgPool = KernelPostgresEnvironment["pools"][number];
+
+async function sdkAgentCheckpointRestartAndExpiry(
+  environment: KernelPostgresEnvironment
+): Promise<void> {
+  const pool = environment.pools[0];
+  const checkpointer = new PostgresSaver(pool);
+  let now = new Date("2026-09-04T00:00:00.000Z");
+  const createState = () =>
+    createPostgresSdkAgentState({
+      pool,
+      checkpointer,
+      hmacKey: "kernel-sdk-agent-state-key",
+      ttlMs: 1_000,
+      now: () => now
+    });
+  const firstState = createState();
+  await checkpointer.setup();
+  await firstState.setup();
+  const threadId = firstState.threadId({
+    profileName: PROFILE,
+    source: { type: "group", groupId: "kernel-group", userId: "kernel-user" }
+  });
+  if (!threadId) throw new Error("sdk_checkpoint_not_persisted");
+
+  const invoke = (
+    state: ReturnType<typeof createState>,
+    content: string,
+    policyKey = "kernel-policy-v1"
+  ) =>
+    state.run(threadId, policyKey, () =>
+      createSdkAgent({
+        checkpointer,
+        model: new FakeToolCallingModel({ toolCalls: [[]] })
+      }).invoke(
+        { messages: [{ role: "user", content }] },
+        { configurable: { thread_id: threadId } }
+      )
+    );
+
+  const first = await invoke(firstState, "first");
+  if (first.messages.length < 2) throw new Error("sdk_checkpoint_not_persisted");
+  const secondState = createState();
+  await secondState.setup();
+  const second = await invoke(secondState, "second");
+  if (second.messages.length <= first.messages.length) {
+    throw new Error("sdk_checkpoint_not_restored");
+  }
+  const changedPolicy = await invoke(secondState, "third", "kernel-policy-v2");
+  if (changedPolicy.messages.length >= second.messages.length) {
+    throw new Error("sdk_checkpoint_policy_not_invalidated");
+  }
+
+  now = new Date("2026-09-04T00:00:02.000Z");
+  if ((await secondState.cleanupExpired()) !== 1) {
+    throw new Error("sdk_thread_metadata_not_deleted");
+  }
+  const [checkpointRows, threadRows] = await Promise.all([
+    pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [threadId]),
+    pool.query("select 1 from agent_sdk_threads where thread_id = $1", [threadId])
+  ]);
+  if (checkpointRows.rowCount) throw new Error("sdk_checkpoint_not_deleted");
+  if (threadRows.rowCount) throw new Error("sdk_thread_metadata_not_deleted");
+}
 
 async function installCatalogOverlapTrigger(pool: KernelPgPool): Promise<void> {
   await pool.query(`
@@ -461,7 +537,7 @@ async function knowledgeRollbackAndStaleFailure(
     (await right.search({ profileName: PROFILE, query: "Stable content" })).length === 1,
     "knowledge_baseline_not_searchable"
   );
-  await assertKnowledgeAnchoredFollowUp(right);
+  await assertKnowledgeResultAnchor(right);
 
   const staged = await left.upsertSource({
     profileName: PROFILE,
@@ -541,8 +617,7 @@ async function knowledgeRollbackAndStaleFailure(
   assert(promoted.stagingRevision !== first.stagingRevision, "knowledge_revision_not_rotated");
 }
 
-async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): Promise<void> {
-  const now = new Date("2026-07-21T12:01:00.000Z");
+async function assertKnowledgeResultAnchor(store: PostgresKnowledgeStore): Promise<void> {
   const handler = createQueryKnowledgeHandler({
     store,
     embedding: {
@@ -575,7 +650,6 @@ async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): P
     permissionRequiredFunctions: [],
     allowedProviders: ["deepseek" as const],
     allowSubscriptionProviders: false,
-    controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
     schedulePolicy: { meetingWindows: [], domains: [] }
   };
   const event = {
@@ -584,24 +658,24 @@ async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): P
     message: { type: "text" as const, text: "Stable content" }
   };
   const first = await handler({ query: "Stable content" }, { profile, event });
-  const task = activeTaskFromResult("query_knowledge", first, now, 600_000);
-  assert(task, "knowledge_active_task_missing");
-  const sourceId = task.anchors.sourceId;
-  const documentId = task.anchors.documentId;
-  const sectionKey = task.anchors.sectionKey;
+  const anchors = first.agentResult?.anchors;
+  assert(anchors, "knowledge_result_anchors_missing");
+  const sourceId = anchors.sourceId;
+  const documentId = anchors.documentId;
+  const sectionKey = anchors.sectionKey;
   assert(
     typeof sourceId === "string" &&
       typeof documentId === "string" &&
       typeof sectionKey === "string",
-    "knowledge_active_anchor_invalid"
+    "knowledge_result_anchor_invalid"
   );
   assert(
     (await store.listSources({ profileName: PROFILE })).some(({ id }) => id === sourceId),
-    "knowledge_active_source_missing"
+    "knowledge_result_source_missing"
   );
   assert(
     await store.hasAnchor({ profileName: PROFILE, sourceId, documentId, sectionKey }),
-    "knowledge_active_anchor_missing"
+    "knowledge_result_anchor_missing"
   );
   assert(
     (
@@ -618,23 +692,8 @@ async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): P
         ordinal: 0
       })
     ).length > 0,
-    "knowledge_anchored_search_missing"
+    "knowledge_scoped_search_missing"
   );
-  const followUp = await handler(
-    { query: "Follow-up content" },
-    {
-      profile,
-      event: { ...event, message: { type: "text", text: "Follow-up content" } },
-      activeTask: {
-        capability: task.currentCapability,
-        anchors: task.anchors,
-        references: task.references,
-        entities: task.entities,
-        supportedOperations: task.supportedOperations
-      }
-    }
-  );
-  assert(followUp.agentResult?.status === "success", "knowledge_anchored_follow_up_unavailable");
 }
 
 function oneHotVector(): number[] {

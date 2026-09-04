@@ -7,16 +7,13 @@ import type { KernelIntegrationCaseResult } from "./redis-matrix.js";
 
 export const KERNEL_INTEGRATION_CASE_CONTRACTS = [
   { caseId: "redis/selection/atomic-consume", boundary: "slot_ambiguity_resolution" },
-  { caseId: "redis/task-frame/requester-restart", boundary: "active_task_lifecycle" },
   { caseId: "redis/job/scope-restart", boundary: "external_dependency" },
   { caseId: "redis/webhook/cross-replica-deduplication", boundary: "entrance_access" },
-  { caseId: "redis/in-flight/cross-replica-lock", boundary: "external_dependency" },
   { caseId: "redis/cache/cross-replica-invalidation", boundary: "freshness_invalidation" },
   { caseId: "redis/confirmation/actor-safe-consume", boundary: "write_workflow" },
   { caseId: "redis/session/group-requester-isolation", boundary: "slot_ambiguity_resolution" },
-  { caseId: "redis/session/atomic-interactive-replacement", boundary: "active_task_lifecycle" },
+  { caseId: "redis/session/atomic-interactive-replacement", boundary: "state_lifecycle" },
   { caseId: "redis/restart/aof-policy", boundary: "deployment_configuration" },
-  { caseId: "redis/restart/task-frame-durable", boundary: "active_task_lifecycle" },
   { caseId: "redis/restart/job-durable", boundary: "external_dependency" },
   { caseId: "redis/restart/webhook-durable", boundary: "entrance_access" },
   { caseId: "redis/restart/cache-durable", boundary: "freshness_invalidation" },
@@ -26,6 +23,10 @@ export const KERNEL_INTEGRATION_CASE_CONTRACTS = [
   { caseId: "postgres/catalog/concurrent-publication", boundary: "freshness_invalidation" },
   { caseId: "postgres/catalog/rollback-and-visibility", boundary: "adapter_retrieval" },
   { caseId: "postgres/knowledge/rollback-and-stale-failure", boundary: "adapter_retrieval" },
+  {
+    caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
+    boundary: "state_lifecycle"
+  },
   { caseId: "harness/namespace-cleanup", boundary: "deployment_configuration" },
   { caseId: "harness/compose-cleanup", boundary: "deployment_configuration" }
 ] as const;
@@ -39,15 +40,10 @@ const stableCaseBoundaries = new Map<string, string>(
 
 const boundaries = [
   "entrance_access",
-  "candidate_generation",
-  "planner_proposal",
-  "deterministic_validation",
   "slot_ambiguity_resolution",
-  "active_task_lifecycle",
+  "state_lifecycle",
   "adapter_retrieval",
   "freshness_invalidation",
-  "result_envelope",
-  "response_projection",
   "write_workflow",
   "external_dependency",
   "deployment_configuration"

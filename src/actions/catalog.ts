@@ -1,5 +1,5 @@
 import { getFunctionDefinitions } from "../functions/definitions.js";
-import { matchExactWholeMessageIntent } from "../agent/plan-evidence.js";
+import { matchExactWholeMessageIntent } from "../functions/explicit-function-intent.js";
 import {
   FUNCTION_NAMES,
   type ActionName,

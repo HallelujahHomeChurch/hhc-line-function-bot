@@ -1,5 +1,5 @@
 import type {
-  ControlledTurnStage,
+  TextContinuationStage,
   FunctionExecutionResult,
   TextMessageHandler,
   TextMessageHandlerRegistry
@@ -18,7 +18,7 @@ export interface OrderedTurnHandler {
   handler: TextMessageHandler;
 }
 
-const STAGE_ORDER: Record<ControlledTurnStage, number> = {
+const STAGE_ORDER: Record<TextContinuationStage, number> = {
   pending_function: 10,
   resolution: 20,
   attachment: 30,

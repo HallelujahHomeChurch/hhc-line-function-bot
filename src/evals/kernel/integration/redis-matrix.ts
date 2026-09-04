@@ -1,12 +1,9 @@
 import type { KernelBoundary } from "../contracts.js";
 import { RedisConfirmationStore } from "../../../actions/confirmation-store.js";
 import { RedisAgentJobStore } from "../../../agent/jobs.js";
-import { RedisConversationWindowStore } from "../../../agent/context-manager.js";
 import { RedisCacheStore } from "../../../cache/redis-cache-store.js";
 import { RedisWebhookEventStore } from "../../../idempotency/webhook-event-store.js";
-import { RedisInFlightStore } from "../../../in-flight/in-flight-store.js";
 import { RedisSessionStore } from "../../../state/redis-session-store.js";
-import type { ActiveTaskContext } from "../../../agent/active-task.js";
 import type { KernelRedisEnvironment } from "./environment.js";
 
 export interface KernelIntegrationCaseResult {
@@ -55,11 +52,6 @@ export async function runRedisIntegrationMatrix(
       run: async () => selectionAtomicConsume(environment)
     },
     {
-      caseId: "redis/task-frame/requester-restart",
-      boundary: "active_task_lifecycle",
-      run: async () => taskFrameRequesterRestart(environment)
-    },
-    {
       caseId: "redis/job/scope-restart",
       boundary: "external_dependency",
       run: async () => jobScopeRestart(environment)
@@ -68,11 +60,6 @@ export async function runRedisIntegrationMatrix(
       caseId: "redis/webhook/cross-replica-deduplication",
       boundary: "entrance_access",
       run: async () => webhookDeduplication(environment)
-    },
-    {
-      caseId: "redis/in-flight/cross-replica-lock",
-      boundary: "external_dependency",
-      run: async () => inFlightLock(environment)
     },
     {
       caseId: "redis/cache/cross-replica-invalidation",
@@ -91,7 +78,7 @@ export async function runRedisIntegrationMatrix(
     },
     {
       caseId: "redis/session/atomic-interactive-replacement",
-      boundary: "active_task_lifecycle",
+      boundary: "state_lifecycle",
       run: async () => atomicInteractiveReplacement(environment)
     }
   ];
@@ -123,26 +110,6 @@ export async function prepareRedisServerRestartState(
   environment: KernelRedisEnvironment
 ): Promise<void> {
   const client = environment.clients[0];
-  const taskStore = new RedisConversationWindowStore({
-    client,
-    keyPrefix: environment.keyPrefix,
-    now: () => NOW
-  });
-  await taskStore.recordActiveTask({
-    scope: RESTART_SCOPE,
-    task: {
-      version: 2,
-      currentCapability: "find_resource",
-      allowedCapabilities: ["find_resource"],
-      anchors: {},
-      entities: [],
-      supportedOperations: ["filter"],
-      createdAt: NOW.toISOString(),
-      expiresAt: EXPIRES_AT
-    },
-    ttlMs: 60_000
-  });
-
   const jobStore = new RedisAgentJobStore({
     client,
     keyPrefix: environment.keyPrefix,
@@ -198,18 +165,6 @@ export async function verifyRedisServerRestartState(
 ): Promise<KernelIntegrationCaseResult[]> {
   const [leftClient, rightClient] = environment.clients;
   const cases: Array<{ caseId: string; boundary: KernelBoundary; run: () => Promise<void> }> = [
-    {
-      caseId: "redis/restart/task-frame-durable",
-      boundary: "active_task_lifecycle",
-      run: async () => {
-        const store = new RedisConversationWindowStore({
-          client: rightClient,
-          keyPrefix: environment.keyPrefix,
-          now: () => NOW
-        });
-        assert((await store.activeTask(RESTART_SCOPE))?.currentCapability === "find_resource");
-      }
-    },
     {
       caseId: "redis/restart/job-durable",
       boundary: "external_dependency",
@@ -312,40 +267,6 @@ async function selectionAtomicConsume(environment: KernelRedisEnvironment): Prom
   assert(results.filter(Boolean).length === 1);
 }
 
-async function taskFrameRequesterRestart(environment: KernelRedisEnvironment): Promise<void> {
-  const scope = { profileName: "helper", sourceKey: "group:G1", requesterUserId: "U1" };
-  const task: ActiveTaskContext = {
-    version: 2,
-    currentCapability: "query_schedule",
-    allowedCapabilities: ["query_schedule"],
-    anchors: {},
-    entities: [],
-    supportedOperations: ["filter"],
-    createdAt: NOW.toISOString(),
-    expiresAt: EXPIRES_AT
-  };
-  const writer = new RedisConversationWindowStore({
-    client: environment.clients[0],
-    keyPrefix: environment.keyPrefix,
-    now: () => NOW
-  });
-  const reader = new RedisConversationWindowStore({
-    client: environment.clients[1],
-    keyPrefix: environment.keyPrefix,
-    now: () => NOW
-  });
-  await writer.recordActiveTask({ scope, task, ttlMs: 60_000 });
-  assert((await reader.activeTask(scope))?.currentCapability === "query_schedule");
-  assert((await reader.activeTask({ ...scope, requesterUserId: "U2" })) === undefined);
-  const reconnected = await environment.reconnectReplica(0);
-  const restarted = new RedisConversationWindowStore({
-    client: reconnected,
-    keyPrefix: environment.keyPrefix,
-    now: () => NOW
-  });
-  assert((await restarted.activeTask(scope))?.currentCapability === "query_schedule");
-}
-
 async function jobScopeRestart(environment: KernelRedisEnvironment): Promise<void> {
   const scope = { profileName: "helper", sourceKey: "group:G1", requesterUserId: "U1" };
   let writer = new RedisAgentJobStore({
@@ -377,22 +298,6 @@ async function webhookDeduplication(environment: KernelRedisEnvironment): Promis
   const b = new RedisWebhookEventStore(environment.clients[1], environment.keyPrefix);
   assert((await a.tryStart("helper", "event", 60_000)) === "started");
   assert((await b.tryStart("helper", "event", 60_000)) === "duplicate");
-}
-
-async function inFlightLock(environment: KernelRedisEnvironment): Promise<void> {
-  const a = new RedisInFlightStore({
-    client: environment.clients[0],
-    keyPrefix: environment.keyPrefix
-  });
-  const b = new RedisInFlightStore({
-    client: environment.clients[1],
-    keyPrefix: environment.keyPrefix
-  });
-  const key = { profileName: "helper", sourceKey: "group:G1", action: "lookup", queryHash: "hash" };
-  assert((await a.tryStart(key, 60_000)) === "started");
-  assert((await b.tryStart(key, 60_000)) === "busy");
-  await b.release(key);
-  assert((await a.tryStart(key, 60_000)) === "started");
 }
 
 async function cacheInvalidation(environment: KernelRedisEnvironment): Promise<void> {

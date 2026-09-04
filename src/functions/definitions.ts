@@ -53,65 +53,13 @@ export interface FunctionGrantPolicy {
 }
 
 export type AgentOperation = "continue" | "refine" | "advance" | "select" | "view_full";
-export type AgentArgumentAuthority =
-  "current_text" | "explicit_current_text" | "model_grounded" | "active_task_only";
-
-export interface AgentArgumentContract {
-  type: "string" | "number" | "boolean";
-  authority: AgentArgumentAuthority;
-  values?: string[];
-}
-
-export interface AgentResponseField {
-  label: string;
-  aliases: string[];
-}
-
-export interface AgentResponseProjection {
-  defaultMode: "focused" | "full";
-  fields: Record<string, AgentResponseField>;
-}
-
-export interface AgentCapabilityHandoff {
-  on: "success";
-  to: FunctionName;
-  map: Record<string, string>;
-  when?: Record<string, string>;
-}
 
 export interface AgentCapabilityContract {
   intents: string[];
   exactIntents?: boolean;
-  candidateHints: string[];
   semanticDescription: string;
-  arguments?: Record<string, AgentArgumentContract>;
-  genericWriteFallback?: boolean;
-  argumentEvidence?: AgentArgumentEvidenceContract;
   retrievalEvidence?: { provider: string; queryStopWords?: string[] };
-  entityTypes?: string[];
-  refinableFields?: string[];
-  operations: AgentOperation[];
-  responseProjection: AgentResponseProjection;
-  handoffs?: AgentCapabilityHandoff[];
-  ambiguity?: "clarify";
-  activeEvidence?: AgentActiveEvidenceContract;
-}
-
-export interface AgentArgumentEvidenceContract {
-  queryArgument: string;
-  allOf: string[];
-  anyOf?: string[];
-}
-
-export interface AgentActiveEvidenceRule {
-  entityTypes?: string[];
-  anchorKeys?: string[];
-  referenceKeys?: string[];
-}
-
-export interface AgentActiveEvidenceContract {
-  arguments?: Record<string, AgentActiveEvidenceRule>;
-  references?: Record<string, AgentActiveEvidenceRule>;
+  operations?: AgentOperation[];
 }
 
 export interface FunctionDefinition {
@@ -153,53 +101,12 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     sideEffectLevel: "read",
     agentCapability: {
       intents: ["查投影片", "找投影片", "搜尋投影片", "查簡報", "找簡報"],
-      candidateHints: ["投影片", "簡報", "ppt", "powerpoint", "slides", "keynote", "odp"],
       semanticDescription: "依名稱或關鍵字搜尋教會投影片檔案。",
-      arguments: {
-        query: { type: "string", authority: "current_text" },
-        resourceId: { type: "string", authority: "active_task_only" },
-        driveId: { type: "string", authority: "active_task_only" },
-        itemId: { type: "string", authority: "active_task_only" },
-        originalQuery: { type: "string", authority: "current_text" },
-        includePdf: { type: "boolean", authority: "explicit_current_text" },
-        fileType: {
-          type: "string",
-          authority: "explicit_current_text",
-          values: ["ppt", "pdf", "any"]
-        },
-        matchMode: {
-          type: "string",
-          authority: "model_grounded",
-          values: ["fuzzy", "exact"]
-        }
-      },
       retrievalEvidence: {
         provider: "catalog_presentation",
         queryStopWords: ["投影片", "簡報", "ppt", "powerpoint", "slides", "keynote", "odp"]
       },
-      entityTypes: ["resource"],
-      refinableFields: ["query", "fileType", "matchMode"],
-      operations: ["continue", "refine", "select", "view_full"],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: {
-          title: { label: "投影片", aliases: ["名稱", "標題", "哪一份"] },
-          link: { label: "連結", aliases: ["連結", "下載", "開啟"] }
-        }
-      },
-      ambiguity: "clarify",
-      activeEvidence: {
-        arguments: {
-          query: { entityTypes: ["resource"] },
-          resourceId: {
-            entityTypes: ["resource"],
-            anchorKeys: ["resourceId"],
-            referenceKeys: ["resourceId"]
-          },
-          driveId: { entityTypes: ["resource"], referenceKeys: ["driveId"] },
-          itemId: { entityTypes: ["resource"], referenceKeys: ["itemId"] }
-        }
-      }
+      operations: ["continue", "refine", "select", "view_full"]
     },
     allowedSources: ["user", "group"],
     requiredSlots: [
@@ -241,49 +148,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     sideEffectLevel: "read",
     agentCapability: {
       intents: ["查知識", "知識查詢", "找知識"],
-      candidateHints: ["知識", "sop", "計畫", "流程"],
       semanticDescription: "從管理員已加入的內部知識回答問題。",
-      arguments: {
-        query: { type: "string", authority: "current_text" },
-        sourceKey: { type: "string", authority: "active_task_only" },
-        sourceId: { type: "string", authority: "active_task_only" },
-        documentId: { type: "string", authority: "active_task_only" },
-        sectionKey: { type: "string", authority: "active_task_only" },
-        ordinal: { type: "number", authority: "model_grounded" },
-        limit: { type: "number", authority: "explicit_current_text" }
-      },
       retrievalEvidence: { provider: "knowledge", queryStopWords: ["知識", "查知識", "知識查詢"] },
-      entityTypes: ["source", "document", "section", "ordinal"],
-      refinableFields: ["sourceKey", "sourceId", "documentId", "sectionKey", "ordinal"],
-      operations: ["continue", "refine", "select"],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: {
-          answer: { label: "答案", aliases: ["是什麼", "哪裡", "誰", "如何", "為什麼"] },
-          ordinal: { label: "順序", aliases: ["第一個", "第二個", "第幾個"] }
-        }
-      },
-      ambiguity: "clarify",
-      activeEvidence: {
-        arguments: {
-          sourceKey: { entityTypes: ["source"] },
-          sourceId: { entityTypes: ["source"], anchorKeys: ["sourceId"] },
-          documentId: {
-            entityTypes: ["document"],
-            anchorKeys: ["documentId"],
-            referenceKeys: ["documentId"]
-          },
-          sectionKey: {
-            entityTypes: ["section"],
-            anchorKeys: ["sectionKey"],
-            referenceKeys: ["sectionKey"]
-          },
-          ordinal: { entityTypes: ["ordinal"], anchorKeys: ["ordinal"] }
-        },
-        references: {
-          documentId: { referenceKeys: ["documentId"] }
-        }
-      }
+      operations: ["continue", "refine", "select"]
     },
     allowedSources: ["user", "group"],
     requiredSlots: [
@@ -299,7 +166,7 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     memoryPolicy: { kind: "none" },
     clarificationPrompt: "想查已加入知識中的哪一項資訊？",
     description:
-      '- query_knowledge: answer from administrator-registered internal knowledge sources. Arguments: {"query":"full user question","sourceKey":"eligible source key optional","sourceId":"active-task opaque source id optional","documentId":"active-task document id optional","sectionKey":"active-task opaque section id optional","ordinal":"zero-based requested item optional","limit":number optional}. Never use it for service schedules when query_schedule applies.',
+      '- query_knowledge: answer from administrator-registered internal knowledge sources. Arguments: {"query":"full user question","sourceKey":"eligible source key optional","sourceId":"opaque source id optional","documentId":"opaque document id optional","sectionKey":"opaque section id optional","ordinal":"zero-based requested item optional","limit":number optional}. Never use it for service schedules when query_schedule applies.',
     argumentSchema: queryKnowledgeArgumentsSchema,
     quickReply: { label: "查知識", command: "小哈 查知識" },
     helpText: "查詢管理員已加入的計畫、SOP與其他內部資訊。"
@@ -338,47 +205,8 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
         "修改服事",
         "刪除服事"
       ],
-      candidateHints: ["服事表"],
       semanticDescription: "整理並保存使用者明確提供的共用服事表。",
-      arguments: {
-        operation: {
-          type: "string",
-          authority: "model_grounded",
-          values: ["replace", "add_entry", "update_entry", "delete_entry", "delete_schedule"]
-        },
-        scheduleType: {
-          type: "string",
-          authority: "model_grounded",
-          values: [
-            "morning_prayer_family",
-            "street_sign_service",
-            "children_sunday",
-            "prayer_meeting_family",
-            "custom_service_schedule"
-          ]
-        },
-        title: { type: "string", authority: "explicit_current_text" },
-        content: { type: "string", authority: "explicit_current_text" },
-        query: { type: "string", authority: "current_text" },
-        targetQuery: { type: "string", authority: "explicit_current_text" },
-        confirm: { type: "boolean", authority: "active_task_only" },
-        cancel: { type: "boolean", authority: "active_task_only" }
-      },
-      entityTypes: ["schedule"],
-      refinableFields: ["content", "scheduleType", "operation", "targetQuery"],
-      operations: [],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: { summary: { label: "保存結果", aliases: ["保存", "結果"] } }
-      },
-      handoffs: [
-        {
-          on: "success",
-          to: "query_schedule",
-          map: { scheduleType: "scheduleType" }
-        }
-      ],
-      ambiguity: "clarify"
+      operations: []
     },
     clarificationPrompt: "請貼上要記住的服事表文字內容。",
     description:
@@ -400,52 +228,12 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     sideEffectLevel: "read",
     agentCapability: {
       intents: ["查歌譜", "找歌譜", "搜尋歌譜", "查樂譜", "找樂譜"],
-      candidateHints: ["歌譜", "樂譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"],
       semanticDescription: "依歌名、演出者或檔案類型搜尋歌譜。",
-      arguments: {
-        query: { type: "string", authority: "current_text" },
-        resourceId: { type: "string", authority: "active_task_only" },
-        driveId: { type: "string", authority: "active_task_only" },
-        itemId: { type: "string", authority: "active_task_only" },
-        artist: { type: "string", authority: "explicit_current_text" },
-        fileType: {
-          type: "string",
-          authority: "explicit_current_text",
-          values: ["pdf", "image", "any"]
-        },
-        matchMode: {
-          type: "string",
-          authority: "model_grounded",
-          values: ["fuzzy", "exact"]
-        }
-      },
       retrievalEvidence: {
         provider: "catalog_sheet_music",
         queryStopWords: ["歌譜", "樂譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"]
       },
-      entityTypes: ["resource"],
-      refinableFields: ["query", "artist", "fileType", "matchMode"],
-      operations: ["continue", "refine", "select", "view_full"],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: {
-          title: { label: "歌譜", aliases: ["名稱", "歌名", "哪一份"] },
-          link: { label: "連結", aliases: ["連結", "下載", "開啟"] }
-        }
-      },
-      ambiguity: "clarify",
-      activeEvidence: {
-        arguments: {
-          query: { entityTypes: ["resource"] },
-          resourceId: {
-            entityTypes: ["resource"],
-            anchorKeys: ["resourceId"],
-            referenceKeys: ["resourceId"]
-          },
-          driveId: { entityTypes: ["resource"], referenceKeys: ["driveId"] },
-          itemId: { entityTypes: ["resource"], referenceKeys: ["itemId"] }
-        }
-      }
+      operations: ["continue", "refine", "select", "view_full"]
     },
     allowedSources: ["user", "group"],
     requiredSlots: [
@@ -486,40 +274,12 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     sideEffectLevel: "read",
     agentCapability: {
       intents: ["查教會資料", "找教會資料", "查小哈資料庫", "找小哈資料庫"],
-      candidateHints: ["教會資料", "小哈資料庫", "週報音檔", "檔案", "文件", "音檔"],
       semanticDescription: "搜尋已授權的泛用教會文件、圖片或音檔資源。",
-      arguments: {
-        query: { type: "string", authority: "current_text" },
-        resourceId: { type: "string", authority: "active_task_only" },
-        itemKind: { type: "string", authority: "explicit_current_text" },
-        domain: { type: "string", authority: "explicit_current_text" },
-        limit: { type: "number", authority: "explicit_current_text" }
-      },
       retrievalEvidence: {
         provider: "catalog_general",
         queryStopWords: ["教會資料", "小哈資料庫", "檔案", "文件", "音檔"]
       },
-      entityTypes: ["resource"],
-      refinableFields: ["query", "itemKind", "domain"],
-      operations: ["continue", "refine", "select", "view_full"],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: {
-          title: { label: "資料", aliases: ["名稱", "標題", "哪一份"] },
-          link: { label: "連結", aliases: ["連結", "下載", "開啟"] }
-        }
-      },
-      ambiguity: "clarify",
-      activeEvidence: {
-        arguments: {
-          query: { entityTypes: ["resource"] },
-          resourceId: {
-            entityTypes: ["resource"],
-            anchorKeys: ["resourceId"],
-            referenceKeys: ["resourceId"]
-          }
-        }
-      }
+      operations: ["continue", "refine", "select", "view_full"]
     },
     allowedSources: ["user", "group"],
     requiredSlots: [
@@ -555,25 +315,8 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     sideEffectLevel: "read",
     agentCapability: {
       intents: ["查維基百科", "找維基百科", "查wiki", "查wikipedia"],
-      candidateHints: ["維基百科", "wiki", "wikipedia"],
       semanticDescription: "查詢一個維基百科主題並回答相關事實問題。",
-      arguments: {
-        query: { type: "string", authority: "current_text" }
-      },
-      entityTypes: ["topic"],
-      refinableFields: ["query"],
-      operations: ["continue", "refine", "view_full"],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: {
-          answer: { label: "答案", aliases: ["誰", "什麼", "何時", "哪裡", "為什麼"] },
-          summary: { label: "摘要", aliases: ["摘要", "完整內容", "全文"] }
-        }
-      },
-      ambiguity: "clarify",
-      activeEvidence: {
-        arguments: { query: { entityTypes: ["topic"] } }
-      }
+      operations: ["continue", "refine", "view_full"]
     },
     allowedSources: ["user", "group"],
     requiredSlots: [
@@ -621,36 +364,8 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     grantPolicy: { principals: ["user"] },
     agentCapability: {
       intents: ["幫我記住", "記住這個", "幫我保存", "幫我儲存", "保存這段資訊"],
-      candidateHints: ["記住", "保存", "儲存"],
       semanticDescription: "保存使用者明確要求記住的文字資訊。",
-      arguments: {
-        title: { type: "string", authority: "explicit_current_text" },
-        content: { type: "string", authority: "explicit_current_text" },
-        query: { type: "string", authority: "current_text" },
-        visibility: {
-          type: "string",
-          authority: "explicit_current_text",
-          values: ["private", "group"]
-        },
-        confirm: { type: "boolean", authority: "active_task_only" },
-        cancel: { type: "boolean", authority: "active_task_only" }
-      },
-      genericWriteFallback: true,
-      entityTypes: ["memory"],
-      refinableFields: ["title", "content", "visibility"],
-      operations: [],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: { summary: { label: "保存結果", aliases: ["保存", "結果"] } }
-      },
-      handoffs: [
-        {
-          on: "success",
-          to: "retrieve_memory",
-          map: { memoryId: "memoryId" }
-        }
-      ],
-      ambiguity: "clarify"
+      operations: []
     },
     clarificationPrompt: "請直接告訴我要記住的內容。",
     description:
@@ -712,59 +427,9 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     memoryPolicy: { kind: "explicit_text" },
     agentCapability: {
       intents: ["保存檔案", "上傳檔案", "幫我存檔案", "保存連結", "幫我保存"],
-      candidateHints: ["保存", "上傳", "檔案", "連結"],
       semanticDescription:
         "啟動受控附件流程，上傳圖片或檔案後選擇用途、輸入名稱、預覽確認，通過驗證與掃毒後發布；也保留明確外部連結匯入。",
-      arguments: {
-        mode: {
-          type: "string",
-          authority: "active_task_only",
-          values: ["attachment_intake", "external_url_import"]
-        },
-        url: { type: "string", authority: "explicit_current_text" },
-        resourceType: {
-          type: "string",
-          authority: "explicit_current_text",
-          values: ["ppt_slide", "sheet_music"]
-        },
-        title: { type: "string", authority: "explicit_current_text" },
-        description: { type: "string", authority: "explicit_current_text" },
-        visibility: {
-          type: "string",
-          authority: "explicit_current_text",
-          values: ["private", "group"]
-        },
-        confirm: { type: "boolean", authority: "active_task_only" },
-        cancel: { type: "boolean", authority: "active_task_only" }
-      },
-      entityTypes: ["resource"],
-      refinableFields: ["url", "resourceType", "title", "visibility"],
-      operations: [],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: { summary: { label: "保存結果", aliases: ["保存", "結果"] } }
-      },
-      handoffs: [
-        {
-          on: "success",
-          to: "find_ppt_slides",
-          map: { query: "title" },
-          when: { resourceKind: "ppt_slide" }
-        },
-        {
-          on: "success",
-          to: "find_sheet_music",
-          map: { query: "title" },
-          when: { resourceKind: "sheet_music" }
-        },
-        {
-          on: "success",
-          to: "find_resource",
-          map: { query: "title", resourceId: "resourceId" },
-          when: { resourceKind: "resource" }
-        }
-      ],
-      ambiguity: "clarify"
+      operations: []
     },
     clarificationPrompt: "請先上傳圖片或檔案；之後我會依序詢問用途與名稱，再讓你預覽確認。",
     description:
@@ -786,37 +451,12 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
     sideEffectLevel: "read",
     agentCapability: {
       intents: ["查我記住的", "查我保存的", "查我儲存的", "查記住的資訊"],
-      candidateHints: ["記住的資訊", "保存的資訊", "小哈記得"],
       semanticDescription: "查詢目前來源中可見且未過期的明確文字記憶。",
-      arguments: {
-        query: { type: "string", authority: "current_text" },
-        memoryId: { type: "string", authority: "active_task_only" }
-      },
       retrievalEvidence: {
         provider: "memory",
         queryStopWords: ["記憶", "記住的資訊", "已記住的資訊", "保存的資訊", "已保存的資訊"]
       },
-      entityTypes: ["memory"],
-      refinableFields: ["query"],
-      operations: ["continue", "refine", "select", "view_full"],
-      responseProjection: {
-        defaultMode: "focused",
-        fields: {
-          answer: { label: "答案", aliases: ["誰", "什麼", "何時", "哪裡", "內容"] },
-          title: { label: "記憶", aliases: ["名稱", "標題", "哪一段"] }
-        }
-      },
-      ambiguity: "clarify",
-      activeEvidence: {
-        arguments: {
-          query: { entityTypes: ["memory"] },
-          memoryId: {
-            entityTypes: ["memory"],
-            anchorKeys: ["memoryId"],
-            referenceKeys: ["memoryId"]
-          }
-        }
-      }
+      operations: ["continue", "refine", "select", "view_full"]
     },
     allowedSources: ["user", "group"],
     requiredSlots: [

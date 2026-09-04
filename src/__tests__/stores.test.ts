@@ -3,8 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryCacheStore } from "../cache/cache-store.js";
 import { createCacheStore } from "../cache/create-cache-store.js";
 import { RedisCacheStore } from "../cache/redis-cache-store.js";
-import { createInFlightStore } from "../in-flight/create-in-flight-store.js";
-import { MemoryInFlightStore, RedisInFlightStore } from "../in-flight/in-flight-store.js";
 import { createWebhookEventStore } from "../idempotency/create-webhook-event-store.js";
 import {
   InMemoryWebhookEventStore,
@@ -188,73 +186,11 @@ describe("store factories", () => {
 
     expect(createSessionStore({ redis })).toBeInstanceOf(RedisSessionStore);
     expect(createCacheStore({ redis })).toBeInstanceOf(RedisCacheStore);
-    expect(createInFlightStore({ redis })).toBeInstanceOf(RedisInFlightStore);
     expect(createWebhookEventStore(redis)).toBeInstanceOf(RedisWebhookEventStore);
   });
 
   it("uses a memory webhook idempotency store when Redis is absent", () => {
     expect(createWebhookEventStore()).toBeInstanceOf(InMemoryWebhookEventStore);
-  });
-
-  it("uses memory in-flight store when Redis is not configured", async () => {
-    const store = createInFlightStore({ redis: undefined });
-
-    expect(store).toBeInstanceOf(MemoryInFlightStore);
-    await expect(
-      store.tryStart(
-        {
-          profileName: "helper",
-          sourceKey: "group:C1",
-          action: "find_ppt_slides",
-          queryHash: "abc"
-        },
-        60_000
-      )
-    ).resolves.toBe("started");
-    await expect(
-      store.tryStart(
-        {
-          profileName: "helper",
-          sourceKey: "group:C1",
-          action: "find_ppt_slides",
-          queryHash: "abc"
-        },
-        60_000
-      )
-    ).resolves.toBe("busy");
-    await store.release({
-      profileName: "helper",
-      sourceKey: "group:C1",
-      action: "find_ppt_slides",
-      queryHash: "abc"
-    });
-    await expect(
-      store.tryStart(
-        {
-          profileName: "helper",
-          sourceKey: "group:C1",
-          action: "find_ppt_slides",
-          queryHash: "abc"
-        },
-        60_000
-      )
-    ).resolves.toBe("started");
-  });
-
-  it("uses Redis NX semantics for in-flight locks", async () => {
-    const client = new FakeRedisClient();
-    const store = new RedisInFlightStore({ client, keyPrefix: "test" });
-    const key = {
-      profileName: "helper",
-      sourceKey: "group:C1",
-      action: "find_ppt_slides",
-      queryHash: "abc"
-    };
-
-    await expect(store.tryStart(key, 60_000)).resolves.toBe("started");
-    await expect(store.tryStart(key, 60_000)).resolves.toBe("busy");
-    await store.release(key);
-    await expect(store.tryStart(key, 60_000)).resolves.toBe("started");
   });
 
   it("does not match in-memory group sessions when the requester user id is missing", async () => {

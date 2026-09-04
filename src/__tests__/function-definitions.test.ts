@@ -32,8 +32,7 @@ describe("function definitions", () => {
       resourcePolicy: { kind: "none", remember: false, alias: false },
       memoryPolicy: { kind: "none" },
       agentCapability: {
-        operations: [],
-        refinableFields: []
+        operations: []
       }
     });
     expect(definition?.argumentSchema.safeParse({ issueNumber: 1 }).success).toBe(true);
@@ -83,7 +82,7 @@ describe("function definitions", () => {
       }
     });
     expect(definition?.shortDescription).toContain("歌譜");
-    expect(definition?.agentCapability?.candidateHints).toContain("樂譜");
+    expect(definition?.agentCapability?.semanticDescription).toContain("歌譜");
   });
 
   it("keeps shared write functions user-grant-only", () => {

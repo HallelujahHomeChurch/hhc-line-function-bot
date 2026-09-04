@@ -15,7 +15,6 @@ import type {
   AppConfig,
   FunctionName,
   GraphDriveClient,
-  JsonRecord,
   LineContentClient,
   NotionDatabaseClient,
   TextGenerationProvider,
@@ -44,22 +43,6 @@ export interface FunctionModuleRegistrations {
   postbacks?: PostbackHandlerRegistry;
   textMessages?: TextMessageHandlerRegistry;
   adminHandlers?: AdminHandlerRegistry;
-}
-
-export interface RouterEvalCase {
-  kind: "positive" | "missing_slot" | "typo" | "negative" | "disabled" | "cross_function";
-  text: string;
-  enabledFunctions?: FunctionName[];
-  expected:
-    | {
-        type: "execute";
-        action: FunctionName;
-        arguments: JsonRecord;
-      }
-    | {
-        type: "deny";
-        reason: string;
-      };
 }
 
 export interface FunctionModuleContext {
@@ -94,6 +77,5 @@ export interface FunctionModuleContext {
 export interface FunctionModule {
   name: FunctionName;
   definition: FunctionModuleDefinition;
-  routerEvalCases: RouterEvalCase[];
   register(context: FunctionModuleContext): FunctionModuleRegistrations;
 }
