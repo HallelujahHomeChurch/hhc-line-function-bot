@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { InMemoryAgentJobStore } from "../agent/jobs.js";
+import { buildAgentJobScope, InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createMainRuntime } from "../runtime/main-runtime.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type { BotProfileConfig, FunctionHandler, LineEvent } from "../types.js";
@@ -25,8 +25,12 @@ const profile: BotProfileConfig = {
   schedulePolicy: { meetingWindows: [], domains: [] }
 };
 
-function input(text: string) {
-  const event: LineEvent = { type: "message", source, message: { type: "text", text } };
+function input(text: string, eventSource = source) {
+  const event: LineEvent = {
+    type: "message",
+    source: eventSource,
+    message: { type: "text", text }
+  };
   return {
     profile,
     event,
@@ -141,11 +145,12 @@ describe("main runtime", () => {
       replyText: "最新週報",
       executedAction: "download_weekly_paper"
     }));
+    const reviewIds = ["stale-review", "other-review"];
     const runtime = createMainRuntime({
       handlers: { download_weekly_paper: weekly, update_own_profile: update },
       sessions,
       jobs,
-      idFactory: () => "stale-review"
+      idFactory: () => reviewIds.shift() ?? "unexpected-review"
     });
 
     await runtime.handleTextTurn(input("修改姓名"));
@@ -157,6 +162,19 @@ describe("main runtime", () => {
       requesterUserId: source.userId
     });
     if (!review?.threadId) throw new Error("missing linked review");
+    const otherSource = { type: "user" as const, userId: "U2" };
+    await runtime.handleTextTurn(input("修改姓名", otherSource));
+    await runtime.handleTextTurn(input("怡君", otherSource));
+    await runtime.handleTextTurn(input("陳", otherSource));
+    const otherReview = await sessions.findActionReview({
+      profileName: "main",
+      source: otherSource,
+      requesterUserId: otherSource.userId
+    });
+    if (!otherReview?.threadId) throw new Error("missing other linked review");
+    const reviewScope = buildAgentJobScope("main", source);
+    const otherScope = buildAgentJobScope("main", otherSource);
+    if (!reviewScope || !otherScope) throw new Error("missing job scope");
 
     await expect(runtime.handleTextTurn(input("下載最新週報"))).resolves.toMatchObject({
       replyText: "最新週報"
@@ -169,10 +187,24 @@ describe("main runtime", () => {
       })
     ).resolves.toBeUndefined();
     await expect(sessions.get(review.threadId)).resolves.toBeUndefined();
+    await expect(jobs.get(review.resultJobId, reviewScope)).resolves.toMatchObject({
+      status: "failed"
+    });
+    await expect(
+      sessions.findActionReview({
+        profileName: "main",
+        source: otherSource,
+        requesterUserId: otherSource.userId
+      })
+    ).resolves.toEqual(otherReview);
+    await expect(sessions.get(otherReview.threadId)).resolves.toBeDefined();
+    await expect(jobs.get(otherReview.resultJobId, otherScope)).resolves.toMatchObject({
+      status: "pending"
+    });
     await expect(runtime.handleTextTurn(input("確認"))).resolves.toMatchObject({
       replyText: "目前不支援這個請求。"
     });
     expect(weekly).toHaveBeenCalledOnce();
-    expect(update).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledTimes(2);
   });
 });

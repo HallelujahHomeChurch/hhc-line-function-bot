@@ -20,6 +20,7 @@ import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
+import { createPendingResolutionTextMessageHandler } from "../functions/pending-resolution.js";
 import { createQueryKnowledgeHandler } from "../functions/query-knowledge.js";
 import { InMemoryKnowledgeStore } from "../knowledge/store.js";
 import { signLineBody } from "../line-signature.js";
@@ -6607,6 +6608,172 @@ describe("LINE entrance", () => {
       "投影片 1",
       "請選用途"
     ]);
+  });
+
+  it.each([
+    ["allowed", true],
+    ["revoked", false]
+  ] as const)(
+    "rechecks a pending resolution capability against Account authorization: %s",
+    async (_label, allowed) => {
+      const config = accessConfig();
+      const helper = config.profiles[0]!;
+      helper.enabledFunctions = ["query_schedule"];
+      helper.permissionRequiredFunctions = ["query_schedule"];
+      helper.directAccessPolicy = "public";
+      helper.registration = { enabled: false };
+      const source = { type: "user" as const, userId: "Uresolution" };
+      const sessions = new InMemorySessionStore();
+      await sessions.set({
+        id: `resolution-${_label}`,
+        type: "pending_resolution",
+        profileName: helper.name,
+        requesterUserId: source.userId,
+        source,
+        capability: "query_schedule",
+        groundedArguments: { query: "服事表" },
+        candidates: [{ id: "service", domainKey: "service", displayName: "主日服事" }],
+        expiresAt: "2099-01-01T00:00:00.000Z"
+      });
+      const querySchedule = vi.fn(async () => ({ ok: true, replyText: "主日服事表" }));
+      const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const authorizeFunctions = vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: allowed ? ["query_schedule"] : []
+      });
+      const app = createTestApp(config, {
+        sessionStore: sessions,
+        profileRuntime: createProfileRuntimeDispatcher({
+          helper: { handleTextTurn: profileTurn }
+        }),
+        textMessageHandlers: {
+          pending_resolution_answer: createPendingResolutionTextMessageHandler({
+            sessionStore: sessions,
+            functions: { query_schedule: querySchedule }
+          })
+        },
+        accountAdminClient: {
+          authorizeAdministrator: vi.fn(),
+          authorizeFunctions,
+          createBinding: vi.fn(),
+          finalizeBinding: vi.fn()
+        },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "message",
+        replyToken: `resolution-${_label}`,
+        source,
+        message: { type: "text", text: "主日服事" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: helper.webhookPath,
+        headers: signedHeaders(body, helper.channelSecret),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledWith({
+        lineUserId: source.userId,
+        profileName: helper.name,
+        functionNames: ["query_schedule"]
+      });
+      expect(querySchedule).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(profileTurn).not.toHaveBeenCalled();
+      expect(replyText).toHaveBeenCalledWith(
+        `resolution-${_label}`,
+        allowed ? "主日服事表" : expect.any(String),
+        undefined
+      );
+    }
+  );
+
+  it("lets a requester-scoped group intro preserve a pending attachment continuation", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    helper.enabledFunctions = ["save_resource"];
+    helper.permissionRequiredFunctions = [];
+    const source = { type: "group" as const, groupId: "Cmain", userId: "Uowner" };
+    const sessions = new InMemorySessionStore();
+    await sessions.set({
+      id: "pending-upload",
+      type: "pending_attachment",
+      action: "save_resource",
+      stage: "awaiting_opt_in",
+      profileName: helper.name,
+      requesterUserId: source.userId,
+      source,
+      attachment: { messageId: "file-1", messageType: "file" },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const handle = vi.fn(async () => ({ ok: true, replyText: "continuation" }));
+    const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: true,
+      allowedFunctions: ["save_resource"]
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      sessionStore: sessions,
+      profileRuntime: createProfileRuntimeDispatcher({
+        helper: { handleTextTurn: profileTurn }
+      }),
+      textMessageHandlers: {
+        pending_attachment_answer: {
+          turnStage: "attachment",
+          capability: "save_resource",
+          matches: vi.fn(async () => true),
+          handle
+        }
+      },
+      accessStore: new InMemoryAccessStore({
+        principals: [
+          {
+            id: "helper-intro-group",
+            profileName: helper.name,
+            type: "group",
+            principalId: source.groupId,
+            createdAt: "2026-09-05T00:00:00.000Z",
+            createdBy: "test"
+          }
+        ]
+      }),
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions,
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "intro-token",
+      source,
+      message: { type: "text", text: "小哈" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(body, helper.channelSecret),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(String(replyText.mock.calls[0]?.[1])).toContain("小哈");
+    expect(handle).not.toHaveBeenCalled();
+    expect(profileTurn).not.toHaveBeenCalled();
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+    await expect(sessions.get("pending-upload")).resolves.toBeDefined();
   });
 
   it("observes a freshly committed helper review once and skips completion on replay", async () => {

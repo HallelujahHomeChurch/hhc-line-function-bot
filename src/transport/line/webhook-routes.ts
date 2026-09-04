@@ -1316,40 +1316,6 @@ async function handleWebhook(
             requesterUserId: event.source.userId
           })
         : undefined;
-    const continuation = await executeDeterministicTextContinuation({
-      event,
-      profile: effectiveProfile,
-      configuredFunctions: profile.enabledFunctions,
-      handlers: textMessageHandlers,
-      requesterDisplayName,
-      requesterIsAdmin,
-      authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-      agentRuntime,
-      completionObserver,
-      accessStore,
-      routeObserver,
-      lastErrorStore,
-      lastRouteStore,
-      requestId
-    });
-    if (continuation.matched) {
-      if (continuation.result) {
-        await line.replyText(
-          event.replyToken,
-          continuation.result.replyText,
-          continuation.result.quickReplies
-            ? { quickReplies: continuation.result.quickReplies }
-            : undefined
-        );
-        await recordConversationReply(
-          conversationWindowStore,
-          effectiveProfile,
-          event,
-          continuation.result
-        );
-      }
-      continue;
-    }
     const groupEngagement =
       event.source.type === "group"
         ? classifyGroupEngagement(effectiveProfile, event.message)
@@ -1432,6 +1398,42 @@ async function handleWebhook(
       continue;
     }
 
+    const continuation = await executeDeterministicTextContinuation({
+      event,
+      profile: effectiveProfile,
+      configuredFunctions: profile.enabledFunctions,
+      handlers: textMessageHandlers,
+      requesterDisplayName,
+      requesterIsAdmin,
+      authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+      sessionStore,
+      agentRuntime,
+      completionObserver,
+      accessStore,
+      routeObserver,
+      lastErrorStore,
+      lastRouteStore,
+      requestId
+    });
+    if (continuation.matched) {
+      if (continuation.result) {
+        await line.replyText(
+          event.replyToken,
+          continuation.result.replyText,
+          continuation.result.quickReplies
+            ? { quickReplies: continuation.result.quickReplies }
+            : undefined
+        );
+        await recordConversationReply(
+          conversationWindowStore,
+          effectiveProfile,
+          event,
+          continuation.result
+        );
+      }
+      continue;
+    }
+
     const routingAllowed =
       Boolean(pendingActionReview) ||
       !groupEngagement ||
@@ -1507,6 +1509,7 @@ async function executeDeterministicTextContinuation(input: {
   requesterDisplayName?: string;
   requesterIsAdmin: boolean;
   authorizeFunctions(names: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  sessionStore?: SessionStore;
   agentRuntime?: AgentRuntime;
   completionObserver: FunctionCompletionObserver;
   accessStore: AccessStore;
@@ -1520,9 +1523,10 @@ async function executeDeterministicTextContinuation(input: {
       ["resolution", "attachment"].includes(handler.turnStage)
     )
   );
+  const profile = await projectPendingResolutionAuthorization(input);
   const matched = await matchTextContinuation(
     input.event,
-    input.profile,
+    profile,
     handlers,
     input.requesterDisplayName,
     input.requesterIsAdmin,
@@ -1605,6 +1609,31 @@ async function executeDeterministicTextContinuation(input: {
       result: { ok: false, replyText: requestFailedMessage(input.requestId) }
     };
   }
+}
+
+async function projectPendingResolutionAuthorization(input: {
+  event: LineEvent;
+  profile: BotProfileConfig;
+  configuredFunctions: readonly FunctionName[];
+  authorizeFunctions(names: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  sessionStore?: SessionStore;
+}): Promise<BotProfileConfig> {
+  const requesterUserId = input.event.source.userId;
+  if (!input.sessionStore || !requesterUserId) return input.profile;
+  const pending = await input.sessionStore.findPendingResolution({
+    profileName: input.profile.name,
+    source: input.event.source,
+    requesterUserId
+  });
+  if (!pending || !input.configuredFunctions.includes(pending.capability)) return input.profile;
+  const allowed = await input.authorizeFunctions([pending.capability]);
+  return {
+    ...input.profile,
+    enabledFunctions: [
+      ...input.profile.enabledFunctions.filter((name) => name !== pending.capability),
+      ...(allowed.includes(pending.capability) ? [pending.capability] : [])
+    ]
+  };
 }
 
 async function recordDeterministicFunctionWriteAudit(
