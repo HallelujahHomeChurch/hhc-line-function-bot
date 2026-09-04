@@ -898,12 +898,14 @@ function liveSheetMusicCase(apiKey: string, id: string) {
           read: async () => ({ kind: "direct_file", untrusted: true, links: [] })
         }
       });
-      const first = await fixture.runtime.handleTextTurn(fixture.turn("找合成曲目歌譜"));
+      const first = await fixture.runtime.handleTextTurn(
+        fixture.turn("請查內部歌譜庫的《合成測試曲 Alpha》歌譜。")
+      );
       assert(first?.agentResult?.status === "not_found");
       const accepted = await fixture.runtime.acceptSheetMusicResearch?.(fixture.turn("上網找"));
       assert(accepted?.kind === "accepted");
       const result = await fixture.runtime.handleTextTurn(
-        fixture.turn("繼續搜尋剛才的合成曲目歌譜")
+        fixture.turn("請繼續上網搜尋《合成測試曲 Alpha》的歌譜。")
       );
       assert(Boolean(result?.replyText));
       assert(fixture.probe.toolNames.includes("search_sheet_music_web"));
