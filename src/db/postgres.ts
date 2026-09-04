@@ -12,7 +12,8 @@ export interface PostgresRuntime {
 export function createPostgresPool(config: DatabaseConfig): pg.Pool {
   return new pg.Pool({
     connectionString: config.url,
-    ssl: config.ssl ? { rejectUnauthorized: false } : undefined
+    ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+    max: 2
   });
 }
 
