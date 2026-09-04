@@ -89,7 +89,7 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
 }
 
 export function createPostgresHelperAgentState(
-  options: HelperAgentStateOptions & { pool: Pool }
+  options: HelperAgentStateOptions & { pool: Pool; lockPool: Pool }
 ): PostgresHelperAgentState {
   const now = options.now ?? (() => new Date());
   return {
@@ -107,11 +107,13 @@ export function createPostgresHelperAgentState(
       `);
     },
     async run(input) {
-      const outcome = await withPgThreadLock(options.pool, input.threadId, async (client) => {
-        const current = await client.query<{ expires_at: Date; policy_key: string | null }>(
-          "select expires_at, policy_key from agent_sdk_threads where thread_id = $1",
-          [input.threadId]
-        );
+      const outcome = await withPgThreadLock(options.lockPool, input.threadId, async () => {
+        const current = await options.pool.query<{
+          expires_at: Date;
+          policy_key: string | null;
+        }>("select expires_at, policy_key from agent_sdk_threads where thread_id = $1", [
+          input.threadId
+        ]);
         const metadata = current.rows[0];
         if (
           metadata &&
@@ -119,13 +121,13 @@ export function createPostgresHelperAgentState(
             (metadata.policy_key !== null && metadata.policy_key !== input.policyKey))
         ) {
           await options.checkpointer.deleteThread(input.threadId);
-          await client.query("delete from agent_sdk_threads where thread_id = $1", [
+          await options.pool.query("delete from agent_sdk_threads where thread_id = $1", [
             input.threadId
           ]);
         }
         try {
           const result = await input.task();
-          await client.query(
+          await options.pool.query(
             `insert into agent_sdk_threads (thread_id, expires_at, policy_key)
              values ($1, $2, $3)
              on conflict (thread_id) do update
@@ -139,7 +141,7 @@ export function createPostgresHelperAgentState(
           return { kind: "success" as const, result };
         } catch (error) {
           await options.checkpointer.deleteThread(input.threadId);
-          await client.query("delete from agent_sdk_threads where thread_id = $1", [
+          await options.pool.query("delete from agent_sdk_threads where thread_id = $1", [
             input.threadId
           ]);
           return { kind: "failure" as const, error };
@@ -149,13 +151,13 @@ export function createPostgresHelperAgentState(
       return outcome.result;
     },
     reset: (threadId) =>
-      withPgThreadLock(options.pool, threadId, async (client) => {
+      withPgThreadLock(options.lockPool, threadId, async () => {
         await options.checkpointer.deleteThread(threadId);
-        await client.query("delete from agent_sdk_threads where thread_id = $1", [threadId]);
+        await options.pool.query("delete from agent_sdk_threads where thread_id = $1", [threadId]);
       }),
     async allowExternalSheetMusic(threadId, source, expiration) {
-      await withPgThreadLock(options.pool, threadId, (client) =>
-        client.query(
+      await withPgThreadLock(options.lockPool, threadId, () =>
+        options.pool.query(
           `insert into agent_sdk_threads (thread_id, expires_at, external_search_expires_at)
          values ($1, $2, $3)
          on conflict (thread_id) do update
@@ -179,13 +181,18 @@ export function createPostgresHelperAgentState(
       );
       let removed = 0;
       for (const { thread_id: threadId } of expired.rows) {
-        removed += await withPgThreadLock(options.pool, threadId, async (client) => {
-          const deleted = await client.query(
+        removed += await withPgThreadLock(options.lockPool, threadId, async () => {
+          const current = await options.pool.query(
+            "select 1 from agent_sdk_threads where thread_id = $1 and expires_at <= $2",
+            [threadId, now()]
+          );
+          if (!current.rowCount) return 0;
+          await options.checkpointer.deleteThread(threadId);
+          const deleted = await options.pool.query(
             "delete from agent_sdk_threads where thread_id = $1 and expires_at <= $2 returning thread_id",
             [threadId, now()]
           );
           if (!deleted.rowCount) return 0;
-          await options.checkpointer.deleteThread(threadId);
           return 1;
         });
       }

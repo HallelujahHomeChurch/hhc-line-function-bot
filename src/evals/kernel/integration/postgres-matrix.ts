@@ -1,5 +1,6 @@
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { FakeToolCallingModel } from "langchain";
+import { Pool } from "pg";
 
 import { runAccessMigrations } from "../../../access/migrations.js";
 import { runAgentMemoryMigrations } from "../../../agent/migrations.js";
@@ -114,7 +115,9 @@ const MATRIX_FAILURE_CODES = new Set([
   "helper_direct_ttl_invalid",
   "helper_group_ttl_invalid",
   "helper_checkpoint_not_deleted",
-  "helper_failed_run_metadata_retained"
+  "helper_failed_run_metadata_retained",
+  "helper_state_pool_deadlock",
+  "helper_data_pool_not_saturated"
 ]);
 
 function boundedFailureCode(error: unknown): string {
@@ -189,96 +192,120 @@ async function sdkAgentCheckpointRestartAndExpiry(
 }
 
 async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironment): Promise<void> {
-  const pool = environment.pools[0];
-  const checkpointer = new PostgresSaver(pool);
-  const now = new Date("2026-09-04T00:00:00.000Z");
-  const state = createPostgresHelperAgentState({
-    pool,
-    checkpointer,
-    hmacKey: "kernel-helper-agent-state-key",
-    now: () => now
-  });
-  await checkpointer.setup();
-  await state.setup();
-  const direct = state.threadId({
-    profileName: PROFILE,
-    source: { type: "user", userId: "kernel-direct-user" }
-  });
-  const group = state.threadId({
-    profileName: PROFILE,
-    source: { type: "group", groupId: "kernel-group", userId: "kernel-group-user" }
-  });
-  if (!direct || !group) throw new Error("helper_checkpoint_not_deleted");
-  const groupSource = { type: "group", groupId: "kernel-group", userId: "kernel-group-user" };
-  await state.allowExternalSheetMusic(group, groupSource, new Date("2026-09-04T00:01:00.000Z"));
-
-  const invoke = (threadId: string, source: { type: string; userId: string; groupId?: string }) =>
-    state.run({
-      threadId,
-      policyKey: "kernel-policy-v1",
-      source,
-      task: () =>
-        createSdkAgent({
-          checkpointer,
-          model: new FakeToolCallingModel({ toolCalls: [[]] })
-        }).invoke(
-          { messages: [{ role: "user", content: "kernel" }] },
-          { configurable: { thread_id: threadId } }
-        )
-    });
-
-  await invoke(direct, { type: "user", userId: "kernel-direct-user" });
-  await invoke(group, groupSource);
-  const metadata = await pool.query<{ thread_id: string; expires_at: Date }>(
-    "select thread_id, expires_at from agent_sdk_threads where thread_id = any($1::text[])",
-    [[direct, group]]
-  );
-  const expiresAt = new Map(metadata.rows.map((row) => [row.thread_id, row.expires_at]));
-  if (expiresAt.get(direct)?.getTime() !== now.getTime() + 30 * 60_000) {
-    throw new Error("helper_direct_ttl_invalid");
-  }
-  if (expiresAt.get(group)?.getTime() !== now.getTime() + 15 * 60_000) {
-    throw new Error("helper_group_ttl_invalid");
-  }
-
-  await state.reset(group);
-  const checkpoint = await pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [
-    group
-  ]);
-  if (checkpoint.rowCount) throw new Error("helper_checkpoint_not_deleted");
-
-  const failed = state.threadId({
-    profileName: PROFILE,
-    source: { type: "group", groupId: "kernel-failed-group", userId: "kernel-failed-user" }
-  });
-  if (!failed) throw new Error("helper_failed_run_metadata_retained");
-  const failedSource = {
-    type: "group",
-    groupId: "kernel-failed-group",
-    userId: "kernel-failed-user"
-  };
-  await invoke(failed, failedSource);
-  await state.allowExternalSheetMusic(failed, failedSource, new Date("2026-09-04T00:01:00.000Z"));
+  const pool = new Pool({ ...environment.pools[0].options, max: 1 });
   try {
-    await state.run({
-      threadId: failed,
-      policyKey: "kernel-policy-v1",
-      source: failedSource,
-      task: async () => {
-        throw new Error("kernel_expected_failure");
-      }
+    const checkpointer = new PostgresSaver(pool);
+    const now = new Date("2026-09-04T00:00:00.000Z");
+    const state = createPostgresHelperAgentState({
+      pool,
+      lockPool: environment.pools[1],
+      checkpointer,
+      hmacKey: "kernel-helper-agent-state-key",
+      now: () => now
     });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "kernel_expected_failure") {
-      throw error;
+    await checkpointer.setup();
+    await state.setup();
+    const direct = state.threadId({
+      profileName: PROFILE,
+      source: { type: "user", userId: "kernel-direct-user" }
+    });
+    const group = state.threadId({
+      profileName: PROFILE,
+      source: { type: "group", groupId: "kernel-group", userId: "kernel-group-user" }
+    });
+    if (!direct || !group) throw new Error("helper_checkpoint_not_deleted");
+    const groupSource = { type: "group", groupId: "kernel-group", userId: "kernel-group-user" };
+    await state.allowExternalSheetMusic(group, groupSource, new Date("2026-09-04T00:01:00.000Z"));
+
+    const invoke = (threadId: string, source: { type: string; userId: string; groupId?: string }) =>
+      state.run({
+        threadId,
+        policyKey: "kernel-policy-v1",
+        source,
+        task: () =>
+          createSdkAgent({
+            checkpointer,
+            model: new FakeToolCallingModel({ toolCalls: [[]] })
+          }).invoke(
+            { messages: [{ role: "user", content: "kernel" }] },
+            { configurable: { thread_id: threadId } }
+          )
+      });
+
+    if (pool.options.max !== 1) throw new Error("helper_data_pool_not_saturated");
+    await withinHelperStateTimeout(invoke(direct, { type: "user", userId: "kernel-direct-user" }));
+    await invoke(group, groupSource);
+    const metadata = await pool.query<{ thread_id: string; expires_at: Date }>(
+      "select thread_id, expires_at from agent_sdk_threads where thread_id = any($1::text[])",
+      [[direct, group]]
+    );
+    const expiresAt = new Map(metadata.rows.map((row) => [row.thread_id, row.expires_at]));
+    if (expiresAt.get(direct)?.getTime() !== now.getTime() + 30 * 60_000) {
+      throw new Error("helper_direct_ttl_invalid");
     }
+    if (expiresAt.get(group)?.getTime() !== now.getTime() + 15 * 60_000) {
+      throw new Error("helper_group_ttl_invalid");
+    }
+
+    await state.reset(group);
+    const checkpoint = await pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [
+      group
+    ]);
+    if (checkpoint.rowCount) throw new Error("helper_checkpoint_not_deleted");
+
+    const failed = state.threadId({
+      profileName: PROFILE,
+      source: { type: "group", groupId: "kernel-failed-group", userId: "kernel-failed-user" }
+    });
+    if (!failed) throw new Error("helper_failed_run_metadata_retained");
+    const failedSource = {
+      type: "group",
+      groupId: "kernel-failed-group",
+      userId: "kernel-failed-user"
+    };
+    await invoke(failed, failedSource);
+    await state.allowExternalSheetMusic(failed, failedSource, new Date("2026-09-04T00:01:00.000Z"));
+    try {
+      await withinHelperStateTimeout(
+        state.run({
+          threadId: failed,
+          policyKey: "kernel-policy-v1",
+          source: failedSource,
+          task: async () => {
+            throw new ReviewCreationDenied();
+          }
+        })
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewCreationDenied)) {
+        throw error;
+      }
+    }
+    const [failedMetadata, failedCheckpoint] = await Promise.all([
+      pool.query("select 1 from agent_sdk_threads where thread_id = $1", [failed]),
+      pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [failed])
+    ]);
+    if (failedMetadata.rowCount || failedCheckpoint.rowCount) {
+      throw new Error("helper_failed_run_metadata_retained");
+    }
+  } finally {
+    await pool.end();
   }
-  const [failedMetadata, failedCheckpoint] = await Promise.all([
-    pool.query("select 1 from agent_sdk_threads where thread_id = $1", [failed]),
-    pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [failed])
-  ]);
-  if (failedMetadata.rowCount || failedCheckpoint.rowCount) {
-    throw new Error("helper_failed_run_metadata_retained");
+}
+
+class ReviewCreationDenied extends Error {}
+
+async function withinHelperStateTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("helper_state_pool_deadlock")), 5_000);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

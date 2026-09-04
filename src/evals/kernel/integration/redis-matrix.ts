@@ -282,13 +282,26 @@ async function jobScopeRestart(environment: KernelRedisEnvironment): Promise<voi
   });
   const record = await writer.createPending({ scope, label: "synthetic", ttlMs: 60_000 });
   await writer.complete(record.id, { ok: true, replyText: "complete" });
+  await writer.fail(record.id, "late_failure");
   const reader = new RedisAgentJobStore({
     client: environment.clients[1],
     keyPrefix: environment.keyPrefix,
     now: () => NOW
   });
-  assert((await reader.get(record.id, scope))?.status === "completed");
+  const completed = await reader.get(record.id, scope);
+  assert(completed?.status === "completed" && completed.result?.replyText === "complete");
   assert((await reader.get(record.id, { ...scope, requesterUserId: "U2" })) === undefined);
+  const failedStore = new RedisAgentJobStore({
+    client: environment.clients[0],
+    keyPrefix: environment.keyPrefix,
+    now: () => NOW,
+    idFactory: () => "failed-job"
+  });
+  const failed = await failedStore.createPending({ scope, label: "synthetic", ttlMs: 60_000 });
+  await failedStore.fail(failed.id, "x".repeat(300));
+  await failedStore.fail(failed.id, "late_replacement");
+  const terminalFailure = await reader.get(failed.id, scope);
+  assert(terminalFailure?.status === "failed" && terminalFailure.error === "x".repeat(160));
   const reconnected = await environment.reconnectReplica(0);
   writer = new RedisAgentJobStore({
     client: reconnected,

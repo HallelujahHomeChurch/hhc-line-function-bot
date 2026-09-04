@@ -45,7 +45,21 @@ export interface AgentJobStore {
 export interface RedisAgentJobClient {
   get(key: string): Promise<string | null>;
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
+  eval?(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 }
+
+const FAIL_PENDING_JOB_SCRIPT = `
+local value = redis.call('GET', KEYS[1])
+if not value then return 0 end
+local record = cjson.decode(value)
+if record.status ~= 'pending' then return 0 end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then return 0 end
+record.status = 'failed'
+record.error = ARGV[1]
+redis.call('PSETEX', KEYS[1], ttl, cjson.encode(record))
+return 1
+`;
 
 export class InMemoryAgentJobStore implements AgentJobStore {
   private readonly jobs = new Map<string, AgentJobRecord>();
@@ -89,7 +103,7 @@ export class InMemoryAgentJobStore implements AgentJobStore {
 
   async fail(id: string, error: string): Promise<void> {
     const job = this.jobs.get(id);
-    if (!job) {
+    if (!job || job.status !== "pending") {
       return;
     }
     this.jobs.set(id, { ...job, status: "failed", error });
@@ -157,11 +171,11 @@ export class RedisAgentJobStore implements AgentJobStore {
   }
 
   async fail(id: string, error: string): Promise<void> {
-    const record = await this.readById(id);
-    if (!record) {
-      return;
-    }
-    await this.write({ ...record, status: "failed", error });
+    if (!this.options.client.eval) return;
+    await this.options.client.eval(FAIL_PENDING_JOB_SCRIPT, {
+      keys: [this.key(id)],
+      arguments: [boundedJobError(error)]
+    });
   }
 
   async get(id: string, scope: AgentJobScope): Promise<AgentJobRecord | undefined> {
@@ -195,6 +209,15 @@ export class RedisAgentJobStore implements AgentJobStore {
   private key(id: string): string {
     return `${this.options.keyPrefix}:agent-job:${encodeURIComponent(id)}`;
   }
+}
+
+function boundedJobError(error: string): string {
+  return (
+    error
+      .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+      .trim()
+      .slice(0, 160) || "failed"
+  );
 }
 
 export function scopeKey(scope: AgentJobScope): string {

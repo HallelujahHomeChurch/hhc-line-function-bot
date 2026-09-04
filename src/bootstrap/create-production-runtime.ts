@@ -53,7 +53,7 @@ import { createSearxngClient } from "../clients/searxng.js";
 import { createPublicPageReader } from "../clients/public-page.js";
 import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
-import { createPostgresRuntime } from "../db/postgres.js";
+import { createPostgresPool, createPostgresRuntime } from "../db/postgres.js";
 import { MediaSyncManagementService } from "../media-sync/service.js";
 import { createFunctionRegistries } from "../functions/registry.js";
 import { FUNCTION_MODULES } from "../functions/modules.js";
@@ -341,11 +341,13 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     (profile) => profile.name === "helper" && profile.agent
   );
   let stopSdkStateCleanup: (() => void) | undefined;
+  let helperStateLockPool: ReturnType<typeof createPostgresPool> | undefined;
   let agentTurnRuntime = directTurnRuntime;
   if (helperProfile) {
     let sdkState;
     let helperState;
     if (postgres?.pool) {
+      if (!config.database) throw new Error("helper_postgres_config_required");
       const checkpointer = new PostgresSaver(postgres.pool);
       await checkpointer.setup();
       const postgresState = createPostgresSdkAgentState({
@@ -356,21 +358,30 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       });
       await postgresState.setup();
       await postgresState.cleanupExpired();
-      const postgresHelperState = createPostgresHelperAgentState({
-        pool: postgres.pool,
-        checkpointer,
-        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
-      });
-      await postgresHelperState.setup();
-      await postgresHelperState.cleanupExpired();
-      const timer = setInterval(
-        () => void postgresHelperState.cleanupExpired().catch(() => undefined),
-        300_000
-      );
-      timer.unref();
-      stopSdkStateCleanup = () => clearInterval(timer);
       sdkState = postgresState;
-      helperState = postgresHelperState;
+      helperStateLockPool = createPostgresPool(config.database);
+      try {
+        await helperStateLockPool.query("select 1");
+        const postgresHelperState = createPostgresHelperAgentState({
+          pool: postgres.pool,
+          lockPool: helperStateLockPool,
+          checkpointer,
+          hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
+        });
+        await postgresHelperState.setup();
+        await postgresHelperState.cleanupExpired();
+        const timer = setInterval(
+          () => void postgresHelperState.cleanupExpired().catch(() => undefined),
+          300_000
+        );
+        timer.unref();
+        stopSdkStateCleanup = () => clearInterval(timer);
+        helperState = postgresHelperState;
+      } catch (error) {
+        await helperStateLockPool.end().catch(() => undefined);
+        helperStateLockPool = undefined;
+        throw error;
+      }
     } else {
       sdkState = createSdkAgentState({
         checkpointer: new MemorySaver(),
@@ -462,6 +473,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       stopMediaSyncOutbox?.();
       await app.close();
       await redis?.close();
+      await helperStateLockPool?.end();
       await postgres?.pool.end();
     }
   };
