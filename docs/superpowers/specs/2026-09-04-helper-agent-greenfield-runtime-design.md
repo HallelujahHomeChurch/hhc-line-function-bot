@@ -1,7 +1,7 @@
 # Helper agent greenfield runtime design
 
-Date: 2026-09-04  
-Status: approved in conversation; awaiting implementation-plan review  
+Date: 2026-09-04
+Status: approved in conversation; awaiting implementation-plan review
 Baseline: `origin/main` at `9110b9e2784cfb39ddbf57fdbb0a8d63b65747f7`
 
 This design supersedes the future architecture direction in
