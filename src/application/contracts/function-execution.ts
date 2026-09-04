@@ -60,18 +60,6 @@ export interface FunctionHandlerContext {
   requesterIsAdmin?: boolean;
   /** The SDK agent consumes bounded evidence and owns the final wording. */
   agentTool?: boolean;
-  activeTask?: {
-    capability: FunctionName;
-    anchors: JsonRecord;
-    references?: JsonRecord;
-    entities: Array<{
-      type: string;
-      key: string;
-      label: string;
-      aliases?: string[];
-    }>;
-    supportedOperations: string[];
-  };
 }
 
 export type FunctionHandler = (
@@ -142,11 +130,11 @@ export interface TextMessageContext {
   requesterIsAdmin?: boolean;
 }
 
-export type ControlledTurnStage =
+export type TextContinuationStage =
   "pending_function" | "resolution" | "attachment" | "pre_route_recall";
 
 export interface TextMessageHandler {
-  turnStage: ControlledTurnStage;
+  turnStage: TextContinuationStage;
   capability?: FunctionName;
   matches(request: TextMessageRequest, context: TextMessageContext): Promise<boolean> | boolean;
   handle(

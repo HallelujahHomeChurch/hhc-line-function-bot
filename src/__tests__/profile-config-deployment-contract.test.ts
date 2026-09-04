@@ -287,12 +287,6 @@ describe("production profile configuration deployment contract", () => {
         lineIdEnv: string;
         providerIdEnv: string;
       };
-      controlledAgent?: {
-        enabled: boolean;
-        shadow: boolean;
-        maxCandidates: number;
-        minPlannerConfidence: number;
-      };
       providerPolicy?: {
         function_routing?: { primary: string; fallback?: string };
       };
@@ -360,17 +354,12 @@ describe("production profile configuration deployment contract", () => {
       expect.arrayContaining(["find_resource", "save_resource", "save_memory", "retrieve_memory"])
     );
     expect(helper?.allowedMessageTypes).toEqual(["text", "image", "file"]);
-    expect(helper?.controlledAgent).toEqual({
-      maxCandidates: 3,
-      minPlannerConfidence: 0.65
-    });
     expect(helper?.providerPolicy?.function_routing).toEqual({
       primary: "deepseek"
     });
     expect(main).toMatchObject({
       allowedMessageTypes: ["text"],
-      enabledFunctions: ["download_weekly_paper", "update_own_profile"],
-      controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 }
+      enabledFunctions: ["download_weekly_paper", "update_own_profile"]
     });
     expect(helper).toMatchObject({
       permissionRequiredFunctions: [],

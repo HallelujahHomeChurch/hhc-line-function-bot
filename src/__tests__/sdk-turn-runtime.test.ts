@@ -24,7 +24,6 @@ function profile(name: "helper" | "main" = "helper"): BotProfileConfig {
     permissionRequiredFunctions: [],
     allowedProviders: name === "helper" ? ["deepseek"] : [],
     allowSubscriptionProviders: false,
-    controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
     schedulePolicy: { meetingWindows: [], domains: [] },
     agent:
       name === "helper"

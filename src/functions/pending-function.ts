@@ -1,5 +1,4 @@
 import { messages } from "../messages.js";
-import { buildCapabilityCandidates } from "../agent/capability-candidates.js";
 import {
   applyPendingSlotAnswer,
   createSlotClarificationResult,
@@ -16,6 +15,7 @@ import type {
   TextMessageHandler
 } from "../types.js";
 import { normalizeFunctionArguments } from "./argument-normalization.js";
+import { isExplicitFunctionSwitch } from "./explicit-function-intent.js";
 
 const PENDING_FUNCTION_TTL_MS = 10 * 60 * 1000;
 
@@ -139,15 +139,7 @@ function explicitFunctionSwitch(
   pendingAction: FunctionName,
   context: TextMessageContext
 ): boolean {
-  const source = context.event.source.type;
-  if (source !== "user" && source !== "group") return false;
-  return buildCapabilityCandidates({
-    text,
-    enabledFunctions: context.profile.enabledFunctions,
-    source,
-    knowledgeSources: [],
-    maxCandidates: 5
-  }).some(({ capability, reason }) => capability !== pendingAction && reason === "explicit_intent");
+  return isExplicitFunctionSwitch(text, pendingAction, context.profile.enabledFunctions);
 }
 
 function findPendingFunction(sessionStore: SessionStore, context: TextMessageContext) {

@@ -24,7 +24,6 @@ import {
 import { readTimeZone } from "../../time-zone.js";
 import {
   extractScheduleRoleFocus,
-  isScheduleAdvanceFollowUp,
   refineScheduleQuery
 } from "../../functions/schedule-query-refinement.js";
 import {
@@ -94,7 +93,6 @@ async function queryScheduleDomain(input: {
         now: input.now,
         timeZone: input.timeZone,
         afterDate: input.afterDate,
-        availableRoles: activeTaskRoles(input.context.activeTask),
         sourceKeys: input.domain.binding.sourceKeys,
         meetingWindows: input.context.profile.schedulePolicy?.meetingWindows
       })
@@ -219,8 +217,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       args.role ??
       extractScheduleRoleFocus({
         query: args.query,
-        hasContinuation: context.activeTask?.capability === "query_schedule",
-        availableRoles: activeTaskRoles(context.activeTask),
+        hasContinuation: false,
         now: now(),
         timeZone
       });
@@ -237,7 +234,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       domains,
       text: args.query,
       requestedDomainKey,
-      activeDomainKey: activeTaskDomainKey(context.activeTask?.anchors)
+      activeDomainKey: undefined
     });
     if (resolution.status === "ambiguous") {
       return storeAndReplyWithDomainClarification({
@@ -250,7 +247,6 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
     }
     const selectedDomainKey =
       resolution.status === "selected" ? resolution.candidate.domainKey : undefined;
-    const afterDate = scheduleAdvanceDate(args, context.activeTask?.anchors);
     const results: Array<{ domainKey: string; result: FunctionExecutionResult }> = [];
     const eligibleDomains = selectedDomainKey
       ? domains.filter(({ key }) => key === selectedDomainKey)
@@ -266,8 +262,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
           memoryHandler,
           serviceHandler,
           now: now(),
-          timeZone,
-          afterDate
+          timeZone
         })
       });
     }
@@ -326,12 +321,6 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
   };
 }
 
-function activeTaskDomainKey(anchors: unknown): string | undefined {
-  if (!anchors || typeof anchors !== "object") return undefined;
-  const domainKey = (anchors as Record<string, unknown>).domainKey;
-  return typeof domainKey === "string" ? domainKey : undefined;
-}
-
 function withScheduleDomain(
   result: FunctionExecutionResult,
   domainKey: string
@@ -344,13 +333,6 @@ function withScheduleDomain(
       anchors: { ...result.agentResult.anchors, domainKey }
     }
   };
-}
-
-function activeTaskRoles(activeTask: FunctionHandlerContext["activeTask"]): string[] | undefined {
-  const roles = activeTask?.entities
-    .filter((entity) => entity.type === "role")
-    .map((entity) => entity.label);
-  return roles?.length ? roles : undefined;
 }
 
 function isScheduleListRequest(query: string): boolean {
@@ -440,23 +422,6 @@ function monthRange(month: string): { start: string; endExclusive: string } {
     start: `${month}-01`,
     endExclusive: `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-01`
   };
-}
-
-function scheduleAdvanceDate(
-  args: QueryScheduleArguments,
-  activeTaskAnchors: unknown
-): string | undefined {
-  if (
-    args.dateIntent !== "next_meeting" ||
-    !isScheduleAdvanceFollowUp(args.query) ||
-    !activeTaskAnchors ||
-    typeof activeTaskAnchors !== "object"
-  ) {
-    return undefined;
-  }
-  const record = activeTaskAnchors as Record<string, unknown>;
-  const date = typeof record.date === "string" ? record.date : record.specificDate;
-  return typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(date) ? date : undefined;
 }
 
 function nextDateKey(dateKey: string): string {

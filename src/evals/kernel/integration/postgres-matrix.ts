@@ -3,7 +3,6 @@ import { FakeToolCallingModel } from "langchain";
 
 import { runAccessMigrations } from "../../../access/migrations.js";
 import { runAgentMemoryMigrations } from "../../../agent/migrations.js";
-import { activeTaskFromResult } from "../../../agent/active-task.js";
 import { createSdkAgent } from "../../../agent/sdk-runtime.js";
 import { createPostgresSdkAgentState } from "../../../agent/sdk-state.js";
 import { runCatalogMigrations } from "../../../catalog/migrations.js";
@@ -50,7 +49,7 @@ export async function runPostgresIntegrationMatrix(
     },
     {
       caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
-      boundary: "active_task_lifecycle",
+      boundary: "state_lifecycle",
       run: async () => sdkAgentCheckpointRestartAndExpiry(environment)
     }
   ];
@@ -96,12 +95,11 @@ const MATRIX_FAILURE_CODES = new Set([
   "knowledge_ready_health_overwritten",
   "knowledge_routing_metadata_overwritten",
   "knowledge_revision_not_rotated",
-  "knowledge_active_task_missing",
-  "knowledge_active_anchor_invalid",
-  "knowledge_active_source_missing",
-  "knowledge_active_anchor_missing",
-  "knowledge_anchored_search_missing",
-  "knowledge_anchored_follow_up_unavailable",
+  "knowledge_result_anchors_missing",
+  "knowledge_result_anchor_invalid",
+  "knowledge_result_source_missing",
+  "knowledge_result_anchor_missing",
+  "knowledge_scoped_search_missing",
   "sdk_checkpoint_not_persisted",
   "sdk_checkpoint_not_restored",
   "sdk_checkpoint_policy_not_invalidated",
@@ -539,7 +537,7 @@ async function knowledgeRollbackAndStaleFailure(
     (await right.search({ profileName: PROFILE, query: "Stable content" })).length === 1,
     "knowledge_baseline_not_searchable"
   );
-  await assertKnowledgeAnchoredFollowUp(right);
+  await assertKnowledgeResultAnchor(right);
 
   const staged = await left.upsertSource({
     profileName: PROFILE,
@@ -619,8 +617,7 @@ async function knowledgeRollbackAndStaleFailure(
   assert(promoted.stagingRevision !== first.stagingRevision, "knowledge_revision_not_rotated");
 }
 
-async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): Promise<void> {
-  const now = new Date("2026-07-21T12:01:00.000Z");
+async function assertKnowledgeResultAnchor(store: PostgresKnowledgeStore): Promise<void> {
   const handler = createQueryKnowledgeHandler({
     store,
     embedding: {
@@ -653,7 +650,6 @@ async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): P
     permissionRequiredFunctions: [],
     allowedProviders: ["deepseek" as const],
     allowSubscriptionProviders: false,
-    controlledAgent: { maxCandidates: 3, minPlannerConfidence: 0.65 },
     schedulePolicy: { meetingWindows: [], domains: [] }
   };
   const event = {
@@ -662,24 +658,24 @@ async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): P
     message: { type: "text" as const, text: "Stable content" }
   };
   const first = await handler({ query: "Stable content" }, { profile, event });
-  const task = activeTaskFromResult("query_knowledge", first, now, 600_000);
-  assert(task, "knowledge_active_task_missing");
-  const sourceId = task.anchors.sourceId;
-  const documentId = task.anchors.documentId;
-  const sectionKey = task.anchors.sectionKey;
+  const anchors = first.agentResult?.anchors;
+  assert(anchors, "knowledge_result_anchors_missing");
+  const sourceId = anchors.sourceId;
+  const documentId = anchors.documentId;
+  const sectionKey = anchors.sectionKey;
   assert(
     typeof sourceId === "string" &&
       typeof documentId === "string" &&
       typeof sectionKey === "string",
-    "knowledge_active_anchor_invalid"
+    "knowledge_result_anchor_invalid"
   );
   assert(
     (await store.listSources({ profileName: PROFILE })).some(({ id }) => id === sourceId),
-    "knowledge_active_source_missing"
+    "knowledge_result_source_missing"
   );
   assert(
     await store.hasAnchor({ profileName: PROFILE, sourceId, documentId, sectionKey }),
-    "knowledge_active_anchor_missing"
+    "knowledge_result_anchor_missing"
   );
   assert(
     (
@@ -696,23 +692,8 @@ async function assertKnowledgeAnchoredFollowUp(store: PostgresKnowledgeStore): P
         ordinal: 0
       })
     ).length > 0,
-    "knowledge_anchored_search_missing"
+    "knowledge_scoped_search_missing"
   );
-  const followUp = await handler(
-    { query: "Follow-up content" },
-    {
-      profile,
-      event: { ...event, message: { type: "text", text: "Follow-up content" } },
-      activeTask: {
-        capability: task.currentCapability,
-        anchors: task.anchors,
-        references: task.references,
-        entities: task.entities,
-        supportedOperations: task.supportedOperations
-      }
-    }
-  );
-  assert(followUp.agentResult?.status === "success", "knowledge_anchored_follow_up_unavailable");
 }
 
 function oneHotVector(): number[] {

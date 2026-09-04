@@ -11,11 +11,11 @@ import type {
   FunctionHandlerContext
 } from "../contracts/function-execution.js";
 import type { RouteObserver } from "../contracts/routing.js";
-import { applyResultGuidance, type ControlledResultState } from "./result-guidance.js";
+import { applyResultGuidance, type FunctionResultState } from "./result-guidance.js";
 
 const FIRST_SUCCESS_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
-export interface ControlledCompletionInput {
+export interface FunctionCompletionInput {
   context: FunctionHandlerContext;
   action: FunctionName;
   result: FunctionExecutionResult;
@@ -23,22 +23,22 @@ export interface ControlledCompletionInput {
   clarificationCount?: number;
 }
 
-export interface ControlledCompletionObserver {
-  complete(input: ControlledCompletionInput): Promise<FunctionExecutionResult>;
+export interface FunctionCompletionObserver {
+  complete(input: FunctionCompletionInput): Promise<FunctionExecutionResult>;
 }
 
-export function createControlledCompletionObserver(options: {
+export function createFunctionCompletionObserver(options: {
   accessStore?: AccessStore;
   routeObserver?: RouteObserver;
   firstSuccessStore?: FirstSuccessStore;
   observabilityHmacKey?: string;
   now?: () => Date;
-}): ControlledCompletionObserver {
+}): FunctionCompletionObserver {
   const now = options.now ?? (() => new Date());
 
   return {
     async complete(input) {
-      const result = guideControlledResult(input.result, input.action);
+      const result = guideFunctionResult(input.result, input.action);
       const resultClass = productResultClass(result);
 
       await recordGroupSuccessSummary(
@@ -97,23 +97,23 @@ export function productResultClass(result: FunctionExecutionResult): ProductResu
   return result.agentResult?.status ?? "success";
 }
 
-function guideControlledResult(
+function guideFunctionResult(
   result: FunctionExecutionResult,
   action: FunctionName
 ): FunctionExecutionResult {
   const definition = getFunctionDefinition(action);
   return applyResultGuidance({
-    state: controlledResultState(result),
+    state: functionResultState(result),
     result,
     definition,
     supportsViewFull:
       result.agentResult?.status === "success" &&
-      definition?.agentCapability?.operations.includes("view_full"),
+      definition?.agentCapability?.operations?.includes("view_full"),
     staleAt: result.diagnostics?.dataAsOf
   });
 }
 
-function controlledResultState(result: FunctionExecutionResult): ControlledResultState {
+function functionResultState(result: FunctionExecutionResult): FunctionResultState {
   if (!result.ok) return "error";
   if (result.diagnostics?.freshnessStatus === "stale_allowed") return "stale_allowed";
   return result.agentResult?.status ?? "success";

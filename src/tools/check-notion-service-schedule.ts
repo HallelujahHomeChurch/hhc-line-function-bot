@@ -215,10 +215,6 @@ function handlerContext(): FunctionHandlerContext {
     permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
-    controlledAgent: {
-      maxCandidates: 3,
-      minPlannerConfidence: 0.65
-    },
     schedulePolicy: { meetingWindows: [], domains: DEFAULT_SCHEDULE_DOMAINS }
   };
 

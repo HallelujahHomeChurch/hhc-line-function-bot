@@ -456,7 +456,6 @@ export function createQueryScheduleMemoryHandler(
       profileName: context.profile.name,
       source: context.event.source,
       requesterUserId: context.event.source.userId,
-      memoryId: scheduleMemoryId(context.activeTask?.references),
       scheduleType: inferredType,
       date,
       meetingName: args.meeting,
@@ -473,7 +472,7 @@ export function createQueryScheduleMemoryHandler(
       entries,
       args,
       now(),
-      scheduleAdvanceDate(args, context.activeTask?.anchors),
+      undefined,
       context.profile.schedulePolicy?.meetingWindows,
       timeZone
     );
@@ -542,14 +541,6 @@ function formatFocusedMemoryRoleReply(
     )
   );
   return `${role}：${assignees.join("、") || "未填人員"}`;
-}
-
-function scheduleMemoryId(references: unknown): string | undefined {
-  if (!references || typeof references !== "object") return undefined;
-  const record = references as Record<string, unknown>;
-  return record.kind === "schedule_memory" && typeof record.memoryId === "string"
-    ? record.memoryId
-    : undefined;
 }
 
 function parseScheduleLine(
@@ -780,23 +771,6 @@ function applyScheduleDateIntent(
     default:
       return entries;
   }
-}
-
-function scheduleAdvanceDate(
-  args: QueryScheduleMemoryArguments,
-  activeTaskAnchors: unknown
-): string | undefined {
-  if (
-    args.dateIntent !== "next_meeting" ||
-    !/(?:下一場|下場|下一次|下次)/u.test(args.query) ||
-    !activeTaskAnchors ||
-    typeof activeTaskAnchors !== "object"
-  ) {
-    return undefined;
-  }
-  const record = activeTaskAnchors as Record<string, unknown>;
-  const date = typeof record.date === "string" ? record.date : record.specificDate;
-  return typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(date) ? date : undefined;
 }
 
 function isConfirmText(value: string | undefined): boolean {

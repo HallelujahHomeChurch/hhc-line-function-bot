@@ -1,14 +1,8 @@
 import type { FunctionExecutionResult, QuickReplyItem } from "../contracts/function-execution.js";
-import type { ValidatedAgentPlan } from "../../agent/plan-validator.js";
 import type { FunctionDefinition } from "../../functions/definitions.js";
 import { messages } from "../../messages.js";
 
-export type ValidatorDenyReason = Extract<
-  ValidatedAgentPlan,
-  { disposition: "deny" }
->["reasonCode"];
-
-export type ControlledResultState =
+export type FunctionResultState =
   | "permission_denied"
   | "write_intent_required"
   | "unsupported"
@@ -39,7 +33,7 @@ const viewFullQuickReply: QuickReplyItem = {
 };
 
 export function applyResultGuidance(input: {
-  state: ControlledResultState;
+  state: FunctionResultState;
   result: FunctionExecutionResult;
   definition?: FunctionDefinition;
   supportsViewFull?: boolean;
@@ -116,27 +110,6 @@ export function applyResultGuidance(input: {
         ...input.result,
         quickReplies: [viewFullQuickReply]
       };
-  }
-}
-
-export function controlledResultStateForValidatorDeny(
-  reason: ValidatorDenyReason | string
-): ControlledResultState {
-  switch (reason) {
-    case "function_disabled":
-    case "source_not_allowed":
-      return "permission_denied";
-    case "write_evidence_missing":
-      return "write_intent_required";
-    case "candidate_not_allowed":
-    case "planner_denied":
-      return "unsupported";
-    case "capability_not_agent_enabled":
-      return "unavailable";
-    case "invalid_policy":
-      return "error";
-    default:
-      return "error";
   }
 }
 

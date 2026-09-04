@@ -16,81 +16,12 @@ export const queryScheduleDefinition: FunctionDefinition = {
   sideEffectLevel: "read",
   agentCapability: {
     intents: ["查服事", "查服事表", "找服事", "下一場服事", "本週服事", "主日服事"],
-    candidateHints: ["服事", "服事表", "服事安排", "聚會服事"],
     semanticDescription: "依日期、聚會、服事角色或服事表類型查詢安排。",
-    arguments: {
-      query: { type: "string", authority: "current_text" },
-      date: { type: "string", authority: "model_grounded" },
-      specificDate: { type: "string", authority: "model_grounded" },
-      dateIntent: {
-        type: "string",
-        authority: "model_grounded",
-        values: [
-          "today",
-          "tomorrow",
-          "day_after_tomorrow",
-          "this_week",
-          "next_meeting",
-          "specific_date",
-          "upcoming"
-        ]
-      },
-      meeting: { type: "string", authority: "model_grounded" },
-      role: { type: "string", authority: "model_grounded" },
-      month: { type: "string", authority: "model_grounded" },
-      participant: { type: "string", authority: "model_grounded" },
-      domainKey: { type: "string", authority: "active_task_only" },
-      scheduleType: {
-        type: "string",
-        authority: "model_grounded",
-        values: [
-          "morning_prayer_family",
-          "street_sign_service",
-          "children_sunday",
-          "prayer_meeting_family",
-          "custom_service_schedule"
-        ]
-      },
-      limit: { type: "number", authority: "explicit_current_text" }
-    },
     retrievalEvidence: {
       provider: "schedule",
       queryStopWords: ["服事表", "服事安排"]
     },
-    argumentEvidence: {
-      queryArgument: "query",
-      allOf: ["role"],
-      anyOf: ["meeting", "date", "specificDate", "dateIntent"]
-    },
-    entityTypes: ["date", "meeting", "role", "scheduleType"],
-    refinableFields: ["date", "specificDate", "dateIntent", "meeting", "role", "scheduleType"],
-    operations: ["continue", "refine", "advance", "select"],
-    responseProjection: {
-      defaultMode: "focused",
-      fields: {
-        date: { label: "日期", aliases: ["日期", "哪一天", "何時", "什麼時候"] },
-        meeting: { label: "聚會", aliases: ["聚會", "哪一場"] },
-        scheduleType: { label: "服事表", aliases: ["類型", "哪種服事表"] },
-        role: { label: "服事", aliases: ["誰", "人員", "角色", "家族"] }
-      }
-    },
-    ambiguity: "clarify",
-    activeEvidence: {
-      arguments: {
-        date: { entityTypes: ["date"], anchorKeys: ["date"] },
-        specificDate: {
-          entityTypes: ["date"],
-          anchorKeys: ["specificDate", "date"]
-        },
-        dateIntent: { entityTypes: ["date"], anchorKeys: ["dateIntent"] },
-        meeting: { entityTypes: ["meeting"], anchorKeys: ["meeting"] },
-        role: { entityTypes: ["role"], anchorKeys: ["role"] },
-        scheduleType: {
-          entityTypes: ["scheduleType"],
-          anchorKeys: ["scheduleType"]
-        }
-      }
-    }
+    operations: ["continue", "refine", "advance", "select"]
   },
   allowedSources: ["user", "group"],
   requiredSlots: [

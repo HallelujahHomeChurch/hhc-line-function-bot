@@ -1043,37 +1043,6 @@ describe("config", () => {
     });
   });
 
-  it("defaults the authoritative controlled agent policy", () => {
-    const config = loadConfigFromEnv(baseEnv());
-
-    expect(config.profiles[0]!.controlledAgent).toEqual({
-      maxCandidates: 3,
-      minPlannerConfidence: 0.65
-    });
-  });
-
-  it.each([
-    { field: "maxCandidates", value: 0 },
-    { field: "maxCandidates", value: 6 },
-    { field: "maxCandidates", value: 1.5 },
-    { field: "minPlannerConfidence", value: -0.01 },
-    { field: "minPlannerConfidence", value: 1.01 }
-  ])("rejects invalid controlled agent setting $field=$value", ({ field, value }) => {
-    expect(() =>
-      loadConfigFromEnv({
-        ...profilesEnv([
-          {
-            name: "helper",
-            webhookPath: "/api/line/webhook/helper",
-            channelSecret: "secret",
-            channelAccessToken: "token",
-            controlledAgent: { [field]: value }
-          }
-        ])
-      })
-    ).toThrow(field);
-  });
-
   it("allows a DeepSeek-only controlled planner", async () => {
     await withProfileFile(
       [
@@ -1085,10 +1054,6 @@ describe("config", () => {
           allowedProviders: ["deepseek"],
           providerPolicy: {
             function_routing: { primary: "deepseek" }
-          },
-          controlledAgent: {
-            maxCandidates: 3,
-            minPlannerConfidence: 0.65
           }
         }
       ],
@@ -1100,22 +1065,6 @@ describe("config", () => {
         });
       }
     );
-  });
-
-  it.each(["enabled", "shadow"])("rejects removed controlled agent flag %s", (field) => {
-    expect(() =>
-      loadConfigFromEnv({
-        ...profilesEnv([
-          {
-            name: "helper",
-            webhookPath: "/api/line/webhook/helper",
-            channelSecret: "secret",
-            channelAccessToken: "token",
-            controlledAgent: { [field]: false }
-          }
-        ])
-      })
-    ).toThrow("controlled routing is always authoritative");
   });
 
   it("loads the helper profile with only the DeepSeek provider", () => {

@@ -17,7 +17,7 @@ The service uses separate routing paths per profile while keeping authority serv
 - `main` remains provider-free (`allowedProviders: []`) and uses the existing deterministic Weekly Paper and own-profile workflows without invoking the SDK model.
 - Profile policy, effective function projection, Account authorization, source scope, strict tool schemas, write confirmation, and domain handlers remain server-owned.
 - The helper model receives only tools valid for the current profile/source/requester. Authorization is checked again immediately before each handler call.
-- Existing pending confirmation, selection, slot-collection, attachment, and admin stages run before the helper SDK agent. The old candidate/planner/validator code remains only for `main` compatibility and those deterministic workflows; it is not a second helper semantic path.
+- Existing pending confirmation, selection, slot-collection, attachment, and admin stages run before the helper SDK agent. The former candidate/planner/validator and active-task path has been removed.
 - Helper conversation threads use the official PostgreSQL checkpointer in production, are HMAC-scoped by profile/source/requester, serialize same-thread turns, and expire after the configured idle TTL. A group without requester identity gets no thread.
 - `config/agents/helper/PERSONA.md` and `MEMORY.md` are read-only prompt policy. Explicit memory remains in the database; group chat does not create automatic named profiles or ingest unaddressed messages.
 - Knowledge, visible memory, and Wikipedia return bounded evidence directly in SDK tool mode, avoiding nested model summarizers. Temporary sharing links and internal knowledge anchors stay outside checkpointed tool output.
@@ -34,8 +34,7 @@ The service remains one deployed modular monolith. The source boundaries are:
 - `src/transport/*`: Fastify and LINE adapters for health/readiness, canonical
   webhooks, public access commands, admin commands, and postbacks.
 - `src/application/*`: use-case contracts and the controlled turn coordinator.
-  Turn stages own text continuation, capability resolution, admin actions,
-  controlled planning, and function execution in that order.
+  It owns pending text continuations and admin actions before SDK dispatch.
 - `src/capabilities/*`: vertical product slices. `query-schedule` is the
   reference slice and owns its definition, eval cases, ports, handler, and
   module factory. `download-weekly-paper.ts` is intentionally a single narrow
@@ -72,7 +71,7 @@ For normal LINE webhook messages, read the flow in this order:
 
 Production checkpoint state uses `PostgresSaver` plus `agent_sdk_threads`. A PostgreSQL advisory transaction lock serializes each thread across replicas; the configured 600-second idle TTL and five-minute cleanup delete the full checkpoint chain. Redis retains webhook idempotency, selections, confirmation, jobs, cache, and conversation-window responsibilities.
 
-`main` never enters steps 5-9. Its provider-free compatibility runtime remains covered by entrance and Kernel regression tests.
+`main` never enters steps 5-9. Its provider-free direct handlers remain covered by entrance and function tests.
 
 ## Action Types
 
@@ -120,13 +119,12 @@ Routing remains layered, with one semantic owner per profile:
 - `src/agent/sdk-tools.ts` adapts existing handlers into a small tool set. Tool construction and execution both enforce profile, source, requester, and Account authorization.
 - `src/agent/sdk-state.ts` owns only scoped thread identity, TTL, cleanup, and same-thread serialization around the official checkpointer. It does not serialize messages itself.
 - `src/clients/public-page.ts` is the bounded SSRF-safe reader used only after sheet-music search consent.
-- `src/agent/capability-candidates.ts`, `planner.ts`, `controlled-agent-router.ts`, and `plan-validator.ts` are legacy compatibility code for provider-free `main`, deterministic diagnostics/evals, and existing workflows. Helper semantic turns do not call them.
 
 The helper tool surface intentionally groups related reads: `search_information` covers dynamic knowledge and visible explicit memory; `search_files` covers presentations, sheet music, and general catalog resources. Formal schedules and Wikipedia keep dedicated tools. Writes keep dedicated preview-only tools because their schemas and policy differ.
 
 Intro/help stays deterministic so it cannot expose unavailable tools or implementation details. General helper chat, follow-up reasoning, and cross-source decisions use the same persona and memory policy as tool-driven answers. `main` loads neither helper policy file nor a semantic model path.
 
-If helper chooses a wrong tool, start with `src/agent/sdk-tools.ts`, the function definition/schema, and `src/__tests__/sdk-tools.test.ts`. If an existing preview/selection does not continue, start with `src/application/turn/runtime.ts` and the owning function/session handler. If `main` regresses, inspect the legacy candidate/planner/validator path and entrance tests.
+If helper chooses a wrong tool, start with `src/agent/sdk-tools.ts`, the function definition/schema, and `src/__tests__/sdk-tools.test.ts`. If an existing preview/selection does not continue, start with `src/application/turn/runtime.ts` and the owning function/session handler. If `main` regresses, inspect its direct capability handlers and entrance tests.
 
 ## Function Cookbook
 
@@ -134,10 +132,8 @@ To add or change a user function:
 
 1. Add the name to `FUNCTION_NAMES`.
 2. Add a capability slice in `src/capabilities/<name>/*` containing its
-   definition, eval cases, narrow ports, handler, and module factory.
-3. For every helper function, add it to the smallest appropriate SDK tool and
-   expose only current effective sub-operations. Keep `agentCapability` metadata
-   while legacy `main` or shared result-envelope code still consumes it.
+   definition, narrow ports, handler, and module factory.
+3. For every helper function, add it to the smallest appropriate SDK tool and expose only current effective operations.
 4. Add argument schema and normalization. Add a source-technology adapter only
    when integrating a genuinely new storage/API format; keep that adapter behind
    the existing product capability and out of the SDK wrapper/turn runtime.
@@ -148,12 +144,10 @@ To add or change a user function:
 7. Return a structured `agentResult` from read outcomes. A success envelope may
    contain only declared safe entities, canonical anchors, opaque references,
    supported operations, and reply data; never put raw secrets, URLs, prompts,
-   evidence text, or temporary links in active-task state.
+   evidence text, or temporary links in checkpointed tool output.
 8. Add clarification state if required slots can be missing.
 9. Add postback or numeric selection if multiple results are possible.
-10. Add tests for SDK tool visibility/schema/authorization/evidence plus enabled,
-    disabled, missing-slot, typo/fuzzy, deny, requester isolation, and
-    multi-result behavior. Preserve legacy router cases for `main` compatibility.
+10. Add tests for SDK tool visibility, schema, authorization, evidence, requester isolation, writes, and multi-result behavior. Add direct-handler tests for `main`.
 11. Update README and AGENTS if the user/admin surface changes.
 
 High-value tests:
@@ -161,11 +155,9 @@ High-value tests:
 - entrance/access behavior: `src/__tests__/entrance.test.ts`
 - helper SDK behavior: `src/__tests__/sdk-agent.test.ts`, `sdk-tools.test.ts`,
   `sdk-state.test.ts`, and `sdk-turn-runtime.test.ts`
-- legacy deterministic planner/validator behavior: `src/__tests__/controlled-agent-router.test.ts`
 - function behavior: function-specific test files
 
-Run `pnpm eval:sdk-agent` after changing helper routing. Run `pnpm eval:agent`
-when the legacy `main` compatibility path or shared contracts change.
+Run `pnpm eval:agent` after changing helper routing.
 
 ## Agent Runtime Cookbook
 
@@ -227,11 +219,9 @@ multiple replicas or restarts matter.
 - `src/agent/sdk-state.ts`: helper checkpointer scope, same-thread serialization,
   consent TTL, and checkpoint cleanup. Other `src/agent/*` files retain explicit
   text/resource memory and the `main` compatibility runtime.
-- `src/in-flight/*`: duplicate in-flight function locks.
 - `src/idempotency/*`: profile-scoped LINE `webhookEventId` deduplication.
 - `src/agent/jobs.ts`: requester-scoped long-running job results.
-- `src/agent/context-manager.ts`: requester-scoped conversation window and
-  context budget/compression.
+- `src/agent/context-manager.ts`: requester-scoped conversation window.
 - `src/observability/*`: recent routes and recent errors.
 - `src/access/*`: Postgres access principals, audit, and invite-code stores.
 
@@ -254,7 +244,7 @@ identity with verification, revision, and tombstone metadata. Redis makes
 selection and webhook-event consumption cross-replica; PostgreSQL separately
 persists and serializes SDK checkpoints.
 
-Long-running job results are separate from in-flight locks. They are keyed by a
+Long-running job results are keyed by a
 random job id but can only be read from the same profile, LINE source, and
 requester user id. With Redis configured, job results survive app restarts until
 their TTL expires.
@@ -351,10 +341,10 @@ storage key, queue connection string, ClamAV state, channel secret, admin ID,
 LLM/Notion credential, or observability secret. The
 `xiaoha_database` manual source is skipped by catalog sync and receives a 90-day
 catalog `expiresAt`; formal synced sources do not. Successful publication
-records opaque drive/item metadata as a recent general resource, so a scoped
-task-frame follow-up such as `剛剛那份` can re-enter `find_resource` with the exact
-catalog item reference and regenerate a temporary link without storing the link
-itself. Catalog full/delta publication atomically advances source revision,
+records opaque drive/item metadata as a recent general resource. An SDK follow-up
+such as `剛剛那份` must call the currently authorized resource tool, which validates
+the catalog item again and regenerates a temporary link without storing it.
+Catalog full/delta publication atomically advances source revision,
 health, cursor, items, and tombstones. Retrieval distinguishes fresh,
 stale-but-allowed, unavailable, and genuine not-found. Recent resource memory is
 only a ranking signal for a currently authorized candidate, and Graph identity
@@ -397,16 +387,14 @@ Use this map for common issues:
 - Bot responds when merely mentioned in third person: `src/engagement.ts` and
   entrance tests for `third_person`.
 - Wrong helper function or missing cross-source evidence: `src/agent/sdk-tools.ts`,
-  the owning function definition/handler, and SDK tests. For `main`, inspect the
-  legacy candidate/planner/validator path.
+  the owning function definition/handler, and SDK tests. For `main`, inspect its
+  direct capability handlers.
 - Missing query or wrong slot: `src/function-arguments.ts`,
   `src/functions/argument-normalization.ts`, `src/agent/slot-clarification.ts`,
   and clarification tests.
 - Group clarification or selection goes to the wrong person:
   `src/state/session-safety.ts`, `src/requester-personalization.ts`, and
   requester-scoped session tests.
-- Duplicate long task replies: `src/in-flight/*` and
-  `src/application/turn/stages/function-execution-stage.ts`.
 - User asks twice because a task is slow: `src/agent/jobs.ts` and
   `handleAgentTextTurnWithLongJob` in `src/transport/line/postbacks.ts`.
 - Follow-up without wake word fails for same user: `src/agent/context-manager.ts`
@@ -439,24 +427,13 @@ pnpm test
 pnpm config:validate
 pnpm eval:admin
 pnpm eval:agent
-pnpm eval:sdk-agent
 pnpm eval:retrieval-product
 pnpm eval:kernel
 pnpm eval:kernel:integration
 pnpm build
 ```
 
-Run `pnpm eval:sdk-agent --live` manually when DeepSeek credentials are
-available. It is a bounded helper acceptance check, not a CI dependency. The
-legacy `eval:agent:live` remains only for the compatibility router.
-
-Run `pnpm eval:kernel:local-live` manually for the disposable signed-webhook
-Kernel gate. It composes only synthetic local app/PostgreSQL/Redis state, uses
-real DeepSeek routing and Azure embeddings under a serialized 10/3 request
-ceiling, captures replies locally, and never calls production LINE, Graph,
-Notion, OneDrive, queues, or ClamAV. Its secrets are fetched from ACA into
-memory-backed mode-`0600` files and are removed with the run-scoped Compose
-resources on every exit. This gate is intentionally excluded from CI.
+Run `pnpm eval:agent:live` manually when DeepSeek credentials are available. It is a bounded helper acceptance check, not a CI dependency.
 
 For docs-only changes, `pnpm format:check` is usually enough.
 

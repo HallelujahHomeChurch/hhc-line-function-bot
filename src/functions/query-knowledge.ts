@@ -77,16 +77,10 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
       return source ? [{ source, metadata }] : [];
     });
 
-    const anchor = knowledgeAnchor(context.activeTask);
-    if (anchor && !eligibleSources.some(({ source }) => source.id === anchor.sourceId)) {
-      return knowledgeUnavailableResult();
-    }
-
     const sourceResolution = resolveSource({
       query: args.query,
       requestedSourceKey: args.sourceKey,
       requestedSourceId: args.sourceId,
-      anchor,
       sources: eligibleSources
     });
     if (sourceResolution.status === "unavailable") return knowledgeUnavailableResult();
@@ -96,7 +90,6 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
     }
     let targetSource = sourceResolution.status === "resolved" ? sourceResolution.source : undefined;
     if (
-      !anchor &&
       args.documentId &&
       targetSource &&
       !(await anchorAvailable(options.store, context.profile.name, {
@@ -141,17 +134,7 @@ export function createQueryKnowledgeHandler(options: QueryKnowledgeOptions): Fun
       targetSource = evidenceSources[0];
     }
 
-    const anchored = Boolean(
-      anchor &&
-      targetSource?.id === anchor.sourceId &&
-      !args.sourceKey &&
-      !args.sourceId &&
-      !args.documentId &&
-      !args.sectionKey
-    );
     const scopes = retrievalScopes({
-      anchored,
-      anchor,
       documentId: args.documentId,
       sectionKey: args.sectionKey,
       ordinal: args.ordinal
@@ -256,38 +239,10 @@ export function createQueryKnowledgeTextMessageHandler(
   };
 }
 
-interface KnowledgeAnchor {
-  sourceId: string;
-  documentId: string;
-  sectionKey?: string;
-  ordinal?: number;
-}
-
-function knowledgeAnchor(
-  activeTask: Parameters<FunctionHandler>[1]["activeTask"]
-): KnowledgeAnchor | undefined {
-  if (activeTask?.capability !== "query_knowledge") return undefined;
-  const values = { ...activeTask.anchors, ...activeTask.references };
-  const sourceId = values.sourceId;
-  const documentId = values.documentId;
-  const sectionKey = values.sectionKey;
-  const ordinal = values.ordinal;
-  return typeof sourceId === "string" && typeof documentId === "string"
-    ? {
-        sourceId,
-        documentId,
-        ...(typeof sectionKey === "string" ? { sectionKey } : {}),
-        ...(typeof ordinal === "number" && Number.isInteger(ordinal) && ordinal >= 0
-          ? { ordinal }
-          : {})
-      }
-    : undefined;
-}
-
 async function anchorAvailable(
   store: KnowledgeStore,
   profileName: string,
-  anchor: KnowledgeAnchor
+  anchor: { sourceId: string; documentId: string; sectionKey?: string }
 ): Promise<boolean> {
   try {
     return await store.hasAnchor({ profileName, ...anchor });
@@ -307,7 +262,6 @@ function resolveSource(input: {
   query: string;
   requestedSourceKey?: string;
   requestedSourceId?: string;
-  anchor?: KnowledgeAnchor;
   sources: Array<{ source: KnowledgeSourceRecord; metadata: KnowledgeRoutingMetadata }>;
 }): SourceResolution {
   if (input.requestedSourceKey || input.requestedSourceId) {
@@ -323,31 +277,6 @@ function resolveSource(input: {
     input.query,
     input.sources.map(({ metadata }) => metadata)
   );
-
-  if (input.anchor) {
-    const anchoredSource = input.sources.find(({ source }) => source.id === input.anchor!.sourceId);
-    if (!anchoredSource) return { status: "unavailable" };
-    if (
-      match.status === "none" ||
-      (match.status === "unique" && match.source.sourceKey === anchoredSource.metadata.sourceKey)
-    ) {
-      return { status: "resolved", source: anchoredSource.source };
-    }
-    if (match.status === "unique") {
-      const switched = input.sources.find(
-        ({ metadata }) => metadata.sourceKey === match.source.sourceKey
-      );
-      return switched ? { status: "resolved", source: switched.source } : { status: "unavailable" };
-    }
-    return {
-      status: "ambiguous",
-      sources: input.sources
-        .filter(({ metadata }) =>
-          match.sources.some(({ sourceKey }) => sourceKey === metadata.sourceKey)
-        )
-        .map(({ source }) => source)
-    };
-  }
 
   if (match.status === "unique") {
     const resolved = input.sources.find(
@@ -379,33 +308,17 @@ interface RetrievalScope {
 }
 
 function retrievalScopes(input: {
-  anchored: boolean;
-  anchor?: KnowledgeAnchor;
   documentId?: string;
   sectionKey?: string;
   ordinal?: number;
 }): RetrievalScope[] {
-  if (!input.anchored) {
-    return [
-      {
-        ...(input.documentId ? { documentId: input.documentId } : {}),
-        ...(input.sectionKey ? { sectionKey: input.sectionKey } : {}),
-        ...(input.ordinal !== undefined ? { ordinal: input.ordinal } : {})
-      }
-    ];
-  }
-  const scopes: RetrievalScope[] = [];
-  if (input.anchor?.sectionKey) {
-    scopes.push({
-      documentId: input.anchor.documentId,
-      sectionKey: input.anchor.sectionKey,
-      ...(input.anchor.ordinal !== undefined ? { ordinal: input.anchor.ordinal } : {})
-    });
-  }
-  scopes.push({ documentId: input.anchor!.documentId }, {});
-  return scopes.filter(
-    (scope, index) => index === 0 || JSON.stringify(scope) !== JSON.stringify(scopes[index - 1])
-  );
+  return [
+    {
+      ...(input.documentId ? { documentId: input.documentId } : {}),
+      ...(input.sectionKey ? { sectionKey: input.sectionKey } : {}),
+      ...(input.ordinal !== undefined ? { ordinal: input.ordinal } : {})
+    }
+  ];
 }
 
 async function searchScopes(

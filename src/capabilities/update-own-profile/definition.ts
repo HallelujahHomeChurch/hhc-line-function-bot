@@ -12,22 +12,8 @@ export const updateOwnProfileDefinition: FunctionDefinition = {
   agentCapability: {
     intents: ["/profile", "修改個人資料", "修改姓名", "更新姓名"],
     exactIntents: true,
-    candidateHints: [],
     semanticDescription: "修改目前已連結 HHC 帳戶的名字與姓氏。",
-    arguments: {
-      firstName: { type: "string", authority: "explicit_current_text" },
-      lastName: { type: "string", authority: "explicit_current_text" },
-      confirm: { type: "boolean", authority: "active_task_only" },
-      cancel: { type: "boolean", authority: "active_task_only" }
-    },
-    entityTypes: [],
-    refinableFields: ["firstName", "lastName"],
-    operations: [],
-    responseProjection: {
-      defaultMode: "focused",
-      fields: { name: { label: "姓名", aliases: ["姓名", "名字"] } }
-    },
-    ambiguity: "clarify"
+    operations: []
   },
   allowedSources: ["user"],
   requiredSlots: [

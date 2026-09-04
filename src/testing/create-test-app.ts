@@ -3,15 +3,16 @@ import { randomUUID } from "node:crypto";
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
 import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
 import { createAdminActionRegistry } from "../actions/admin-registry.js";
-import type { ControlledAgentRouter } from "../agent/controlled-agent-router.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
+import { createSlotClarificationResult } from "../agent/slot-clarification.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
-import { createControlledCompletionObserver } from "../application/turn/completion-observer.js";
+import { createFunctionCompletionObserver } from "../application/turn/completion-observer.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createStaticAppDiagnostics } from "../diagnostics/dependencies.js";
-import { MemoryInFlightStore } from "../in-flight/in-flight-store.js";
+import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
+import { messages } from "../messages.js";
 import { InMemoryWebhookEventStore } from "../idempotency/webhook-event-store.js";
 import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
 import { InMemoryLastRouteStore } from "../observability/last-route-store.js";
@@ -26,13 +27,11 @@ import {
 } from "../transport/line/webhook-routes.js";
 import type { AppConfig, FunctionRouterPort } from "../types.js";
 import type { AdminActionRouterPort, FunctionRegistry } from "../types.js";
-import type { InFlightStore } from "../in-flight/in-flight-store.js";
 
 export type TestAppDependencies = Partial<AppDependencies> & {
   router?: FunctionRouterPort;
   adminActionRouter?: AdminActionRouterPort;
   functionRegistry?: FunctionRegistry;
-  inFlightStore?: InFlightStore;
   firstSuccessStore?: FirstSuccessStore;
 };
 
@@ -44,14 +43,11 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     overrides.lastErrorStore ?? new InMemoryLastErrorStore(config.lastErrors?.maxEntries ?? 20);
   const lastRouteStore =
     overrides.lastRouteStore ?? new InMemoryLastRouteStore(config.lastErrors?.maxEntries ?? 20);
-  const inFlightStore = overrides.inFlightStore ?? new MemoryInFlightStore();
   const agentTraceStore =
     overrides.agentTraceStore ?? new InMemoryAgentTraceStore(config.lastErrors?.maxEntries ?? 20);
   const conversationWindowStore =
     overrides.conversationWindowStore ?? new InMemoryConversationWindowStore();
-  const controlledAgentRouter =
-    overrides.controlledAgentRouter ??
-    (overrides.router ? adaptLegacyRouter(overrides.router) : undefined);
+  const sessionStore = overrides.sessionStore;
   const functionRegistry = overrides.functionRegistry ?? {};
   const textMessageHandlers = overrides.textMessageHandlers ?? {};
   const firstSuccessStore = overrides.firstSuccessStore ?? new InMemoryFirstSuccessStore();
@@ -109,7 +105,7 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
   };
   const completionObserver =
     overrides.completionObserver ??
-    createControlledCompletionObserver({
+    createFunctionCompletionObserver({
       accessStore,
       routeObserver: overrides.routeObserver,
       firstSuccessStore,
@@ -124,7 +120,7 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
       confirmationStore: overrides.confirmationStore,
       confirmationTtlMinutes: config.access?.confirmationTtlMinutes
     });
-  const agentTurnRuntime =
+  const continuationRuntime =
     overrides.agentTurnRuntime ??
     createAgentTurnRuntime({
       functionRegistry,
@@ -132,22 +128,19 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
       adminActionRouter: overrides.adminActionRouter,
       adminActionRegistry,
       accessStore,
-      inFlightStore,
-      sessionStore: overrides.sessionStore,
+      sessionStore,
       agentRuntime: overrides.agentRuntime,
       traceStore: agentTraceStore,
       lastErrorStore,
       lastRouteStore,
       routeObserver: overrides.routeObserver,
-      textGenerator: overrides.textGenerator,
-      textFallbackGenerator: overrides.textFallbackGenerator,
-      conversationWindowStore,
-      controlledAgentRouter,
       observabilityHmacKey: config.observability?.hmacKey,
       firstSuccessStore,
-      completionObserver,
-      timeZone: config.timeZone
+      completionObserver
     });
+  const agentTurnRuntime = overrides.router
+    ? createRouterTestRuntime(overrides.router, continuationRuntime, functionRegistry, sessionStore)
+    : continuationRuntime;
 
   return createTransportApp(config, {
     adminActionRegistry,
@@ -174,43 +167,56 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     agentRuntime: overrides.agentRuntime,
     agentTurnRuntime,
     agentTraceStore,
-    sessionStore: overrides.sessionStore,
+    sessionStore,
     agentJobStore: overrides.agentJobStore ?? new InMemoryAgentJobStore(),
     conversationWindowStore,
     textFallbackGenerator: overrides.textFallbackGenerator,
-    controlledAgentRouter,
     completionObserver,
     accountAdminClient,
     mediaSyncStore: overrides.mediaSyncStore
   });
 }
 
-function adaptLegacyRouter(router: FunctionRouterPort): ControlledAgentRouter {
+function createRouterTestRuntime(
+  router: FunctionRouterPort,
+  continuationRuntime: ReturnType<typeof createAgentTurnRuntime>,
+  functionRegistry: FunctionRegistry,
+  sessionStore: TestAppDependencies["sessionStore"]
+) {
   return {
-    async resolve(
-      input: Parameters<NonNullable<AppDependencies["controlledAgentRouter"]>["resolve"]>[0]
-    ) {
+    async handleTextTurn(input: Parameters<typeof continuationRuntime.handleTextTurn>[0]) {
+      const continuation = await continuationRuntime.handleTextTurn(input);
+      if (continuation || input.allowRouting === false) return continuation;
       const route = await router.route({
-        profileName: input.profileName,
-        text: input.text,
-        enabledFunctions: [...input.enabledFunctions],
-        source:
-          input.sourceType === "group"
-            ? { type: "group" as const, groupId: "test-group", userId: "test-user" }
-            : { type: "user" as const, userId: "test-user" }
+        profileName: input.profile.name,
+        text: input.event.message?.text ?? "",
+        enabledFunctions: input.profile.enabledFunctions,
+        source: input.event.source
       });
-      if (route.type === "deny") {
-        return { disposition: "deny" as const, reasonCode: "planner_denied" };
-      }
-      if (route.type === "respond") {
-        return { disposition: "chat" as const, reasonCode: "no_capability_evidence" };
-      }
-      return {
-        disposition: "execute" as const,
-        capability: route.action,
-        arguments: route.arguments,
-        reasonCode: "deterministic_explicit_intent"
+      if (!route) return { ok: true, replyText: messages.unsupported };
+      if (route.type === "deny") return { ok: true, replyText: messages.unsupported };
+      if (route.type === "respond") return { ok: true, replyText: messages.unsupported };
+      const handler = functionRegistry[route.action];
+      if (!handler) return { ok: true, replyText: messages.functionNotConfigured };
+      const context = {
+        profile: input.profile,
+        event: input.event,
+        requestId: input.requestId,
+        requesterDisplayName: input.requesterDisplayName,
+        requesterIsAdmin: input.requesterIsAdmin
       };
+      const arguments_ = normalizeFunctionArguments(route.action, route.arguments, {
+        text: input.event.message?.text ?? ""
+      });
+      const clarification = await createSlotClarificationResult({
+        sessionStore,
+        action: route.action,
+        arguments: arguments_,
+        context,
+        requestId: input.requestId,
+        now: new Date()
+      });
+      return clarification ?? handler(arguments_, context);
     }
   };
 }

@@ -210,15 +210,6 @@ const profileSchema = z.object({
   providerPolicy: z
     .partialRecord(z.enum(MODEL_PROVIDER_LANE_NAMES), providerLanePolicySchema)
     .optional(),
-  controlledAgent: z
-    .object({
-      maxCandidates: z.number().int().min(1).max(5).default(3),
-      minPlannerConfidence: z.number().min(0).max(1).default(0.65)
-    })
-    .default({
-      maxCandidates: 3,
-      minPlannerConfidence: 0.65
-    }),
   agentRuntime: z
     .object({
       taskFrameSeconds: z.number().int().min(60).max(3600).default(600)
@@ -869,19 +860,6 @@ function assertNoLegacyProfileFields(parsedProfiles: unknown): void {
     ) {
       throw new Error(
         "registration.inviteCodeRequired is no longer supported; use /registry invite codes"
-      );
-    }
-    if (
-      profile &&
-      typeof profile === "object" &&
-      "controlledAgent" in profile &&
-      profile.controlledAgent &&
-      typeof profile.controlledAgent === "object" &&
-      (Object.prototype.hasOwnProperty.call(profile.controlledAgent, "enabled") ||
-        Object.prototype.hasOwnProperty.call(profile.controlledAgent, "shadow"))
-    ) {
-      throw new Error(
-        "controlledAgent.enabled and controlledAgent.shadow are no longer supported; controlled routing is always authoritative"
       );
     }
   }

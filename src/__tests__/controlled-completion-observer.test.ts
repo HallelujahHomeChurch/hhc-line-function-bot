@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
-import { createControlledCompletionObserver } from "../application/turn/completion-observer.js";
+import { createFunctionCompletionObserver } from "../application/turn/completion-observer.js";
 import type { FunctionHandlerContext, RouteObserverEvent } from "../types.js";
 
 function context(): FunctionHandlerContext {
@@ -41,7 +41,7 @@ describe("controlled completion observer", () => {
     const firstSuccessStore = {
       tryMark: vi.fn().mockResolvedValueOnce("first").mockResolvedValueOnce("existing")
     };
-    const observer = createControlledCompletionObserver({
+    const observer = createFunctionCompletionObserver({
       accessStore,
       firstSuccessStore,
       routeObserver: (event) => {
@@ -80,7 +80,7 @@ describe("controlled completion observer", () => {
 
   it("uses presentation-only stale data without emitting its timestamp", async () => {
     const events: RouteObserverEvent[] = [];
-    const observer = createControlledCompletionObserver({
+    const observer = createFunctionCompletionObserver({
       routeObserver: (event) => {
         events.push(event);
       }
@@ -108,7 +108,7 @@ describe("controlled completion observer", () => {
   it("keeps the guided reply when observational stores fail", async () => {
     const accessStore = new InMemoryAccessStore();
     vi.spyOn(accessStore, "recordPrincipalSuccess").mockRejectedValue(new Error("offline"));
-    const observer = createControlledCompletionObserver({
+    const observer = createFunctionCompletionObserver({
       accessStore,
       firstSuccessStore: { tryMark: vi.fn().mockRejectedValue(new Error("offline")) },
       routeObserver: vi.fn().mockRejectedValue(new Error("offline"))

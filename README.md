@@ -16,7 +16,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Hermes-compatible numeric selection replies, so users can tap a Quick Reply or reply with `1`, `2`, `3`.
 - Definition-driven clarification state for missing slots. A generic capability request such as `查投影片`, `查流行歌譜`, `查維基百科`, or `查服事表` never runs a lookup; the bot asks for the missing value first.
 - Friendly intro/help replies for `小哈`, `小哈可以幹嘛`, `help`, and related prompts without exposing internal function names or backing services.
-- Requester-scoped SDK checkpoints plus the existing workflow stages, in-flight locks, explicit text/resource memories, and typed domain handlers.
+- Requester-scoped SDK checkpoints plus explicit text/resource memories and typed domain handlers.
 - Requester-scoped short conversation windows, so group follow-up messages can continue naturally without letting other users inherit context.
 - Long-running task handoff: slow turns can reply with a "check result" postback instead of using LINE push quota.
 - Free Wikipedia-only lookup: Chinese Wikipedia first, English fallback, then source-bounded summary generation.
@@ -175,7 +175,7 @@ Function toggles are profile-scoped:
 
 - `enabledFunctions` means profile-global functions for that bot profile only.
 - Ordinary users receive profile-global read functions that do not require Account permission.
-- `permissionRequiredFunctions` is the explicitly Account-granted subset of `enabledFunctions`; Account must return its names in `allowedFunctions` even for administrators. A configured write omitted from the public effective projection is available only when the same Account response reports `administrator: true`. Only bounded candidates or current requester-scoped continuation capabilities are sent to Account API, and denied/unavailable permissions fail closed before planner or handler execution.
+- `permissionRequiredFunctions` is the explicitly Account-granted subset of `enabledFunctions`; Account must return its names in `allowedFunctions` even for administrators. A configured write omitted from the public effective projection is available only when the same Account response reports `administrator: true`. Only the currently requested restricted tools or pending continuations are sent to Account API, and denied or unavailable permissions fail closed before handler execution.
 - `main/update_own_profile` is the single self-service exception: Account resolves the caller's bound LINE identity and active state at confirmation, and accepts only first/last-name updates. It is not an RBAC permission.
 - Access principals and group registration still authorize the LINE source. Historical user/group grant and role-capability tables remain for rollback compatibility but do not add functions.
 - The retired `/function-grant`, `/function-user-grant`, revoke/list variants, and matching natural-language actions are hidden or rejected. Function permissions are managed by HHC Account.
@@ -183,13 +183,13 @@ Function toggles are profile-scoped:
 
 The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; its command section is source-, registration-, and capability-aware, so group help omits `/whoami` and protected memory commands are hidden unless currently usable. Onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
 
-`main` sets `allowedProviders: []`, which is the sole provider-free authority. Its planner returns a local `providers_disabled` result before any provider lookup. Deterministic validation can still execute one explicit `download_weekly_paper` read candidate, while one of the exact `/profile`, `修改個人資料`, `修改姓名`, or `更新姓名` intents may enter the shared first-name/last-name collection and preview flow. The profile update rechecks live Account permission at confirmation and never executes from routing alone. Weekly download uses Dapr to call `hhc-web-api`, accepts only the canonical root-relative asset path or its exact `https://www.alive.org.tw` absolute form, and places the validated URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
+`main` sets `allowedProviders: []` and uses narrow direct handlers without an agent or provider call. It can execute an explicit `download_weekly_paper` request, while one of the exact `/profile`, `修改個人資料`, `修改姓名`, or `更新姓名` intents may enter the shared first-name/last-name collection and preview flow. The profile update rechecks live Account permission at confirmation and never executes from routing alone. Weekly download uses Dapr to call `hhc-web-api`, accepts only the canonical root-relative asset path or its exact `https://www.alive.org.tw` absolute form, and places the validated URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
 
 ## Routing
 
 The `helper` profile has one production semantic path: LangChain JS `createAgent` with `ChatDeepSeek`, LangGraph checkpointing, and the SDK's model/tool call-limit middleware. `DEEPSEEK_API_KEY` is read from local or ACA secrets; provider OAuth routes and database token storage do not exist.
 
-Before every helper turn, the server completes any existing confirmation, selection, slot-collection, attachment, or admin workflow. A turn that is not consumed enters the SDK agent. The old candidate/planner/validator path is not invoked for helper semantic routing; it remains only as a compatibility path for provider-free `main` and existing deterministic workflow handlers.
+Before every helper turn, the server completes any existing confirmation, selection, slot-collection, attachment, or admin workflow. A turn that is not consumed enters the SDK agent. The former candidate/planner/validator and active-task runtime has been removed; provider-free `main` uses only direct Weekly Paper and own-profile handlers.
 
 The model receives only tools assembled for the current profile, LINE source, requester, and Account authorization. Every invocation rechecks authorization and calls the existing registered domain handler with a strict Zod schema. The initial tool surface is deliberately small:
 
@@ -221,7 +221,7 @@ LLM_GENERAL_MAX_OUTPUT_TOKENS=160
 LLM_ROUTE_MAX_OUTPUT_TOKENS=256
 ```
 
-`pnpm eval:sdk-agent` runs the offline SDK loop acceptance probe. Run `pnpm eval:sdk-agent --live` manually with `DEEPSEEK_API_KEY` for a bounded live tool-calling check. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies official checkpoint restart, expiry, and cleanup as part of its fixed report contract. The legacy `pnpm eval:agent` and Kernel corpus remain regression gates for the compatibility workflow and domain contracts while `main` still uses that path.
+`pnpm eval:agent` and `pnpm eval:kernel` validate the 30-case SDK corpus and run the offline SDK loop probe. Run `pnpm eval:agent:live` manually with `DEEPSEEK_API_KEY` for a bounded DeepSeek tool-calling check. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies official checkpoint restart, expiry, and cleanup.
 
 ## Time Zone
 
@@ -297,7 +297,7 @@ The memory layer adds controlled memory without making the bot an unrestricted c
 - Recent PPT and sheet music results store only resource metadata: profile, LINE scope, requester, file title, Graph drive id, and item id.
 - This automatic resource metadata is a controlled read-function exception for recall and aliasing. It is not the same as a user explicitly asking the bot to remember or save content.
 - Users can explicitly ask the bot to remember an external PPT or sheet-music link. These remain scoped resource memories, but ordinary file lookup does not treat remembered metadata as current storage evidence.
-- Temporary sharing links are never stored. While the requester-scoped task frame is live, a follow-up for the same item uses its opaque catalog/Graph reference, verifies that the current item still exists and is authorized, and then creates a fresh 24 hour Graph link. Resource memory only ranks current catalog/provider candidates; it cannot answer by itself or revive a tombstoned resource.
+- Temporary sharing links are never stored. A follow-up asks the current authorized tool to validate the catalog/Graph item again before creating a fresh 24 hour Graph link. Resource memory only ranks current catalog/provider candidates; it cannot answer by itself or revive a tombstoned resource.
 - External links are stored as user-provided links. The bot does not verify whether those links remain accessible.
 - Task-frame continuation is requester-scoped. In a group, another user cannot inherit or replay someone else's result.
 - Resource aliases are scope-scoped ranking hints. They never bypass a current catalog/provider search or reference validation.
@@ -324,7 +324,7 @@ Useful memory commands:
 `/memories` requires effective `retrieve_memory`; `/forget-memory <id>` requires effective `save_memory` write authority in the current LINE scope. Both authorize before the memory runtime is entered. `/memory-status` is admin-only.
 `/memories` lists both text memories and resource memories. `/forget-memory <id>` can remove either kind.
 
-New explicit file lookups always run retrieval. Prior resources can be replayed only through a validated explicit continuation such as `剛剛那份`; legacy automatic aliases no longer short-circuit handlers.
+New explicit file lookups always run retrieval. Prior resources can be replayed only through an SDK follow-up and a current authorized tool call; automatic aliases do not short-circuit handlers.
 
 Redis provides cross-replica atomic selection consumption and seven-day LINE `webhookEventId` deduplication. Without Redis those guarantees are limited to one process and are lost on restart.
 
@@ -368,7 +368,6 @@ Advanced commands:
 /status
 /profile
 /diag
-/route-test <text>
 /last-errors
 /last-routes
 /last-agent-turns [limit]
@@ -381,7 +380,7 @@ Advanced commands:
 /catalog-sync-now [sourceKey]
 ```
 
-Registered function modules may add more admin commands, such as `/llm-status`, `/functions`, `/sessions`, `/cache`, `/clear-sessions`, and catalog source operations. `/access-list group` includes each registered group's display name, active/disabled state, effective function display names, and latest privacy-safe successful function/timestamp; it does not infer requester-specific grants for the group. `/catalog-sources` and knowledge-source listings show an administrator-only owner label and freshness responsibility, using `尚未指定` when no safe label exists. Ordinary help and function results never expose those administration fields or storage details. `/catalog-source-enable <sourceKey>` and `/catalog-source-disable <sourceKey>` toggle source availability without changing root metadata or capabilities. `/catalog-sync-now [sourceKey]` runs the catalog sync service manually for one source or all current-profile sources and records access audit events. `/route-test <text>` reports the selected provider, action, arguments, and any fallback reason. `/last-routes` reports recent sanitized route/function outcomes, including whether a query was present, without echoing the raw query. `/last-agent-turns` shows the latest sanitized agent runtime phases so admins can debug whether a request stopped at memory, clarification, routing, in-flight locking, or function execution.
+Registered function modules may add more admin commands, such as `/llm-status`, `/functions`, `/sessions`, `/cache`, `/clear-sessions`, and catalog source operations. `/access-list group` includes each registered group's display name, active/disabled state, effective function display names, and latest privacy-safe successful function/timestamp; it does not infer requester-specific grants for the group. `/catalog-sources` and knowledge-source listings show an administrator-only owner label and freshness responsibility, using `尚未指定` when no safe label exists. Ordinary help and function results never expose those administration fields or storage details. `/catalog-source-enable <sourceKey>` and `/catalog-source-disable <sourceKey>` toggle source availability without changing root metadata or capabilities. `/catalog-sync-now [sourceKey]` runs the catalog sync service manually for one source or all current-profile sources and records access audit events. `/last-routes` reports recent sanitized route/function outcomes, including whether a query was present, without echoing the raw query. `/last-agent-turns` shows the latest sanitized helper SDK-agent phases without storing raw messages or provider payloads.
 
 ## OneDrive And Graph
 
@@ -422,7 +421,7 @@ Knowledge synchronization preserves page hierarchy, tables, lists, properties, a
 
 Configure `EMBEDDING_PROVIDER=azure_openai`, `AZURE_OPENAI_EMBEDDING_API_KEY`, `AZURE_OPENAI_EMBEDDING_ENDPOINT=https://bible-text-embedding-resource.cognitiveservices.azure.com/`, `AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small`, `AZURE_OPENAI_EMBEDDING_API_VERSION=2024-10-21`, `EMBEDDING_MODEL=text-embedding-3-small`, `EMBEDDING_BATCH_SIZE=16`, and `EMBEDDING_TIMEOUT_MS=30000`. Production deployment reuses the Bible Azure AI Services account and copies an account key directly into a workload-scoped ACA secret without printing or rotating it. The embedding model and its 1536 dimensions are a fixed contract; `EMBEDDING_DIMENSIONS` and retired direct-OpenAI settings are rejected. PostgreSQL must already have the `vector` extension; the app validates it but never installs extensions.
 
-Helper follow-up state is the requester-scoped LangGraph checkpoint described above. It may remember prior questions and bounded tool evidence, but it never grants authority; every later tool is rebuilt and authorized from the current profile/source/requester. Schedule and knowledge follow-ups therefore ask their handlers again with current arguments instead of treating stored content as authoritative. `main` keeps its legacy short-lived task frame only for its provider-free deterministic path.
+Helper follow-up state is the requester-scoped LangGraph checkpoint described above. It may remember prior questions and bounded tool evidence, but it never grants authority; every later tool is rebuilt and authorized from the current profile/source/requester. Schedule and knowledge follow-ups therefore ask their handlers again with current arguments instead of treating stored content as authoritative. `main` has no agent checkpoint or task frame.
 
 ## LINE Attachment Save Gate
 
@@ -483,7 +482,7 @@ Operational details are in `docs/runbooks/production-operations.md`.
 
 `main` is protected by a no-bypass GitHub ruleset. Every change—including changes made by administrators or automated agents—must use a pull request and pass the required `PR CI` check. No approving review is required, so an agent may enable auto-merge and GitHub will squash the PR after CI succeeds.
 
-`.github/workflows/ci.yml` runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the deterministic controlled-agent eval, the Kernel v1 acceptance gate, the owned real-dependency integration gate, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
+`.github/workflows/ci.yml` runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the SDK agent eval, the SDK acceptance gate, the owned real-dependency integration gate, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
 
 `.github/workflows/release.yml` runs only after app, build, or deployment inputs are merged to `main`, or through an explicit manual dispatch. It does not repeat the pnpm validation suite. It authenticates to Azure through a branch-scoped OIDC federated credential, builds the production image with `az acr build`, and publishes these ACR tags:
 
@@ -529,7 +528,6 @@ pnpm test
 pnpm config:validate
 pnpm eval:admin
 pnpm eval:agent
-pnpm eval:sdk-agent
 pnpm eval:retrieval-product
 pnpm eval:kernel
 pnpm eval:kernel:integration
@@ -539,5 +537,5 @@ pnpm build
 Optional live helper SDK check:
 
 ```powershell
-pnpm eval:sdk-agent --live
+pnpm eval:agent:live
 ```

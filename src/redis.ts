@@ -5,7 +5,6 @@ import type { RedisRegistrationInviteCodeClient } from "./access/registration-in
 import type { RedisConfirmationClient } from "./actions/confirmation-store.js";
 import type { RedisCacheClient } from "./cache/redis-cache-store.js";
 import type { DiagnosticRedisClient } from "./diagnostics/dependencies.js";
-import type { RedisInFlightClient } from "./in-flight/in-flight-store.js";
 import type { RedisLastErrorClient } from "./observability/create-last-error-store.js";
 import type { RedisFirstSuccessClient } from "./observability/first-success-store.js";
 import type { RedisRateLimitClient } from "./rate-limit.js";
@@ -25,7 +24,6 @@ export interface RedisRuntime {
     RedisRegistrationInviteCodeClient &
     RedisConfirmationClient &
     DiagnosticRedisClient &
-    RedisInFlightClient &
     RedisAgentJobClient &
     RedisAttachmentScanWorkClient &
     RedisAgentTraceClient &

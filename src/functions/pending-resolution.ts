@@ -1,5 +1,4 @@
 import type { ResolutionCandidate } from "../agent/resolution.js";
-import { buildCapabilityCandidates } from "../agent/capability-candidates.js";
 import { messages } from "../messages.js";
 import type { SessionStore } from "../state/session-store.js";
 import type {
@@ -9,6 +8,7 @@ import type {
   JsonRecord,
   TextMessageHandler
 } from "../types.js";
+import { isExplicitFunctionSwitch } from "./explicit-function-intent.js";
 
 const PENDING_RESOLUTION_TTL_MS = 10 * 60 * 1000;
 
@@ -54,15 +54,10 @@ export function createPendingResolutionTextMessageHandler(input: {
         requesterUserId: context.event.source.userId
       });
       if (!pending) return false;
-      const switched = buildCapabilityCandidates({
-        text: request.text,
-        enabledFunctions: context.profile.enabledFunctions,
-        source: context.event.source.type === "user" ? "user" : "group",
-        knowledgeSources: [],
-        maxCandidates: 5
-      }).some(
-        ({ capability, reason }) =>
-          capability !== pending.capability && reason === "explicit_intent"
+      const switched = isExplicitFunctionSwitch(
+        request.text,
+        pending.capability,
+        context.profile.enabledFunctions
       );
       if (switched) {
         await input.sessionStore.delete(pending.id);

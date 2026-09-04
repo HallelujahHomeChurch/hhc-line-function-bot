@@ -10,9 +10,7 @@ import { evaluateActionPolicy } from "../../actions/policy.js";
 import type { ConfirmationStore } from "../../actions/confirmation-store.js";
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
 import { memoryCommandFunctionName, type AgentRuntime } from "../../agent/agent-runtime.js";
-import type { ControlledAgentRouter } from "../../agent/controlled-agent-router.js";
-import { applyActiveTaskTransition } from "../../agent/active-task-transition.js";
-import { matchExactWholeMessageIntent } from "../../agent/plan-evidence.js";
+import { matchExactWholeMessageIntent } from "../../functions/explicit-function-intent.js";
 import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
 import type { AgentJobStore } from "../../agent/jobs.js";
 import {
@@ -30,7 +28,7 @@ import {
 } from "../../account/account-admin-client.js";
 import { resolveEffectiveAccessContext } from "../../application/access/effective-access.js";
 import type { EffectiveAccessContext } from "../../application/access/effective-access.js";
-import type { ControlledCompletionObserver } from "../../application/turn/completion-observer.js";
+import type { FunctionCompletionObserver } from "../../application/turn/completion-observer.js";
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import {
   type AccountSurfacePresentation,
@@ -121,8 +119,7 @@ export interface AppDependencies {
   agentJobStore: AgentJobStore;
   conversationWindowStore: ConversationWindowStore;
   textFallbackGenerator?: TextGenerationProvider;
-  controlledAgentRouter?: ControlledAgentRouter;
-  completionObserver: ControlledCompletionObserver;
+  completionObserver: FunctionCompletionObserver;
   accountAdminClient: AccountAdminClient;
   mediaSyncStore?: PostgresMediaSyncStore;
   mediaSyncManagementService?: MediaSyncManagementService;
@@ -187,7 +184,6 @@ const builtInAdminCommandGroups: AdminCommandHelpGroup[] = [
       { usage: "/profile", description: "查看目前 LINE 來源與 profile 設定摘要" },
       { usage: "/diag", description: "查看服務診斷摘要" },
       { usage: "/confirm <code>", description: "確認需要二次確認的操作" },
-      { usage: "/route-test <text>", description: "測試一段文字會 route 到哪個 function" },
       { usage: "/last-errors", description: "查看最近錯誤" },
       { usage: "/last-routes", description: "查看最近 route/function 結果" },
       { usage: "/last-agent-turns [limit]", description: "查看最近 agent runtime 步驟" },
@@ -271,7 +267,6 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         registrationInviteCodeStore,
         diagnostics,
         agentTurnRuntime,
-        deps.controlledAgentRouter,
         agentTraceStore,
         textGenerator,
         textFallbackGenerator,
@@ -310,7 +305,6 @@ async function handleWebhook(
   registrationInviteCodeStore: RegistrationInviteCodeStore,
   diagnostics: AppDiagnostics,
   agentTurnRuntime: AgentTurnRuntime,
-  controlledAgentRouter: ControlledAgentRouter | undefined,
   agentTraceStore: AgentTraceStore,
   textGenerator: TextGenerationProvider | undefined,
   textFallbackGenerator: TextGenerationProvider | undefined,
@@ -319,7 +313,7 @@ async function handleWebhook(
   conversationWindowStore: ConversationWindowStore,
   webhookEventStore: WebhookEventStore,
   sessionStore: SessionStore | undefined,
-  completionObserver: ControlledCompletionObserver,
+  completionObserver: FunctionCompletionObserver,
   accountAdminClient: AccountAdminClient,
   mediaSyncStore: PostgresMediaSyncStore | undefined
 ) {
@@ -904,17 +898,6 @@ async function handleWebhook(
       const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
       const postbackFunctionName = completionEligible ? capability : undefined;
       if (postbackFunctionName) {
-        await applyActiveTaskTransition({
-          store: conversationWindowStore,
-          scope: activeTaskScopeForEvent(conversationWindowStore, postbackProfile, event),
-          capability: postbackFunctionName,
-          enabledFunctions: postbackProfile.enabledFunctions,
-          result,
-          now: new Date(),
-          ttlMs: Math.max(1, postbackProfile.generalAgent?.conversationWindowSeconds ?? 60) * 1000
-        });
-      }
-      if (postbackFunctionName) {
         await agentRuntime?.afterFunctionResult({
           context: { profile: postbackProfile, event, requestId, requesterDisplayName },
           action: postbackFunctionName,
@@ -1146,7 +1129,6 @@ async function handleWebhook(
             event,
             config,
             adminHandlers,
-            controlledAgentRouter,
             lastErrorStore,
             lastRouteStore,
             accessStore,
@@ -1323,17 +1305,6 @@ async function handleWebhook(
     allowedEvents: admittedEvents,
     ignored: ignoredCounts.size > 0 ? formatIgnoredSummary(ignoredCounts) : undefined
   });
-}
-
-function activeTaskScopeForEvent(
-  store: ConversationWindowStore,
-  profile: BotProfileConfig,
-  event: LineEvent
-): ConversationWindowScope | undefined {
-  const source = sourceKey(event.source);
-  const requesterUserId = event.source.userId;
-  if (!store || !source || !requesterUserId) return undefined;
-  return { profileName: profile.name, sourceKey: source, requesterUserId };
 }
 
 function parseWebhookPayload(body: Buffer): LineWebhookPayload | null {
@@ -1715,7 +1686,6 @@ async function handleAdminCommand(
   event: LineEvent,
   config: AppConfig,
   adminHandlers: AdminHandlerRegistry,
-  controlledAgentRouter: ControlledAgentRouter | undefined,
   lastErrorStore: LastErrorStore,
   lastRouteStore: LastRouteStore,
   accessStore: AccessStore,
@@ -1786,10 +1756,6 @@ async function handleAdminCommand(
       event,
       requesterIsAdmin
     });
-  }
-
-  if (parsed.command === "route-test") {
-    return handleRouteTestCommand(parsed.args, profile, event, controlledAgentRouter);
   }
 
   if (parsed.command === "last-errors") {
@@ -2161,50 +2127,6 @@ function formatAdminCommandHelpByMode(
       : []),
     ...(showAll ? [] : ["", "更多指令", "/help admin all"])
   ].join("\n");
-}
-
-async function handleRouteTestCommand(
-  args: string[],
-  profile: BotProfileConfig,
-  event: LineEvent,
-  router: ControlledAgentRouter | undefined
-): Promise<FunctionExecutionResult> {
-  const text = args.join(" ").trim();
-  if (!text) {
-    return { ok: true, replyText: "Route test\n請提供要測試的文字。" };
-  }
-
-  if (!router) {
-    return { ok: true, replyText: "Route test\ncontrolled agent router unavailable" };
-  }
-  const route = await router.resolve({
-    profileName: profile.name,
-    text,
-    enabledFunctions: profile.enabledFunctions,
-    sourceType: event.source.type,
-    maxCandidates: profile.controlledAgent?.maxCandidates ?? 3,
-    minPlannerConfidence: profile.controlledAgent?.minPlannerConfidence ?? 0.65
-  });
-
-  if (route.disposition === "deny") {
-    return {
-      ok: true,
-      replyText: ["Route test", "type: deny", `reason: ${route.reasonCode}`].join("\n")
-    };
-  }
-
-  return {
-    ok: true,
-    replyText: [
-      "Route test",
-      `type: ${route.disposition}`,
-      ...(route.disposition === "execute"
-        ? [`action: ${route.capability}`, `arguments: ${JSON.stringify(route.arguments)}`]
-        : route.disposition === "clarify" && route.capability
-          ? [`action: ${route.capability}`]
-          : [])
-    ].join("\n")
-  };
 }
 
 function parseAdminCommand(text: string | undefined): ParsedAdminCommand | undefined {

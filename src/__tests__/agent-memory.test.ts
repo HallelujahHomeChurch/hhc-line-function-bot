@@ -308,7 +308,7 @@ describe("agent memory", () => {
     expect(JSON.stringify(result.agentResult)).not.toMatch(/牧者|王小明|主日服事/u);
   });
 
-  it("retrieves an active-task memory by opaque id without fuzzy re-search", async () => {
+  it("retrieves an explicit memory by opaque id without fuzzy re-search", async () => {
     const store = new InMemoryAgentMemoryStore();
     const source = context().event.source;
     await store.saveTextMemory({

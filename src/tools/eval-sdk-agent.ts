@@ -3,6 +3,10 @@ import { FakeToolCallingModel, tool } from "langchain";
 import { z } from "zod";
 
 import { createSdkAgent } from "../agent/sdk-runtime.js";
+import { SDK_AGENT_ACCEPTANCE_CASES, validateSdkAgentCorpus } from "../evals/kernel/corpus.js";
+
+const corpusErrors = validateSdkAgentCorpus();
+if (corpusErrors.length) throw new Error(`invalid_sdk_agent_corpus:${corpusErrors.join(",")}`);
 
 const live = process.argv.includes("--live");
 const toolCalls: string[] = [];
@@ -90,6 +94,7 @@ console.log(
     mode: live ? "live" : "offline",
     model: live ? "deepseek-chat" : "fake-tool-calling",
     passed,
+    corpusCases: SDK_AGENT_ACCEPTANCE_CASES.length,
     toolNames: toolCalls,
     elapsedMs: Math.round(performance.now() - startedAt)
   })

@@ -47,10 +47,6 @@
       "enabled": true,
       "conversationWindowSeconds": 60
     },
-    "controlledAgent": {
-      "maxCandidates": 3,
-      "minPlannerConfidence": 0.65
-    },
     "agentRuntime": {
       "taskFrameSeconds": 600
     },
@@ -91,7 +87,13 @@
           "start": "09:00",
           "end": "11:30"
         },
-        { "key": "sunday", "aliases": ["主日"], "weekdays": [0], "start": "09:00", "end": "12:00" }
+        {
+          "key": "sunday",
+          "aliases": ["主日"],
+          "weekdays": [0],
+          "start": "09:00",
+          "end": "12:00"
+        }
       ]
     },
     "allowedProviders": ["deepseek"],
@@ -152,10 +154,6 @@
     "generalAgent": {
       "enabled": false,
       "conversationWindowSeconds": 60
-    },
-    "controlledAgent": {
-      "maxCandidates": 3,
-      "minPlannerConfidence": 0.65
     },
     "agentRuntime": {
       "taskFrameSeconds": 600
