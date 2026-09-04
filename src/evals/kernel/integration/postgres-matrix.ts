@@ -230,7 +230,7 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
   await invoke(direct, { type: "user", userId: "kernel-direct-user" });
   await invoke(group, groupSource);
   const metadata = await pool.query<{ thread_id: string; expires_at: Date }>(
-    "select thread_id, expires_at from helper_agent_threads where thread_id = any($1::text[])",
+    "select thread_id, expires_at from agent_sdk_threads where thread_id = any($1::text[])",
     [[direct, group]]
   );
   const expiresAt = new Map(metadata.rows.map((row) => [row.thread_id, row.expires_at]));
@@ -274,7 +274,7 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
     }
   }
   const [failedMetadata, failedCheckpoint] = await Promise.all([
-    pool.query("select 1 from helper_agent_threads where thread_id = $1", [failed]),
+    pool.query("select 1 from agent_sdk_threads where thread_id = $1", [failed]),
     pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [failed])
   ]);
   if (failedMetadata.rowCount || failedCheckpoint.rowCount) {
