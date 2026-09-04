@@ -168,6 +168,7 @@ export async function createSyntheticScheduleRuntimeFixture(
   const now = () => new Date("2026-09-04T00:00:00.000Z");
   const scheduleStore = new InMemoryScheduleStore();
   const rows = [
+    { serviceDate: "2026-08-30", assignee: "合成舊同工" },
     { serviceDate: "2026-09-06", assignee: "合成目前同工" },
     { serviceDate: "2026-09-13", assignee: "合成未來同工" }
   ] as const;

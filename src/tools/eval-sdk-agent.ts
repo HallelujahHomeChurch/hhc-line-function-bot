@@ -116,52 +116,22 @@ async function conversationGreeting(): Promise<Partial<EvalMetrics>> {
 }
 
 async function scheduleLatestDefault(): Promise<Partial<EvalMetrics>> {
-  const now = () => new Date("2026-09-04T00:00:00.000Z");
-  const schedules = new InMemoryScheduleStore();
-  for (const [serviceDate, assignee] of [
-    ["2026-08-30", "合成舊同工"],
-    ["2026-09-06", "合成目前同工"],
-    ["2026-09-13", "合成未來同工"]
-  ] as const) {
-    await schedules.upsertItem({
-      profileName: "helper",
-      sourceKey: "official-service",
-      origin: "notion",
-      externalId: serviceDate,
-      serviceDate,
-      meeting: "主日",
-      role: "接待",
-      assignee
-    });
-  }
   const probe = createEvalProbe();
-  const fixture = createSyntheticRuntimeFixture({
+  const fixture = await createSyntheticScheduleRuntimeFixture({
     model: instrumentedFakeModel(
-      [[{ name: "get_official_schedule", args: { query: "查服事表" }, id: "latest" }], []],
+      [
+        [
+          { name: "get_official_schedule", args: { query: "查服事表" }, id: "latest-1" },
+          { name: "get_official_schedule", args: { query: "查服事表" }, id: "latest-2" }
+        ],
+        []
+      ],
       probe
     ),
-    probe,
-    enabledFunctions: ["query_schedule"],
-    handlers: {
-      query_schedule: createQueryScheduleHandler({
-        memoryStore: new InMemoryAgentMemoryStore({ now }),
-        scheduleStore: schedules,
-        now,
-        timeZone: "Asia/Taipei"
-      })
-    },
-    profile: { schedulePolicy: schedulePolicy([officialDomain()]) },
-    now
+    probe
   });
   await fixture.runtime.handleTextTurn(fixture.turn("查服事表"));
-  const call = fixture.calls.get("query_schedule")?.[0];
-  assert(call);
-  const records = call?.result.agentResult?.replyData?.records ?? [];
-  assert(call?.args.dateIntent === undefined && records.length === 1);
-  assert(records[0]?.date === "2026-09-06" && records[0]?.people === "合成目前同工");
-  assert(
-    !call.result.replyText.includes("合成舊同工") && !call.result.replyText.includes("合成未來同工")
-  );
+  assertGroundedScheduleLatest(fixture);
   return probe.values();
 }
 
@@ -271,7 +241,13 @@ async function wikipediaFixedSource(): Promise<Partial<EvalMetrics>> {
   const probe = createEvalProbe();
   const fixture = createSyntheticRuntimeFixture({
     model: instrumentedFakeModel(
-      [[{ name: "query_wikipedia", args: { query: "合成百科題目" }, id: "wiki" }], []],
+      [
+        [
+          { name: "query_wikipedia", args: { query: "合成百科題目" }, id: "wiki-1" },
+          { name: "query_wikipedia", args: { query: "合成百科題目" }, id: "wiki-2" }
+        ],
+        []
+      ],
       probe
     ),
     probe,
@@ -279,7 +255,7 @@ async function wikipediaFixedSource(): Promise<Partial<EvalMetrics>> {
     handlers: { query_wikipedia: async () => success("wikipedia") }
   });
   await fixture.runtime.handleTextTurn(fixture.turn("查合成百科題目"));
-  assert(probe.toolNames.join() === "query_wikipedia");
+  assertOnlyToolCalls(probe, "query_wikipedia");
   assert(probe.inputs.flat().some((message) => message.text.includes('"sourceType":"public"')));
   return probe.values();
 }
@@ -308,10 +284,19 @@ async function toolAuthorizationRecheck(): Promise<Partial<EvalMetrics>> {
 
 async function reviewApproveOnce(): Promise<Partial<EvalMetrics>> {
   let commits = 0;
+  let previewContent: unknown;
   const probe = createEvalProbe();
   const fixture = createSyntheticRuntimeFixture({
     model: instrumentedFakeModel(
-      [[{ name: "propose_save_memory", args: { content: "合成偏好" }, id: "write" }]],
+      [
+        [
+          {
+            name: "propose_save_memory",
+            args: { content: "合成測試偏好是深色模式。" },
+            id: "write"
+          }
+        ]
+      ],
       probe
     ),
     probe,
@@ -319,12 +304,13 @@ async function reviewApproveOnce(): Promise<Partial<EvalMetrics>> {
     handlers: {
       save_memory: async (args) => {
         if (args.confirm === true) commits += 1;
+        else previewContent = args.content;
         return writeResult(args.confirm === true);
       }
     },
     profile: { permissionRequiredFunctions: ["save_memory"] }
   });
-  const turn = fixture.turn("請記住合成偏好");
+  const turn = fixture.turn("請記住：合成測試偏好是深色模式。");
   const preview = await fixture.runtime.handleTextTurn(turn);
   const review = await currentReview(fixture, turn.event.source);
   const approve = { ...turn, reviewId: review.id, resultJobId: review.resultJobId, text: "確認" };
@@ -334,6 +320,7 @@ async function reviewApproveOnce(): Promise<Partial<EvalMetrics>> {
   assert(
     replay?.freshExecution === false && replay.result.writePhase === "commit" && commits === 1
   );
+  assert(previewContent === "合成測試偏好是深色模式。");
   return probe.values();
 }
 
@@ -342,8 +329,20 @@ async function reviewRevisionInvalidatesOriginal(): Promise<Partial<EvalMetrics>
   const fixture = createSyntheticRuntimeFixture({
     model: instrumentedFakeModel(
       [
-        [{ name: "propose_save_memory", args: { content: "原始偏好" }, id: "original" }],
-        [{ name: "propose_save_memory", args: { content: "修訂偏好" }, id: "revised" }]
+        [
+          {
+            name: "propose_save_memory",
+            args: { content: "合成測試偏好是深色模式。" },
+            id: "original"
+          }
+        ],
+        [
+          {
+            name: "propose_save_memory",
+            args: { content: "合成測試偏好是淺色模式。" },
+            id: "revised"
+          }
+        ]
       ],
       probe
     ),
@@ -352,14 +351,14 @@ async function reviewRevisionInvalidatesOriginal(): Promise<Partial<EvalMetrics>
     handlers: { save_memory: async (args) => writeResult(args.confirm === true) },
     profile: { permissionRequiredFunctions: ["save_memory"] }
   });
-  const turn = fixture.turn("請記住原始偏好");
+  const turn = fixture.turn("請記住：合成測試偏好是深色模式。");
   await fixture.runtime.handleTextTurn(turn);
   const original = await currentReview(fixture, turn.event.source);
   const revised = await fixture.runtime.handleActionReview?.({
     ...turn,
     reviewId: original.id,
     resultJobId: original.resultJobId,
-    text: "改成修訂偏好"
+    text: "改成：合成測試偏好是淺色模式。"
   });
   const replacement = await currentReview(fixture, turn.event.source);
   const oldJob = await fixture.jobs.get(
@@ -754,14 +753,7 @@ async function runLiveCases(): Promise<EvalReport[]> {
         result?.ok === true && Boolean(result.replyText) && fixture.probe.toolNames.length === 0
       );
     }),
-    liveTextCase(
-      apiKey,
-      ids[1]!,
-      ["query_schedule"],
-      { query_schedule: async () => success("schedule") },
-      "查最新服事表。",
-      (fixture) => assert(fixture.calls.get("query_schedule")?.length === 1)
-    ),
+    liveLatestDefaultCase(apiKey, ids[1]!),
     liveTextCase(
       apiKey,
       ids[2]!,
@@ -783,7 +775,7 @@ async function runLiveCases(): Promise<EvalReport[]> {
       ["query_wikipedia"],
       { query_wikipedia: async () => success("wikipedia") },
       "請使用 Wikipedia 回答：台灣最高的山是哪一座？",
-      (fixture) => assert(fixture.probe.toolNames.join() === "query_wikipedia")
+      (fixture) => assertOnlyToolCalls(fixture.probe, "query_wikipedia")
     ),
     liveReviewCase(apiKey, ids[5]!, false),
     liveReviewCase(apiKey, ids[6]!, true),
@@ -832,6 +824,22 @@ function liveFollowUpCase(apiKey: string, id: string) {
   };
 }
 
+function liveLatestDefaultCase(apiKey: string, id: string) {
+  return {
+    id,
+    run: async () => {
+      const probe = createEvalProbe();
+      const fixture = await createSyntheticScheduleRuntimeFixture({
+        model: createLiveModel(apiKey, probe),
+        probe
+      });
+      await fixture.runtime.handleTextTurn(fixture.turn("查最新合成服事表。"));
+      assertGroundedScheduleLatest(fixture);
+      return checkedLiveMetrics(probe);
+    }
+  };
+}
+
 function liveReviewCase(apiKey: string, id: string, revise: boolean) {
   return {
     id,
@@ -841,7 +849,7 @@ function liveReviewCase(apiKey: string, id: string, revise: boolean) {
         handlers: { save_memory: async (args) => writeResult(args.confirm === true) },
         profile: { permissionRequiredFunctions: ["save_memory"] }
       });
-      const turn = fixture.turn("請記住合成測試偏好。");
+      const turn = fixture.turn("請記住：合成測試偏好是深色模式。");
       const preview = await fixture.runtime.handleTextTurn(turn);
       const original = await currentReview(fixture, turn.event.source);
       assert(preview?.writePhase === "preview");
@@ -850,7 +858,7 @@ function liveReviewCase(apiKey: string, id: string, revise: boolean) {
           ...turn,
           reviewId: original.id,
           resultJobId: original.resultJobId,
-          text: "改成另一個合成測試偏好。"
+          text: "改成：合成測試偏好是淺色模式。"
         });
         const replacement = await currentReview(fixture, turn.event.source);
         assert(result?.result.writePhase === "preview" && replacement.id !== original.id);
@@ -952,6 +960,40 @@ function assertGroundedScheduleJourney(
         (args.domainKey === undefined || args.domainKey === domain.key)
     );
   assert(followUp);
+}
+
+function assertGroundedScheduleLatest(
+  fixture: Awaited<ReturnType<typeof createSyntheticScheduleRuntimeFixture>>
+) {
+  const [domain] = fixture.profile.schedulePolicy?.domains ?? [];
+  assert(domain);
+  const calls = fixture.calls.get("query_schedule") ?? [];
+  assert(
+    calls.length > 0 &&
+      calls.every(
+        ({ args }) =>
+          args.specificDate === undefined &&
+          (args.domainKey === undefined || args.domainKey === domain.key)
+      )
+  );
+  const latest = calls.find(({ result }) => {
+    if (result.agentResult?.anchors?.domainKey !== domain.key) return false;
+    const records = result.agentResult.replyData?.records ?? [];
+    return (
+      records.length === 1 &&
+      records[0]?.date === "2026-09-06" &&
+      records[0]?.people === "合成目前同工"
+    );
+  });
+  assert(
+    latest &&
+      !latest.result.replyText.includes("合成舊同工") &&
+      !latest.result.replyText.includes("合成未來同工")
+  );
+}
+
+function assertOnlyToolCalls(probe: ReturnType<typeof createEvalProbe>, name: string) {
+  assert(probe.toolNames.length > 0 && probe.toolNames.every((toolName) => toolName === name));
 }
 
 function checkedLiveMetrics(probe: ReturnType<typeof createEvalProbe>) {
