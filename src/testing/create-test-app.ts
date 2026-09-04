@@ -6,6 +6,7 @@ import { createAdminActionRegistry } from "../actions/admin-registry.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
+import type { AgentTurnRuntime } from "../agent/turn-runtime.js";
 import { createSlotClarificationResult } from "../agent/slot-clarification.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createFunctionCompletionObserver } from "../application/turn/completion-observer.js";
@@ -35,6 +36,7 @@ export type TestAppDependencies = Partial<AppDependencies> & {
   adminActionRouter?: AdminActionRouterPort;
   functionRegistry?: FunctionRegistry;
   firstSuccessStore?: FirstSuccessStore;
+  agentTurnRuntime?: AgentTurnRuntime;
 };
 
 export function createTestApp(config: AppConfig, overrides: TestAppDependencies = {}) {
@@ -140,19 +142,14 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
       firstSuccessStore,
       completionObserver
     });
-  const agentTurnRuntime = overrides.profileRuntime
-    ? createProfileRuntimeTestAdapter(overrides.profileRuntime)
-    : overrides.router
-      ? createRouterTestRuntime(
-          overrides.router,
-          continuationRuntime,
-          functionRegistry,
-          sessionStore
-        )
-      : continuationRuntime;
+  const legacyRuntime = overrides.router
+    ? createRouterTestRuntime(overrides.router, continuationRuntime, functionRegistry, sessionStore)
+    : continuationRuntime;
+  const profileRuntime = overrides.profileRuntime ?? createLegacyRuntimeTestAdapter(legacyRuntime);
 
   return createTransportApp(config, {
     adminActionRegistry,
+    adminActionRouter: overrides.adminActionRouter,
     postbackHandlers: overrides.postbackHandlers ?? {},
     textMessageHandlers,
     adminHandlers: overrides.adminHandlers ?? {},
@@ -174,7 +171,7 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     webhookEventStore: overrides.webhookEventStore ?? new InMemoryWebhookEventStore(),
     textGenerator: overrides.textGenerator,
     agentRuntime: overrides.agentRuntime,
-    agentTurnRuntime,
+    profileRuntime,
     agentTraceStore,
     sessionStore,
     agentJobStore: overrides.agentJobStore ?? new InMemoryAgentJobStore(),
@@ -186,12 +183,11 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
   });
 }
 
-function createProfileRuntimeTestAdapter(profileRuntime: ProfileRuntime) {
+function createLegacyRuntimeTestAdapter(runtime: AgentTurnRuntime): ProfileRuntime {
   return {
-    handleTextTurn(
-      input: Parameters<ReturnType<typeof createAgentTurnRuntime>["handleTextTurn"]>[0]
-    ) {
-      return profileRuntime.handleTextTurn({
+    observesCompletion: true,
+    handleTextTurn(input) {
+      return runtime.handleTextTurn({
         profile: input.profile,
         event: input.event,
         requestId: input.requestId,
@@ -199,9 +195,10 @@ function createProfileRuntimeTestAdapter(profileRuntime: ProfileRuntime) {
         requesterIsAdmin: input.requesterIsAdmin,
         configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
         authorizeFunctions: input.authorizeFunctions
-          ? async (names) => [...(await input.authorizeFunctions!(names))]
+          ? async (names) => [...(await input.authorizeFunctions!([...names]))]
           : undefined,
-        accountAdministrator: input.accountAdministrator
+        accountAdministrator: input.accountAdministrator,
+        allowRouting: true
       });
     }
   };

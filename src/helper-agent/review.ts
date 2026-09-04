@@ -144,17 +144,19 @@ export function createActionReviewLifecycleObserver(input: {
   source: LineSource;
   hmacKey?: string;
 }): ActionReviewLifecycleObserver {
-  return ({ status, action }) =>
-    emitProductEvent(input.routeObserver, {
-      eventName: status === "approved" ? "write_committed" : "write_previewed",
+  return ({ status, action }) => {
+    if (status === "approved") return;
+    return emitProductEvent(input.routeObserver, {
+      eventName: "write_previewed",
       requestId: input.requestId,
       profileName: input.profileName,
       source: input.source,
       hmacKey: input.hmacKey,
       action,
-      resultClass: status === "approved" || status === "rejected" ? "success" : "unavailable",
+      resultClass: status === "rejected" ? "success" : "unavailable",
       finalStatus: `review_${status}`
     });
+  };
 }
 
 export async function resumeHelperReview(input: ResumeHelperReviewInput): Promise<ReviewResult> {

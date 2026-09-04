@@ -12,8 +12,23 @@ export interface ProfileTurnInput {
   accountAdministrator?: () => boolean;
 }
 
+export interface ProfileActionReviewInput extends ProfileTurnInput {
+  reviewId: string;
+  resultJobId: string;
+  text: string;
+}
+
+export interface ProfileActionReviewResult {
+  result: FunctionExecutionResult;
+  freshExecution: boolean;
+}
+
 export interface ProfileRuntime {
+  readonly observesCompletion?: boolean;
   handleTextTurn(input: ProfileTurnInput): Promise<FunctionExecutionResult | undefined>;
+  handleActionReview?(
+    input: ProfileActionReviewInput
+  ): Promise<ProfileActionReviewResult | undefined>;
 }
 
 export function createProfileRuntimeDispatcher(
@@ -22,6 +37,11 @@ export function createProfileRuntimeDispatcher(
   return {
     handleTextTurn(input) {
       return runtimes[input.profile.name]?.handleTextTurn(input) ?? Promise.resolve(undefined);
+    },
+    handleActionReview(input) {
+      return (
+        runtimes[input.profile.name]?.handleActionReview?.(input) ?? Promise.resolve(undefined)
+      );
     }
   };
 }

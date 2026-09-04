@@ -1,4 +1,3 @@
-import { ChatDeepSeek } from "@langchain/deepseek";
 import { MemorySaver } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 
@@ -16,11 +15,10 @@ import {
 import { createAgentMemoryStore } from "../agent/create-agent-memory-store.js";
 import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
 import { createAgentRuntime } from "../agent/agent-runtime.js";
-import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
-import { createSdkAgentTurnRuntime } from "../agent/sdk-turn-runtime.js";
-import { createPostgresSdkAgentState, createSdkAgentState } from "../agent/sdk-state.js";
 import { createHelperModels, createHelperRuntime } from "../helper-agent/runtime.js";
 import { createHelperAgentState, createPostgresHelperAgentState } from "../helper-agent/state.js";
+import { createMainRuntime } from "../runtime/main-runtime.js";
+import { createProfileRuntimeDispatcher, type ProfileRuntime } from "../runtime/profile-runtime.js";
 import { createWikipediaSummarizer } from "../wikipedia/summarizer.js";
 import { InMemoryAgentJobStore, RedisAgentJobStore } from "../agent/jobs.js";
 import { createAzureAttachmentScanQueue } from "../attachments/scan-queue.js";
@@ -50,7 +48,6 @@ import {
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { createSearxngClient } from "../clients/searxng.js";
-import { createPublicPageReader } from "../clients/public-page.js";
 import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
 import { createPostgresPool, createPostgresRuntime } from "../db/postgres.js";
@@ -155,13 +152,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     ? createSearxngClient({
         baseUrl: config.webSearch.searxngBaseUrl,
         timeoutMs: config.webSearch.timeoutMs
-      })
-    : undefined;
-  const publicPageReader = webSearch
-    ? createPublicPageReader({
-        maxBytes: 512 * 1024,
-        maxRedirects: config.externalResources.maxRedirects,
-        timeoutMs: config.externalResources.downloadTimeoutMs
       })
     : undefined;
   const registrationInviteCodeStore = redis
@@ -321,44 +311,25 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     )
   );
   const applicationAgentRuntime = createAgentRuntime({ memoryStore, graph, accessStore });
-  const directTurnRuntime = createAgentTurnRuntime({
-    functionRegistry: registries.functions,
-    textMessageHandlers: registries.textMessages,
-    adminActionRouter,
-    adminActionRegistry: knowledgeAdminActionRegistry,
-    accessStore,
-    sessionStore,
-    agentRuntime: applicationAgentRuntime,
-    traceStore: agentTraceStore,
-    lastErrorStore,
-    lastRouteStore,
-    firstSuccessStore,
-    routeObserver,
-    completionObserver,
-    observabilityHmacKey: config.observability?.hmacKey
-  });
   const helperProfile = config.profiles.find(
     (profile) => profile.name === "helper" && profile.agent
   );
   let stopSdkStateCleanup: (() => void) | undefined;
   let helperStateLockPool: ReturnType<typeof createPostgresPool> | undefined;
-  let agentTurnRuntime = directTurnRuntime;
+  const runtimes: Partial<Record<string, ProfileRuntime>> = {};
+  if (config.profiles.some(({ name }) => name === "main")) {
+    runtimes.main = createMainRuntime({
+      handlers: registries.functions,
+      sessions: sessionStore,
+      jobs: agentJobStore
+    });
+  }
   if (helperProfile) {
-    let sdkState;
     let helperState;
     if (postgres?.pool) {
       if (!config.database) throw new Error("helper_postgres_config_required");
       const checkpointer = new PostgresSaver(postgres.pool);
       await checkpointer.setup();
-      const postgresState = createPostgresSdkAgentState({
-        pool: postgres.pool,
-        checkpointer,
-        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
-        ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
-      });
-      await postgresState.setup();
-      await postgresState.cleanupExpired();
-      sdkState = postgresState;
       helperStateLockPool = createPostgresPool(config.database);
       try {
         await helperStateLockPool.query("select 1");
@@ -383,11 +354,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
         throw error;
       }
     } else {
-      sdkState = createSdkAgentState({
-        checkpointer: new MemorySaver(),
-        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
-        ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
-      });
       helperState = createHelperAgentState({
         checkpointer: new MemorySaver(),
         hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
@@ -399,7 +365,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       model: config.llm.deepseekModel,
       timeoutMs: config.llm.deepseekTimeoutMs
     });
-    const stagedHelperRuntime = createHelperRuntime({
+    runtimes.helper = createHelperRuntime({
       ...helperModels,
       state: helperState,
       handlers: registries.functions,
@@ -410,27 +376,11 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       routeObserver,
       observabilityHmacKey: config.observability?.hmacKey
     });
-    void stagedHelperRuntime;
-    agentTurnRuntime = createSdkAgentTurnRuntime({
-      fallback: directTurnRuntime,
-      functionRegistry: registries.functions,
-      lastErrorStore,
-      model: new ChatDeepSeek({
-        apiKey: config.llm.deepseekApiKey,
-        model: config.llm.deepseekModel,
-        temperature: 0,
-        maxRetries: 1,
-        timeout: config.llm.deepseekTimeoutMs,
-        configuration: { baseURL: config.llm.deepseekBaseUrl }
-      }),
-      state: sdkState,
-      sessionStore,
-      webSearch,
-      pageReader: publicPageReader
-    });
   }
+  const profileRuntime = createProfileRuntimeDispatcher(runtimes);
   const app = createApp(config, {
     adminActionRegistry: knowledgeAdminActionRegistry,
+    adminActionRouter,
     postbackHandlers: registries.postbacks,
     textMessageHandlers: registries.textMessages,
     adminHandlers: registries.adminHandlers,
@@ -450,7 +400,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     conversationWindowStore,
     textGenerator: smartTalkPrimary,
     agentRuntime: applicationAgentRuntime,
-    agentTurnRuntime,
+    profileRuntime,
     diagnostics: createDependencyDiagnostics({
       config,
       postgres: postgres?.pool,

@@ -164,6 +164,7 @@ export function createActionExecutor(options: ActionExecutorOptions) {
             agentTool: true
           }
         );
+        result = { ...result, executedAction: action.capability };
       } catch {
         await deny("execution_unavailable");
         return { status: "unavailable" };

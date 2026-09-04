@@ -9,7 +9,10 @@ import {
   RedisRegistrationInviteCodeStore
 } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
-import type { FunctionCompletionObserver } from "../application/turn/completion-observer.js";
+import {
+  createFunctionCompletionObserver,
+  type FunctionCompletionObserver
+} from "../application/turn/completion-observer.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
@@ -20,6 +23,7 @@ import { InMemoryKnowledgeStore } from "../knowledge/store.js";
 import { signLineBody } from "../line-signature.js";
 import { runMediaSyncMigrations } from "../media-sync/migrations.js";
 import { PostgresMediaSyncStore } from "../media-sync/store.js";
+import { InMemoryFirstSuccessStore } from "../observability/first-success-store.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
@@ -6441,6 +6445,183 @@ describe("LINE entrance", () => {
     expect(route).not.toHaveBeenCalled();
     expect(handleNumericSelection).toHaveBeenCalledOnce();
     expect(replyText).not.toHaveBeenCalled();
+  });
+
+  it("dispatches only the owning requester through a pending group review without a wake word", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    const source = { type: "group" as const, groupId: "Cmain", userId: "Uowner" };
+    const sessions = new InMemorySessionStore();
+    await sessions.set({
+      id: "review-1",
+      type: "action_review",
+      profileName: helper.name,
+      requesterUserId: "Uowner",
+      source,
+      threadId: "thread-1",
+      interruptId: "interrupt-1",
+      toolName: "propose_save_memory",
+      argumentsHash: "hash",
+      policyKey: "policy",
+      resultJobId: "job-1",
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const handleTextTurn = vi.fn(async () => ({ ok: true, replyText: "review resumed" }));
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      sessionStore: sessions,
+      profileRuntime: { handleTextTurn },
+      accessStore: new InMemoryAccessStore({
+        principals: [
+          {
+            id: "helper-review-group",
+            profileName: helper.name,
+            type: "group",
+            principalId: "Cmain",
+            createdAt: "2026-09-05T00:00:00.000Z",
+            createdBy: "test"
+          }
+        ]
+      }),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const ownerBody = lineBody({
+      type: "message",
+      replyToken: "owner-token",
+      source,
+      message: { type: "text", text: "確認" }
+    });
+    const otherBody = lineBody({
+      type: "message",
+      replyToken: "other-token",
+      source: { ...source, userId: "Uother" },
+      message: { type: "text", text: "確認" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(ownerBody, helper.channelSecret),
+      payload: ownerBody
+    });
+    await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(otherBody, helper.channelSecret),
+      payload: otherBody
+    });
+
+    expect(handleTextTurn).toHaveBeenCalledOnce();
+    expect(handleTextTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: expect.objectContaining({ source }) })
+    );
+    expect(replyText).toHaveBeenCalledOnce();
+  });
+
+  it("observes a freshly committed helper review once and skips completion on replay", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    const handleActionReview = vi
+      .fn()
+      .mockResolvedValueOnce({
+        result: {
+          ok: true,
+          replyText: "已保存",
+          executedAction: "save_memory",
+          writePhase: "commit"
+        },
+        freshExecution: true
+      })
+      .mockResolvedValueOnce({
+        result: {
+          ok: true,
+          replyText: "已保存",
+          executedAction: "save_memory",
+          writePhase: "commit"
+        },
+        freshExecution: false
+      });
+    const routeObserver = vi.fn();
+    const completion = createFunctionCompletionObserver({
+      routeObserver,
+      firstSuccessStore: new InMemoryFirstSuccessStore(),
+      observabilityHmacKey: "test-observability-key"
+    });
+    const complete = vi.fn<FunctionCompletionObserver["complete"]>((input) =>
+      completion.complete(input)
+    );
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      profileRuntime: { handleTextTurn: vi.fn(), handleActionReview },
+      completionObserver: { complete },
+      routeObserver,
+      accessStore: new InMemoryAccessStore({
+        principals: [
+          {
+            id: "helper-review-user",
+            profileName: helper.name,
+            type: "user",
+            principalId: "Uowner",
+            createdAt: "2026-09-05T00:00:00.000Z",
+            createdBy: "test"
+          }
+        ]
+      }),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "postback",
+      replyToken: "review-token",
+      source: { type: "user", userId: "Uowner" },
+      postback: {
+        data: "action=helper_action_review&reviewId=review-1&resultJobId=job-1&decision=approve"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(body, helper.channelSecret),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(handleActionReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewId: "review-1",
+        resultJobId: "job-1",
+        text: "確認"
+      })
+    );
+    expect(replyText).toHaveBeenCalledWith("review-token", "已保存", undefined);
+
+    const replayBody = lineBody({
+      type: "postback",
+      replyToken: "review-token-replay",
+      source: { type: "user", userId: "Uowner" },
+      postback: {
+        data: "action=helper_action_review&reviewId=review-1&resultJobId=job-1&decision=approve"
+      }
+    });
+    await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(replayBody, helper.channelSecret),
+      payload: replayBody
+    });
+
+    expect(handleActionReview).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "save_memory", result: expect.any(Object) })
+    );
+    expect(
+      routeObserver.mock.calls.filter(([event]) => event.eventName === "write_committed")
+    ).toHaveLength(1);
+    expect(
+      routeObserver.mock.calls.filter(([event]) => event.eventName === "first_success")
+    ).toHaveLength(1);
+    expect(replyText).toHaveBeenLastCalledWith("review-token-replay", "已保存", undefined);
   });
 
   it("keeps healthz minimal", async () => {

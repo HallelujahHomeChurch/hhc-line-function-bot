@@ -1,4 +1,4 @@
-import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
+import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
 import type { AgentJobScope, AgentJobStore } from "../../agent/jobs.js";
 import { getFunctionDefinition } from "../../functions/definitions.js";
 import { buildPostbackQuickReply } from "../../line-reply.js";
@@ -130,7 +130,7 @@ export async function handlePostbackEvent(
 }
 
 export async function handleAgentTextTurnWithLongJob(input: {
-  runtime: AgentTurnRuntime;
+  runtime: ProfileRuntime;
   jobStore: AgentJobStore;
   profile: BotProfileConfig;
   event: LineEvent;
@@ -138,23 +138,24 @@ export async function handleAgentTextTurnWithLongJob(input: {
   requesterDisplayName?: string;
   requesterIsAdmin?: boolean;
   configuredFunctions?: readonly FunctionName[];
-  engagement?: string;
-  allowRouting: boolean;
   authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
   accountAdministrator?(): boolean;
+  completeResult?(result: FunctionExecutionResult): Promise<FunctionExecutionResult>;
 }): Promise<FunctionExecutionResult | undefined> {
-  const turnPromise = input.runtime.handleTextTurn({
-    profile: input.profile,
-    configuredFunctions: input.configuredFunctions,
-    event: input.event,
-    requestId: input.requestId,
-    requesterDisplayName: input.requesterDisplayName,
-    requesterIsAdmin: input.requesterIsAdmin,
-    engagement: input.engagement,
-    allowRouting: input.allowRouting,
-    authorizeFunctions: input.authorizeFunctions,
-    accountAdministrator: input.accountAdministrator
-  });
+  const turnPromise = input.runtime
+    .handleTextTurn({
+      profile: input.profile,
+      configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
+      event: input.event,
+      requestId: input.requestId,
+      requesterDisplayName: input.requesterDisplayName,
+      requesterIsAdmin: input.requesterIsAdmin,
+      authorizeFunctions: input.authorizeFunctions
+        ? async (names) => [...(await input.authorizeFunctions!(names))]
+        : undefined,
+      accountAdministrator: input.accountAdministrator
+    })
+    .then((result) => (result && input.completeResult ? input.completeResult(result) : result));
   const config = input.profile.longRunningJobs;
   if (!config?.enabled || config.inlineReplyTimeoutMs <= 0) {
     return turnPromise;

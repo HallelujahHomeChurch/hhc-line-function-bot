@@ -573,6 +573,7 @@ export class RedisSessionStore implements SessionStore {
 }
 
 function isInteractiveSession(session: ConversationSession): boolean {
+  if (session.type === "pending_function" && session.reviewId) return false;
   return [
     "pending_function",
     "pending_resolution",

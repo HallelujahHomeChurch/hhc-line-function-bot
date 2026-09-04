@@ -12,12 +12,16 @@ import {
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
 import type { RouteObserver } from "../application/contracts/routing.js";
 import type { AgentTraceStore } from "../agent/trace-store.js";
-import type { AgentJobStore } from "../agent/jobs.js";
+import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
 import { getFunctionDefinition } from "../functions/definitions.js";
 import { requestFailedMessage } from "../messages.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
 import { emitProductEvent, type ProductResultClass } from "../observability/product-events.js";
-import type { ProfileRuntime, ProfileTurnInput } from "../runtime/profile-runtime.js";
+import type {
+  ProfileActionReviewResult,
+  ProfileRuntime,
+  ProfileTurnInput
+} from "../runtime/profile-runtime.js";
 import { createActionExecutor } from "../runtime/action-executor.js";
 import type { SessionStore } from "../state/session-store.js";
 import type {
@@ -30,7 +34,11 @@ import type {
 import { createHelperAgent } from "./agent.js";
 import { createBudgetedFetch, runWithAgentBudget } from "./budget.js";
 import { createHelperReadTools } from "./read-tools.js";
-import { createActionReview, createActionReviewLifecycleObserver } from "./review.js";
+import {
+  createActionReview,
+  createActionReviewLifecycleObserver,
+  resumeHelperReview
+} from "./review.js";
 import type { HelperAgentState } from "./state.js";
 import { createHelperWriteTools } from "./write-tools.js";
 
@@ -75,7 +83,7 @@ export function createHelperModels(options: HelperModelOptions) {
 
 export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRuntime {
   const now = options.now ?? (() => new Date());
-  return {
+  const runtime: ProfileRuntime = {
     async handleTextTurn(input) {
       if (input.profile.name !== "helper" || !input.profile.agent) return undefined;
       const text = input.event.message?.text?.trim();
@@ -89,6 +97,23 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
       const startedAt = performance.now();
 
       try {
+        if (options.sessions && options.jobs && input.event.source.userId) {
+          const review = await options.sessions.findActionReview({
+            profileName: input.profile.name,
+            source: input.event.source,
+            requesterUserId: input.event.source.userId
+          });
+          if (review) {
+            return (
+              await runtime.handleActionReview?.({
+                ...input,
+                reviewId: review.id,
+                resultJobId: review.resultJobId,
+                text
+              })
+            )?.result;
+          }
+        }
         if (isResetMessage(text)) {
           await options.state.reset(threadId);
           return { ok: true, replyText: "這段短期對話已清除。" };
@@ -254,8 +279,146 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         await recordHelperObservability(options, input, metrics, result, startedAt, now());
         return result;
       }
+    },
+
+    async handleActionReview(input) {
+      if (
+        input.profile.name !== "helper" ||
+        !input.profile.agent ||
+        !options.sessions ||
+        !options.jobs ||
+        !input.event.source.userId
+      ) {
+        return undefined;
+      }
+      const threadId = options.state.threadId({
+        profileName: input.profile.name,
+        source: input.event.source
+      });
+      const scope = buildAgentJobScope(input.profile.name, input.event.source);
+      if (!threadId || !scope) return undefined;
+      const current = await options.sessions.findActionReview({
+        profileName: input.profile.name,
+        source: input.event.source,
+        requesterUserId: input.event.source.userId
+      });
+      if (!current || current.id !== input.reviewId || current.resultJobId !== input.resultJobId) {
+        return reviewJobResult(options.jobs, input.resultJobId, scope);
+      }
+      const profile = await effectiveProfile(input);
+      const context: FunctionHandlerContext = {
+        profile,
+        event: input.event,
+        requestId: input.requestId,
+        requesterDisplayName: input.requesterDisplayName,
+        requesterIsAdmin: input.accountAdministrator?.() || input.requesterIsAdmin
+      };
+      const authorize = async (name: FunctionName) =>
+        isUnrestrictedRead(input.profile, name) ||
+        Boolean((await input.authorizeFunctions?.([name]))?.includes(name));
+      const executor = createActionExecutor({
+        handlers: options.handlers,
+        jobs: options.jobs,
+        authorize: (name) => authorize(name),
+        currentPolicyKey: async () => helperPolicyKey(await effectiveProfile(input))
+      });
+      const outcomes: Array<Awaited<ReturnType<typeof executor.execute>>> = [];
+      const runMode = (await options.state.externalSheetMusicAllowed(threadId))
+        ? "sheet_music_research"
+        : "normal";
+      try {
+        const resumed = await runWithAgentBudget(runMode, () =>
+          options.state.run({
+            threadId,
+            policyKey: helperPolicyKey(profile),
+            source: input.event.source,
+            task: () => {
+              const readTools = createHelperReadTools({
+                context,
+                handlers: options.handlers,
+                authorize
+              });
+              const writeTools = createHelperWriteTools({
+                context,
+                executor,
+                review: current,
+                onResult: (outcome) => outcomes.push(outcome)
+              });
+              const agent = createHelperAgent({
+                checkpointer: options.state.checkpointer,
+                model: options.model,
+                summaryModel: options.summaryModel,
+                runMode,
+                systemPrompt: helperSystemPrompt(profile, input.event.source, now()),
+                tools: [...readTools, ...writeTools],
+                writeReview: writeTools.length > 0,
+                prepareWriteArguments: (name, args) => executor.prepare(name, args, context)
+              });
+              return resumeHelperReview({
+                sessions: options.sessions!,
+                jobs: options.jobs!,
+                reviewId: input.reviewId,
+                profileName: profile.name,
+                source: input.event.source,
+                requesterUserId: input.event.source.userId!,
+                text: input.text,
+                agent,
+                policyKey: helperPolicyKey(profile),
+                preview: async (toolName, args) =>
+                  (await executor.preview(toolName, args, context))?.replyText,
+                now: now(),
+                resultTtlMs: (profile.longRunningJobs?.resultTtlMinutes ?? 30) * 60_000,
+                getExecutionOutcome: () => outcomes.at(-1),
+                onLifecycle: createActionReviewLifecycleObserver({
+                  routeObserver: options.routeObserver,
+                  requestId: input.requestId,
+                  profileName: profile.name,
+                  source: input.event.source,
+                  hmacKey: options.observabilityHmacKey
+                })
+              });
+            }
+          })
+        );
+        if (resumed.status === "approved" || resumed.status === "review") {
+          return {
+            result: resumed.result,
+            freshExecution: resumed.status === "approved" && outcomes.at(-1)?.status === "approved"
+          };
+        }
+        if (resumed.status === "rejected") {
+          const replyText =
+            input.text.trim() === "取消" ? "已取消這次操作。" : lastReply(resumed.state);
+          return {
+            result: { ok: true, replyText: replyText || "已取消原本的操作，請重新提出。" },
+            freshExecution: false
+          };
+        }
+        return reviewJobResult(options.jobs, input.resultJobId, scope);
+      } catch (error) {
+        try {
+          await options.lastErrorStore?.record({
+            requestId: input.requestId,
+            occurredAt: now().toISOString(),
+            profileName: input.profile.name,
+            sourceType: input.event.source.type,
+            phase: "function",
+            errorName: error instanceof Error ? error.name : typeof error,
+            message: error instanceof Error ? error.message : String(error)
+          });
+        } catch {
+          // Review failures must keep their bounded response.
+        }
+        return reviewJobResult(
+          options.jobs,
+          input.resultJobId,
+          scope,
+          outcomes.at(-1)?.status === "approved"
+        );
+      }
     }
   };
+  return runtime;
 }
 
 class ReviewCreationFailure extends Error {
@@ -344,6 +507,35 @@ function isAuthoritativeResult(result: FunctionExecutionResult): boolean {
 
 function failed(requestId: string): FunctionExecutionResult {
   return { ok: false, replyText: requestFailedMessage(requestId) };
+}
+
+async function reviewJobResult(
+  jobs: AgentJobStore,
+  resultJobId: string,
+  scope: NonNullable<ReturnType<typeof buildAgentJobScope>>,
+  freshExecution = false
+): Promise<ProfileActionReviewResult> {
+  const job = await jobs.get(resultJobId, scope).catch(() => undefined);
+  if (job?.status === "completed" && job.result) return { result: job.result, freshExecution };
+  if (job?.status === "pending")
+    return {
+      result: { ok: true, replyText: "這項操作仍在處理中。" },
+      freshExecution: false
+    };
+  if (job?.status === "failed")
+    return {
+      result: { ok: true, replyText: "這項確認已結束，請重新提出。" },
+      freshExecution: false
+    };
+  return {
+    result: { ok: true, replyText: "找不到這項確認，可能已經過期，請重新提出。" },
+    freshExecution: false
+  };
+}
+
+function lastReply(state: unknown): string | undefined {
+  const messages = (state as { messages?: Array<{ text?: string }> }).messages;
+  return messages?.at(-1)?.text?.trim().slice(0, 5_000) || undefined;
 }
 
 interface HelperMetrics {

@@ -42,6 +42,7 @@ export interface PendingFunctionSession {
   requesterUserId?: string;
   source: LineSource;
   arguments: JsonRecord;
+  reviewId?: string;
   expiresAt: string;
 }
 
@@ -579,6 +580,7 @@ export class InMemorySessionStore implements SessionStore {
 }
 
 function isInteractiveSession(session: ConversationSession): boolean {
+  if (session.type === "pending_function" && session.reviewId) return false;
   return [
     "pending_function",
     "pending_resolution",

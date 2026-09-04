@@ -67,9 +67,8 @@ describe("helper action review", () => {
     await observe({ status: "execution_denied", action: "save_memory" });
     await observe({ status: "unavailable", action: "save_memory" });
 
-    expect(routeObserver).toHaveBeenCalledTimes(5);
+    expect(routeObserver).toHaveBeenCalledTimes(4);
     expect(routeObserver.mock.calls.map(([event]) => event.finalStatus)).toEqual([
-      "review_approved",
       "review_rejected",
       "review_expired_or_missing",
       "review_execution_denied",

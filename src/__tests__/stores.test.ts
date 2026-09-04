@@ -112,6 +112,53 @@ class FakeRedisClient {
 }
 
 describe("store factories", () => {
+  it("keeps reviewed arguments behind the sole interactive review", async () => {
+    const stores = [
+      new InMemorySessionStore({ now: () => new Date("2026-07-15T10:00:00.000Z") }),
+      new RedisSessionStore({
+        client: new FakeRedisClient(),
+        keyPrefix: "test-reviewed-arguments",
+        now: () => new Date("2026-07-15T10:00:00.000Z")
+      })
+    ];
+    for (const store of stores) {
+      const source = { type: "user" as const, userId: "U1" };
+      await store.set({
+        id: "review-1",
+        type: "action_review",
+        profileName: "main",
+        requesterUserId: "U1",
+        source,
+        threadId: "review-1:arguments",
+        interruptId: "review-1",
+        toolName: "update_own_profile",
+        argumentsHash: "hash",
+        policyKey: "policy",
+        resultJobId: "job-1",
+        expiresAt: "2026-07-15T10:05:00.000Z"
+      });
+      await store.set({
+        id: "review-1:arguments",
+        type: "pending_function",
+        action: "update_own_profile",
+        profileName: "main",
+        requesterUserId: "U1",
+        source,
+        arguments: { firstName: "Ray", lastName: "Self" },
+        reviewId: "review-1",
+        expiresAt: "2026-07-15T10:05:00.000Z"
+      });
+
+      await expect(
+        store.findActionReview({ profileName: "main", source, requesterUserId: "U1" })
+      ).resolves.toMatchObject({ id: "review-1" });
+      await expect(store.get("review-1:arguments")).resolves.toMatchObject({
+        reviewId: "review-1",
+        arguments: { firstName: "Ray", lastName: "Self" }
+      });
+    }
+  });
+
   it("atomically consumes a Redis selection once", async () => {
     const store = new RedisSessionStore({
       client: new FakeRedisClient(),

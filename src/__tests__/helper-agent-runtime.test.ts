@@ -174,6 +174,96 @@ describe("helper profile runtime", () => {
     expect(saveMemory).toHaveBeenCalledOnce();
   });
 
+  it("resumes a scoped review once and replays its durable result", async () => {
+    const model = new FakeToolCallingModel({
+      toolCalls: [[{ name: "propose_save_memory", args: { content: "remember" }, id: "write-1" }]]
+    });
+    vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const sessions = new InMemorySessionStore();
+    const jobs = new InMemoryAgentJobStore();
+    const durableState = createHelperAgentState({
+      checkpointer: new MemorySaver(),
+      hmacKey: "state-key"
+    });
+    let runs = 0;
+    const helperState: HelperAgentState = {
+      ...durableState,
+      async run(runInput) {
+        runs += 1;
+        const result = await durableState.run(runInput);
+        if (runs === 2) throw new Error("checkpoint persistence failed after commit");
+        return result;
+      }
+    };
+    const saveMemory = vi.fn(async (args: Record<string, unknown>) => ({
+      ok: true,
+      replyText: args.confirm === true ? "已保存" : "請確認保存",
+      writePhase: args.confirm === true ? ("commit" as const) : ("preview" as const)
+    }));
+    const writeProfile = {
+      ...profile(),
+      enabledFunctions: ["save_memory" as const],
+      permissionRequiredFunctions: ["save_memory" as const]
+    };
+    const routeObserver = vi.fn();
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: helperState,
+      handlers: { save_memory: saveMemory },
+      sessions,
+      jobs,
+      routeObserver
+    });
+    const turn = {
+      ...input("記住 remember"),
+      profile: writeProfile,
+      configuredFunctions: ["save_memory" as const],
+      authorizeFunctions: async () => ["save_memory" as const]
+    };
+
+    await expect(runtime.handleTextTurn(turn)).resolves.toMatchObject({ writePhase: "preview" });
+    const review = await sessions.findActionReview({
+      profileName: "helper",
+      source: turn.event.source,
+      requesterUserId: "LINE_USER_ID"
+    });
+    if (!review) throw new Error("missing review");
+    const wrongRequester = {
+      ...turn,
+      event: input("確認", { type: "user", userId: "OTHER_USER" }).event,
+      reviewId: review.id,
+      resultJobId: review.resultJobId,
+      text: "確認"
+    };
+    await expect(runtime.handleActionReview?.(wrongRequester)).resolves.toMatchObject({
+      result: { ok: true },
+      freshExecution: false
+    });
+    await expect(sessions.get(review.id)).resolves.toBeDefined();
+    expect(saveMemory).toHaveBeenCalledOnce();
+
+    const approve = {
+      ...turn,
+      event: input("確認").event,
+      reviewId: review.id,
+      resultJobId: review.resultJobId,
+      text: "確認"
+    };
+    await expect(runtime.handleActionReview?.(approve)).resolves.toMatchObject({
+      result: { writePhase: "commit", replyText: "已保存" },
+      freshExecution: true
+    });
+    await expect(runtime.handleActionReview?.(approve)).resolves.toMatchObject({
+      result: { writePhase: "commit", replyText: "已保存" },
+      freshExecution: false
+    });
+    expect(saveMemory).toHaveBeenCalledTimes(2);
+    expect(
+      routeObserver.mock.calls.filter(([event]) => event.eventName === "write_committed")
+    ).toHaveLength(0);
+  });
+
   it("clears prior tool evidence before the model runs after authorization is revoked", async () => {
     const model = new FakeToolCallingModel({
       toolCalls: [

@@ -21,18 +21,20 @@ export function createUpdateOwnProfileHandler(
       return { ok: true, replyText: messages.permissionDenied };
     }
     if (!argumentsValue.confirm) {
-      await storePendingFunctionQuery({
-        sessionStore: dependencies.sessionStore,
-        requestId: requestIdFactory(),
-        action: "update_own_profile",
-        arguments: {
-          firstName: argumentsValue.firstName,
-          lastName: argumentsValue.lastName,
-          confirm: true
-        },
-        context,
-        now: now()
-      });
+      if (!context.agentTool) {
+        await storePendingFunctionQuery({
+          sessionStore: dependencies.sessionStore,
+          requestId: requestIdFactory(),
+          action: "update_own_profile",
+          arguments: {
+            firstName: argumentsValue.firstName,
+            lastName: argumentsValue.lastName,
+            confirm: true
+          },
+          context,
+          now: now()
+        });
+      }
       return {
         ok: true,
         writePhase: "preview",

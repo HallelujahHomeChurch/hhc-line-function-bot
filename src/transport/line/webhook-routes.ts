@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { AdminActionRegistry } from "../../actions/admin-registry.js";
 import {
+  enabledNaturalLanguageAdminActionNames,
+  matchesGroupScopedNaturalLanguageAdminActionHint,
   matchesNaturalLanguageAdminActionHint,
   matchNaturalLanguageSystemActionHint
 } from "../../actions/catalog.js";
@@ -11,7 +13,6 @@ import type { ConfirmationStore } from "../../actions/confirmation-store.js";
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
 import { memoryCommandFunctionName, type AgentRuntime } from "../../agent/agent-runtime.js";
 import { matchExactWholeMessageIntent } from "../../functions/explicit-function-intent.js";
-import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
 import type { AgentJobStore } from "../../agent/jobs.js";
 import {
   type ConversationWindowScope,
@@ -54,6 +55,7 @@ import {
   providerIsAllowedForProfile
 } from "../../llm/provider-runtime.js";
 import { messages } from "../../messages.js";
+import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
 import { emitProductEvent } from "../../observability/product-events.js";
 import { resolveRequesterDisplayName } from "../../requester-personalization.js";
@@ -66,6 +68,7 @@ import type {
   AppConfig,
   AppDiagnostics,
   AdminHandlerRegistry,
+  AdminActionRouterPort,
   BotProfileConfig,
   FunctionExecutionResult,
   LineAccountLinkEvent,
@@ -96,6 +99,7 @@ import { handlePublicAccessCommand, registrationPrompt } from "./public-access-c
 
 export interface AppDependencies {
   adminActionRegistry: AdminActionRegistry;
+  adminActionRouter?: AdminActionRouterPort;
   postbackHandlers: PostbackHandlerRegistry;
   textMessageHandlers: TextMessageHandlerRegistry;
   adminHandlers: AdminHandlerRegistry;
@@ -113,7 +117,7 @@ export interface AppDependencies {
   webhookEventStore: WebhookEventStore;
   textGenerator?: TextGenerationProvider;
   agentRuntime?: AgentRuntime;
-  agentTurnRuntime: AgentTurnRuntime;
+  profileRuntime: ProfileRuntime;
   agentTraceStore: AgentTraceStore;
   sessionStore?: SessionStore;
   agentJobStore: AgentJobStore;
@@ -219,6 +223,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   const accessStore = deps.accessStore;
   const registrationInviteCodeStore = deps.registrationInviteCodeStore;
   const adminActionRegistry = deps.adminActionRegistry;
+  const adminActionRouter = deps.adminActionRouter;
   const lastErrorStore = deps.lastErrorStore;
   const lastRouteStore = deps.lastRouteStore;
   const rateLimiter = deps.rateLimiter;
@@ -229,7 +234,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   const agentTraceStore = deps.agentTraceStore;
   const agentJobStore = deps.agentJobStore;
   const conversationWindowStore = deps.conversationWindowStore;
-  const agentTurnRuntime = deps.agentTurnRuntime;
+  const profileRuntime = deps.profileRuntime;
 
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
@@ -253,6 +258,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         profile,
         config,
         adminActionRegistry,
+        adminActionRouter,
         deps.postbackHandlers,
         deps.textMessageHandlers,
         deps.adminHandlers,
@@ -266,7 +272,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         accessStore,
         registrationInviteCodeStore,
         diagnostics,
-        agentTurnRuntime,
+        profileRuntime,
         agentTraceStore,
         textGenerator,
         textFallbackGenerator,
@@ -291,6 +297,7 @@ async function handleWebhook(
   profile: BotProfileConfig,
   config: AppConfig,
   adminActionRegistry: AdminActionRegistry,
+  adminActionRouter: AdminActionRouterPort | undefined,
   postbackHandlers: PostbackHandlerRegistry,
   textMessageHandlers: TextMessageHandlerRegistry,
   adminHandlers: AdminHandlerRegistry,
@@ -304,7 +311,7 @@ async function handleWebhook(
   accessStore: AccessStore,
   registrationInviteCodeStore: RegistrationInviteCodeStore,
   diagnostics: AppDiagnostics,
-  agentTurnRuntime: AgentTurnRuntime,
+  profileRuntime: ProfileRuntime,
   agentTraceStore: AgentTraceStore,
   textGenerator: TextGenerationProvider | undefined,
   textFallbackGenerator: TextGenerationProvider | undefined,
@@ -893,7 +900,48 @@ async function handleWebhook(
         requesterDisplayName,
         agentJobStore,
         profile.enabledFunctions,
-        turnAccountAuthorization.allowedFunctions
+        turnAccountAuthorization.allowedFunctions,
+        profileRuntime.handleActionReview
+          ? async (review) => {
+              const reviewOutcome = await profileRuntime.handleActionReview!({
+                profile: review.profile,
+                event: review.event,
+                requestId: review.requestId,
+                requesterDisplayName: review.requesterDisplayName,
+                requesterIsAdmin,
+                configuredFunctions: [...profile.enabledFunctions],
+                authorizeFunctions: async (names) => [
+                  ...(await turnAccountAuthorization.allowedFunctions(names))
+                ],
+                accountAdministrator: turnAccountAuthorization.administrator,
+                reviewId: review.reviewId,
+                resultJobId: review.resultJobId,
+                text: review.text
+              });
+              if (!reviewOutcome) return { ok: true, replyText: messages.postbackUnsupported };
+              const reviewResult = reviewOutcome.result;
+              if (
+                reviewOutcome.freshExecution &&
+                reviewResult.writePhase === "commit" &&
+                reviewResult.executedAction
+              ) {
+                return completionObserver.complete({
+                  context: {
+                    profile: review.profile,
+                    event: review.event,
+                    requestId: review.requestId,
+                    requesterDisplayName: review.requesterDisplayName,
+                    requesterIsAdmin
+                  },
+                  action: reviewResult.executedAction,
+                  result: reviewResult,
+                  durationMs: elapsedMs(startedAt),
+                  clarificationCount: 0
+                });
+              }
+              return reviewResult;
+            }
+          : undefined
       );
       const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
       const postbackFunctionName = completionEligible ? capability : undefined;
@@ -1174,11 +1222,120 @@ async function handleWebhook(
       continue;
     }
 
+    if (requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
+      if (
+        event.source.type !== "user" &&
+        !matchesGroupScopedNaturalLanguageAdminActionHint(event.message.text)
+      ) {
+        await line.replyText(event.replyToken, "管理操作請到個人對話使用。", undefined);
+        continue;
+      }
+      if (!adminActionRouter) {
+        await line.replyText(event.replyToken, "目前無法辨識這個管理操作。", undefined);
+        continue;
+      }
+      const adminRouteStartedAt = Date.now();
+      const route = await adminActionRouter.route({
+        profileName: effectiveProfile.name,
+        text: event.message.text,
+        enabledActions: enabledNaturalLanguageAdminActionNames(),
+        source: event.source
+      });
+      const adminRouteDurationMs = elapsedMs(adminRouteStartedAt);
+      await emitRouteEvent(routeObserver, {
+        kind: "admin_action_route",
+        profileName: effectiveProfile.name,
+        sourceType: event.source.type,
+        requestId,
+        provider: route.provider,
+        lane: route.lane,
+        outcome: route.type,
+        action: route.type === "execute" ? route.action : undefined,
+        reason: route.type === "deny" ? route.reason : undefined,
+        durationMs: adminRouteDurationMs
+      });
+      await lastRouteStore.record({
+        requestId,
+        occurredAt: new Date().toISOString(),
+        profileName: effectiveProfile.name,
+        sourceType: event.source.type,
+        phase: "admin_route",
+        provider: route.provider,
+        outcome: route.type,
+        action: route.type === "execute" ? route.action : undefined,
+        reason: route.type === "deny" ? route.reason : undefined,
+        durationMs: adminRouteDurationMs
+      });
+      if (route.type !== "execute") {
+        await line.replyText(event.replyToken, "目前無法辨識這個管理操作。", undefined);
+        continue;
+      }
+      const adminResult = await adminActionRegistry.execute({
+        action: route.action,
+        profile: effectiveProfile,
+        event,
+        arguments: route.arguments,
+        requesterIsAdmin: true
+      });
+      await emitRouteEvent(routeObserver, {
+        kind: "admin_action_result",
+        profileName: effectiveProfile.name,
+        sourceType: event.source.type,
+        requestId,
+        action: route.action,
+        ok: adminResult.ok
+      });
+      await lastRouteStore.record({
+        requestId,
+        occurredAt: new Date().toISOString(),
+        profileName: effectiveProfile.name,
+        sourceType: event.source.type,
+        phase: "admin_action",
+        action: route.action,
+        ok: adminResult.ok
+      });
+      await line.replyText(
+        event.replyToken,
+        adminResult.replyText,
+        adminResult.quickReplies ? { quickReplies: adminResult.quickReplies } : undefined
+      );
+      continue;
+    }
+
     if (await shouldPromptManagedRegistration(profile, event, accessStore, requesterIsAdmin)) {
       await line.replyText(event.replyToken, registrationPrompt(profile, event), undefined);
       continue;
     }
 
+    const pendingActionReview =
+      sessionStore && event.source.userId
+        ? await sessionStore.findActionReview({
+            profileName: profile.name,
+            source: event.source,
+            requesterUserId: event.source.userId
+          })
+        : undefined;
+    if (/^\d+$/u.test(event.message.text.trim())) {
+      const numeric = await handleNumericSelection(
+        event,
+        effectiveProfile,
+        textMessageHandlers,
+        requesterDisplayName,
+        requesterIsAdmin,
+        turnAccountAuthorization.allowedFunctions,
+        profile.enabledFunctions
+      );
+      if (numeric.matched) {
+        if (numeric.result) {
+          await line.replyText(
+            event.replyToken,
+            numeric.result.replyText,
+            numeric.result.quickReplies ? { quickReplies: numeric.result.quickReplies } : undefined
+          );
+        }
+        continue;
+      }
+    }
     const groupEngagement =
       event.source.type === "group"
         ? classifyGroupEngagement(effectiveProfile, event.message)
@@ -1262,22 +1419,43 @@ async function handleWebhook(
     }
 
     const routingAllowed =
-      !groupEngagement || groupEngagementAllowsReply(groupEngagement) || conversationWindowActive;
+      Boolean(pendingActionReview) ||
+      !groupEngagement ||
+      groupEngagementAllowsReply(groupEngagement) ||
+      conversationWindowActive;
 
-    const agentTurnResult = await handleAgentTextTurnWithLongJob({
-      runtime: agentTurnRuntime,
-      jobStore: agentJobStore,
-      profile: effectiveProfile,
-      event,
-      requestId,
-      requesterDisplayName,
-      requesterIsAdmin,
-      configuredFunctions: profile.enabledFunctions,
-      engagement: conversationWindowActive ? "conversation_window" : groupEngagement?.kind,
-      allowRouting: routingAllowed,
-      authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-      accountAdministrator: turnAccountAuthorization.administrator
-    });
+    const agentTurnResult = routingAllowed
+      ? await handleAgentTextTurnWithLongJob({
+          runtime: profileRuntime,
+          jobStore: agentJobStore,
+          profile: effectiveProfile,
+          event,
+          requestId,
+          requesterDisplayName,
+          requesterIsAdmin,
+          configuredFunctions: profile.enabledFunctions,
+          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+          accountAdministrator: turnAccountAuthorization.administrator,
+          completeResult: (result) =>
+            result.executedAction &&
+            result.writePhase !== "preview" &&
+            !profileRuntime.observesCompletion
+              ? completionObserver.complete({
+                  context: {
+                    profile: effectiveProfile,
+                    event,
+                    requestId,
+                    requesterDisplayName,
+                    requesterIsAdmin
+                  },
+                  action: result.executedAction,
+                  result,
+                  durationMs: 0,
+                  clarificationCount: 0
+                })
+              : Promise.resolve(result)
+        })
+      : undefined;
     if (agentTurnResult) {
       await line.replyText(
         event.replyToken,
@@ -1305,6 +1483,41 @@ async function handleWebhook(
     allowedEvents: admittedEvents,
     ignored: ignoredCounts.size > 0 ? formatIgnoredSummary(ignoredCounts) : undefined
   });
+}
+
+async function handleNumericSelection(
+  event: LineEvent,
+  profile: BotProfileConfig,
+  handlers: TextMessageHandlerRegistry,
+  requesterDisplayName: string | undefined,
+  requesterIsAdmin: boolean,
+  authorizeFunctions: (names: readonly FunctionName[]) => Promise<readonly FunctionName[]>,
+  configuredFunctions: readonly FunctionName[]
+): Promise<{ matched: boolean; result?: FunctionExecutionResult }> {
+  const text = event.message?.text;
+  if (!text) return { matched: false };
+  for (const name of [
+    "ppt_numeric_selection",
+    "knowledge_numeric_selection",
+    "sheet_music_numeric_selection"
+  ]) {
+    const handler = handlers[name];
+    if (!handler) continue;
+    const capability = handler.capability;
+    if (capability && !configuredFunctions.includes(capability)) continue;
+    if (
+      capability &&
+      profile.permissionRequiredFunctions.includes(capability) &&
+      !(await authorizeFunctions([capability])).includes(capability)
+    ) {
+      continue;
+    }
+    const context = { profile, event, requesterDisplayName, requesterIsAdmin };
+    if (!(await handler.matches({ text }, context))) continue;
+    const result = await handler.handle({ text }, context);
+    return { matched: true, ...(result ? { result } : {}) };
+  }
+  return { matched: false };
 }
 
 function parseWebhookPayload(body: Buffer): LineWebhookPayload | null {
@@ -1475,6 +1688,17 @@ async function allowEvent(
       }
       if (await hasActiveConversationWindow(profile, event, conversationWindowStore)) {
         return { allowed: true, reason: "group_conversation_window_active" };
+      }
+      if (
+        sessionStore &&
+        event.source.userId &&
+        (await sessionStore.findActionReview({
+          profileName: profile.name,
+          source: event.source,
+          requesterUserId: event.source.userId
+        }))
+      ) {
+        return { allowed: true, reason: "group_action_review_active" };
       }
       if (
         sessionStore &&
