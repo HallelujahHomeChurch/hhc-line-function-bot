@@ -1,6 +1,6 @@
-# SDK agent harness 改造設計與分析
+# SDK agent harness 改造設計與分析（歷史文件）
 
-日期：2026-09-04。狀態：**設計已由使用者核定，待實作**。SDK mechanics probe 14/14通過，真實DeepSeek 4個synthetic情境各跑3次，工具選擇與寫入暫停均符合預期。實作尚未開始。證據見 [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)，分階段工作見 [implementation plan](../plans/2026-09-04-sdk-agent-redesign.md)。
+日期：2026-09-04。狀態：**歷史設計，已由 PR #76 實作；後續架構方向由 [helper agent greenfield runtime design](./2026-09-04-helper-agent-greenfield-runtime-design.md) 取代。** SDK mechanics probe 14/14通過，真實DeepSeek 4個synthetic情境各跑3次，工具選擇與寫入暫停均符合預期。證據見 [feasibility report](../research/2026-09-04-sdk-agent-feasibility.md)，原分階段工作見 [implementation plan](../plans/2026-09-04-sdk-agent-redesign.md)。
 
 分析基準：`origin/main` 的 `04d085646bb40f4386afa4243401542926b5f39b`。2026-09-04 再次比對遠端 main，仍為相同 commit。分析分支：`codex/hermes-agent-redesign-analysis`。
 
