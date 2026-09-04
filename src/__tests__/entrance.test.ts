@@ -12,8 +12,11 @@ import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import type { FunctionCompletionObserver } from "../application/turn/completion-observer.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
+import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
 import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
+import { createQueryKnowledgeHandler } from "../functions/query-knowledge.js";
+import { InMemoryKnowledgeStore } from "../knowledge/store.js";
 import { signLineBody } from "../line-signature.js";
 import { runMediaSyncMigrations } from "../media-sync/migrations.js";
 import { PostgresMediaSyncStore } from "../media-sync/store.js";
@@ -4009,16 +4012,45 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("target=group:Cnew");
   });
 
-  it("allows public direct profiles without static allowlists and blocks their groups", async () => {
-    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
-      type: "deny",
-      reason: "not_matched",
-      provider: "deepseek"
-    });
+  it("keeps public main direct functions provider-free and blocks group events without replying", async () => {
+    const deepSeekGenerate = vi.fn<TextGenerationProvider["completeText"]>();
+    const embedding = vi.fn().mockResolvedValue([[0]]);
     const replyText = vi.fn<LineReplyClient["replyText"]>();
-    const app = createTestApp(accessConfig(), {
-      router: { route },
-      accessStore: new InMemoryAccessStore(),
+    const app = createTestApp(providerFreeMainConfig(), {
+      textGenerator: { completeText: deepSeekGenerate },
+      textFallbackGenerator: { completeText: deepSeekGenerate },
+      textMessageHandlers: {
+        main_weekly_paper: createDownloadWeeklyPaperTextMessageHandler(
+          vi.fn().mockResolvedValue(
+            Response.json({
+              data: {
+                issueNumber: 1733,
+                locale: "zh-Hant",
+                issueDate: "2026-09-01",
+                title: "週報",
+                subtitle: "",
+                downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
+                downloadFileName: "1733-weekly.pdf",
+                publishedAt: "2026-09-01T00:00:00.000Z",
+                version: 1
+              },
+              error: null,
+              meta: {}
+            })
+          )
+        )
+      },
+      functionRegistry: {
+        query_knowledge: createQueryKnowledgeHandler({
+          store: new InMemoryKnowledgeStore(),
+          embedding: {
+            provider: "azure_openai",
+            model: "text-embedding-3-small",
+            dimensions: 1,
+            embed: embedding
+          }
+        })
+      },
       createLineReplyClient: () => ({ replyText })
     });
 
@@ -4026,11 +4058,11 @@ describe("LINE entrance", () => {
       type: "message",
       replyToken: "reply-token-1",
       source: { type: "user", userId: "Uany" },
-      message: { type: "text", text: "查服事表" }
+      message: { type: "text", text: "下載第 1733 期週報" }
     });
     const directRes = await app.inject({
       method: "POST",
-      url: "/api/line/webhook/main-public",
+      url: "/api/line/webhook/main",
       headers: signedHeaders(directBody, "main-secret"),
       payload: directBody
     });
@@ -4039,11 +4071,11 @@ describe("LINE entrance", () => {
       type: "message",
       replyToken: "reply-token-2",
       source: { type: "group", groupId: "Cblocked", userId: "Uany" },
-      message: { type: "text", text: "查服事表" }
+      message: { type: "text", text: "下載第 1733 期週報" }
     });
     const groupRes = await app.inject({
       method: "POST",
-      url: "/api/line/webhook/main-public",
+      url: "/api/line/webhook/main",
       headers: signedHeaders(groupBody, "main-secret"),
       payload: groupBody
     });
@@ -4051,8 +4083,15 @@ describe("LINE entrance", () => {
     expect(directRes.statusCode).toBe(200);
     expect(groupRes.statusCode).toBe(200);
     expect(groupRes.json()).toMatchObject({ ok: true, ignored: true, reason: "group_blocked" });
-    expect(route).toHaveBeenCalledOnce();
     expect(replyText).toHaveBeenCalledOnce();
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token-1",
+      expect.stringContaining("第 1733 期週報"),
+      expect.anything()
+    );
+    expect(replyText.mock.calls.some(([token]) => token === "reply-token-2")).toBe(false);
+    expect(deepSeekGenerate).not.toHaveBeenCalled();
+    expect(embedding).not.toHaveBeenCalled();
   });
 
   it.each([
