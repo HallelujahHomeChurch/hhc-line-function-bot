@@ -25,13 +25,13 @@ Read these first when starting work:
 
 - One service can host multiple LINE bot profiles on canonical webhook paths, for example `/api/line/webhook/helper`.
 - Profile names must be lowercase URL-safe names, and `webhookPath` must equal `/api/line/webhook/{profileName}`. Do not reintroduce `/line/{profile}/webhook`.
-- Each profile has its own LINE credential references, access policy, wake-word behavior, enabled functions, and bootstrap `adminUserId`.
+- Each profile has its own LINE credential references, access policy, wake-word behavior, and enabled functions.
 - The intended split is:
   - `helper`: managed direct users/groups, registration enabled, DeepSeek SDK agent.
   - `main`: public direct users, groups blocked, registration disabled, provider-free, with public Weekly Paper download and Account-authorized own-profile updates.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
-- `adminUserId` is the single bootstrap superadmin. Legacy `adminUserIds`, `allowedUserIds`, and `allowedGroupIds` should not be reintroduced.
-- Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv`, `channelAccessTokenEnv`, and `adminUserIdEnv`; do not put real LINE credentials or bootstrap user IDs in the file.
+- Administrator authority comes from a current linked Account administrator role and is rechecked for each protected operation. Legacy bootstrap or allowlist fields should not be reintroduced.
+- Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv` and `channelAccessTokenEnv`; do not put real LINE credentials or user IDs in the file.
 - The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`; use API keys from ACA/local secrets for remote providers.
 - Remote API providers such as `deepseek` are profile-scoped; `main` intentionally keeps an empty provider allowlist.
 - Helper persona and memory rules come from `config/agents/helper/PERSONA.md` and `MEMORY.md`, loaded through restricted profile-relative paths. Treat them as read-only prompt policy and never append runtime content. Keep house-church quote/golden-sentence behavior out of the persona; it should become a separate function if needed.
@@ -104,7 +104,7 @@ The retired SDK compatibility wrapper, turn-state engine, generic pending/slot/r
 ## Access And Admin Model
 
 - Ordinary users should use natural language, `/registry <code>`, `/help`, or `/whoami`.
-- Slash admin commands are gated by `adminUserId` or DB-managed admin principals.
+- Slash admin commands are gated by the linked Account administrator role or DB-managed admin principals.
 - Natural-language admin actions are gated the same way and must not run in groups.
 - `adminDirectOnly` means admin commands should only run from direct chat except explicitly group-scoped commands.
 - Registration is invite-code based:

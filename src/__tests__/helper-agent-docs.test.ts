@@ -40,4 +40,11 @@ describe("helper agent operational documentation", () => {
       expect(text).not.toContain(retired);
     }
   });
+
+  it("documents linked Account administrator authority without legacy bootstrap fields", async () => {
+    const text = (await Promise.all(documents.map((path) => readFile(path, "utf8")))).join("\n");
+
+    expect(text).toContain("linked Account administrator");
+    expect(text).not.toMatch(/adminUserId(?:Env)?/u);
+  });
 });
