@@ -20,11 +20,13 @@ export interface HelperToolGatewayOptions {
   onDomainResult?: (
     name: CapabilityName,
     args: JsonRecord,
-    result: FunctionExecutionResult
+    result: FunctionExecutionResult,
+    invocationOrder: number
   ) => void;
 }
 
 export function createHelperToolGateway(options: HelperToolGatewayOptions) {
+  let nextInvocationOrder = 0;
   return {
     async execute(
       name: CapabilityName,
@@ -32,6 +34,7 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
       sourceType: HelperToolSourceType
     ): Promise<HelperToolResult> {
       takeToolCall();
+      const invocationOrder = ++nextInvocationOrder;
       const definition = getFunctionDefinition(name);
       const parsedArgs = definition
         ? validatedArguments(definition.argumentSchema, args)
@@ -64,7 +67,7 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
       } catch {
         return unavailable(sourceType);
       }
-      options.onDomainResult?.(name, parsedArgs, result);
+      options.onDomainResult?.(name, parsedArgs, result, invocationOrder);
       return projectToolResult(result, sourceType);
     }
   };

@@ -144,7 +144,7 @@ describe("helper profile runtime", () => {
     );
   });
 
-  it("records only the authoritative helper resource result with validated arguments", async () => {
+  it("selects and records the latest-invoked authoritative result despite reverse completion", async () => {
     const model = new FakeToolCallingModel({
       toolCalls: [
         [
@@ -156,7 +156,8 @@ describe("helper profile runtime", () => {
     });
     vi.spyOn(model, "bindTools").mockReturnValue(model);
     const resourceMemory: ResourceMemoryObserver = { afterFunctionResult: vi.fn() };
-    const presentation = vi.fn(async () => ({
+    let resolvePresentation!: (result: Awaited<ReturnType<typeof presentationResult>>) => void;
+    const presentationResult = async () => ({
       ok: true,
       replyText: "投影片完成",
       agentResult: { status: "success" as const, replyText: "投影片完成" },
@@ -165,7 +166,13 @@ describe("helper profile runtime", () => {
         title: "青年聚會.pptx",
         storage: { provider: "graph" as const, driveId: "drive", itemId: "ppt" }
       }
-    }));
+    });
+    const presentation = vi.fn(
+      () =>
+        new Promise<Awaited<ReturnType<typeof presentationResult>>>((resolve) => {
+          resolvePresentation = resolve;
+        })
+    );
     const sheetMusic = vi.fn(async () => ({
       ok: true,
       replyText: "歌譜完成",
@@ -184,7 +191,11 @@ describe("helper profile runtime", () => {
       resourceMemory
     });
 
-    await runtime.handleTextTurn(input("找青年聚會投影片和奇異恩典歌譜"));
+    const turn = runtime.handleTextTurn(input("找青年聚會投影片和奇異恩典歌譜"));
+    await vi.waitFor(() => expect(sheetMusic).toHaveBeenCalledOnce());
+    resolvePresentation(await presentationResult());
+
+    await expect(turn).resolves.toMatchObject({ replyText: "歌譜完成" });
 
     expect(resourceMemory.afterFunctionResult).toHaveBeenCalledOnce();
     expect(resourceMemory.afterFunctionResult).toHaveBeenCalledWith(
@@ -192,6 +203,54 @@ describe("helper profile runtime", () => {
         action: "find_sheet_music",
         arguments: { query: "奇異恩典" },
         result: expect.objectContaining({ replyText: "歌譜完成" })
+      })
+    );
+  });
+
+  it("keeps an earlier authoritative result when a later invocation is non-authoritative", async () => {
+    const model = new FakeToolCallingModel({
+      toolCalls: [
+        [
+          { name: "find_presentation", args: { query: "青年聚會" }, id: "ppt-1" },
+          { name: "find_sheet_music", args: { query: "未知歌名" }, id: "sheet-1" }
+        ],
+        []
+      ]
+    });
+    vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const resourceMemory: ResourceMemoryObserver = { afterFunctionResult: vi.fn() };
+    const presentation = vi.fn(async () => ({
+      ok: true,
+      replyText: "投影片完成",
+      agentResult: { status: "success" as const, replyText: "投影片完成" },
+      agentResource: {
+        resourceType: "presentation" as const,
+        title: "青年聚會.pptx",
+        storage: { provider: "graph" as const, driveId: "drive", itemId: "ppt" }
+      }
+    }));
+    const sheetMusic = vi.fn(async () => ({
+      ok: true,
+      replyText: "找不到歌譜",
+      agentResult: { status: "not_found" as const, replyText: "找不到歌譜" }
+    }));
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: state(),
+      handlers: { find_ppt_slides: presentation, find_sheet_music: sheetMusic },
+      resourceMemory
+    });
+
+    await expect(
+      runtime.handleTextTurn(input("找青年聚會投影片和未知歌名歌譜"))
+    ).resolves.toMatchObject({ replyText: "投影片完成" });
+
+    expect(resourceMemory.afterFunctionResult).toHaveBeenCalledOnce();
+    expect(resourceMemory.afterFunctionResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "find_ppt_slides",
+        arguments: { query: "青年聚會" }
       })
     );
   });

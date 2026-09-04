@@ -186,6 +186,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           name: CapabilityName;
           args: Record<string, unknown>;
           result: FunctionExecutionResult;
+          invocationOrder: number;
         }> = [];
         const authorize = input.authorizeFunctions
           ? async (name: CapabilityName) =>
@@ -210,7 +211,8 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
               context,
               handlers: options.handlers,
               authorize,
-              onDomainResult: (name, args, result) => domainResults.push({ name, args, result })
+              onDomainResult: (name, args, result, invocationOrder) =>
+                domainResults.push({ name, args, result, invocationOrder })
             });
             const writeTools =
               options.sessions && actionExecutor
@@ -308,9 +310,15 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           return turn.result;
         }
         const agentState = turn.state;
-        const authoritative = [...domainResults]
-          .reverse()
-          .find(({ result }) => isAuthoritativeResult(result));
+        let authoritative: (typeof domainResults)[number] | undefined;
+        for (const entry of domainResults) {
+          if (
+            isAuthoritativeResult(entry.result) &&
+            (!authoritative || entry.invocationOrder > authoritative.invocationOrder)
+          ) {
+            authoritative = entry;
+          }
+        }
         const replyText = agentState.messages.at(-1)?.text.trim();
         const result =
           authoritative?.result ??

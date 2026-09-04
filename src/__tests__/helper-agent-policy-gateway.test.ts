@@ -55,6 +55,36 @@ function successfulScheduleResult(): FunctionExecutionResult {
 }
 
 describe("helper tool policy gateway", () => {
+  it("assigns callback order at invocation time without serializing handlers", async () => {
+    let releaseFirst!: (result: FunctionExecutionResult) => void;
+    const firstResult = new Promise<FunctionExecutionResult>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const handler = vi.fn(async (args: Record<string, unknown>) =>
+      args.query === "first" ? firstResult : successfulScheduleResult()
+    );
+    const observed: Array<{ query: unknown; order: number }> = [];
+    const gateway = createHelperToolGateway({
+      handlers: { query_schedule: handler },
+      context: helperContext(),
+      onDomainResult: (_name, args, _result, order) => {
+        observed.push({ query: args.query, order });
+      }
+    });
+
+    const first = gateway.execute("query_schedule", { query: "first" }, "official");
+    const second = gateway.execute("query_schedule", { query: "second" }, "official");
+    await second;
+    expect(observed).toEqual([{ query: "second", order: 2 }]);
+    releaseFirst(successfulScheduleResult());
+    await first;
+
+    expect(observed).toEqual([
+      { query: "second", order: 2 },
+      { query: "first", order: 1 }
+    ]);
+  });
+
   it("rechecks authorization immediately before every handler call", async () => {
     const handler = vi.fn(async () => successfulScheduleResult());
     const gateway = createHelperToolGateway({
