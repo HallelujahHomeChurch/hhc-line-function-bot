@@ -38,7 +38,7 @@ export function createSaveResourceHandler(options: SaveResourceFunctionOptions):
     const visibility = args.visibility ?? "private";
 
     if (!args.confirm) {
-      if (options.sessionStore) {
+      if (options.sessionStore && !context.agentTool) {
         await storePendingFunctionQuery({
           sessionStore: options.sessionStore,
           requestId: requestIdFactory(),
@@ -57,6 +57,7 @@ export function createSaveResourceHandler(options: SaveResourceFunctionOptions):
       }
       return {
         ok: true,
+        writePhase: "preview",
         replyText: [
           "請確認要保存這份連結資源：",
           `名稱：${title}`,

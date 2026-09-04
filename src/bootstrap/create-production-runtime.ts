@@ -392,6 +392,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       ...helperModels,
       state: helperState,
       handlers: registries.functions,
+      sessions: sessionStore,
       lastErrorStore,
       traceStore: agentTraceStore,
       routeObserver,

@@ -55,6 +55,7 @@ describe("kernel Redis integration environment", () => {
       "redis/webhook/cross-replica-deduplication",
       "redis/cache/cross-replica-invalidation",
       "redis/confirmation/actor-safe-consume",
+      "redis/review/atomic-owner-consume",
       "redis/session/group-requester-isolation",
       "redis/session/atomic-interactive-replacement"
     ]);

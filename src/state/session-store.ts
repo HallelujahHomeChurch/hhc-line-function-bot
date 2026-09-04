@@ -140,6 +140,23 @@ export interface ExternalSheetMusicImportSession {
   expiresAt: string;
 }
 
+export type HelperWriteToolName =
+  "propose_save_schedule" | "propose_save_memory" | "propose_save_resource" | "update_own_profile";
+
+export interface ActionReviewSession {
+  id: string;
+  type: "action_review";
+  profileName: string;
+  requesterUserId: string;
+  source: LineSource;
+  threadId?: string;
+  interruptId?: string;
+  toolName: HelperWriteToolName;
+  argumentsHash: string;
+  policyKey: string;
+  expiresAt: string;
+}
+
 export type ConversationSession =
   | PptSelectionSession
   | SelectionSession
@@ -149,7 +166,8 @@ export type ConversationSession =
   | PendingResolutionSession
   | PendingCapabilityResolutionSession
   | ExternalSearchConsentSession
-  | ExternalSheetMusicImportSession;
+  | ExternalSheetMusicImportSession
+  | ActionReviewSession;
 export type ConversationSessionType = ConversationSession["type"];
 
 export interface SessionStoreSummary {
@@ -173,6 +191,13 @@ export interface PendingFunctionLookup extends PptSelectionLookup {
 
 export interface ExternalSearchConsentLookup extends PptSelectionLookup {
   action: string;
+}
+
+export interface ActionReviewLookup {
+  id: string;
+  profileName: string;
+  source: LineSource;
+  requesterUserId: string;
 }
 
 export interface SessionStore {
@@ -200,6 +225,7 @@ export interface SessionStore {
   findExternalSheetMusicImport(
     lookup: PptSelectionLookup
   ): Promise<ExternalSheetMusicImportSession | undefined>;
+  takeActionReview(lookup: ActionReviewLookup): Promise<ActionReviewSession | undefined>;
   summary(): Promise<SessionStoreSummary>;
   clear(): Promise<number>;
 }
@@ -376,6 +402,20 @@ export class InMemorySessionStore implements SessionStore {
     return session;
   }
 
+  async takeActionReview(lookup: ActionReviewLookup): Promise<ActionReviewSession | undefined> {
+    const session = this.liveSession(this.sessions.get(lookup.id));
+    if (
+      session?.type !== "action_review" ||
+      session.profileName !== lookup.profileName ||
+      session.requesterUserId !== lookup.requesterUserId ||
+      !sourceMatchesExact(session.source, lookup.source)
+    ) {
+      return undefined;
+    }
+    this.sessions.delete(session.id);
+    return session;
+  }
+
   async promoteUploadIntent(
     pending: PendingAttachmentSession
   ): Promise<UploadIntentPromotion | undefined> {
@@ -530,7 +570,8 @@ function isInteractiveSession(session: ConversationSession): boolean {
     "pending_resolution",
     "pending_capability_resolution",
     "pending_attachment",
-    "upload_intent"
+    "upload_intent",
+    "action_review"
   ].includes(session.type);
 }
 
@@ -548,4 +589,13 @@ function sourceMatches(expected: LineSource, actual: LineSource): boolean {
     default:
       return false;
   }
+}
+
+function sourceMatchesExact(expected: LineSource, actual: LineSource): boolean {
+  return (
+    expected.type === actual.type &&
+    expected.userId === actual.userId &&
+    expected.groupId === actual.groupId &&
+    expected.roomId === actual.roomId
+  );
 }

@@ -40,6 +40,9 @@ export const updateOwnProfileArgumentsSchema = z
     cancel: z.boolean().optional()
   })
   .strip();
+export const updateOwnProfileReviewArgumentsSchema = updateOwnProfileArgumentsSchema
+  .omit({ confirm: true, cancel: true })
+  .strict();
 export const scheduleTypeSchema = z
   .string()
   .trim()

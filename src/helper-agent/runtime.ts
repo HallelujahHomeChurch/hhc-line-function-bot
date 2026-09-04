@@ -17,6 +17,8 @@ import { requestFailedMessage } from "../messages.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
 import { emitProductEvent, type ProductResultClass } from "../observability/product-events.js";
 import type { ProfileRuntime, ProfileTurnInput } from "../runtime/profile-runtime.js";
+import { createActionExecutor } from "../runtime/action-executor.js";
+import type { SessionStore } from "../state/session-store.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
@@ -27,13 +29,16 @@ import type {
 import { createHelperAgent } from "./agent.js";
 import { createBudgetedFetch, runWithAgentBudget } from "./budget.js";
 import { createHelperReadTools } from "./read-tools.js";
+import { createActionReview } from "./review.js";
 import type { HelperAgentState } from "./state.js";
+import { createHelperWriteTools } from "./write-tools.js";
 
 export interface HelperRuntimeOptions {
   model: CreateAgentParams["model"];
   summaryModel: SummarizationMiddlewareConfig["model"];
   state: HelperAgentState;
   handlers: FunctionRegistry;
+  sessions?: SessionStore;
   lastErrorStore?: LastErrorStore;
   traceStore?: AgentTraceStore;
   routeObserver?: RouteObserver;
@@ -95,32 +100,44 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           requesterIsAdmin: input.accountAdministrator?.() || input.requesterIsAdmin
         };
         const domainResults: Array<{ name: FunctionName; result: FunctionExecutionResult }> = [];
-        const tools = createHelperReadTools({
+        const authorize = input.authorizeFunctions
+          ? async (name: FunctionName) =>
+              isUnrestrictedRead(input.profile, name) ||
+              (await input.authorizeFunctions!([name])).includes(name)
+          : undefined;
+        const readTools = createHelperReadTools({
           context,
           handlers: options.handlers,
-          authorize: input.authorizeFunctions
-            ? async (name) =>
-                isUnrestrictedRead(input.profile, name) ||
-                (await input.authorizeFunctions!([name])).includes(name)
-            : undefined,
+          authorize,
           onDomainResult: (name, result) => domainResults.push({ name, result })
         });
+        const actionExecutor = createActionExecutor({
+          handlers: options.handlers,
+          authorize: async (name) => (await authorize?.(name)) === true,
+          currentPolicyKey: async () => helperPolicyKey(await effectiveProfile(input))
+        });
+        const writeTools = options.sessions
+          ? createHelperWriteTools({ context, executor: actionExecutor })
+          : [];
+        const tools = [...readTools, ...writeTools];
         const runMode = (await options.state.externalSheetMusicAllowed(threadId))
           ? "sheet_music_research"
           : "normal";
-        const agentState = await runWithAgentBudget(runMode, () =>
+        const turn = await runWithAgentBudget(runMode, () =>
           options.state.run({
             threadId,
             policyKey: helperPolicyKey(profile),
             source: input.event.source,
-            task: () =>
-              createHelperAgent({
+            task: async () => {
+              const state = await createHelperAgent({
                 checkpointer: options.state.checkpointer,
                 model: options.model,
                 summaryModel: options.summaryModel,
                 runMode,
                 systemPrompt: helperSystemPrompt(profile, input.event.source, now()),
-                tools
+                tools,
+                writeReview: writeTools.length > 0,
+                prepareWriteArguments: (name, args) => actionExecutor.prepare(name, args, context)
               }).invoke(
                 { messages: [{ role: "user", content: text }] },
                 {
@@ -128,9 +145,48 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                   recursionLimit: 50,
                   callbacks: metrics.callbacks as never
                 }
-              )
+              );
+              if (!options.sessions || !("__interrupt__" in state)) {
+                return { kind: "complete" as const, state };
+              }
+              const requesterUserId = input.event.source.userId;
+              if (!requesterUserId) return { kind: "denied" as const };
+              const review = await createActionReview({
+                state,
+                sessions: options.sessions,
+                profileName: profile.name,
+                source: input.event.source,
+                requesterUserId,
+                threadId,
+                policyKey: helperPolicyKey(profile),
+                now: now(),
+                preview: async (toolName, args) =>
+                  (await actionExecutor.preview(toolName, args, context))?.replyText
+              });
+              return review.status === "review"
+                ? { kind: "review" as const, result: review.result }
+                : { kind: "denied" as const };
+            }
           })
         );
+        if (turn.kind === "review") {
+          await recordHelperObservability(options, input, metrics, turn.result, startedAt, now());
+          await emitProductEvent(options.routeObserver, {
+            eventName: "write_previewed",
+            requestId: input.requestId,
+            profileName: profile.name,
+            source: input.event.source,
+            hmacKey: options.observabilityHmacKey,
+            action: turn.result.executedAction,
+            resultClass: "success",
+            finalStatus: "review"
+          });
+          return turn.result;
+        }
+        if (turn.kind === "denied") {
+          return { ok: true, replyText: "這項操作目前無法建立確認，請重新提出。" };
+        }
+        const agentState = turn.state;
         const authoritative = [...domainResults]
           .reverse()
           .map(({ result }) => result)
@@ -200,7 +256,13 @@ export function helperPolicyKey(profile: BotProfileConfig): string {
         permissionRequiredFunctions: [...profile.permissionRequiredFunctions].sort(),
         persona: profile.agent?.personaPrompt,
         memoryPolicy: profile.agent?.memoryPolicyPrompt,
-        contract: "helper-read-tools-v1"
+        contract: "helper-tools-v2",
+        scheduleDomains: profile.schedulePolicy?.domains?.map((domain) => ({
+          key: domain.key,
+          revision: domain.revision,
+          binding: domain.binding,
+          writePolicy: domain.writePolicy
+        }))
       })
     )
     .digest("hex");

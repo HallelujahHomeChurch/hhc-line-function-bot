@@ -84,15 +84,17 @@ export function createSaveScheduleMemoryHandler(
 
     const domainResolution = resolveSaveScheduleDomain({ args, context, content });
     if (domainResolution.status === "ambiguous") {
-      await storePendingResolution({
-        sessionStore: options.sessionStore,
-        requestId: requestIdFactory(),
-        capability: action,
-        groundedArguments: args,
-        candidates: domainResolution.domains.map(scheduleDomainCandidate),
-        context,
-        now: now()
-      });
+      if (!context.agentTool) {
+        await storePendingResolution({
+          sessionStore: options.sessionStore,
+          requestId: requestIdFactory(),
+          capability: action,
+          groundedArguments: args,
+          candidates: domainResolution.domains.map(scheduleDomainCandidate),
+          context,
+          now: now()
+        });
+      }
       const choices = domainResolution.domains.map(({ displayName }) => displayName);
       return {
         ok: true,
@@ -166,7 +168,7 @@ export function createSaveScheduleMemoryHandler(
               schedule.scheduleType === parsed.scheduleType && schedule.periodKey === periodKey
           )
         : undefined;
-      if (options.sessionStore) {
+      if (options.sessionStore && !context.agentTool) {
         await storePendingFunctionQuery({
           sessionStore: options.sessionStore,
           requestId: requestIdFactory(),
@@ -186,6 +188,7 @@ export function createSaveScheduleMemoryHandler(
 
       return {
         ok: true,
+        writePhase: "preview",
         replyText: formatSchedulePreview(parsed, existing?.title),
         quickReplies: [
           { label: "保存", action: { type: "message", label: "保存", text: "保存" } },
@@ -294,6 +297,7 @@ async function handleScheduleMutation(input: {
     });
     return {
       ok: true,
+      ...(added ? { writePhase: "commit" as const } : {}),
       replyText: added ? "已新增這筆服事。" : "找不到同月份的服事表，請先保存完整服事表。"
     };
   }
@@ -328,7 +332,11 @@ async function handleScheduleMutation(input: {
       deletedBy: context.event.source.userId,
       isAdmin: true
     });
-    return { ok: true, replyText: removed ? "已刪除這份服事表。" : "服事表已變更，請重新查詢。" };
+    return {
+      ok: true,
+      ...(removed ? { writePhase: "commit" as const } : {}),
+      replyText: removed ? "已刪除這份服事表。" : "服事表已變更，請重新查詢。"
+    };
   }
 
   const targetQuery = args.targetQuery?.trim();
@@ -377,7 +385,11 @@ async function handleScheduleMutation(input: {
       entryId: current.id,
       changes: args.changes
     });
-    return { ok: true, replyText: result ? "已更新這筆服事。" : "服事項目已變更，請重新查詢。" };
+    return {
+      ok: true,
+      ...(result ? { writePhase: "commit" as const } : {}),
+      replyText: result ? "已更新這筆服事。" : "服事項目已變更，請重新查詢。"
+    };
   }
 
   if (args.operation === "delete_entry") {
@@ -392,7 +404,11 @@ async function handleScheduleMutation(input: {
       profileName: context.profile.name,
       entryId: current.id
     });
-    return { ok: true, replyText: removed ? "已刪除這筆服事。" : "服事項目已變更，請重新查詢。" };
+    return {
+      ok: true,
+      ...(removed ? { writePhase: "commit" as const } : {}),
+      replyText: removed ? "已刪除這筆服事。" : "服事項目已變更，請重新查詢。"
+    };
   }
 
   return { ok: true, replyText: "目前不支援這項服事表操作。" };
@@ -406,7 +422,7 @@ async function storeMutationConfirmation(input: {
   action: FunctionName;
   requestIdFactory: () => string;
 }): Promise<void> {
-  if (!input.options.sessionStore) {
+  if (!input.options.sessionStore || input.context.agentTool) {
     return;
   }
   await storePendingFunctionQuery({
@@ -422,6 +438,7 @@ async function storeMutationConfirmation(input: {
 function mutationPreview(lines: string[], confirmLabel: string): FunctionExecutionResult {
   return {
     ok: true,
+    writePhase: "preview",
     replyText: lines.join("\n"),
     quickReplies: [
       {

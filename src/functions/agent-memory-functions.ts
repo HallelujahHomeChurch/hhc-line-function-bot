@@ -34,7 +34,7 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
     const visibility =
       context.event.source.type === "group" && args.visibility === "group" ? "group" : "private";
     if (!args.confirm) {
-      if (options.sessionStore) {
+      if (options.sessionStore && !context.agentTool) {
         await storePendingFunctionQuery({
           sessionStore: options.sessionStore,
           requestId: requestIdFactory(),
@@ -46,6 +46,7 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
       }
       return {
         ok: true,
+        writePhase: "preview",
         replyText: [
           "請確認要記住這段資訊：",
           `名稱：${title}`,

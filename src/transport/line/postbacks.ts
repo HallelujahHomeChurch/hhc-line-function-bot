@@ -19,6 +19,17 @@ export interface HandledPostbackEvent {
   profile?: BotProfileConfig;
 }
 
+export interface HelperReviewPostbackHandler {
+  (input: {
+    reviewId: string;
+    text: "確認" | "取消";
+    profile: BotProfileConfig;
+    event: LineEvent;
+    requestId: string;
+    requesterDisplayName?: string;
+  }): Promise<FunctionExecutionResult>;
+}
+
 export async function handlePostbackEvent(
   event: LineEvent,
   profile: BotProfileConfig,
@@ -27,7 +38,8 @@ export async function handlePostbackEvent(
   requesterDisplayName: string | undefined,
   agentJobStore: AgentJobStore,
   configuredFunctions: readonly FunctionName[] = profile.enabledFunctions,
-  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>
+  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>,
+  helperReviewHandler?: HelperReviewPostbackHandler
 ): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
@@ -46,6 +58,27 @@ export async function handlePostbackEvent(
         configuredFunctions,
         authorizeFunctions
       ),
+      completionEligible: false
+    };
+  }
+  if (request.action === "helper_action_review") {
+    const reviewId = request.params.reviewId;
+    const decision = request.params.decision;
+    if (!reviewId || (decision !== "approve" && decision !== "reject") || !helperReviewHandler) {
+      return {
+        result: { ok: true, replyText: messages.postbackUnsupported },
+        completionEligible: false
+      };
+    }
+    return {
+      result: await helperReviewHandler({
+        reviewId,
+        text: decision === "approve" ? "確認" : "取消",
+        profile,
+        event,
+        requestId,
+        requesterDisplayName
+      }),
       completionEligible: false
     };
   }
