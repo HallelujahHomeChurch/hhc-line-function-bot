@@ -27,6 +27,7 @@ export const KERNEL_INTEGRATION_CASE_CONTRACTS = [
     caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
     boundary: "state_lifecycle"
   },
+  { caseId: "postgres/helper-agent/source-ttl-and-reset", boundary: "state_lifecycle" },
   { caseId: "harness/namespace-cleanup", boundary: "deployment_configuration" },
   { caseId: "harness/compose-cleanup", boundary: "deployment_configuration" }
 ] as const;

@@ -306,7 +306,8 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
         "postgres/catalog/concurrent-publication",
         "postgres/catalog/rollback-and-visibility",
         "postgres/knowledge/rollback-and-stale-failure",
-        "postgres/sdk-agent/checkpoint-restart-and-expiry"
+        "postgres/sdk-agent/checkpoint-restart-and-expiry",
+        "postgres/helper-agent/source-ttl-and-reset"
       ]);
       expect(results.filter((result) => !result.passed || result.failureCode)).toEqual([]);
     } finally {

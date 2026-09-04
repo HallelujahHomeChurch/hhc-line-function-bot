@@ -6,6 +6,7 @@ import { runAgentMemoryMigrations } from "../../../agent/migrations.js";
 import { createSdkAgent } from "../../../agent/sdk-runtime.js";
 import { createPostgresSdkAgentState } from "../../../agent/sdk-state.js";
 import { runCatalogMigrations } from "../../../catalog/migrations.js";
+import { createPostgresHelperAgentState } from "../../../helper-agent/state.js";
 import { PostgresCatalogStore } from "../../../catalog/postgres-store.js";
 import { catalogStorageIdentity, type CatalogItemInput } from "../../../catalog/store.js";
 import { runKnowledgeMigrations } from "../../../knowledge/migrations.js";
@@ -51,6 +52,11 @@ export async function runPostgresIntegrationMatrix(
       caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
       boundary: "state_lifecycle",
       run: async () => sdkAgentCheckpointRestartAndExpiry(environment)
+    },
+    {
+      caseId: "postgres/helper-agent/source-ttl-and-reset",
+      boundary: "state_lifecycle",
+      run: async () => helperAgentSourceTtlAndReset(environment)
     }
   ];
 
@@ -104,7 +110,10 @@ const MATRIX_FAILURE_CODES = new Set([
   "sdk_checkpoint_not_restored",
   "sdk_checkpoint_policy_not_invalidated",
   "sdk_checkpoint_not_deleted",
-  "sdk_thread_metadata_not_deleted"
+  "sdk_thread_metadata_not_deleted",
+  "helper_direct_ttl_invalid",
+  "helper_group_ttl_invalid",
+  "helper_checkpoint_not_deleted"
 ]);
 
 function boundedFailureCode(error: unknown): string {
@@ -176,6 +185,68 @@ async function sdkAgentCheckpointRestartAndExpiry(
   ]);
   if (checkpointRows.rowCount) throw new Error("sdk_checkpoint_not_deleted");
   if (threadRows.rowCount) throw new Error("sdk_thread_metadata_not_deleted");
+}
+
+async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironment): Promise<void> {
+  const pool = environment.pools[0];
+  const checkpointer = new PostgresSaver(pool);
+  const now = new Date("2026-09-04T00:00:00.000Z");
+  const state = createPostgresHelperAgentState({
+    pool,
+    checkpointer,
+    hmacKey: "kernel-helper-agent-state-key",
+    now: () => now
+  });
+  await checkpointer.setup();
+  await state.setup();
+  const direct = state.threadId({
+    profileName: PROFILE,
+    source: { type: "user", userId: "kernel-direct-user" }
+  });
+  const group = state.threadId({
+    profileName: PROFILE,
+    source: { type: "group", groupId: "kernel-group", userId: "kernel-group-user" }
+  });
+  if (!direct || !group) throw new Error("helper_checkpoint_not_deleted");
+
+  const invoke = (threadId: string, source: { type: string; userId: string; groupId?: string }) =>
+    state.run({
+      threadId,
+      policyKey: "kernel-policy-v1",
+      source,
+      task: () =>
+        createSdkAgent({
+          checkpointer,
+          model: new FakeToolCallingModel({ toolCalls: [[]] })
+        }).invoke(
+          { messages: [{ role: "user", content: "kernel" }] },
+          { configurable: { thread_id: threadId } }
+        )
+    });
+
+  await invoke(direct, { type: "user", userId: "kernel-direct-user" });
+  await invoke(group, {
+    type: "group",
+    groupId: "kernel-group",
+    userId: "kernel-group-user"
+  });
+  const metadata = await pool.query<{ thread_id: string; expires_at: Date }>(
+    "select thread_id, expires_at from helper_agent_threads where thread_id = any($1::text[])",
+    [[direct, group]]
+  );
+  const expiresAt = new Map(metadata.rows.map((row) => [row.thread_id, row.expires_at]));
+  if (expiresAt.get(direct)?.getTime() !== now.getTime() + 30 * 60_000) {
+    throw new Error("helper_direct_ttl_invalid");
+  }
+  if (expiresAt.get(group)?.getTime() !== now.getTime() + 15 * 60_000) {
+    throw new Error("helper_group_ttl_invalid");
+  }
+
+  await state.reset(group);
+  const checkpoint = await pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [
+    group
+  ]);
+  if (checkpoint.rowCount) throw new Error("helper_checkpoint_not_deleted");
 }
 
 async function installCatalogOverlapTrigger(pool: KernelPgPool): Promise<void> {
