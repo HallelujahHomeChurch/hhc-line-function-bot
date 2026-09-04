@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
+import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { createHelperReadTools } from "../helper-agent/read-tools.js";
 import type {
   BotProfileConfig,
@@ -121,6 +123,46 @@ describe("helper read tools", () => {
     );
   });
 
+  it("returns a bounded official schedule list without internal source data", async () => {
+    const now = () => new Date("2026-09-04T00:00:00.000Z");
+    const memoryStore = new InMemoryAgentMemoryStore({ now });
+    for (let index = 1; index <= 12; index += 1) {
+      await memoryStore.saveScheduleMemory({
+        profileName: "helper",
+        source: { type: "user", userId: "U1" },
+        scheduleType: `schedule_${index}`,
+        title: `服事表 ${index}`,
+        originalText: `2026-09-${String(index).padStart(2, "0")} 服事安排`,
+        entries: [
+          {
+            serviceDate: `2026-09-${String(index).padStart(2, "0")}`,
+            meetingName: "聚會",
+            role: "服事",
+            assignee: "同工"
+          }
+        ]
+      });
+    }
+    const [schedule] = createHelperReadTools({
+      context: context(["query_schedule"]),
+      handlers: {
+        query_schedule: createQueryScheduleHandler({ memoryStore, now, timeZone: "Asia/Taipei" })
+      }
+    });
+
+    const result = await schedule?.invoke({ query: "有哪些服事表" });
+
+    expect(result).toMatchObject({
+      status: "success",
+      sourceType: "official",
+      data: { kind: "schedule_list", records: expect.any(Array) }
+    });
+    expect((result as { data: { records: unknown[] } }).data.records).toHaveLength(10);
+    expect(JSON.stringify(result)).toContain("服事表");
+    expect(JSON.stringify(result)).not.toMatch(/memoryId|sourceKey|userId|U1/u);
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(2_000);
+  });
+
   it("rechecks live authorization through the shared gateway", async () => {
     const handlers = registry();
     const authorize = vi.fn(async () => false);
@@ -141,11 +183,17 @@ describe("helper read tools", () => {
     expect(createHelperReadTools({ context: restricted, handlers: registry() })).toEqual([]);
   });
 
-  it("exposes no tools outside the helper profile or for an anonymous group requester", () => {
+  it("exposes no tools outside the helper profile or without a requester identity", () => {
     const main = context();
     main.profile = { ...main.profile, name: "main", allowedProviders: [] };
 
     expect(createHelperReadTools({ context: main, handlers: registry() })).toEqual([]);
+    expect(
+      createHelperReadTools({
+        context: context(allReadFunctions, { type: "user" }),
+        handlers: registry()
+      })
+    ).toEqual([]);
     expect(
       createHelperReadTools({
         context: context(allReadFunctions, { type: "group", groupId: "G1" }),

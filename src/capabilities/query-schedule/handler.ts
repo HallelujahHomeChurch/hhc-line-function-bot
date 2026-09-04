@@ -201,14 +201,26 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
         profileName: context.profile.name,
         limit: args.limit ?? 10
       });
+      const replyText =
+        schedules.length === 0
+          ? "目前沒有保存的服事表。"
+          : ["目前保存的服事表：", ...schedules.map((schedule) => `- ${schedule.title}`)].join(
+              "\n"
+            );
       return {
         ok: true,
-        replyText:
-          schedules.length === 0
-            ? "目前沒有保存的服事表。"
-            : ["目前保存的服事表：", ...schedules.map((schedule) => `- ${schedule.title}`)].join(
-                "\n"
-              )
+        replyText,
+        agentResult: schedules.length
+          ? {
+              status: "success",
+              replyText: "服事表清單查詢完成。",
+              replyData: {
+                kind: "schedule_list",
+                fields: { count: schedules.length },
+                records: schedules.map(({ title }) => ({ title }))
+              }
+            }
+          : { status: "not_found", replyText }
       };
     }
     const refinement = refineScheduleQuery(args, currentTime, timeZone);

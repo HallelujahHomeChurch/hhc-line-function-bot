@@ -71,7 +71,7 @@ export function createHelperReadTools(options: HelperToolGatewayOptions) {
   if (
     options.context.profile.name !== "helper" ||
     !allowedSource ||
-    (source === "group" && !options.context.event.source.userId)
+    !options.context.event.source.userId
   ) {
     return [];
   }
