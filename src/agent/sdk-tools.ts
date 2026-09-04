@@ -145,6 +145,8 @@ function createExternalSheetMusicTools(options: SdkFunctionToolsOptions) {
   const external = options.externalSheetMusicSearch;
   if (!external?.allowed || !availableDefinition(options, "find_sheet_music")) return [];
   const references = new Map<string, { title: string; url: string }>();
+  let directFileFound = false;
+  let searchResultNeedsInspection = false;
   let nextReference = 1;
   const remember = (title: string, url: string) => {
     const ref = `web-${nextReference++}`;
@@ -157,12 +159,24 @@ function createExternalSheetMusicTools(options: SdkFunctionToolsOptions) {
         if (!(await externalSearchAuthorized(options))) {
           return { status: "denied", reason: "authorization_changed" };
         }
+        if (directFileFound) {
+          return {
+            status: "complete",
+            reason: "direct_file_already_found",
+            instruction: "Stop searching and reply with the existing direct file candidate."
+          };
+        }
+        if (searchResultNeedsInspection) {
+          return { status: "denied", reason: "inspect_current_candidates_before_new_search" };
+        }
+        searchResultNeedsInspection = true;
         try {
           const results = await external.webSearch.search({
             query,
             language: "zh-TW",
             limit: 5
           });
+          searchResultNeedsInspection = results.length > 0;
           return {
             status: results.length ? "success" : "not_found",
             results: results.map(({ title, snippet, url }) => ({
@@ -172,6 +186,7 @@ function createExternalSheetMusicTools(options: SdkFunctionToolsOptions) {
             }))
           };
         } catch {
+          searchResultNeedsInspection = false;
           return { status: "unavailable", results: [] };
         }
       },
@@ -188,18 +203,26 @@ function createExternalSheetMusicTools(options: SdkFunctionToolsOptions) {
         }
         const reference = references.get(ref);
         if (!reference) return { status: "denied", reason: "unknown_or_expired_reference" };
+        searchResultNeedsInspection = false;
         try {
           const page = await external.pageReader.read(reference.url);
+          directFileFound = page.kind === "direct_file";
           const candidates = [...(page.kind === "direct_file" ? [reference] : []), ...page.links];
           if (candidates.length) {
             await external.onDirectFileCandidates?.(candidates);
           }
           return {
-            status: "success",
+            status: page.kind === "direct_file" ? "complete" : "success",
             kind: page.kind,
             untrusted: true,
             ...(page.text ? { text: page.text } : {}),
-            ...(page.kind === "direct_file" ? { directFileRef: ref } : {}),
+            ...(page.kind === "direct_file"
+              ? {
+                  directFileRef: ref,
+                  title: reference.title,
+                  instruction: "Stop searching and reply with this candidate; do not save it."
+                }
+              : {}),
             links: page.links.map(({ title, url: linkUrl }) => ({
               title,
               ref: remember(title, linkUrl)

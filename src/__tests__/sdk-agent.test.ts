@@ -98,6 +98,29 @@ describe("SDK agent runtime", () => {
     expect(execute).toHaveBeenCalledWith({ query: "Sunday" }, expect.anything());
   });
 
+  it("executes an identical tool call only once per agent run", async () => {
+    const execute = vi.fn(async () => ({ status: "success", value: "Taiwan" }));
+    const queryWikipedia = tool(execute, {
+      name: "query_wikipedia",
+      description: "Query Wikipedia.",
+      schema: z.object({ query: z.string() }).strict()
+    });
+    const agent = createSdkAgent({
+      model: new FakeToolCallingModel({
+        toolCalls: [
+          [{ name: "query_wikipedia", args: { query: "Taiwan" }, id: "wiki-1" }],
+          [{ name: "query_wikipedia", args: { query: "Taiwan" }, id: "wiki-2" }],
+          []
+        ]
+      }),
+      tools: [queryWikipedia]
+    });
+
+    await agent.invoke({ messages: [{ role: "user", content: "Taiwan" }] }, config("sdk-dedup"));
+
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it("never executes a tool that was not exposed", async () => {
     const agent = createSdkAgent({
       model: new FakeToolCallingModel({
@@ -250,7 +273,7 @@ describe("SDK agent runtime", () => {
         toolCalls: [1, 2, 3].map((index) => [
           {
             name: "query_schedule",
-            args: { query: "repeat" },
+            args: { query: `repeat-${index}` },
             id: `repeat-${index}`
           }
         ])

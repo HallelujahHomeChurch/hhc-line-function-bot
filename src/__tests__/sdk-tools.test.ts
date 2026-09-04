@@ -308,6 +308,98 @@ describe("SDK function tools", () => {
     expect(JSON.stringify(page)).not.toContain("https://");
   });
 
+  it("requires inspecting a public search result before changing the query", async () => {
+    const search = vi.fn(async () => [
+      { title: "Candidate", url: "https://public.example.test/candidate" }
+    ]);
+    const read = vi.fn(async () => ({ kind: "html" as const, text: "Lyrics", links: [] }));
+    const toolContext = context();
+    toolContext.profile = profileWith(["find_sheet_music"]);
+    const tools = createSdkFunctionTools({
+      context: toolContext,
+      externalSheetMusicSearch: { allowed: true, pageReader: { read }, webSearch: { search } },
+      functionRegistry: { find_sheet_music: vi.fn() }
+    });
+    const searchTool = tools.find(({ name }) => name === "search_sheet_music_web")!;
+    const readTool = tools.find(({ name }) => name === "read_sheet_music_page")!;
+
+    const first = (await searchTool.invoke({ query: "song score" })) as {
+      results: Array<{ ref: string }>;
+    };
+    await expect(searchTool.invoke({ query: "song score PDF" })).resolves.toEqual({
+      status: "denied",
+      reason: "inspect_current_candidates_before_new_search"
+    });
+    expect(search).toHaveBeenCalledOnce();
+
+    await readTool.invoke({ ref: first.results[0]!.ref });
+    await searchTool.invoke({ query: "song score PDF" });
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows only one parallel public search before inspection", async () => {
+    const search = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return [{ title: "Candidate", url: "https://public.example.test/candidate" }];
+    });
+    const toolContext = context();
+    toolContext.profile = profileWith(["find_sheet_music"]);
+    const searchTool = createSdkFunctionTools({
+      context: toolContext,
+      externalSheetMusicSearch: {
+        allowed: true,
+        pageReader: { read: vi.fn() },
+        webSearch: { search }
+      },
+      functionRegistry: { find_sheet_music: vi.fn() }
+    }).find(({ name }) => name === "search_sheet_music_web")!;
+
+    const results = await Promise.all([
+      searchTool.invoke({ query: "song score" }),
+      searchTool.invoke({ query: "song score PDF" })
+    ]);
+
+    expect(search).toHaveBeenCalledOnce();
+    expect(results).toContainEqual({
+      status: "denied",
+      reason: "inspect_current_candidates_before_new_search"
+    });
+  });
+
+  it("stops public search after finding a direct file candidate", async () => {
+    const search = vi.fn(async () => [
+      { title: "Choir score", url: "https://public.example.test/score.pdf" }
+    ]);
+    const toolContext = context();
+    toolContext.profile = profileWith(["find_sheet_music"]);
+    const tools = createSdkFunctionTools({
+      context: toolContext,
+      externalSheetMusicSearch: {
+        allowed: true,
+        pageReader: { read: vi.fn(async () => ({ kind: "direct_file" as const, links: [] })) },
+        webSearch: { search }
+      },
+      functionRegistry: { find_sheet_music: vi.fn() }
+    });
+    const searchTool = tools.find(({ name }) => name === "search_sheet_music_web")!;
+    const readTool = tools.find(({ name }) => name === "read_sheet_music_page")!;
+    const first = (await searchTool.invoke({ query: "song score PDF" })) as {
+      results: Array<{ ref: string }>;
+    };
+
+    await expect(readTool.invoke({ ref: first.results[0]!.ref })).resolves.toEqual(
+      expect.objectContaining({
+        status: "complete",
+        kind: "direct_file",
+        title: "Choir score"
+      })
+    );
+    await expect(searchTool.invoke({ query: "another query" })).resolves.toEqual(
+      expect.objectContaining({ status: "complete", reason: "direct_file_already_found" })
+    );
+    expect(search).toHaveBeenCalledOnce();
+  });
+
   it("reauthorizes consented public search before each call", async () => {
     const search = vi.fn();
     const toolContext = context();
