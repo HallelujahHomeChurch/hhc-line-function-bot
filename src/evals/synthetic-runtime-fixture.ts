@@ -2,10 +2,13 @@ import { FakeToolCallingModel, AIMessage, type BaseMessage } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
 
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
+import { createQueryScheduleHandler } from "../functions/query-schedule.js";
 import { createHelperRuntime } from "../helper-agent/runtime.js";
 import type { HelperRuntimeOptions } from "../helper-agent/runtime.js";
 import { createHelperAgentState, type HelperAgentState } from "../helper-agent/state.js";
 import type { InMemoryLastErrorStore } from "../observability/last-error-store.js";
+import { InMemoryScheduleStore } from "../schedules/store.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   BotProfileConfig,
@@ -157,6 +160,42 @@ export function createSyntheticRuntimeFixture(options: FixtureOptions) {
     accountAdministrator: () => true
   });
   return { runtime, profile, source, sessions, jobs, calls, probe: options.probe, turn };
+}
+
+export async function createSyntheticScheduleRuntimeFixture(
+  options: Pick<FixtureOptions, "model" | "probe">
+) {
+  const now = () => new Date("2026-09-04T00:00:00.000Z");
+  const scheduleStore = new InMemoryScheduleStore();
+  const rows = [
+    { serviceDate: "2026-09-06", assignee: "合成目前同工" },
+    { serviceDate: "2026-09-13", assignee: "合成未來同工" }
+  ] as const;
+  for (const row of rows) {
+    await scheduleStore.upsertItem({
+      profileName: "helper",
+      sourceKey: "official-service",
+      origin: "notion",
+      externalId: row.serviceDate,
+      serviceDate: row.serviceDate,
+      meeting: "主日",
+      role: "接待",
+      assignee: row.assignee
+    });
+  }
+  return createSyntheticRuntimeFixture({
+    ...options,
+    enabledFunctions: ["query_schedule"],
+    handlers: {
+      query_schedule: createQueryScheduleHandler({
+        memoryStore: new InMemoryAgentMemoryStore({ now }),
+        scheduleStore,
+        now,
+        timeZone: "Asia/Taipei"
+      })
+    },
+    now
+  });
 }
 
 export function helperProfile(

@@ -7,6 +7,7 @@ import { buildAgentJobScope, InMemoryAgentJobStore } from "../agent/jobs.js";
 import { AGENT_EVAL_CASES, validateAgentEvalCorpus } from "../evals/kernel/corpus.js";
 import {
   createEvalProbe,
+  createSyntheticScheduleRuntimeFixture,
   createSyntheticRuntimeFixture,
   emptyEvalMetrics,
   helperProfile,
@@ -200,7 +201,7 @@ async function scheduleFollowUpNextPeriod(): Promise<Partial<EvalMetrics>> {
       [
         {
           name: "get_official_schedule",
-          args: { query: "下個期間", dateIntent: "upcoming", domainKey: "official_service" },
+          args: { query: "下個期間", dateIntent: "upcoming" },
           id: "schedule-2"
         }
       ],
@@ -208,19 +209,11 @@ async function scheduleFollowUpNextPeriod(): Promise<Partial<EvalMetrics>> {
     ],
     probe
   );
-  const fixture = createSyntheticRuntimeFixture({
-    model,
-    probe,
-    enabledFunctions: ["query_schedule"],
-    handlers: { query_schedule: async () => success("schedule") }
-  });
+  const fixture = await createSyntheticScheduleRuntimeFixture({ model, probe });
   await fixture.runtime.handleTextTurn(fixture.turn("查服事表"));
+  const firstTurnCallCount = fixture.calls.get("query_schedule")?.length ?? 0;
   await fixture.runtime.handleTextTurn(fixture.turn("下個期間呢？"));
-  const calls = fixture.calls.get("query_schedule") ?? [];
-  assert(calls.length === 2);
-  assert(
-    calls[1]?.args.dateIntent === "upcoming" && calls[1]?.args.domainKey === "official_service"
-  );
+  assertGroundedScheduleJourney(fixture, firstTurnCallCount);
   return probe.values();
 }
 
@@ -789,7 +782,7 @@ async function runLiveCases(): Promise<EvalReport[]> {
       ids[4]!,
       ["query_wikipedia"],
       { query_wikipedia: async () => success("wikipedia") },
-      "用百科工具回答一個合成地理問題。",
+      "請使用 Wikipedia 回答：台灣最高的山是哪一座？",
       (fixture) => assert(fixture.probe.toolNames.join() === "query_wikipedia")
     ),
     liveReviewCase(apiKey, ids[5]!, false),
@@ -825,16 +818,15 @@ function liveFollowUpCase(apiKey: string, id: string) {
   return {
     id,
     run: async () => {
-      const fixture = liveFixture(apiKey, {
-        enabledFunctions: ["query_schedule"],
-        handlers: { query_schedule: async () => success("schedule") }
+      const probe = createEvalProbe();
+      const fixture = await createSyntheticScheduleRuntimeFixture({
+        model: createLiveModel(apiKey, probe),
+        probe
       });
       await fixture.runtime.handleTextTurn(fixture.turn("查最新合成服事表。"));
+      const firstTurnCallCount = fixture.calls.get("query_schedule")?.length ?? 0;
       await fixture.runtime.handleTextTurn(fixture.turn("同一類服事表的下個期間呢？"));
-      const calls = fixture.calls.get("query_schedule") ?? [];
-      const [domain] = fixture.profile.schedulePolicy?.domains ?? [];
-      assert(domain && calls.length === 2 && calls[1]?.args.domainKey === domain.key);
-      assert(calls[1]?.args.dateIntent === "upcoming" && calls[1]?.args.specificDate === undefined);
+      assertGroundedScheduleJourney(fixture, firstTurnCallCount);
       return checkedLiveMetrics(fixture.probe);
     }
   };
@@ -918,7 +910,15 @@ function liveFixture(
   options: Omit<Parameters<typeof createSyntheticRuntimeFixture>[0], "model" | "probe">
 ) {
   const probe = createEvalProbe();
-  const model = new ChatDeepSeek({
+  return createSyntheticRuntimeFixture({
+    ...options,
+    model: createLiveModel(apiKey, probe),
+    probe
+  });
+}
+
+function createLiveModel(apiKey: string, probe: ReturnType<typeof createEvalProbe>) {
+  return new ChatDeepSeek({
     apiKey,
     model: "deepseek-v4-flash",
     temperature: 0,
@@ -928,7 +928,30 @@ function liveFixture(
     callbacks: probe.callbacks,
     configuration: { baseURL: "https://api.deepseek.com", fetch: createBudgetedFetch() }
   });
-  return createSyntheticRuntimeFixture({ ...options, model, probe });
+}
+
+function assertGroundedScheduleJourney(
+  fixture: Awaited<ReturnType<typeof createSyntheticScheduleRuntimeFixture>>,
+  firstTurnCallCount: number
+) {
+  const [domain] = fixture.profile.schedulePolicy?.domains ?? [];
+  assert(domain);
+  const calls = fixture.calls.get("query_schedule") ?? [];
+  const grounded = calls.slice(0, firstTurnCallCount).find(({ result }) => {
+    if (result.agentResult?.anchors?.domainKey !== domain.key) return false;
+    const records = result.agentResult.replyData?.records ?? [];
+    return records.some(({ date }) => typeof date === "string" && date > "2026-09-04");
+  });
+  assert(grounded);
+  const followUp = calls
+    .slice(firstTurnCallCount)
+    .find(
+      ({ args }) =>
+        (args.dateIntent === "upcoming" || args.dateIntent === "next_meeting") &&
+        args.specificDate === undefined &&
+        (args.domainKey === undefined || args.domainKey === domain.key)
+    );
+  assert(followUp);
 }
 
 function checkedLiveMetrics(probe: ReturnType<typeof createEvalProbe>) {
