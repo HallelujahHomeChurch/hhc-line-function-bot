@@ -103,7 +103,7 @@ describe("function argument normalization", () => {
     ).toMatchObject({ query: "synthetic alpha procedure" });
   });
 
-  it("clears a model-inferred schedule range when the user only asks for service staff", () => {
+  it("keeps a model-inferred next meeting range for a generic service staff query", () => {
     expect(
       normalizeFunctionArguments(
         "query_schedule",
@@ -111,7 +111,8 @@ describe("function argument normalization", () => {
         { text: "小哈 查服事人員" }
       )
     ).toMatchObject({
-      query: ""
+      query: "下一場服事",
+      dateIntent: "next_meeting"
     });
   });
 
@@ -214,7 +215,7 @@ describe("function argument normalization", () => {
     });
   });
 
-  it("clears model-inferred next meeting metadata for generic service schedule requests", () => {
+  it("keeps model-inferred next meeting metadata for generic service schedule requests", () => {
     const result = normalizeFunctionArguments(
       "query_schedule",
       { query: "服事表", dateIntent: "next_meeting", limit: 1 },
@@ -222,10 +223,10 @@ describe("function argument normalization", () => {
     );
 
     expect(result).toMatchObject({
-      query: "",
+      query: "服事表",
+      dateIntent: "next_meeting",
       limit: 1
     });
-    expect(result).not.toHaveProperty("dateIntent");
   });
 
   it("keeps explicit next meeting service schedule intent", () => {

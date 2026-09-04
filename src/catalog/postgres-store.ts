@@ -583,7 +583,7 @@ export class PostgresCatalogStore implements CatalogStore {
       from catalog_items
       join catalog_sources on catalog_sources.id = catalog_items.source_id
       where ${conditions.join("\n        and ")}
-      order by catalog_items.title asc
+      order by catalog_items.external_updated_at desc nulls last, catalog_items.title asc
       limit $${values.length}
       `,
       values

@@ -188,9 +188,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
           databaseId: options.databaseId,
           properties: options.properties,
           timeZone: options.timeZone,
-          sessionStore: options.sessionStore,
           now,
-          requestIdFactory: options.requestIdFactory,
           sourceKeys: DEFAULT_MEDIA_SOURCE_KEYS
         })
       : undefined;
@@ -227,6 +225,14 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       ...(roleFocus ? { role: roleFocus } : {}),
       query: roleFocus ? "" : refinement.residualQuery
     });
+    if (
+      !refinedArgs.dateIntent &&
+      !refinedArgs.date &&
+      !refinedArgs.specificDate &&
+      !refinedArgs.month
+    ) {
+      refinedArgs.dateIntent = "next_meeting";
+    }
     const domains = context.profile.schedulePolicy?.domains ?? DEFAULT_SCHEDULE_DOMAINS;
     const requestedDomainKey =
       refinedArgs.domainKey ?? domainKeyForScheduleType(domains, refinedArgs.scheduleType);

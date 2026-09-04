@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import {
   queryServiceScheduleArgumentsSchema,
   type QueryServiceScheduleArguments
@@ -8,10 +6,7 @@ import { readTimeZone } from "../time-zone.js";
 import { selectFirstUpcomingOccurrence } from "../schedules/occurrence-policy.js";
 import type { MeetingWindowRule } from "../types.js";
 import type { FunctionHandler, JsonRecord, NotionDatabaseClient } from "../types.js";
-import { withRequesterDisplayName } from "../requester-personalization.js";
-import type { SessionStore } from "../state/session-store.js";
 import { normalizeNotionSchedulePage } from "../schedules/notion-adapter.js";
-import { storePendingFunctionQuery } from "./pending-function.js";
 import { resolveScheduleResultRows, scheduleResultEnvelope } from "./schedule-result.js";
 
 export interface QueryServiceScheduleOptions {
@@ -25,8 +20,6 @@ export interface QueryServiceScheduleOptions {
   };
   now?: () => Date;
   timeZone?: string;
-  sessionStore?: SessionStore;
-  requestIdFactory?: () => string;
   sourceKeys?: string[];
 }
 
@@ -54,47 +47,9 @@ export function createQueryServiceScheduleHandler(
 ): FunctionHandler {
   const now = options.now ?? (() => new Date());
   const timeZone = readTimeZone(options.timeZone, "timeZone");
-  const requestIdFactory = options.requestIdFactory ?? randomUUID;
 
   return async (rawArgs, context) => {
     const args = queryServiceScheduleArgumentsSchema.parse(rawArgs);
-
-    if (options.sessionStore && needsServiceScheduleClarification(args)) {
-      await storePendingFunctionQuery({
-        sessionStore: options.sessionStore,
-        requestId: requestIdFactory(),
-        action: "query_schedule",
-        arguments: args,
-        context,
-        now: now()
-      });
-
-      return {
-        ok: true,
-        replyText: withRequesterDisplayName(
-          context,
-          "要查哪個服事表範圍？請選擇或直接回覆：下一場、本週、明天、主日。"
-        ),
-        quickReplies: [
-          {
-            label: "下一場",
-            action: { type: "message", label: "下一場", text: "下一場" }
-          },
-          {
-            label: "本週",
-            action: { type: "message", label: "本週", text: "本週" }
-          },
-          {
-            label: "明天",
-            action: { type: "message", label: "明天", text: "明天" }
-          },
-          {
-            label: "主日",
-            action: { type: "message", label: "主日", text: "主日服事" }
-          }
-        ]
-      };
-    }
 
     const derivedFilters = deriveFilters(args, now(), timeZone);
     const pages = await options.notion.queryDatabase(
@@ -178,38 +133,6 @@ export function createQueryServiceScheduleHandler(
   };
 }
 
-function needsServiceScheduleClarification(args: QueryServiceScheduleArguments): boolean {
-  const hasStructuredMetadata = [
-    args.date,
-    args.dateIntent,
-    args.specificDate,
-    args.meeting,
-    args.role
-  ].some((value) => typeof value === "string" && value.trim());
-  if (hasStructuredMetadata) {
-    return false;
-  }
-
-  const normalized = args.query
-    .normalize("NFKC")
-    .trim()
-    .replace(/^小哈[，,\s]*/i, "")
-    .replace(/^(請|幫我|幫忙|查詢|查|找|搜尋)\s*/u, "")
-    .replace(/\s+/g, "");
-
-  return [
-    "",
-    "服事",
-    "服事表",
-    "服事人員",
-    "服事安排",
-    "聚會服事",
-    "聚會服事表",
-    "聚會服事人員",
-    "聚會服事安排"
-  ].includes(normalized);
-}
-
 function buildNotionQuery(filters: DerivedFilters, dateProperty: string): JsonRecord {
   if (!filters.range) {
     return {};
@@ -268,7 +191,7 @@ export function deriveFilters(
 
   if (!args.dateIntent && /(下一場|下場|最近一場|下一次|下次)/.test(query)) {
     filters.nextMeetingOnly = true;
-    filters.range ??= upcomingRange(now, timeZone);
+    filters.range ??= nextMeetingRange(now, timeZone);
   }
 
   if (!filters.meeting && query.includes("主日")) {
@@ -279,8 +202,9 @@ export function deriveFilters(
     filters.role = extractKnownScheduleRole(query);
   }
 
-  if (!filters.range && !filters.date && /服事/.test(query)) {
-    filters.range = upcomingRange(now, timeZone);
+  if (!filters.range && !filters.date) {
+    filters.nextMeetingOnly = true;
+    filters.range = nextMeetingRange(now, timeZone);
   }
 
   return filters;
@@ -308,7 +232,7 @@ function applyStructuredDateIntent(
       break;
     case "next_meeting":
       filters.nextMeetingOnly = true;
-      filters.range = upcomingRange(now, timeZone);
+      filters.range = nextMeetingRange(now, timeZone);
       break;
     case "specific_date": {
       const date = args.specificDate ?? args.date;
@@ -347,6 +271,13 @@ function upcomingRange(now: Date, timeZone: string): NonNullable<DerivedFilters[
   return {
     start,
     endExclusive: addDaysToDateKey(start, 7)
+  };
+}
+
+function nextMeetingRange(now: Date, timeZone: string): NonNullable<DerivedFilters["range"]> {
+  return {
+    start: toDateKey(now, timeZone),
+    endExclusive: "9999-12-31"
   };
 }
 
