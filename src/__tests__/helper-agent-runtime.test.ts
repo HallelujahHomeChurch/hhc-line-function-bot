@@ -1,5 +1,5 @@
 import { MemorySaver } from "@langchain/langgraph";
-import { FakeToolCallingModel } from "langchain";
+import { FakeToolCallingModel, ToolMessage } from "langchain";
 import { countTokensApproximately } from "langchain";
 import { describe, expect, it, vi } from "vitest";
 
@@ -10,7 +10,7 @@ import {
   createHelperRuntime,
   helperSystemPrompt
 } from "../helper-agent/runtime.js";
-import type { HelperAgentState } from "../helper-agent/state.js";
+import { createHelperAgentState, type HelperAgentState } from "../helper-agent/state.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
@@ -122,6 +122,96 @@ describe("helper profile runtime", () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
+  it("clears prior tool evidence before the model runs after authorization is revoked", async () => {
+    const model = new FakeToolCallingModel({
+      toolCalls: [
+        [
+          {
+            name: "get_official_schedule",
+            args: { query: "synthetic" },
+            id: "tool-1"
+          }
+        ],
+        [],
+        []
+      ]
+    });
+    const bindTools = vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const generate = vi.spyOn(model, "_generate");
+    const helperProfile = profile();
+    helperProfile.permissionRequiredFunctions = ["query_schedule"];
+    const scopedState = createHelperAgentState({
+      checkpointer: new MemorySaver(),
+      hmacKey: "test-hmac"
+    });
+    let granted = true;
+    const authorizeFunctions = vi.fn(async (names: readonly FunctionName[]) =>
+      granted ? names : names.filter((name) => name !== "query_schedule")
+    );
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: scopedState,
+      handlers: handlers()
+    });
+    const turn = {
+      ...input("查服事表"),
+      profile: helperProfile,
+      configuredFunctions: readFunctions,
+      authorizeFunctions
+    };
+
+    await runtime.handleTextTurn(turn);
+    expect(generate.mock.calls.at(-1)?.[0].some(ToolMessage.isInstance)).toBe(true);
+    expect(bindTools.mock.calls.at(-1)?.[0].map(({ name }) => name)).toContain(
+      "get_official_schedule"
+    );
+
+    granted = false;
+    await runtime.handleTextTurn({ ...turn, event: input("繼續").event });
+
+    const secondTurnModelInput = generate.mock.calls.at(-1)?.[0] ?? [];
+    expect(bindTools.mock.calls.at(-1)?.[0].map(({ name }) => name)).not.toContain(
+      "get_official_schedule"
+    );
+    expect(secondTurnModelInput.some(ToolMessage.isInstance)).toBe(false);
+    expect(secondTurnModelInput.some((message) => message.text.includes("domain"))).toBe(false);
+    expect(
+      authorizeFunctions.mock.calls.filter(([names]) => names.length === readFunctions.length)
+    ).toHaveLength(2);
+  });
+
+  it("keeps unrestricted reads when authorization infrastructure is unavailable", async () => {
+    const model = new FakeToolCallingModel({
+      toolCalls: [
+        [
+          {
+            name: "query_wikipedia",
+            args: { query: "synthetic" },
+            id: "tool-1"
+          }
+        ],
+        []
+      ]
+    });
+    vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const functionHandlers = handlers();
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: state(),
+      handlers: functionHandlers
+    });
+
+    await runtime.handleTextTurn({
+      ...input("查百科"),
+      configuredFunctions: readFunctions,
+      authorizeFunctions: vi.fn(async () => Promise.reject(new Error("authorization unavailable")))
+    });
+
+    expect(functionHandlers.query_wikipedia).toHaveBeenCalledOnce();
+  });
+
   it("returns a bounded support response when DeepSeek fails", async () => {
     const model = new FakeToolCallingModel({ toolCalls: [[]] });
     vi.spyOn(model, "bindTools").mockReturnValue(model);
@@ -136,6 +226,29 @@ describe("helper profile runtime", () => {
     const result = await runtime.handleTextTurn(input("你好"));
 
     expect(result).toMatchObject({ ok: false, replyText: expect.stringContaining("支援碼") });
+    expect(result?.replyText.length).toBeLessThan(200);
+  });
+
+  it("still returns the bounded support response when error recording fails", async () => {
+    const model = new FakeToolCallingModel({ toolCalls: [[]] });
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: state({ run: vi.fn(async () => Promise.reject(new Error("checkpoint unavailable"))) }),
+      handlers: handlers(),
+      lastErrorStore: {
+        record: vi.fn(async () => Promise.reject(new Error("store unavailable"))),
+        list: vi.fn(async () => []),
+        clear: vi.fn(async () => 0)
+      }
+    });
+
+    const result = await runtime.handleTextTurn(input("你好"));
+
+    expect(result).toEqual({
+      ok: false,
+      replyText: expect.stringContaining("支援碼")
+    });
     expect(result?.replyText.length).toBeLessThan(200);
   });
 

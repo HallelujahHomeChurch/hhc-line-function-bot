@@ -12,6 +12,7 @@ import {
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
 import type { RouteObserver } from "../application/contracts/routing.js";
 import type { AgentTraceStore } from "../agent/trace-store.js";
+import { getFunctionDefinition } from "../functions/definitions.js";
 import { requestFailedMessage } from "../messages.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
 import { emitProductEvent, type ProductResultClass } from "../observability/product-events.js";
@@ -85,7 +86,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           await options.state.reset(threadId);
           return { ok: true, replyText: "這段短期對話已清除。" };
         }
-        const profile = effectiveProfile(input);
+        const profile = await effectiveProfile(input);
         const context: FunctionHandlerContext = {
           profile,
           event: input.event,
@@ -98,7 +99,9 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           context,
           handlers: options.handlers,
           authorize: input.authorizeFunctions
-            ? async (name) => (await input.authorizeFunctions!([name])).includes(name)
+            ? async (name) =>
+                isUnrestrictedRead(input.profile, name) ||
+                (await input.authorizeFunctions!([name])).includes(name)
             : undefined,
           onDomainResult: (name, result) => domainResults.push({ name, result })
         });
@@ -150,15 +153,19 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         await recordHelperObservability(options, input, metrics, result, startedAt, now());
         return result;
       } catch (error) {
-        await options.lastErrorStore?.record({
-          requestId: input.requestId,
-          occurredAt: now().toISOString(),
-          profileName: input.profile.name,
-          sourceType: input.event.source.type,
-          phase: "router",
-          errorName: error instanceof Error ? error.name : typeof error,
-          message: error instanceof Error ? error.message : String(error)
-        });
+        try {
+          await options.lastErrorStore?.record({
+            requestId: input.requestId,
+            occurredAt: now().toISOString(),
+            profileName: input.profile.name,
+            sourceType: input.event.source.type,
+            phase: "router",
+            errorName: error instanceof Error ? error.name : typeof error,
+            message: error instanceof Error ? error.message : String(error)
+          });
+        } catch {
+          // Error telemetry must never replace the bounded support response.
+        }
         const result = failed(input.requestId);
         await recordHelperObservability(options, input, metrics, result, startedAt, now());
         return result;
@@ -199,12 +206,31 @@ export function helperPolicyKey(profile: BotProfileConfig): string {
     .digest("hex");
 }
 
-function effectiveProfile(input: ProfileTurnInput): BotProfileConfig {
-  const configured = new Set(input.configuredFunctions ?? input.profile.enabledFunctions);
+async function effectiveProfile(input: ProfileTurnInput): Promise<BotProfileConfig> {
+  const configured = Array.from(
+    new Set(input.configuredFunctions ?? input.profile.enabledFunctions)
+  );
+  let explicitlyAllowed = new Set<FunctionName>();
+  if (input.authorizeFunctions) {
+    try {
+      explicitlyAllowed = new Set(await input.authorizeFunctions(configured));
+    } catch {
+      // Profile-global reads remain available when Account authorization is unavailable.
+    }
+  }
   return {
     ...input.profile,
-    enabledFunctions: input.profile.enabledFunctions.filter((name) => configured.has(name))
+    enabledFunctions: configured.filter(
+      (name) => isUnrestrictedRead(input.profile, name) || explicitlyAllowed.has(name)
+    )
   };
+}
+
+function isUnrestrictedRead(profile: BotProfileConfig, name: FunctionName): boolean {
+  return (
+    !profile.permissionRequiredFunctions.includes(name) &&
+    getFunctionDefinition(name)?.sideEffectLevel === "read"
+  );
 }
 
 function isResetMessage(text: string): boolean {
