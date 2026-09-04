@@ -9,6 +9,7 @@ import { createHelperReadTools } from "../helper-agent/read-tools.js";
 import {
   createHelperModels,
   createHelperRuntime,
+  helperPolicyKey,
   helperSystemPrompt
 } from "../helper-agent/runtime.js";
 import { createHelperAgentState, type HelperAgentState } from "../helper-agent/state.js";
@@ -82,7 +83,7 @@ function state(overrides: Partial<HelperAgentState> = {}): HelperAgentState {
   return {
     checkpointer,
     threadId: ({ source }) => (source.userId ? `helper-${source.userId}` : undefined),
-    run: async ({ task }) => task(),
+    run: async ({ task }) => task({ externalSheetMusicAllowed: false }),
     reset: vi.fn(async () => undefined),
     allowExternalSheetMusic: vi.fn(async () => undefined),
     externalSheetMusicAllowed: vi.fn(async () => false),
@@ -122,17 +123,17 @@ describe("helper profile runtime", () => {
       runtime.acceptSheetMusicResearch?.(
         input("上網找", { type: "group", groupId: "G1", userId: "OTHER_USER" })
       )
-    ).resolves.toBe(false);
+    ).resolves.toBeUndefined();
     await expect(
       runtime.acceptSheetMusicResearch?.(
         input("上網找", { type: "group", groupId: "G1", userId: "LINE_USER_ID" })
       )
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ kind: "accepted" });
     await expect(
       runtime.acceptSheetMusicResearch?.(
         input("上網找", { type: "group", groupId: "G1", userId: "LINE_USER_ID" })
       )
-    ).resolves.toBe(false);
+    ).resolves.toBeUndefined();
     expect(helperState.allowExternalSheetMusic).toHaveBeenCalledOnce();
     expect(helperState.allowExternalSheetMusic).toHaveBeenCalledWith(
       "helper-LINE_USER_ID",
@@ -141,10 +142,71 @@ describe("helper profile runtime", () => {
     );
   });
 
+  it("atomically cancels only the requester's pending external search", async () => {
+    const sessions = new InMemorySessionStore();
+    await sessions.set({
+      id: "consent-1",
+      type: "external_search_consent",
+      action: "sheet_music_external_search",
+      profileName: "helper",
+      requesterUserId: "LINE_USER_ID",
+      source: { type: "group", groupId: "G1", userId: "LINE_USER_ID" },
+      query: "奇異恩典",
+      expiresAt: "2099-09-04T00:10:00.000Z"
+    });
+    const model = new FakeToolCallingModel({ toolCalls: [[]] });
+    const invoke = vi.spyOn(model, "invoke");
+    const webSearch = { search: vi.fn() };
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: state(),
+      handlers: handlers(),
+      sessions,
+      webSearch,
+      pageReader: { read: vi.fn() }
+    });
+
+    await expect(
+      runtime.acceptSheetMusicResearch?.(
+        input("不用", { type: "group", groupId: "G1", userId: "OTHER_USER" })
+      )
+    ).resolves.toBeUndefined();
+    await expect(
+      runtime.acceptSheetMusicResearch?.(
+        input("不用", { type: "group", groupId: "G1", userId: "LINE_USER_ID" })
+      )
+    ).resolves.toEqual({
+      kind: "handled",
+      result: { ok: true, replyText: "好，我不做外部搜尋。" }
+    });
+    await expect(sessions.get("consent-1")).resolves.toBeUndefined();
+    await sessions.set({
+      id: "consent-2",
+      type: "external_search_consent",
+      action: "sheet_music_external_search",
+      profileName: "helper",
+      requesterUserId: "LINE_USER_ID",
+      source: { type: "group", groupId: "G1", userId: "LINE_USER_ID" },
+      query: "奇異恩典",
+      expiresAt: "2099-09-04T00:10:00.000Z"
+    });
+    await expect(
+      runtime.acceptSheetMusicResearch?.(
+        input("取消", { type: "group", groupId: "G1", userId: "LINE_USER_ID" })
+      )
+    ).resolves.toMatchObject({ kind: "handled" });
+    await expect(sessions.get("consent-2")).resolves.toBeUndefined();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(webSearch.search).not.toHaveBeenCalled();
+  });
+
   it("uses the research budget tool set without model-controlled writes", async () => {
     const model = new FakeToolCallingModel({ toolCalls: [[]] });
     const bindTools = vi.spyOn(model, "bindTools").mockReturnValue(model);
-    const helperState = state({ externalSheetMusicAllowed: vi.fn(async () => true) });
+    const helperState = state({
+      run: async ({ task }) => task({ externalSheetMusicAllowed: true })
+    });
     const writeProfile = {
       ...profile(),
       enabledFunctions: [...readFunctions, "save_resource" as const],
@@ -175,6 +237,97 @@ describe("helper profile runtime", () => {
       "propose_save_resource"
     );
   });
+
+  it("constructs no research tools when the locked state snapshot has lost consent", async () => {
+    const model = new FakeToolCallingModel({ toolCalls: [[]] });
+    const bindTools = vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const webSearch = { search: vi.fn() };
+    const helperState = state({
+      externalSheetMusicAllowed: vi.fn(async () => true),
+      run: async ({ task }) => task({ externalSheetMusicAllowed: false })
+    });
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: helperState,
+      handlers: handlers(),
+      sessions: new InMemorySessionStore(),
+      webSearch,
+      pageReader: { read: vi.fn() }
+    });
+
+    await runtime.handleTextTurn(input("繼續找歌譜"));
+
+    expect(bindTools.mock.calls.at(-1)?.[0].map(({ name }) => name)).not.toEqual(
+      expect.arrayContaining(["search_sheet_music_web", "read_sheet_music_page"])
+    );
+    expect(helperState.externalSheetMusicAllowed).not.toHaveBeenCalled();
+    expect(webSearch.search).not.toHaveBeenCalled();
+  });
+
+  it.each(["expiry", "reset"] as const)(
+    "constructs no research tools after queued consent %s",
+    async (loss) => {
+      let now = new Date("2026-09-04T00:00:00.000Z");
+      const helperState = createHelperAgentState({
+        checkpointer: new MemorySaver(),
+        hmacKey: "queued-consent",
+        now: () => now
+      });
+      const turnInput = input("繼續找歌譜");
+      const threadId = helperState.threadId({
+        profileName: turnInput.profile.name,
+        source: turnInput.event.source
+      });
+      if (!threadId) throw new Error("missing thread id");
+      await helperState.allowExternalSheetMusic(
+        threadId,
+        turnInput.event.source,
+        new Date("2026-09-04T00:01:00.000Z")
+      );
+      let release!: () => void;
+      let started = false;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const blocker = helperState.run({
+        threadId,
+        policyKey: helperPolicyKey(turnInput.profile),
+        source: turnInput.event.source,
+        task: async () => {
+          started = true;
+          await gate;
+        }
+      });
+      await vi.waitFor(() => expect(started).toBe(true));
+      const model = new FakeToolCallingModel({ toolCalls: [[]] });
+      const bindTools = vi.spyOn(model, "bindTools").mockReturnValue(model);
+      const webSearch = { search: vi.fn() };
+      const runtime = createHelperRuntime({
+        model,
+        summaryModel: model,
+        state: helperState,
+        handlers: handlers(),
+        sessions: new InMemorySessionStore(),
+        webSearch,
+        pageReader: { read: vi.fn() },
+        now: () => now
+      });
+      const run = vi.spyOn(helperState, "run");
+      const reset = loss === "reset" ? helperState.reset(threadId) : Promise.resolve();
+      const turn = runtime.handleTextTurn(turnInput);
+      await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+      if (loss === "expiry") now = new Date("2026-09-04T00:02:00.000Z");
+
+      release();
+      await Promise.all([blocker, reset, turn]);
+
+      expect(bindTools.mock.calls.at(-1)?.[0].map(({ name }) => name)).not.toEqual(
+        expect.arrayContaining(["search_sheet_music_web", "read_sheet_music_page"])
+      );
+      expect(webSearch.search).not.toHaveBeenCalled();
+    }
+  );
 
   it("does not invoke a model for a group without a requester", async () => {
     const model = new FakeToolCallingModel({ toolCalls: [[]] });

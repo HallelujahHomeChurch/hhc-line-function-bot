@@ -1411,24 +1411,40 @@ async function handleWebhook(
       ],
       accountAdministrator: turnAccountAuthorization.administrator
     };
-    const researchAccepted = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
-    if (!researchAccepted) {
-      const attachmentResult = await handleAttachmentIntake({
-        profile: effectiveProfile,
+    const researchOutcome = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
+    if (researchOutcome?.kind === "handled") {
+      await line.replyText(
+        event.replyToken,
+        researchOutcome.result.replyText,
+        researchOutcome.result.quickReplies
+          ? { quickReplies: researchOutcome.result.quickReplies }
+          : undefined
+      );
+      await recordConversationReply(
+        conversationWindowStore,
+        effectiveProfile,
         event,
-        requestId,
-        requesterDisplayName,
-        requesterIsAdmin,
-        configuredFunctions: profile.enabledFunctions,
-        authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-        sessionStore,
-        maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
-        now: new Date(),
-        textHandlers: attachmentTextHandlers(textMessageHandlers)
-      });
-      if (attachmentResult) {
-        const completed = await completeAttachmentIntake({
-          result: attachmentResult,
+        researchOutcome.result
+      );
+      continue;
+    }
+    const researchAccepted = researchOutcome?.kind === "accepted";
+    if (!researchAccepted) {
+      const attachmentResult = await executeAttachmentTextIntake({
+        intake: {
+          profile: effectiveProfile,
+          event,
+          requestId,
+          requesterDisplayName,
+          requesterIsAdmin,
+          configuredFunctions: profile.enabledFunctions,
+          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+          sessionStore,
+          maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
+          now: new Date(),
+          textHandlers: attachmentTextHandlers(textMessageHandlers)
+        },
+        completion: {
           profile: effectiveProfile,
           event,
           requestId,
@@ -1439,13 +1455,23 @@ async function handleWebhook(
           agentRuntime,
           routeObserver,
           lastRouteStore
-        });
+        },
+        lastErrorStore
+      });
+      if (attachmentResult) {
         await line.replyText(
           event.replyToken,
-          completed.replyText,
-          completed.quickReplies ? { quickReplies: completed.quickReplies } : undefined
+          attachmentResult.replyText,
+          attachmentResult.quickReplies
+            ? { quickReplies: attachmentResult.quickReplies }
+            : undefined
         );
-        await recordConversationReply(conversationWindowStore, effectiveProfile, event, completed);
+        await recordConversationReply(
+          conversationWindowStore,
+          effectiveProfile,
+          event,
+          attachmentResult
+        );
         continue;
       }
     }
@@ -1659,6 +1685,34 @@ async function executeDeterministicTextContinuation(input: {
 
 function attachmentTextHandlers(registry: TextMessageHandlerRegistry) {
   return Object.values(registry).filter((handler) => handler.turnStage === "attachment");
+}
+
+async function executeAttachmentTextIntake(input: {
+  intake: Parameters<typeof handleAttachmentIntake>[0];
+  completion: Omit<Parameters<typeof completeAttachmentIntake>[0], "result">;
+  lastErrorStore: LastErrorStore;
+}): Promise<FunctionExecutionResult | undefined> {
+  try {
+    const result = await handleAttachmentIntake(input.intake);
+    if (!result) return undefined;
+    return await completeAttachmentIntake({ ...input.completion, result });
+  } catch (error) {
+    try {
+      await input.lastErrorStore.record({
+        requestId: input.intake.requestId,
+        occurredAt: new Date().toISOString(),
+        profileName: input.intake.profile.name,
+        sourceType: input.intake.event.source.type,
+        phase: "function",
+        action: "save_resource",
+        errorName: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } catch {
+      // Error telemetry must never replace the bounded support response.
+    }
+    return { ok: false, replyText: requestFailedMessage(input.intake.requestId) };
+  }
 }
 
 async function completeAttachmentIntake(input: {

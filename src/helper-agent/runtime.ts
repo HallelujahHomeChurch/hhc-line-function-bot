@@ -93,38 +93,49 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
   const now = options.now ?? (() => new Date());
   const runtime: ProfileRuntime = {
     async acceptSheetMusicResearch(input) {
+      const text = input.event.message?.text?.trim() ?? "";
+      const accepted = /^(?:上網找|同意上網找|可以上網找)[！!。\s]*$/u.test(text);
+      const cancelled = /^(?:不用|不要|取消|先不要|no|n)$/iu.test(text);
       if (
         input.profile.name !== "helper" ||
         !input.profile.agent ||
         !options.sessions ||
-        !options.webSearch ||
-        !options.pageReader ||
-        !/^(?:上網找|同意上網找|可以上網找)[！!。\s]*$/u.test(input.event.message?.text ?? "")
+        !input.event.source.userId ||
+        (!accepted && !cancelled) ||
+        (accepted && (!options.webSearch || !options.pageReader))
       ) {
-        return false;
+        return undefined;
       }
-      const threadId = options.state.threadId({
-        profileName: input.profile.name,
-        source: input.event.source
-      });
-      if (!threadId) return false;
-      const profile = await effectiveProfile(input);
-      if (!profile.enabledFunctions.includes("find_sheet_music")) return false;
       const consent = await options.sessions.findExternalSearchConsent({
         action: "sheet_music_external_search",
         profileName: input.profile.name,
         source: input.event.source,
         requesterUserId: input.event.source.userId
       });
-      if (!consent) return false;
+      if (!consent) return undefined;
+      if (cancelled) {
+        const claimed = await options.sessions.take(consent.id);
+        if (claimed?.type !== "external_search_consent") return undefined;
+        return {
+          kind: "handled",
+          result: { ok: true, replyText: "好，我不做外部搜尋。" }
+        };
+      }
+      const threadId = options.state.threadId({
+        profileName: input.profile.name,
+        source: input.event.source
+      });
+      if (!threadId) return undefined;
+      const profile = await effectiveProfile(input);
+      if (!profile.enabledFunctions.includes("find_sheet_music")) return undefined;
       const claimed = await options.sessions.take(consent.id);
-      if (claimed?.type !== "external_search_consent") return false;
+      if (claimed?.type !== "external_search_consent") return undefined;
       await options.state.allowExternalSheetMusic(
         threadId,
         input.event.source,
         new Date(now().getTime() + helperThreadIdleTtlMs(input.event.source))
       );
-      return true;
+      return { kind: "accepted" };
     },
 
     async handleTextTurn(input) {
@@ -175,12 +186,6 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
               isUnrestrictedRead(input.profile, name) ||
               (await input.authorizeFunctions!([name])).includes(name)
           : undefined;
-        const readTools = createHelperReadTools({
-          context,
-          handlers: options.handlers,
-          authorize,
-          onDomainResult: (name, result) => domainResults.push({ name, result })
-        });
         const actionExecutor = options.jobs
           ? createActionExecutor({
               handlers: options.handlers,
@@ -189,40 +194,45 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
               currentPolicyKey: async () => helperPolicyKey(await effectiveProfile(input))
             })
           : undefined;
-        const writeTools =
-          options.sessions && actionExecutor
-            ? createHelperWriteTools({ context, executor: actionExecutor })
-            : [];
-        const researchAllowed = await options.state.externalSheetMusicAllowed(threadId);
-        const runMode = researchAllowed ? "sheet_music_research" : "normal";
-        const researchTools =
-          researchAllowed && options.webSearch && options.pageReader
-            ? createSheetMusicResearchTools({
-                consented: true,
-                context,
-                webSearch: options.webSearch,
-                pageReader: options.pageReader,
-                authorize,
-                onDirectFileCandidates: options.sessions
-                  ? (candidates) =>
-                      storeSheetMusicImportCandidates({
-                        sessions: options.sessions!,
-                        context,
-                        requestId: input.requestId,
-                        query: text,
-                        candidates,
-                        now: now()
-                      })
-                  : undefined
-              })
-            : [];
-        const tools = [...readTools, ...(researchAllowed ? researchTools : writeTools)];
-        const turn = await runWithAgentBudget(runMode, () =>
-          options.state.run({
-            threadId,
-            policyKey: helperPolicyKey(profile),
-            source: input.event.source,
-            task: async () => {
+        const turn = await options.state.run({
+          threadId,
+          policyKey: helperPolicyKey(profile),
+          source: input.event.source,
+          task: async ({ externalSheetMusicAllowed: researchAllowed }) => {
+            const runMode = researchAllowed ? "sheet_music_research" : "normal";
+            const readTools = createHelperReadTools({
+              context,
+              handlers: options.handlers,
+              authorize,
+              onDomainResult: (name, result) => domainResults.push({ name, result })
+            });
+            const writeTools =
+              options.sessions && actionExecutor
+                ? createHelperWriteTools({ context, executor: actionExecutor })
+                : [];
+            const researchTools =
+              researchAllowed && options.webSearch && options.pageReader
+                ? createSheetMusicResearchTools({
+                    consented: true,
+                    context,
+                    webSearch: options.webSearch,
+                    pageReader: options.pageReader,
+                    authorize,
+                    onDirectFileCandidates: options.sessions
+                      ? (candidates) =>
+                          storeSheetMusicImportCandidates({
+                            sessions: options.sessions!,
+                            context,
+                            requestId: input.requestId,
+                            query: text,
+                            candidates,
+                            now: now()
+                          })
+                      : undefined
+                  })
+                : [];
+            const tools = [...readTools, ...(researchAllowed ? researchTools : writeTools)];
+            return runWithAgentBudget(runMode, async () => {
               const state = await createHelperAgent({
                 checkpointer: options.state.checkpointer,
                 model: options.model,
@@ -274,9 +284,9 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                 throw new ReviewCreationFailure("execution_denied");
               }
               return { kind: "review" as const, result: review.result };
-            }
-          })
-        );
+            });
+          }
+        });
         if (turn.kind === "review") {
           await recordHelperObservability(options, input, metrics, turn.result, startedAt, now());
           await emitProductEvent(options.routeObserver, {
@@ -387,16 +397,14 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         currentPolicyKey: async () => helperPolicyKey(await effectiveProfile(input))
       });
       const outcomes: Array<Awaited<ReturnType<typeof executor.execute>>> = [];
-      const runMode = (await options.state.externalSheetMusicAllowed(threadId))
-        ? "sheet_music_research"
-        : "normal";
+      const runMode = "normal";
       try {
-        const resumed = await runWithAgentBudget(runMode, () =>
-          options.state.run({
-            threadId,
-            policyKey: helperPolicyKey(profile),
-            source: input.event.source,
-            task: () => {
+        const resumed = await options.state.run({
+          threadId,
+          policyKey: helperPolicyKey(profile),
+          source: input.event.source,
+          task: () =>
+            runWithAgentBudget(runMode, () => {
               const readTools = createHelperReadTools({
                 context,
                 handlers: options.handlers,
@@ -441,9 +449,8 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                   hmacKey: options.observabilityHmacKey
                 })
               });
-            }
-          })
-        );
+            })
+        });
         if (resumed.status === "approved" || resumed.status === "review") {
           return {
             result: resumed.result,

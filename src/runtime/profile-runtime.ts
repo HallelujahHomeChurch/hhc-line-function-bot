@@ -23,9 +23,14 @@ export interface ProfileActionReviewResult {
   freshExecution: boolean;
 }
 
+export type ProfileSheetMusicResearchOutcome =
+  { kind: "accepted" } | { kind: "handled"; result: FunctionExecutionResult };
+
 export interface ProfileRuntime {
   readonly observesCompletion?: boolean;
-  acceptSheetMusicResearch?(input: ProfileTurnInput): Promise<boolean>;
+  acceptSheetMusicResearch?(
+    input: ProfileTurnInput
+  ): Promise<ProfileSheetMusicResearchOutcome | undefined>;
   handleTextTurn(input: ProfileTurnInput): Promise<FunctionExecutionResult | undefined>;
   handleActionReview?(
     input: ProfileActionReviewInput
@@ -38,7 +43,8 @@ export function createProfileRuntimeDispatcher(
   return {
     acceptSheetMusicResearch(input) {
       return (
-        runtimes[input.profile.name]?.acceptSheetMusicResearch?.(input) ?? Promise.resolve(false)
+        runtimes[input.profile.name]?.acceptSheetMusicResearch?.(input) ??
+        Promise.resolve(undefined)
       );
     },
     handleTextTurn(input) {

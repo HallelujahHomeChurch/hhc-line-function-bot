@@ -131,6 +131,63 @@ describe("helper agent state", () => {
     expect(await state.externalSheetMusicAllowed("helper-a")).toBe(false);
   });
 
+  it("observes expired research consent only after a queued thread lock is acquired", async () => {
+    let now = new Date("2026-09-04T00:00:00.000Z");
+    const state = createHelperAgentState(testStateOptions(new MemorySaver(), () => now));
+    const source = { type: "user", userId: "U1" } as const;
+    await state.allowExternalSheetMusic("helper-a", source, new Date("2026-09-04T00:01:00.000Z"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = state.run({
+      threadId: "helper-a",
+      policyKey: "find_sheet_music",
+      source,
+      task: async () => gate
+    });
+    const second = state.run({
+      threadId: "helper-a",
+      policyKey: "find_sheet_music",
+      source,
+      task: async (snapshot) => snapshot.externalSheetMusicAllowed
+    });
+
+    now = new Date("2026-09-04T00:02:00.000Z");
+    release();
+
+    await first;
+    await expect(second).resolves.toBe(false);
+  });
+
+  it("observes a queued reset before constructing the next turn", async () => {
+    const state = createHelperAgentState(testStateOptions(new MemorySaver()));
+    const source = { type: "user", userId: "U1" } as const;
+    await state.allowExternalSheetMusic("helper-a", source, new Date("2099-09-04T00:01:00.000Z"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = state.run({
+      threadId: "helper-a",
+      policyKey: "find_sheet_music",
+      source,
+      task: async () => gate
+    });
+    const reset = state.reset("helper-a");
+    const next = state.run({
+      threadId: "helper-a",
+      policyKey: "find_sheet_music",
+      source,
+      task: async (snapshot) => snapshot.externalSheetMusicAllowed
+    });
+
+    release();
+
+    await Promise.all([first, reset]);
+    await expect(next).resolves.toBe(false);
+  });
+
   it("resets only the current requester thread", async () => {
     const checkpointer = new MemorySaver();
     const deleteThread = vi.spyOn(checkpointer, "deleteThread");

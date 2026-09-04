@@ -6573,7 +6573,8 @@ describe("LINE entrance", () => {
     const app = createTestApp(config, {
       profileRuntime: createProfileRuntimeDispatcher({
         helper: {
-          acceptSheetMusicResearch: async ({ event }) => event.message?.text === "上網找",
+          acceptSheetMusicResearch: async ({ event }) =>
+            event.message?.text === "上網找" ? { kind: "accepted" as const } : undefined,
           handleTextTurn: profileTurn
         }
       }),
@@ -6607,6 +6608,115 @@ describe("LINE entrance", () => {
     await expect(memoryStore.summary()).resolves.toMatchObject({ resources: 0 });
     expect(complete).toHaveBeenCalledOnce();
     expect(replyText.mock.calls.map(([, text]) => text)).toEqual(["model", "投影片 1", "請選用途"]);
+  });
+
+  it.each(["match", "completion"] as const)(
+    "returns a bounded support reply when attachment %s fails",
+    async (failurePoint) => {
+      const config = accessConfig();
+      const helper = config.profiles[0]!;
+      helper.enabledFunctions = ["save_resource"];
+      helper.permissionRequiredFunctions = [];
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+      const record = vi.fn(async () => undefined);
+      const completion = vi.fn<FunctionCompletionObserver["complete"]>(async ({ result }) => {
+        if (failurePoint === "completion") throw new Error("completion failed");
+        return result;
+      });
+      const app = createTestApp(config, {
+        profileRuntime: createProfileRuntimeDispatcher({
+          helper: { handleTextTurn: profileTurn }
+        }),
+        textMessageHandlers: {
+          pending_attachment_answer: {
+            turnStage: "attachment",
+            capability: "save_resource",
+            matches: vi.fn(async () => {
+              if (failurePoint === "match") throw new Error("match failed");
+              return true;
+            }),
+            handle: vi.fn(async () => ({
+              ok: true,
+              replyText: "queued",
+              executedAction: "save_resource",
+              writePhase: "commit"
+            }))
+          }
+        },
+        completionObserver: { complete: completion },
+        lastErrorStore: { record, list: vi.fn(async () => []), clear: vi.fn(async () => 0) },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "message",
+        replyToken: `attachment-${failurePoint}`,
+        source: { type: "user", userId: "Uroot" },
+        message: { type: "text", text: "保存" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: helper.webhookPath,
+        headers: signedHeaders(body, helper.channelSecret),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(replyText).toHaveBeenCalledOnce();
+      expect(replyText.mock.calls[0]?.[1]).toContain("支援碼");
+      expect(profileTurn).not.toHaveBeenCalled();
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: "function", action: "save_resource" })
+      );
+    }
+  );
+
+  it("returns a helper research cancellation without entering continuations or the model", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    helper.enabledFunctions = ["find_sheet_music"];
+    const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+    const continuation = vi.fn(async () => ({ ok: true, replyText: "legacy" }));
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      profileRuntime: createProfileRuntimeDispatcher({
+        helper: {
+          acceptSheetMusicResearch: async () => ({
+            kind: "handled" as const,
+            result: { ok: true, replyText: "好，我不做外部搜尋。" }
+          }),
+          handleTextTurn: profileTurn
+        }
+      }),
+      textMessageHandlers: {
+        sheet_music_numeric_selection: {
+          turnStage: "resolution",
+          capability: "find_sheet_music",
+          matches: vi.fn(async () => true),
+          handle: continuation
+        }
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "research-cancel",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "不用" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(body, helper.channelSecret),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith("research-cancel", "好，我不做外部搜尋。", undefined);
+    expect(continuation).not.toHaveBeenCalled();
+    expect(profileTurn).not.toHaveBeenCalled();
   });
 
   it.each([

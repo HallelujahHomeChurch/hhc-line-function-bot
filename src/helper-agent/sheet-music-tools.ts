@@ -11,6 +11,13 @@ import type {
 import type { SessionStore } from "../state/session-store.js";
 import { takeToolCall } from "./budget.js";
 
+const MAX_RESEARCH_RESULT_JSON = 2_000;
+const MAX_REFERENCES = 20;
+const MAX_RESULTS = 5;
+const MAX_TITLE_LENGTH = 160;
+const MAX_SNIPPET_LENGTH = 320;
+const MAX_CANDIDATE_URL_LENGTH = 2_048;
+
 export interface SheetMusicResearchToolsOptions {
   consented: boolean;
   context: FunctionHandlerContext;
@@ -37,8 +44,12 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
   let searchResultNeedsInspection = false;
   let nextReference = 1;
   const remember = (title: string, url: string) => {
+    if (references.size >= MAX_REFERENCES) return undefined;
     const ref = `web-${nextReference++}`;
-    references.set(ref, { title, url });
+    references.set(ref, {
+      title: fitString(title, MAX_TITLE_LENGTH),
+      url: fitString(url, MAX_CANDIDATE_URL_LENGTH)
+    });
     return ref;
   };
 
@@ -47,34 +58,44 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
       async ({ query }) => {
         takeToolCall();
         if (!(await authorized(options))) {
-          return { status: "denied", reason: "authorization_changed" };
+          return fitResearchResult({ status: "denied", reason: "authorization_changed" });
         }
         if (directFileFound) {
-          return {
+          return fitResearchResult({
             status: "complete",
             reason: "direct_file_already_found",
             instruction: "Stop searching and reply with the existing direct file candidate."
-          };
+          });
         }
         if (searchResultNeedsInspection) {
-          return { status: "denied", reason: "inspect_current_candidates_before_new_search" };
+          return fitResearchResult({
+            status: "denied",
+            reason: "inspect_current_candidates_before_new_search"
+          });
         }
         // This assignment must precede I/O so parallel model calls cannot bypass inspection.
         searchResultNeedsInspection = true;
         try {
           const results = await options.webSearch.search({ query, language: "zh-TW", limit: 5 });
           searchResultNeedsInspection = results.length > 0;
-          return {
+          return fitResearchResult({
             status: results.length ? "success" : "not_found",
-            results: results.map(({ title, snippet, url }) => ({
-              ref: remember(title, url),
-              title,
-              ...(snippet ? { snippet } : {})
-            }))
-          };
+            results: results.slice(0, MAX_RESULTS).flatMap(({ title, snippet, url }) => {
+              const ref = remember(title, url);
+              return ref
+                ? [
+                    {
+                      ref,
+                      title: fitString(title, MAX_TITLE_LENGTH),
+                      ...(snippet ? { snippet: fitString(snippet, MAX_SNIPPET_LENGTH) } : {})
+                    }
+                  ]
+                : [];
+            })
+          });
         } catch {
           searchResultNeedsInspection = false;
-          return { status: "unavailable", results: [] };
+          return fitResearchResult({ status: "unavailable", results: [] });
         }
       },
       {
@@ -87,18 +108,27 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
       async ({ ref }) => {
         takeToolCall();
         if (!(await authorized(options))) {
-          return { status: "denied", reason: "authorization_changed" };
+          return fitResearchResult({ status: "denied", reason: "authorization_changed" });
         }
         const reference = references.get(ref);
-        if (!reference) return { status: "denied", reason: "unknown_or_expired_reference" };
-        searchResultNeedsInspection = false;
+        if (!reference) {
+          return fitResearchResult({
+            status: "denied",
+            reason: "unknown_or_expired_reference"
+          });
+        }
         try {
           const page = await options.pageReader.read(reference.url);
-          directFileFound = page.kind === "direct_file";
-          const candidates = [...(page.kind === "direct_file" ? [reference] : []), ...page.links];
+          const links = page.links.slice(0, MAX_RESULTS).map(fitCandidate);
+          directFileFound = page.kind === "direct_file" || links.length > 0;
+          searchResultNeedsInspection = directFileFound;
+          const candidates = [
+            ...(page.kind === "direct_file" ? [fitCandidate(reference)] : []),
+            ...links
+          ].slice(0, MAX_RESULTS);
           if (candidates.length) await options.onDirectFileCandidates?.(candidates);
-          return {
-            status: page.kind === "direct_file" ? "complete" : "success",
+          return fitResearchResult({
+            status: directFileFound ? "complete" : "success",
             kind: page.kind,
             untrusted: true,
             ...(page.text ? { text: page.text } : {}),
@@ -108,11 +138,18 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
                   title: reference.title,
                   instruction: "Stop searching and reply with this candidate; do not save it."
                 }
-              : {}),
-            links: page.links.map(({ title, url }) => ({ title, ref: remember(title, url) }))
-          };
+              : links.length
+                ? {
+                    instruction: "Stop searching and reply with these candidates; do not save them."
+                  }
+                : {}),
+            links: links.flatMap(({ title, url }) => {
+              const linkRef = remember(title, url);
+              return linkRef ? [{ title, ref: linkRef }] : [];
+            })
+          });
         } catch {
-          return { status: "unavailable", reason: "page_read_failed" };
+          return fitResearchResult({ status: "unavailable", reason: "page_read_failed" });
         }
       },
       {
@@ -142,11 +179,61 @@ export async function storeSheetMusicImportCandidates(input: {
     requesterUserId: input.context.event.source.userId,
     source: input.context.event.source,
     query: input.query,
-    items: input.candidates.slice(0, 5),
+    items: input.candidates.slice(0, MAX_RESULTS).map(fitCandidate),
     expiresAt: new Date(input.now.getTime() + 10 * 60_000).toISOString()
   });
 }
 
 async function authorized(options: SheetMusicResearchToolsOptions): Promise<boolean> {
   return !options.authorize || (await options.authorize("find_sheet_music"));
+}
+
+function fitCandidate(candidate: WebSearchResult): WebSearchResult {
+  return {
+    title: fitString(candidate.title, MAX_TITLE_LENGTH),
+    url: fitString(candidate.url, MAX_CANDIDATE_URL_LENGTH),
+    ...(candidate.snippet ? { snippet: fitString(candidate.snippet, MAX_SNIPPET_LENGTH) } : {})
+  };
+}
+
+function fitString(value: string, maxLength: number): string {
+  return value.slice(0, maxLength);
+}
+
+function fitResearchResult<T extends Record<string, unknown>>(result: T): T {
+  const fitted = JSON.parse(JSON.stringify(result)) as T;
+  while (JSON.stringify(fitted).length > MAX_RESEARCH_RESULT_JSON) {
+    const longest = longestString(fitted);
+    if (!longest || longest.value.length <= 16) {
+      return {
+        status: typeof fitted.status === "string" ? fitted.status : "unavailable",
+        reason: "result_truncated"
+      } as unknown as T;
+    }
+    longest.set(longest.value.slice(0, Math.floor(longest.value.length / 2)));
+  }
+  return fitted;
+}
+
+function longestString(value: unknown): { value: string; set(next: string): void } | undefined {
+  let longest: { value: string; set(next: string): void } | undefined;
+  const visit = (current: unknown) => {
+    if (!current || typeof current !== "object") return;
+    for (const [key, child] of Object.entries(current)) {
+      if (typeof child === "string") {
+        if (!longest || child.length > longest.value.length) {
+          longest = {
+            value: child,
+            set: (next) => {
+              (current as Record<string, unknown>)[key] = next;
+            }
+          };
+        }
+      } else {
+        visit(child);
+      }
+    }
+  };
+  visit(value);
+  return longest;
 }

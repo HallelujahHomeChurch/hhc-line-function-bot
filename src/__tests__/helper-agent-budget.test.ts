@@ -35,4 +35,13 @@ describe("helper agent budget", () => {
       })
     ).rejects.toThrow("agent_tool_budget_exceeded");
   });
+
+  it("allows six tool calls only in consented research mode", async () => {
+    await expect(
+      runWithAgentBudget("sheet_music_research", async () => {
+        for (let index = 0; index < 6; index += 1) takeToolCall();
+        takeToolCall();
+      })
+    ).rejects.toThrow("agent_tool_budget_exceeded");
+  });
 });

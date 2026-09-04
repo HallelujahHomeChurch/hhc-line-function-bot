@@ -14,6 +14,10 @@ interface HelperAgentStateOptions {
   now?: () => Date;
 }
 
+export interface HelperAgentRunSnapshot {
+  externalSheetMusicAllowed: boolean;
+}
+
 export interface HelperAgentState {
   checkpointer: SdkCheckpointer;
   threadId(input: { profileName: string; source: LineSource }): string | undefined;
@@ -21,7 +25,7 @@ export interface HelperAgentState {
     threadId: string;
     policyKey: string;
     source: LineSource;
-    task: () => Promise<T>;
+    task: (snapshot: HelperAgentRunSnapshot) => Promise<T>;
   }): Promise<T>;
   reset(threadId: string): Promise<void>;
   allowExternalSheetMusic(threadId: string, source: LineSource, expiresAt: Date): Promise<void>;
@@ -49,8 +53,8 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
     threadId: createThreadId(options.hmacKey),
     run: (input) =>
       withMemoryThreadLock(locks, input.threadId, async () => {
-        const expired =
-          (expiresAt.get(input.threadId) ?? Number.POSITIVE_INFINITY) <= now().getTime();
+        const cleanupAt = now().getTime();
+        const expired = (expiresAt.get(input.threadId) ?? Number.POSITIVE_INFINITY) <= cleanupAt;
         const policyChanged =
           policyKeys.has(input.threadId) && policyKeys.get(input.threadId) !== input.policyKey;
         if (expired || policyChanged) {
@@ -58,7 +62,11 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
           externalSearchExpiresAt.delete(input.threadId);
         }
         try {
-          const result = await input.task();
+          const observedAt = now().getTime();
+          const result = await input.task({
+            externalSheetMusicAllowed:
+              (externalSearchExpiresAt.get(input.threadId) ?? 0) > observedAt
+          });
           expiresAt.set(input.threadId, now().getTime() + helperThreadIdleTtlMs(input.source));
           policyKeys.set(input.threadId, input.policyKey);
           return result;
@@ -111,22 +119,31 @@ export function createPostgresHelperAgentState(
         const current = await options.pool.query<{
           expires_at: Date;
           policy_key: string | null;
-        }>("select expires_at, policy_key from agent_sdk_threads where thread_id = $1", [
-          input.threadId
-        ]);
-        const metadata = current.rows[0];
+          external_search_expires_at: Date | null;
+        }>(
+          `select expires_at, policy_key, external_search_expires_at
+             from agent_sdk_threads where thread_id = $1`,
+          [input.threadId]
+        );
+        let metadata: (typeof current.rows)[number] | undefined = current.rows[0];
+        const cleanupAt = now();
         if (
           metadata &&
-          (metadata.expires_at.getTime() <= now().getTime() ||
+          (metadata.expires_at.getTime() <= cleanupAt.getTime() ||
             (metadata.policy_key !== null && metadata.policy_key !== input.policyKey))
         ) {
           await options.checkpointer.deleteThread(input.threadId);
           await options.pool.query("delete from agent_sdk_threads where thread_id = $1", [
             input.threadId
           ]);
+          metadata = undefined;
         }
         try {
-          const result = await input.task();
+          const observedAt = now();
+          const result = await input.task({
+            externalSheetMusicAllowed:
+              (metadata?.external_search_expires_at?.getTime() ?? 0) > observedAt.getTime()
+          });
           await options.pool.query(
             `insert into agent_sdk_threads (thread_id, expires_at, policy_key)
              values ($1, $2, $3)

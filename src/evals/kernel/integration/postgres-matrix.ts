@@ -195,7 +195,7 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
   const pool = new Pool({ ...environment.pools[0].options, max: 1 });
   try {
     const checkpointer = new PostgresSaver(pool);
-    const now = new Date("2026-09-04T00:00:00.000Z");
+    let now = new Date("2026-09-04T00:00:00.000Z");
     const state = createPostgresHelperAgentState({
       pool,
       lockPool: environment.pools[1],
@@ -234,6 +234,13 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
 
     if (pool.options.max !== 1) throw new Error("helper_data_pool_not_saturated");
     await withinHelperStateTimeout(invoke(direct, { type: "user", userId: "kernel-direct-user" }));
+    const researchAllowed = await state.run({
+      threadId: group,
+      policyKey: "kernel-policy-v1",
+      source: groupSource,
+      task: async (snapshot) => snapshot.externalSheetMusicAllowed
+    });
+    if (!researchAllowed) throw new Error("helper_research_snapshot_not_allowed");
     await invoke(group, groupSource);
     const metadata = await pool.query<{ thread_id: string; expires_at: Date }>(
       "select thread_id, expires_at from agent_sdk_threads where thread_id = any($1::text[])",
@@ -246,6 +253,14 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
     if (expiresAt.get(group)?.getTime() !== now.getTime() + 15 * 60_000) {
       throw new Error("helper_group_ttl_invalid");
     }
+    now = new Date("2026-09-04T00:01:00.000Z");
+    const expiredResearchAllowed = await state.run({
+      threadId: group,
+      policyKey: "kernel-policy-v1",
+      source: groupSource,
+      task: async (snapshot) => snapshot.externalSheetMusicAllowed
+    });
+    if (expiredResearchAllowed) throw new Error("helper_research_snapshot_not_expired");
 
     await state.reset(group);
     const checkpoint = await pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [

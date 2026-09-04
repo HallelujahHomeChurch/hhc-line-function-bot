@@ -111,6 +111,123 @@ describe("helper sheet-music research tools", () => {
     });
   });
 
+  it("keeps the inspection guard while a page read is in flight", async () => {
+    let resolveRead!: (value: { kind: "html"; text: string; links: [] }) => void;
+    const read = vi.fn(
+      () =>
+        new Promise<{ kind: "html"; text: string; links: [] }>((resolve) => {
+          resolveRead = resolve;
+        })
+    );
+    const search = vi.fn(async () => [
+      { title: "Candidate", url: "https://scores.example.test/candidate" }
+    ]);
+    const tools = createSheetMusicResearchTools({
+      consented: true,
+      context: context(),
+      pageReader: { read },
+      webSearch: { search }
+    });
+    const first = (await tools[0]!.invoke({ query: "song score" })) as {
+      results: Array<{ ref: string }>;
+    };
+    const reading = tools[1]!.invoke({ ref: first.results[0]!.ref });
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+
+    await expect(tools[0]!.invoke({ query: "parallel search" })).resolves.toEqual({
+      status: "denied",
+      reason: "inspect_current_candidates_before_new_search"
+    });
+    expect(search).toHaveBeenCalledOnce();
+
+    resolveRead({ kind: "html", text: "lyrics", links: [] });
+    await reading;
+    await tools[0]!.invoke({ query: "next search" });
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps failed reads inspectable and lets the same opaque ref retry", async () => {
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce({ kind: "html" as const, text: "lyrics", links: [] });
+    const search = vi.fn(async () => [
+      { title: "Candidate", url: "https://scores.example.test/candidate" }
+    ]);
+    const tools = createSheetMusicResearchTools({
+      consented: true,
+      context: context(),
+      pageReader: { read },
+      webSearch: { search }
+    });
+    const first = (await tools[0]!.invoke({ query: "song score" })) as {
+      results: Array<{ ref: string }>;
+    };
+
+    await tools[1]!.invoke({ ref: first.results[0]!.ref });
+    await expect(tools[0]!.invoke({ query: "must not bypass" })).resolves.toEqual({
+      status: "denied",
+      reason: "inspect_current_candidates_before_new_search"
+    });
+    await tools[1]!.invoke({ ref: first.results[0]!.ref });
+
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds every result and stored direct-link candidate under hostile input", async () => {
+    const hostile = '"'.repeat(9_000);
+    const candidates = vi.fn();
+    const tools = createSheetMusicResearchTools({
+      consented: true,
+      context: context(),
+      onDirectFileCandidates: candidates,
+      pageReader: {
+        read: vi.fn(async () => ({
+          kind: "html" as const,
+          text: hostile,
+          links: Array.from({ length: 100 }, (_, index) => ({
+            title: `${hostile}${index}`,
+            url: `https://scores.example.test/${"x".repeat(9_000)}-${index}.pdf`
+          }))
+        }))
+      },
+      webSearch: {
+        search: vi.fn(async () =>
+          Array.from({ length: 100 }, (_, index) => ({
+            title: `${hostile}${index}`,
+            snippet: hostile,
+            url: `https://scores.example.test/${"x".repeat(9_000)}-${index}`
+          }))
+        )
+      }
+    });
+    const searchResult = (await tools[0]!.invoke({ query: "song score" })) as {
+      results: Array<{ ref: string }>;
+    };
+    const pageResult = await tools[1]!.invoke({ ref: searchResult.results[0]!.ref });
+
+    expect(JSON.stringify(searchResult).length).toBeLessThanOrEqual(2_000);
+    expect(JSON.stringify(pageResult).length).toBeLessThanOrEqual(2_000);
+    expect(JSON.stringify(searchResult)).not.toContain("https://");
+    expect(searchResult.results).toHaveLength(5);
+    expect(candidates).toHaveBeenCalledOnce();
+    expect(candidates.mock.calls[0]![0]).toHaveLength(5);
+    expect(
+      candidates.mock.calls[0]![0].every(({ title }: { title: string }) => title.length <= 160)
+    ).toBe(true);
+    expect(
+      candidates.mock.calls[0]![0].every(({ url }: { url: string }) => url.length <= 2_048)
+    ).toBe(true);
+    await expect(tools[0]!.invoke({ query: "search after direct link" })).resolves.toMatchObject({
+      status: "complete",
+      reason: "direct_file_already_found"
+    });
+    await expect(tools[1]!.invoke({ ref: "web-21" })).resolves.toMatchObject({
+      status: "denied",
+      reason: "unknown_or_expired_reference"
+    });
+  });
+
   it("treats page instructions as untrusted data and never creates an import candidate", async () => {
     const storeCandidates = vi.fn();
     const tools = createSheetMusicResearchTools({
