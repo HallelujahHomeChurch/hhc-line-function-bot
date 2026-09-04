@@ -204,6 +204,18 @@ describe("helper tool policy gateway", () => {
     ).resolves.toEqual(unavailable);
   });
 
+  it("returns unavailable when a handler exceeds the tool deadline", async () => {
+    const gateway = createHelperToolGateway({
+      context: helperContext(),
+      handlers: { query_schedule: () => new Promise(() => undefined) },
+      timeoutMs: 1
+    });
+
+    await expect(
+      gateway.execute("query_schedule", { query: "查服事表" }, "official")
+    ).resolves.toEqual({ status: "unavailable", sourceType: "official" });
+  });
+
   it("removes links and internal fields while capping records before model exposure", () => {
     const projected = projectToolResult(
       {

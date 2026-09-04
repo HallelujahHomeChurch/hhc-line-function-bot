@@ -121,7 +121,10 @@ describe("production profile configuration deployment contract", () => {
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 2`);
-    expect(manifest).toContain("scale:\n      minReplicas: 1\n      maxReplicas: 10");
+    expect(manifest).toContain(`scale:
+      minReplicas: 1
+      # Two PostgreSQL pools use at most two connections each; recalculate the shared DB budget before raising this.
+      maxReplicas: 3`);
     expect(manifest).toContain("resources:");
     expect(manifest).toContain("cpu:");
     expect(manifest).toContain("memory:");

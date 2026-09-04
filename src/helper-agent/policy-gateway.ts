@@ -16,6 +16,7 @@ import type {
 export interface HelperToolGatewayOptions {
   context: FunctionHandlerContext;
   handlers: FunctionRegistry;
+  timeoutMs?: number;
   authorize?: (name: CapabilityName) => Promise<boolean>;
   onDomainResult?: (
     name: CapabilityName,
@@ -63,7 +64,10 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
       if (!handler) return unavailable(sourceType);
       let result: FunctionExecutionResult;
       try {
-        result = await handler(parsedArgs, { ...options.context, agentTool: true });
+        result = await withDeadline(
+          handler(parsedArgs, { ...options.context, agentTool: true }),
+          options.timeoutMs ?? 10_000
+        );
       } catch {
         return unavailable(sourceType);
       }
@@ -71,6 +75,21 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
       return projectToolResult(result, sourceType);
     }
   };
+}
+
+async function withDeadline<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("helper_tool_timeout")), timeoutMs);
+        timer.unref();
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function denied(sourceType: HelperToolSourceType): HelperToolResult {
