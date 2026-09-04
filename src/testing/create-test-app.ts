@@ -5,11 +5,8 @@ import { InMemoryRegistrationInviteCodeStore } from "../access/registration-invi
 import { createAdminActionRegistry } from "../actions/admin-registry.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
-import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
-import type { AgentTurnRuntime } from "../agent/turn-runtime.js";
-import { createSlotClarificationResult } from "../agent/slot-clarification.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
-import { createFunctionCompletionObserver } from "../application/turn/completion-observer.js";
+import { createFunctionCompletionObserver } from "../observability/function-completion.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createStaticAppDiagnostics } from "../diagnostics/dependencies.js";
 import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
@@ -36,7 +33,6 @@ export type TestAppDependencies = Partial<AppDependencies> & {
   adminActionRouter?: AdminActionRouterPort;
   functionRegistry?: FunctionRegistry;
   firstSuccessStore?: FirstSuccessStore;
-  agentTurnRuntime?: AgentTurnRuntime;
 };
 
 export function createTestApp(config: AppConfig, overrides: TestAppDependencies = {}) {
@@ -124,34 +120,18 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
       confirmationStore: overrides.confirmationStore,
       confirmationTtlMinutes: config.access?.confirmationTtlMinutes
     });
-  const continuationRuntime =
-    overrides.agentTurnRuntime ??
-    createAgentTurnRuntime({
-      functionRegistry,
-      textMessageHandlers,
-      adminActionRouter: overrides.adminActionRouter,
-      adminActionRegistry,
-      accessStore,
-      sessionStore,
-      agentRuntime: overrides.agentRuntime,
-      traceStore: agentTraceStore,
-      lastErrorStore,
-      lastRouteStore,
-      routeObserver: overrides.routeObserver,
-      observabilityHmacKey: config.observability?.hmacKey,
-      firstSuccessStore,
-      completionObserver
-    });
-  const legacyRuntime = overrides.router
-    ? createRouterTestRuntime(overrides.router, continuationRuntime, functionRegistry, sessionStore)
-    : continuationRuntime;
-  const profileRuntime = overrides.profileRuntime ?? createLegacyRuntimeTestAdapter(legacyRuntime);
+  const profileRuntime =
+    overrides.profileRuntime ??
+    (overrides.router
+      ? createRouterTestRuntime(overrides.router, functionRegistry)
+      : { handleTextTurn: async () => undefined });
 
   return createTransportApp(config, {
     adminActionRegistry,
     adminActionRouter: overrides.adminActionRouter,
     postbackHandlers: overrides.postbackHandlers ?? {},
     textMessageHandlers,
+    attachmentTextHandlers: overrides.attachmentTextHandlers ?? [],
     adminHandlers: overrides.adminHandlers ?? {},
     createLineReplyClient: overrides.createLineReplyClient ?? createLineSdkReplyClient,
     createLineIdentityClient: overrides.createLineIdentityClient ?? createLineSdkIdentityClient,
@@ -170,7 +150,8 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     confirmationStore: overrides.confirmationStore,
     webhookEventStore: overrides.webhookEventStore ?? new InMemoryWebhookEventStore(),
     textGenerator: overrides.textGenerator,
-    agentRuntime: overrides.agentRuntime,
+    memoryCommands: overrides.memoryCommands,
+    resourceMemory: overrides.resourceMemory,
     profileRuntime,
     agentTraceStore,
     sessionStore,
@@ -183,37 +164,12 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
   });
 }
 
-function createLegacyRuntimeTestAdapter(runtime: AgentTurnRuntime): ProfileRuntime {
-  return {
-    observesCompletion: true,
-    handleTextTurn(input) {
-      return runtime.handleTextTurn({
-        profile: input.profile,
-        event: input.event,
-        requestId: input.requestId,
-        requesterDisplayName: input.requesterDisplayName,
-        requesterIsAdmin: input.requesterIsAdmin,
-        configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
-        authorizeFunctions: input.authorizeFunctions
-          ? async (names) => [...(await input.authorizeFunctions!([...names]))]
-          : undefined,
-        accountAdministrator: input.accountAdministrator,
-        allowRouting: true
-      });
-    }
-  };
-}
-
 function createRouterTestRuntime(
   router: FunctionRouterPort,
-  continuationRuntime: ReturnType<typeof createAgentTurnRuntime>,
-  functionRegistry: FunctionRegistry,
-  sessionStore: TestAppDependencies["sessionStore"]
-) {
+  functionRegistry: FunctionRegistry
+): ProfileRuntime {
   return {
-    async handleTextTurn(input: Parameters<typeof continuationRuntime.handleTextTurn>[0]) {
-      const continuation = await continuationRuntime.handleTextTurn(input);
-      if (continuation || input.allowRouting === false) return continuation;
+    async handleTextTurn(input) {
       const route = await router.route({
         profileName: input.profile.name,
         text: input.event.message?.text ?? "",
@@ -235,15 +191,7 @@ function createRouterTestRuntime(
       const arguments_ = normalizeFunctionArguments(route.action, route.arguments, {
         text: input.event.message?.text ?? ""
       });
-      const clarification = await createSlotClarificationResult({
-        sessionStore,
-        action: route.action,
-        arguments: arguments_,
-        context,
-        requestId: input.requestId,
-        now: new Date()
-      });
-      return clarification ?? handler(arguments_, context);
+      return handler(arguments_, context);
     }
   };
 }

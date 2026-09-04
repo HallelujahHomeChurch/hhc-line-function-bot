@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -20,7 +21,6 @@ import type {
   RolePrincipalType,
   RecordPrincipalSuccessInput
 } from "./types.js";
-import type { FunctionName } from "../types.js";
 
 export interface PgQueryable {
   query<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -159,7 +159,7 @@ export class PostgresAccessStore implements AccessStore {
     return result.rows.map(mapAuditEvent);
   }
 
-  async listGroupFunctionGrants(profileName: string, groupId: string): Promise<FunctionName[]> {
+  async listGroupFunctionGrants(profileName: string, groupId: string): Promise<CapabilityName[]> {
     const result = await this.db.query(
       `
       select function_name
@@ -171,7 +171,7 @@ export class PostgresAccessStore implements AccessStore {
       `,
       [profileName, groupId]
     );
-    return result.rows.map((row) => row.function_name as FunctionName);
+    return result.rows.map((row) => row.function_name as CapabilityName);
   }
 
   async listAllGroupFunctionGrants(profileName: string): Promise<GroupFunctionGrant[]> {
@@ -221,7 +221,7 @@ export class PostgresAccessStore implements AccessStore {
     return result.rows.length > 0;
   }
 
-  async listUserFunctionGrants(profileName: string, userId: string): Promise<FunctionName[]> {
+  async listUserFunctionGrants(profileName: string, userId: string): Promise<CapabilityName[]> {
     const result = await this.db.query(
       `
       select function_name
@@ -233,7 +233,7 @@ export class PostgresAccessStore implements AccessStore {
       `,
       [profileName, userId]
     );
-    return result.rows.map((row) => row.function_name as FunctionName);
+    return result.rows.map((row) => row.function_name as CapabilityName);
   }
 
   async listAllUserFunctionGrants(profileName: string): Promise<UserFunctionGrant[]> {
@@ -365,8 +365,8 @@ function mapPrincipal(row: Record<string, unknown>): AccessPrincipal {
     createdBy: String(row.created_by),
     disabledAt: optionalIso(row.disabled_at),
     disabledBy: optionalString(row.disabled_by),
-    lastSuccessFunctionName: optionalString(row.last_success_function_name) as
-      FunctionName | undefined,
+    lastSuccessCapabilityName: optionalString(row.last_success_function_name) as
+      CapabilityName | undefined,
     lastSuccessAt: optionalIso(row.last_success_at)
   };
 }
@@ -389,7 +389,7 @@ function mapGroupFunctionGrant(row: Record<string, unknown>): GroupFunctionGrant
     id: String(row.id),
     profileName: String(row.profile_name),
     groupId: String(row.group_id),
-    functionName: row.function_name as FunctionName,
+    functionName: row.function_name as CapabilityName,
     createdAt: toIso(row.created_at),
     createdBy: String(row.created_by),
     disabledAt: optionalIso(row.disabled_at),
@@ -402,7 +402,7 @@ function mapUserFunctionGrant(row: Record<string, unknown>): UserFunctionGrant {
     id: String(row.id),
     profileName: String(row.profile_name),
     userId: String(row.user_id),
-    functionName: row.function_name as FunctionName,
+    functionName: row.function_name as CapabilityName,
     createdAt: toIso(row.created_at),
     createdBy: String(row.created_by),
     disabledAt: optionalIso(row.disabled_at),

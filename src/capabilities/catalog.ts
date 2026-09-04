@@ -1,3 +1,4 @@
+import type { CapabilityName } from "./names.js";
 import type { z } from "zod";
 
 import {
@@ -14,7 +15,7 @@ import {
 import { downloadWeeklyPaperDefinition } from "../capabilities/download-weekly-paper.js";
 import { queryScheduleDefinition } from "../capabilities/query-schedule/definition.js";
 import { updateOwnProfileDefinition } from "../capabilities/update-own-profile/definition.js";
-import type { AgentResourceType, FunctionName } from "../types.js";
+import type { AgentResourceType } from "../types.js";
 
 export type FunctionSideEffectLevel = "read" | "write" | "admin" | "destructive";
 export type FunctionAllowedSource = "user" | "group";
@@ -63,7 +64,7 @@ export interface AgentCapabilityContract {
 }
 
 export interface FunctionDefinition {
-  name: FunctionName;
+  name: CapabilityName;
   displayName: string;
   shortDescription: string;
   examples: string[];
@@ -88,7 +89,7 @@ export interface FunctionDefinition {
   helpText: string;
 }
 
-export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
+export const CAPABILITY_CATALOG: FunctionDefinition[] = [
   downloadWeeklyPaperDefinition,
   updateOwnProfileDefinition,
   {
@@ -484,22 +485,22 @@ export const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
   }
 ];
 
-export function getFunctionDefinition(name: FunctionName): FunctionDefinition | undefined {
-  return FUNCTION_DEFINITIONS.find((definition) => definition.name === name);
+export function getFunctionDefinition(name: CapabilityName): FunctionDefinition | undefined {
+  return CAPABILITY_CATALOG.find((definition) => definition.name === name);
 }
 
-export function getFunctionDefinitions(names: FunctionName[]): FunctionDefinition[] {
+export function getFunctionDefinitions(names: CapabilityName[]): FunctionDefinition[] {
   return names
     .map((name) => getFunctionDefinition(name))
     .filter((definition): definition is FunctionDefinition => Boolean(definition));
 }
 
-export function isGrantableFunctionName(name: FunctionName): boolean {
+export function isGrantableCapabilityName(name: CapabilityName): boolean {
   return Boolean(getFunctionDefinition(name));
 }
 
 export function isFunctionGrantableForPrincipal(
-  name: FunctionName,
+  name: CapabilityName,
   principal: "user" | "group"
 ): boolean {
   const definition = getFunctionDefinition(name);
@@ -508,6 +509,6 @@ export function isFunctionGrantableForPrincipal(
   );
 }
 
-export function userFacingFunctionNames(): FunctionName[] {
-  return FUNCTION_DEFINITIONS.map((definition) => definition.name);
+export function userFacingCapabilityNames(): CapabilityName[] {
+  return CAPABILITY_CATALOG.map((definition) => definition.name);
 }

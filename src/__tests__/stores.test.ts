@@ -139,8 +139,7 @@ describe("store factories", () => {
       });
       await store.set({
         id: "review-1:arguments",
-        type: "pending_function",
-        action: "update_own_profile",
+        type: "profile_update",
         profileName: "main",
         requesterUserId: "U1",
         source,
@@ -152,6 +151,9 @@ describe("store factories", () => {
       await expect(
         store.findActionReview({ profileName: "main", source, requesterUserId: "U1" })
       ).resolves.toMatchObject({ id: "review-1" });
+      await expect(
+        store.findProfileUpdate({ profileName: "main", source, requesterUserId: "U1" })
+      ).resolves.toMatchObject({ id: "review-1:arguments" });
       await expect(store.get("review-1:arguments")).resolves.toMatchObject({
         reviewId: "review-1",
         arguments: { firstName: "Ray", lastName: "Self" }
@@ -278,23 +280,23 @@ describe("store factories", () => {
     });
     await store.set({
       id: "pending-1",
-      type: "pending_function",
-      action: "find_ppt_slides",
+      type: "pending_attachment",
+      action: "save_resource",
       profileName: "helper",
       requesterUserId: "U1",
       source: { type: "group", groupId: "C1" },
-      arguments: { query: "" },
+      attachment: { messageId: "M1", messageType: "file" },
       expiresAt: "2026-07-04T10:10:00.000Z"
     });
 
     await expect(
-      store.findPendingFunction({
+      store.findPendingAttachment({
         profileName: "helper",
         source: { type: "group", groupId: "C1" }
       })
     ).resolves.toBeUndefined();
     await expect(
-      store.findPendingFunction({
+      store.findPendingAttachment({
         profileName: "helper",
         source: { type: "group", groupId: "C1", userId: "U1" },
         requesterUserId: "U1"
@@ -310,23 +312,23 @@ describe("store factories", () => {
     });
     await store.set({
       id: "pending-1",
-      type: "pending_function",
-      action: "find_ppt_slides",
+      type: "pending_attachment",
+      action: "save_resource",
       profileName: "helper",
       requesterUserId: "U1",
       source: { type: "group", groupId: "C1" },
-      arguments: { query: "" },
+      attachment: { messageId: "M1", messageType: "file" },
       expiresAt: "2026-07-04T10:10:00.000Z"
     });
 
     await expect(
-      store.findPendingFunction({
+      store.findPendingAttachment({
         profileName: "helper",
         source: { type: "group", groupId: "C1" }
       })
     ).resolves.toBeUndefined();
     await expect(
-      store.findPendingFunction({
+      store.findPendingAttachment({
         profileName: "helper",
         source: { type: "group", groupId: "C1", userId: "U1" },
         requesterUserId: "U1"

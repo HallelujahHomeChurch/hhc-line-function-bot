@@ -62,7 +62,7 @@ describe("access store", () => {
         type: "group",
         principalId: "C1",
         disabledAt: expect.any(String),
-        lastSuccessFunctionName: "find_ppt_slides",
+        lastSuccessCapabilityName: "find_ppt_slides",
         lastSuccessAt: "2026-07-26T10:00:00.000Z"
       }
     ]);
@@ -100,7 +100,7 @@ describe("access store", () => {
       {
         principalId: "C1",
         disabledAt: "2026-07-25T00:00:00.000Z",
-        lastSuccessFunctionName: "find_ppt_slides",
+        lastSuccessCapabilityName: "find_ppt_slides",
         lastSuccessAt: "2026-07-26T10:00:00.000Z"
       }
     ]);

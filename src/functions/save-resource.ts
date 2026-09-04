@@ -1,24 +1,16 @@
-import { randomUUID } from "node:crypto";
-
 import { saveResourceArgumentsSchema } from "../function-arguments.js";
 import type { AgentMemoryStore } from "../agent/memory-store.js";
 import type { FunctionHandler } from "../types.js";
-import type { SessionStore } from "../state/session-store.js";
-import { storePendingFunctionQuery } from "./pending-function.js";
 
 const RESOURCE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface SaveResourceFunctionOptions {
   memoryStore: AgentMemoryStore;
-  sessionStore?: SessionStore;
   now?: () => Date;
-  requestIdFactory?: () => string;
 }
 
 export function createSaveResourceHandler(options: SaveResourceFunctionOptions): FunctionHandler {
   const now = options.now ?? (() => new Date());
-  const requestIdFactory = options.requestIdFactory ?? randomUUID;
-
   return async (rawArgs, context) => {
     const args = saveResourceArgumentsSchema.parse(rawArgs);
     const url = parseHttpsUrl(args.url);
@@ -38,23 +30,6 @@ export function createSaveResourceHandler(options: SaveResourceFunctionOptions):
     const visibility = args.visibility ?? "private";
 
     if (!args.confirm) {
-      if (options.sessionStore && !context.agentTool) {
-        await storePendingFunctionQuery({
-          sessionStore: options.sessionStore,
-          requestId: requestIdFactory(),
-          action: "save_resource",
-          arguments: {
-            url: url.toString(),
-            resourceType: args.resourceType,
-            title,
-            description: args.description?.trim(),
-            visibility,
-            confirm: true
-          },
-          context,
-          now: now()
-        });
-      }
       return {
         ok: true,
         writePhase: "preview",

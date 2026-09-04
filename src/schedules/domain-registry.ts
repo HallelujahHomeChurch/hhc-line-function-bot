@@ -1,6 +1,6 @@
 import type { ScheduleDomainConfig } from "../types.js";
-import type { ResolutionCandidate, ResolutionDecision } from "../agent/resolution.js";
-import { decideResolution } from "../agent/resolution.js";
+import type { ResolutionCandidate, ResolutionDecision } from "../schedules/resolution.js";
+import { decideResolution } from "../schedules/resolution.js";
 
 export const DEFAULT_SCHEDULE_DOMAINS: ScheduleDomainConfig[] = [
   domain({

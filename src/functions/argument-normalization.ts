@@ -1,8 +1,9 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { extractPptSlideQuery } from "../ppt-query.js";
 import { extractScheduleRoleFocus, refineScheduleQuery } from "./schedule-query-refinement.js";
-import { getFunctionDefinition } from "./definitions.js";
-import { clearGenericSlotArguments, findGenericRequestSlot } from "./generic-slot.js";
-import type { FunctionName, JsonRecord } from "../types.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
+import type { FunctionRequiredSlot } from "../capabilities/catalog.js";
+import type { JsonRecord } from "../types.js";
 
 export interface FunctionArgumentNormalizationInput {
   text: string;
@@ -33,8 +34,64 @@ const leadingRequestWords = [
   "給我"
 ];
 
+const genericRequestPrefixes = [
+  "請幫我",
+  "幫我",
+  "麻煩",
+  "我想要",
+  "我要",
+  "我想",
+  "小哈",
+  "查詢",
+  "搜尋",
+  "lookup",
+  "search",
+  "find",
+  "showme",
+  "請",
+  "想要",
+  "想",
+  "查",
+  "找",
+  "看",
+  "給我",
+  "一份",
+  "一首",
+  "一個",
+  "一些"
+];
+
+function findGenericRequestSlot(
+  slots: FunctionRequiredSlot[],
+  text: string
+): FunctionRequiredSlot | undefined {
+  return slots.find((slot) =>
+    slot.genericRequest?.phrases.some(
+      (phrase) => normalizeGenericRequestText(text) === normalizeGenericRequestText(phrase)
+    )
+  );
+}
+
+function clearGenericSlotArguments(slot: FunctionRequiredSlot, args: JsonRecord): JsonRecord {
+  const next = { ...args, [slot.argument]: "" };
+  for (const argument of slot.genericRequest?.clearArguments ?? []) delete next[argument];
+  return next;
+}
+
+function normalizeGenericRequestText(value: string): string {
+  let normalized = value.normalize("NFKC").trim().toLocaleLowerCase();
+  for (let index = 0; index < 6; index += 1) {
+    const before = normalized;
+    normalized = normalized.replace(/^[\s,，、:：。！？!?]+/u, "");
+    const prefix = genericRequestPrefixes.find((candidate) => normalized.startsWith(candidate));
+    if (prefix) normalized = normalized.slice(prefix.length);
+    if (normalized === before) break;
+  }
+  return normalized.replace(/[\s,，、:：。！？!?"'`~·…/\\|_-]+/gu, "");
+}
+
 export function normalizeFunctionArguments(
-  action: FunctionName,
+  action: CapabilityName,
   args: JsonRecord,
   input: FunctionArgumentNormalizationInput
 ): JsonRecord {

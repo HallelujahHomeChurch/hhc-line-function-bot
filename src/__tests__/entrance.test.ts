@@ -9,18 +9,16 @@ import {
   RedisRegistrationInviteCodeStore
 } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
-import { createAgentRuntime } from "../agent/agent-runtime.js";
+import { createResourceMemoryObserver } from "../agent/resource-memory.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import {
   createFunctionCompletionObserver,
   type FunctionCompletionObserver
-} from "../application/turn/completion-observer.js";
+} from "../observability/function-completion.js";
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
 import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
-import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
-import { createPendingResolutionTextMessageHandler } from "../functions/pending-resolution.js";
 import { createQueryKnowledgeHandler } from "../functions/query-knowledge.js";
 import { InMemoryKnowledgeStore } from "../knowledge/store.js";
 import { signLineBody } from "../line-signature.js";
@@ -408,9 +406,6 @@ describe("LINE entrance", () => {
       "Ray，要查哪一份投影片？請直接回覆名稱。",
       undefined
     );
-    await expect(sessionStore.get("pending-1")).resolves.toMatchObject({
-      requesterUserId: "U1"
-    });
   });
 
   it("does not execute a redelivered LINE webhook event twice", async () => {
@@ -456,76 +451,6 @@ describe("LINE entrance", () => {
       ok: true,
       ignored: "duplicate_webhook_event"
     });
-  });
-
-  it("does not let another group member answer someone else's pending clarification", async () => {
-    const sessionStore = new InMemorySessionStore();
-    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
-      type: "execute",
-      action: "find_ppt_slides",
-      arguments: { query: "" },
-      provider: "deepseek"
-    });
-    const graph: GraphDriveClient = {
-      listFolderChildren: vi.fn().mockResolvedValue([{ id: "1", name: "奇異恩典.pptx" }]),
-      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/1")
-    };
-    const handler = createFindPptSlidesHandler({
-      graph,
-      driveId: "drive-id",
-      folderItemId: "folder-id",
-      allowedExtensions: [".pptx"],
-      defaultIncludePdf: false,
-      sessionStore,
-      requestIdFactory: () => "pending-1"
-    });
-    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
-    const app = createTestApp(testConfig(), {
-      router: { route },
-      functionRegistry: { find_ppt_slides: handler },
-      textMessageHandlers: {
-        pending_function_answer: createPendingFunctionTextMessageHandler({
-          sessionStore,
-          functions: { find_ppt_slides: handler }
-        })
-      },
-      createLineReplyClient: () => ({ replyText })
-    });
-
-    const firstBody = lineBody({
-      type: "message",
-      replyToken: "reply-1",
-      source: { type: "group", groupId: "Cmain", userId: "U1" },
-      message: { type: "text", text: "小哈 查投影片" }
-    });
-    await app.inject({
-      method: "POST",
-      url: "/api/line/webhook/main",
-      headers: signedHeaders(firstBody, "main-secret"),
-      payload: firstBody
-    });
-
-    const secondBody = lineBody({
-      type: "message",
-      replyToken: "reply-2",
-      source: { type: "group", groupId: "Cmain", userId: "U2" },
-      message: { type: "text", text: "奇異恩典" }
-    });
-    const secondResponse = await app.inject({
-      method: "POST",
-      url: "/api/line/webhook/main",
-      headers: signedHeaders(secondBody, "main-secret"),
-      payload: secondBody
-    });
-
-    expect(secondResponse.statusCode).toBe(200);
-    expect(secondResponse.json()).toMatchObject({
-      ok: true,
-      ignored: true,
-      reason: "wake_word_missing"
-    });
-    expect(graph.listFolderChildren).not.toHaveBeenCalled();
-    expect(replyText).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a successful group reply when success-summary persistence fails", async () => {
@@ -661,7 +586,6 @@ describe("LINE entrance", () => {
       const accessStore = defaultAccessStore();
       const accessRead = vi.spyOn(accessStore, "hasActivePrincipal");
       const sessionStore = new InMemorySessionStore();
-      const sessionRead = vi.spyOn(sessionStore, "findPendingCapabilityResolution");
       const conversationWindowStore = new InMemoryConversationWindowStore();
       const conversationRead = vi.spyOn(conversationWindowStore, "isActive");
       const dedupe = vi.fn().mockResolvedValue(dedupeResult);
@@ -703,7 +627,6 @@ describe("LINE entrance", () => {
       expect(dedupe).toHaveBeenCalledOnce();
       expect(rateCheck).toHaveBeenCalledTimes(dedupeResult === "duplicate" ? 0 : 1);
       expect(accessRead).not.toHaveBeenCalled();
-      expect(sessionRead).not.toHaveBeenCalled();
       expect(conversationRead).not.toHaveBeenCalled();
       expect(authorizeAdministrator).not.toHaveBeenCalled();
     }
@@ -1145,7 +1068,7 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
       accountAdminClient: { authorizeFunctions: authorize },
-      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      memoryCommands: { handleCommand },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -1179,7 +1102,7 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
       accountAdminClient: { authorizeFunctions },
-      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      memoryCommands: { handleCommand },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -1220,7 +1143,7 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
       accountAdminClient: { authorizeFunctions },
-      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      memoryCommands: { handleCommand },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -1291,7 +1214,7 @@ describe("LINE entrance", () => {
       const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
       const app = createTestApp(config, {
         accountAdminClient: { authorizeFunctions },
-        agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+        memoryCommands: { handleCommand },
         createLineReplyClient: () => ({ replyText })
       });
       const body = lineBody({
@@ -1329,7 +1252,7 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
       accountAdminClient: { authorizeFunctions },
-      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      memoryCommands: { handleCommand },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -5333,14 +5256,13 @@ describe("LINE entrance", () => {
     const app = createTestApp(config, {
       router,
       sessionStore,
-      textMessageHandlers: {
-        pending_attachment: {
-          turnStage: "attachment",
+      attachmentTextHandlers: [
+        {
           capability: "save_resource",
           matches: vi.fn().mockResolvedValue(true),
           handle: continuePendingAttachment
         }
-      },
+      ],
       accountAdminClient: { authorizeFunctions },
       createLineReplyClient: () => ({ replyText })
     });
@@ -5428,7 +5350,6 @@ describe("LINE entrance", () => {
       accountAdminClient: { authorizeFunctions },
       textMessageHandlers: {
         role_probe: {
-          turnStage: "resolution",
           capability: "query_schedule",
           matches: vi.fn().mockResolvedValue(true),
           handle
@@ -6231,11 +6152,12 @@ describe("LINE entrance", () => {
       complete: vi.fn(async ({ result }) => result)
     };
     const agentTurnRuntime = {
+      observesCompletion: true,
       handleTextTurn: vi.fn().mockReturnValue(deferred.promise)
     };
     const app = createTestApp(config, {
       router: { route: vi.fn() },
-      agentTurnRuntime,
+      profileRuntime: agentTurnRuntime,
       agentJobStore: new InMemoryAgentJobStore(),
       completionObserver,
       createLineReplyClient: () => ({ replyText })
@@ -6365,7 +6287,6 @@ describe("LINE entrance", () => {
     });
     const textMessageHandlers: TextMessageHandlerRegistry = {
       ppt_numeric_selection: {
-        turnStage: "resolution",
         capability: "find_ppt_slides",
         matches: matchesNumericSelection,
         handle: handleNumericSelection
@@ -6424,7 +6345,6 @@ describe("LINE entrance", () => {
     const handleNumericSelection = vi.fn().mockResolvedValue(undefined);
     const textMessageHandlers: TextMessageHandlerRegistry = {
       ppt_numeric_selection: {
-        turnStage: "resolution",
         capability: "find_ppt_slides",
         matches: matchesNumericSelection,
         handle: handleNumericSelection
@@ -6534,7 +6454,6 @@ describe("LINE entrance", () => {
     const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
     const handlers = {
       sheet_music_numeric_selection: {
-        turnStage: "resolution" as const,
         capability: "find_sheet_music" as const,
         matches: ({ text }: { text: string }) => text === "上網找",
         handle: vi.fn(async () => ({
@@ -6549,7 +6468,6 @@ describe("LINE entrance", () => {
         }))
       },
       ppt_numeric_selection: {
-        turnStage: "resolution" as const,
         capability: "find_ppt_slides" as const,
         matches: ({ text }: { text: string }) => text === "1",
         handle: vi.fn(async () => ({
@@ -6559,15 +6477,14 @@ describe("LINE entrance", () => {
         }))
       },
       pending_attachment_answer: {
-        turnStage: "attachment" as const,
         capability: "save_resource" as const,
         matches: vi.fn(({ text }: { text: string }) => text === "是"),
         handle: vi.fn(async () => ({ ok: true, replyText: "請選用途" }))
       }
     };
     const memoryStore = new InMemoryAgentMemoryStore();
-    const agentRuntime = createAgentRuntime({ memoryStore });
-    const afterFunctionResult = vi.spyOn(agentRuntime, "afterFunctionResult");
+    const resourceMemory = createResourceMemoryObserver({ memoryStore });
+    const afterFunctionResult = vi.spyOn(resourceMemory, "afterFunctionResult");
     const complete = vi.fn<FunctionCompletionObserver["complete"]>(async ({ result }) => result);
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
@@ -6578,8 +6495,12 @@ describe("LINE entrance", () => {
           handleTextTurn: profileTurn
         }
       }),
-      textMessageHandlers: handlers,
-      agentRuntime,
+      textMessageHandlers: {
+        sheet_music_numeric_selection: handlers.sheet_music_numeric_selection,
+        ppt_numeric_selection: handlers.ppt_numeric_selection
+      },
+      attachmentTextHandlers: [handlers.pending_attachment_answer],
+      resourceMemory,
       completionObserver: { complete },
       createLineReplyClient: () => ({ replyText })
     });
@@ -6628,9 +6549,8 @@ describe("LINE entrance", () => {
         profileRuntime: createProfileRuntimeDispatcher({
           helper: { handleTextTurn: profileTurn }
         }),
-        textMessageHandlers: {
-          pending_attachment_answer: {
-            turnStage: "attachment",
+        attachmentTextHandlers: [
+          {
             capability: "save_resource",
             matches: vi.fn(async () => {
               if (failurePoint === "match") throw new Error("match failed");
@@ -6643,7 +6563,7 @@ describe("LINE entrance", () => {
               writePhase: "commit"
             }))
           }
-        },
+        ],
         completionObserver: { complete: completion },
         lastErrorStore: { record, list: vi.fn(async () => []), clear: vi.fn(async () => 0) },
         createLineReplyClient: () => ({ replyText })
@@ -6691,7 +6611,6 @@ describe("LINE entrance", () => {
       }),
       textMessageHandlers: {
         sheet_music_numeric_selection: {
-          turnStage: "resolution",
           capability: "find_sheet_music",
           matches: vi.fn(async () => true),
           handle: continuation
@@ -6723,7 +6642,7 @@ describe("LINE entrance", () => {
     ["allowed", true],
     ["revoked", false]
   ] as const)(
-    "rechecks a pending resolution capability against Account authorization: %s",
+    "rechecks a deterministic continuation capability against Account authorization: %s",
     async (_label, allowed) => {
       const config = accessConfig();
       const helper = config.profiles[0]!;
@@ -6732,18 +6651,6 @@ describe("LINE entrance", () => {
       helper.directAccessPolicy = "public";
       helper.registration = { enabled: false };
       const source = { type: "user" as const, userId: "Uresolution" };
-      const sessions = new InMemorySessionStore();
-      await sessions.set({
-        id: `resolution-${_label}`,
-        type: "pending_resolution",
-        profileName: helper.name,
-        requesterUserId: source.userId,
-        source,
-        capability: "query_schedule",
-        groundedArguments: { query: "服事表" },
-        candidates: [{ id: "service", domainKey: "service", displayName: "主日服事" }],
-        expiresAt: "2099-01-01T00:00:00.000Z"
-      });
       const querySchedule = vi.fn(async () => ({ ok: true, replyText: "主日服事表" }));
       const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
       const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
@@ -6754,15 +6661,15 @@ describe("LINE entrance", () => {
         allowedFunctions: allowed ? ["query_schedule"] : []
       });
       const app = createTestApp(config, {
-        sessionStore: sessions,
         profileRuntime: createProfileRuntimeDispatcher({
           helper: { handleTextTurn: profileTurn }
         }),
         textMessageHandlers: {
-          pending_resolution_answer: createPendingResolutionTextMessageHandler({
-            sessionStore: sessions,
-            functions: { query_schedule: querySchedule }
-          })
+          schedule_selection: {
+            capability: "query_schedule",
+            matches: vi.fn(async () => true),
+            handle: querySchedule
+          }
         },
         accountAdminClient: {
           authorizeAdministrator: vi.fn(),
@@ -6794,10 +6701,10 @@ describe("LINE entrance", () => {
         functionNames: ["query_schedule"]
       });
       expect(querySchedule).toHaveBeenCalledTimes(allowed ? 1 : 0);
-      expect(profileTurn).not.toHaveBeenCalled();
+      expect(profileTurn).toHaveBeenCalledTimes(allowed ? 0 : 1);
       expect(replyText).toHaveBeenCalledWith(
         `resolution-${_label}`,
-        allowed ? "主日服事表" : expect.any(String),
+        allowed ? "主日服事表" : "model",
         undefined
       );
     }
@@ -6835,14 +6742,13 @@ describe("LINE entrance", () => {
       profileRuntime: createProfileRuntimeDispatcher({
         helper: { handleTextTurn: profileTurn }
       }),
-      textMessageHandlers: {
-        pending_attachment_answer: {
-          turnStage: "attachment",
+      attachmentTextHandlers: [
+        {
           capability: "save_resource",
           matches: vi.fn(async () => true),
           handle
         }
-      },
+      ],
       accessStore: new InMemoryAccessStore({
         principals: [
           {

@@ -96,9 +96,15 @@ describe("main runtime", () => {
     await expect(runtime.handleTextTurn(input("修改姓名"))).resolves.toMatchObject({
       replyText: expect.stringContaining("名字")
     });
+    await expect(
+      sessions.findProfileUpdate({ profileName: "main", source, requesterUserId: source.userId })
+    ).resolves.toMatchObject({ type: "profile_update", arguments: {} });
     await expect(runtime.handleTextTurn(input("家睿"))).resolves.toMatchObject({
       replyText: expect.stringContaining("姓氏")
     });
+    await expect(
+      sessions.findProfileUpdate({ profileName: "main", source, requesterUserId: source.userId })
+    ).resolves.toMatchObject({ arguments: { firstName: "家睿" } });
     await expect(runtime.handleTextTurn(input("王"))).resolves.toMatchObject({
       writePhase: "preview",
       replyText: expect.stringContaining("家睿 王")

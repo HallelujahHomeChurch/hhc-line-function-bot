@@ -210,13 +210,10 @@ describe("query_schedule", () => {
       role: "音控",
       assignee: "資恆"
     });
-    const sessionStore = new InMemorySessionStore({ now });
     const query = createQueryScheduleHandler({
       memoryStore,
       scheduleStore,
-      sessionStore,
       now,
-      requestIdFactory: () => "resolution-1",
       timeZone: "Asia/Taipei"
     });
 
@@ -227,13 +224,6 @@ describe("query_schedule", () => {
       status: "success",
       anchors: { domainKey: "morning_prayer_family" }
     });
-    await expect(
-      sessionStore.findPendingResolution({
-        profileName: "helper",
-        source: { type: "group", groupId: "C1", userId: "U1" },
-        requesterUserId: "U1"
-      })
-    ).resolves.toBeUndefined();
   });
 
   it("clarifies a generic next-service request when multiple schedule domains match", async () => {

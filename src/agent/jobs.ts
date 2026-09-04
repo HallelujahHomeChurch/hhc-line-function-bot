@@ -1,12 +1,8 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { randomUUID } from "node:crypto";
 
 import { buildPostbackQuickReply } from "../line-reply.js";
-import type {
-  FunctionExecutionResult,
-  FunctionName,
-  LineSource,
-  QuickReplyItem
-} from "../types.js";
+import type { FunctionExecutionResult, LineSource, QuickReplyItem } from "../types.js";
 
 export interface AgentJobScope {
   profileName: string;
@@ -19,7 +15,7 @@ export type AgentJobStatus = "pending" | "completed" | "failed";
 export interface AgentJobRecord {
   id: string;
   scope: AgentJobScope;
-  capability?: FunctionName;
+  capability?: CapabilityName;
   label: string;
   status: AgentJobStatus;
   result?: FunctionExecutionResult;
@@ -30,14 +26,14 @@ export interface AgentJobRecord {
 
 export interface CreatePendingAgentJobInput {
   scope: AgentJobScope;
-  capability?: FunctionName;
+  capability?: CapabilityName;
   label: string;
   ttlMs: number;
 }
 
 export interface AgentJobStore {
   createPending(input: CreatePendingAgentJobInput): Promise<AgentJobRecord>;
-  complete(id: string, result: FunctionExecutionResult, capability?: FunctionName): Promise<void>;
+  complete(id: string, result: FunctionExecutionResult, capability?: CapabilityName): Promise<void>;
   fail(id: string, error: string): Promise<void>;
   get(id: string, scope: AgentJobScope): Promise<AgentJobRecord | undefined>;
 }
@@ -87,7 +83,7 @@ export class InMemoryAgentJobStore implements AgentJobStore {
   async complete(
     id: string,
     result: FunctionExecutionResult,
-    capability?: FunctionName
+    capability?: CapabilityName
   ): Promise<void> {
     const job = this.jobs.get(id);
     if (!job) {
@@ -156,7 +152,7 @@ export class RedisAgentJobStore implements AgentJobStore {
   async complete(
     id: string,
     result: FunctionExecutionResult,
-    capability?: FunctionName
+    capability?: CapabilityName
   ): Promise<void> {
     const record = await this.readById(id);
     if (!record) {

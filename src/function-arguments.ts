@@ -1,6 +1,7 @@
+import type { CapabilityName } from "./capabilities/names.js";
 import { z } from "zod";
 
-import type { FunctionName, JsonRecord } from "./types.js";
+import type { JsonRecord } from "./types.js";
 
 const numericLimitSchema = z.preprocess((value) => {
   if (typeof value === "string" && value.trim()) {
@@ -335,7 +336,7 @@ export type SaveScheduleArguments = z.infer<typeof saveScheduleArgumentsSchema>;
 export type QueryScheduleMemoryArguments = z.infer<typeof queryScheduleMemoryArgumentsSchema>;
 
 export function parseFunctionArguments(
-  action: FunctionName,
+  action: CapabilityName,
   rawArguments: unknown
 ): JsonRecord | undefined {
   const schema = {

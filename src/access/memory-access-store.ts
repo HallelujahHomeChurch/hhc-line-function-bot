@@ -143,7 +143,7 @@ export class InMemoryAccessStore implements AccessStore {
     }
     this.principals.set(existing.id, {
       ...existing,
-      lastSuccessFunctionName: input.functionName,
+      lastSuccessCapabilityName: input.functionName,
       lastSuccessAt: input.occurredAt
     });
   }

@@ -2,10 +2,8 @@ import { ChatDeepSeek } from "@langchain/deepseek";
 import { FakeToolCallingModel, tool, type CreateAgentParams } from "langchain";
 import { z } from "zod";
 
-import { createSdkAgent } from "../agent/sdk-runtime.js";
-import { createSdkFunctionTools } from "../agent/sdk-tools.js";
+import { createHelperAgent } from "../helper-agent/agent.js";
 import { SDK_AGENT_ACCEPTANCE_CASES, validateSdkAgentCorpus } from "../evals/kernel/corpus.js";
-import type { BotProfileConfig } from "../types.js";
 
 const corpusErrors = validateSdkAgentCorpus();
 if (corpusErrors.length) throw new Error(`invalid_sdk_agent_corpus:${corpusErrors.join(",")}`);
@@ -72,7 +70,7 @@ const model = live
     });
 
 const startedAt = performance.now();
-const result = await createSdkAgent({
+const result = await createEvalAgent({
   model,
   tools: [querySchedule, searchInformation],
   systemPrompt: "先查正式服事表；沒有資料時查可見資訊。必須說明筆記不是正式服事表。"
@@ -109,6 +107,15 @@ console.log(
 
 if (!passed) process.exitCode = 1;
 
+function createEvalAgent(options: CreateAgentParams) {
+  return createHelperAgent({
+    model: options.model as Parameters<typeof createHelperAgent>[0]["model"],
+    summaryModel: options.model as Parameters<typeof createHelperAgent>[0]["summaryModel"],
+    tools: options.tools,
+    systemPrompt: options.systemPrompt
+  });
+}
+
 function requireLiveKey(): string {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error("DEEPSEEK_API_KEY is required with --live");
@@ -124,7 +131,7 @@ interface LiveCaseResult {
 async function runAdditionalLiveCases(
   liveModel: CreateAgentParams["model"]
 ): Promise<LiveCaseResult[]> {
-  return [await runWikipediaCase(liveModel), await runSheetMusicCase(liveModel)];
+  return [await runWikipediaCase(liveModel)];
 }
 
 async function runWikipediaCase(model: CreateAgentParams["model"]): Promise<LiveCaseResult> {
@@ -140,7 +147,7 @@ async function runWikipediaCase(model: CreateAgentParams["model"]): Promise<Live
       schema: z.object({ query: z.string().min(1).max(500) }).strict()
     }
   );
-  const output = await createSdkAgent({
+  const output = await createEvalAgent({
     model,
     tools: [queryWikipedia],
     systemPrompt: "百科問題只呼叫 query_wikipedia。工具成功後直接回答，不要重複相同呼叫。"
@@ -152,106 +159,5 @@ async function runWikipediaCase(model: CreateAgentParams["model"]): Promise<Live
     id: "sdk-v1/wikipedia/routing@1",
     passed: toolNames.join(",") === "query_wikipedia" && Boolean(output.messages.at(-1)?.text),
     toolNames
-  };
-}
-
-async function runSheetMusicCase(model: CreateAgentParams["model"]): Promise<LiveCaseResult> {
-  const toolNames: string[] = [];
-  let searches = 0;
-  const tools = createSdkFunctionTools({
-    context: {
-      profile: helperProfile(["find_sheet_music"]),
-      event: {
-        type: "message",
-        source: { type: "user", userId: "sdk-live-user" },
-        message: { type: "text", text: "找歌譜" }
-      }
-    },
-    functionRegistry: {
-      find_sheet_music: async () => {
-        toolNames.push("search_files");
-        return {
-          ok: true,
-          replyText: "找不到內部歌譜。",
-          agentResult: { status: "not_found", replyText: "找不到內部歌譜。" }
-        };
-      }
-    },
-    externalSheetMusicSearch: {
-      allowed: true,
-      webSearch: {
-        search: async () => {
-          searches += 1;
-          toolNames.push("search_sheet_music_web");
-          return searches === 1
-            ? [{ title: "歌詞頁", url: "https://public.example.test/lyrics" }]
-            : [{ title: "合唱譜 PDF", url: "https://public.example.test/score.pdf" }];
-        }
-      },
-      pageReader: {
-        read: async (url) => {
-          toolNames.push("read_sheet_music_page");
-          return url.endsWith(".pdf")
-            ? { kind: "direct_file", untrusted: true, links: [] }
-            : { kind: "html", untrusted: true, text: "只有歌詞", links: [] };
-        }
-      }
-    }
-  });
-  const output = await createSdkAgent({
-    model,
-    tools,
-    modelCallLimit: 10,
-    toolCallLimit: 10,
-    systemPrompt:
-      "找歌譜先用 search_files。內部沒有且使用者已同意上網時，使用 search_sheet_music_web。每次搜尋後立刻以 read_sheet_music_page 讀取 ref。若只是歌詞頁，改用 PDF 查詢再搜尋並讀取。找到 direct_file 後停止工具並回覆候選，不要儲存。"
-  }).invoke(
-    {
-      messages: [
-        {
-          role: "user",
-          content: "找《測試詩歌》合唱譜；內部沒有的話，我同意這次上網找 PDF。"
-        }
-      ]
-    },
-    { configurable: { thread_id: `sdk-live-sheet-music-${Date.now()}` }, recursionLimit: 40 }
-  );
-  const expectedExternal = [
-    "search_sheet_music_web",
-    "read_sheet_music_page",
-    "search_sheet_music_web",
-    "read_sheet_music_page"
-  ];
-  const internalSearchCount = toolNames.filter((name) => name === "search_files").length;
-  const externalSequence = toolNames.filter((name) => name !== "search_files");
-  return {
-    id: "sdk-v1/sheet_music/iterative-discovery@1",
-    passed:
-      internalSearchCount >= 1 &&
-      internalSearchCount <= 2 &&
-      expectedExternal.every((name, index) => externalSequence[index] === name) &&
-      externalSequence.length === expectedExternal.length &&
-      Boolean(output.messages.at(-1)?.text),
-    toolNames
-  };
-}
-
-function helperProfile(enabledFunctions: BotProfileConfig["enabledFunctions"]): BotProfileConfig {
-  return {
-    name: "helper",
-    webhookPath: "/api/line/webhook/helper",
-    channelSecret: "synthetic",
-    channelAccessToken: "synthetic",
-    allowDirectUser: true,
-    allowRooms: false,
-    allowedMessageTypes: ["text"],
-    groupRequireWakeWord: true,
-    wakeKeywords: ["小哈"],
-    acceptMention: true,
-    enabledFunctions,
-    permissionRequiredFunctions: [],
-    allowedProviders: ["deepseek"],
-    allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: [] }
   };
 }

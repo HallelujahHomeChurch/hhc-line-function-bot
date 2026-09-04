@@ -1,5 +1,6 @@
 import type { Readable } from "node:stream";
 
+import { CAPABILITY_NAMES, type CapabilityName } from "./capabilities/names.js";
 import type { LineReplyOptions } from "./application/contracts/function-execution.js";
 
 export type {
@@ -19,7 +20,6 @@ export type {
   AgentResourceReference,
   AgentResourceStorage,
   AgentResourceType,
-  TextContinuationStage,
   FunctionExecutionResult,
   FunctionHandler,
   FunctionHandlerContext,
@@ -35,23 +35,6 @@ export type {
   TextMessageHandlerRegistry,
   TextMessageRequest
 } from "./application/contracts/function-execution.js";
-
-export const FUNCTION_NAMES = [
-  "download_weekly_paper",
-  "update_own_profile",
-  "find_ppt_slides",
-  "query_schedule",
-  "query_knowledge",
-  "save_schedule",
-  "find_sheet_music",
-  "find_resource",
-  "query_wikipedia",
-  "save_memory",
-  "save_resource",
-  "retrieve_memory"
-] as const;
-
-export type FunctionName = (typeof FUNCTION_NAMES)[number];
 
 export const SYSTEM_ACTION_NAMES = [
   "introduce_bot",
@@ -90,7 +73,7 @@ export const ADMIN_ACTION_NAMES = [
 
 export type AdminActionName = (typeof ADMIN_ACTION_NAMES)[number];
 
-export type ActionName = FunctionName | SystemActionName | AdminActionName;
+export type ActionName = CapabilityName | SystemActionName | AdminActionName;
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -119,7 +102,7 @@ export type AgentPlanRecord = Record<string, AgentPlanValue>;
 export interface AgentPlanProposal {
   version: 1;
   disposition: AgentPlanDisposition;
-  capability?: FunctionName;
+  capability?: CapabilityName;
   arguments: AgentPlanRecord;
   references?: AgentPlanRecord;
   confidence: number;
@@ -265,10 +248,6 @@ export interface LongRunningJobsConfig {
   resultTtlMinutes: number;
 }
 
-export interface AgentRuntimeConfig {
-  taskFrameSeconds: number;
-}
-
 export interface RawAccountLinkPresentation {
   displayName: string;
   lineIdEnv: string;
@@ -282,8 +261,8 @@ export interface AccountLinkPresentation {
 }
 
 export interface ProfileFunctionPolicy {
-  enabledFunctions: FunctionName[];
-  permissionRequiredFunctions: FunctionName[];
+  enabledFunctions: CapabilityName[];
+  permissionRequiredFunctions: CapabilityName[];
 }
 
 export interface BotProfileConfig extends ProfileFunctionPolicy {
@@ -313,7 +292,6 @@ export interface BotProfileConfig extends ProfileFunctionPolicy {
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
   providerPolicy?: ProviderPolicy;
-  agentRuntime?: AgentRuntimeConfig;
   schedulePolicy: SchedulePolicyConfig;
   generalAgent?: GeneralAgentConfig;
   longRunningJobs?: LongRunningJobsConfig;
@@ -560,7 +538,7 @@ export interface ChatProviderRequest {
   prompt: string;
   profileName: string;
   text: string;
-  enabledFunctions: FunctionName[];
+  enabledFunctions: CapabilityName[];
   signal?: AbortSignal;
 }
 
@@ -707,8 +685,8 @@ export interface NotionDatabaseClient {
   queryDatabase(databaseId: string, query?: JsonRecord): Promise<NotionPage[]>;
 }
 
-export function isFunctionName(value: string): value is FunctionName {
-  return (FUNCTION_NAMES as readonly string[]).includes(value);
+export function isCapabilityName(value: string): value is CapabilityName {
+  return (CAPABILITY_NAMES as readonly string[]).includes(value);
 }
 
 export function isSystemActionName(value: string): value is SystemActionName {

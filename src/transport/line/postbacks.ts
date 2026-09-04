@@ -1,11 +1,11 @@
+import type { CapabilityName } from "../../capabilities/names.js";
 import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
 import type { AgentJobScope, AgentJobStore } from "../../agent/jobs.js";
-import { getFunctionDefinition } from "../../functions/definitions.js";
+import { getFunctionDefinition } from "../../capabilities/catalog.js";
 import { buildPostbackQuickReply } from "../../line-reply.js";
 import { messages } from "../../messages.js";
 import type {
   BotProfileConfig,
-  FunctionName,
   FunctionExecutionResult,
   LineEvent,
   PostbackHandlerRegistry,
@@ -15,7 +15,7 @@ import type {
 export interface HandledPostbackEvent {
   result: FunctionExecutionResult;
   completionEligible: boolean;
-  capability?: FunctionName;
+  capability?: CapabilityName;
   profile?: BotProfileConfig;
 }
 
@@ -38,8 +38,10 @@ export async function handlePostbackEvent(
   requestId: string,
   requesterDisplayName: string | undefined,
   agentJobStore: AgentJobStore,
-  configuredFunctions: readonly FunctionName[] = profile.enabledFunctions,
-  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>,
+  configuredFunctions: readonly CapabilityName[] = profile.enabledFunctions,
+  authorizeFunctions?: (
+    functionNames: readonly CapabilityName[]
+  ) => Promise<readonly CapabilityName[]>,
   helperReviewHandler?: HelperReviewPostbackHandler
 ): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
@@ -137,8 +139,8 @@ export async function handleAgentTextTurnWithLongJob(input: {
   requestId: string;
   requesterDisplayName?: string;
   requesterIsAdmin?: boolean;
-  configuredFunctions?: readonly FunctionName[];
-  authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  configuredFunctions?: readonly CapabilityName[];
+  authorizeFunctions?(functionNames: readonly CapabilityName[]): Promise<readonly CapabilityName[]>;
   accountAdministrator?(): boolean;
   completeResult?(result: FunctionExecutionResult): Promise<FunctionExecutionResult>;
 }): Promise<FunctionExecutionResult | undefined> {
@@ -220,8 +222,10 @@ async function handleAgentJobResultPostback(
   profile: BotProfileConfig,
   event: LineEvent,
   jobStore: AgentJobStore,
-  configuredFunctions: readonly FunctionName[],
-  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>
+  configuredFunctions: readonly CapabilityName[],
+  authorizeFunctions?: (
+    functionNames: readonly CapabilityName[]
+  ) => Promise<readonly CapabilityName[]>
 ): Promise<FunctionExecutionResult> {
   const jobId = request.params.jobId;
   const scope = buildAgentJobScope(profile, event);
@@ -261,10 +265,10 @@ async function handleAgentJobResultPostback(
 
 async function postbackCapabilityAllowed(
   profile: BotProfileConfig,
-  configuredFunctions: readonly FunctionName[],
-  capability: FunctionName,
+  configuredFunctions: readonly CapabilityName[],
+  capability: CapabilityName,
   authorizeFunctions:
-    ((functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>) | undefined
+    ((functionNames: readonly CapabilityName[]) => Promise<readonly CapabilityName[]>) | undefined
 ): Promise<boolean> {
   if (!configuredFunctions.includes(capability)) return false;
   const needsAccount =

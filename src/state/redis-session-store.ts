@@ -6,10 +6,7 @@ import type {
   ExternalSearchConsentSession,
   ExternalSheetMusicImportSession,
   PendingAttachmentSession,
-  PendingCapabilityResolutionSession,
-  PendingFunctionLookup,
-  PendingFunctionSession,
-  PendingResolutionSession,
+  ProfileUpdateSession,
   PptSelectionLookup,
   PptSelectionSession,
   SelectionLookup,
@@ -248,14 +245,16 @@ export class RedisSessionStore implements SessionStore {
     return latestSession(liveSessions);
   }
 
-  async findPendingFunction(
-    lookup: PendingFunctionLookup
-  ): Promise<PendingFunctionSession | undefined> {
-    const session = await this.indexedInteractiveSession(lookup);
-    return session?.type === "pending_function" &&
-      (!lookup.action || session.action === lookup.action)
-      ? session
-      : undefined;
+  async findProfileUpdate(lookup: PptSelectionLookup): Promise<ProfileUpdateSession | undefined> {
+    return latestSession(
+      (await this.liveSessions())
+        .filter((session): session is ProfileUpdateSession => session.type === "profile_update")
+        .filter((session) => session.profileName === lookup.profileName)
+        .filter((session) => sourceMatches(session.source, lookup.source))
+        .filter((session) =>
+          requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+        )
+    );
   }
 
   async findPendingAttachment(
@@ -274,20 +273,6 @@ export class RedisSessionStore implements SessionStore {
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as PendingAttachmentSession) as
       PendingAttachmentSession | undefined;
-  }
-
-  async findPendingResolution(
-    lookup: PptSelectionLookup
-  ): Promise<PendingResolutionSession | undefined> {
-    const session = await this.indexedInteractiveSession(lookup);
-    return session?.type === "pending_resolution" ? session : undefined;
-  }
-
-  async findPendingCapabilityResolution(
-    lookup: PptSelectionLookup
-  ): Promise<PendingCapabilityResolutionSession | undefined> {
-    const session = await this.indexedInteractiveSession(lookup);
-    return session?.type === "pending_capability_resolution" ? session : undefined;
   }
 
   async takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined> {
@@ -573,15 +558,7 @@ export class RedisSessionStore implements SessionStore {
 }
 
 function isInteractiveSession(session: ConversationSession): boolean {
-  if (session.type === "pending_function" && session.reviewId) return false;
-  return [
-    "pending_function",
-    "pending_resolution",
-    "pending_capability_resolution",
-    "pending_attachment",
-    "upload_intent",
-    "action_review"
-  ].includes(session.type);
+  return ["pending_attachment", "upload_intent", "action_review"].includes(session.type);
 }
 
 function ttlSeconds(ttlMs: number): number {

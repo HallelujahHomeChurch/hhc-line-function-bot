@@ -2,7 +2,7 @@ import type { RouteObserverEvent } from "../types.js";
 import {
   ADMIN_ACTION_NAMES,
   AGENT_PLAN_DISPOSITIONS,
-  isFunctionName,
+  isCapabilityName,
   MODEL_PROVIDER_NAMES,
   SMALL_TALK_CATEGORIES,
   SYSTEM_ACTION_NAMES
@@ -79,7 +79,7 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       return allowedString(value, QUERY_MARKERS);
     case "candidates":
       return Array.isArray(value)
-        ? [...new Set(value.filter((item): item is string => isFunctionName(item)))].slice(0, 5)
+        ? [...new Set(value.filter((item): item is string => isCapabilityName(item)))].slice(0, 5)
         : undefined;
     case "entityTypes":
       return Array.isArray(value)
@@ -390,7 +390,7 @@ const SAFE_ACTIONS: ReadonlySet<string> = new Set([...SYSTEM_ACTION_NAMES, ...AD
 
 function safeAction(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  return isFunctionName(value) || SAFE_ACTIONS.has(value) ? value : undefined;
+  return isCapabilityName(value) || SAFE_ACTIONS.has(value) ? value : undefined;
 }
 
 function allowedString(value: unknown, allowed: ReadonlySet<string>): string | undefined {

@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../../capabilities/names.js";
 import fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
@@ -11,7 +12,7 @@ import {
 import { evaluateActionPolicy } from "../../actions/policy.js";
 import type { ConfirmationStore } from "../../actions/confirmation-store.js";
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
-import { memoryCommandFunctionName, type AgentRuntime } from "../../agent/agent-runtime.js";
+import type { ResourceMemoryObserver } from "../../agent/resource-memory.js";
 import { matchExactWholeMessageIntent } from "../../functions/explicit-function-intent.js";
 import type { AgentJobStore } from "../../agent/jobs.js";
 import {
@@ -29,8 +30,7 @@ import {
 } from "../../account/account-admin-client.js";
 import { resolveEffectiveAccessContext } from "../../application/access/effective-access.js";
 import type { EffectiveAccessContext } from "../../application/access/effective-access.js";
-import type { FunctionCompletionObserver } from "../../application/turn/completion-observer.js";
-import { matchTextContinuation } from "../../application/turn/stages/text-continuation-stage.js";
+import type { FunctionCompletionObserver } from "../../observability/function-completion.js";
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import {
   type AccountSurfacePresentation,
@@ -41,8 +41,7 @@ import {
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
 } from "../../engagement.js";
-import { getFunctionDefinition } from "../../functions/definitions.js";
-import { pendingAttachmentPrompt } from "../../functions/pending-attachment.js";
+import { getFunctionDefinition } from "../../capabilities/catalog.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
 import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
 import { prepareMediaSyncIntake } from "../../media-sync/intake.js";
@@ -79,11 +78,11 @@ import type {
   ModelProviderName,
   LineReplyClient,
   LineWebhookPayload,
-  FunctionName,
   PostbackHandlerRegistry,
   RouteObserver,
   RouteObserverEvent,
   TextGenerationProvider,
+  TextMessageHandler,
   TextMessageHandlerRegistry
 } from "../../types.js";
 import { registerHealthRoutes } from "../http/health-routes.js";
@@ -97,12 +96,15 @@ import {
   sourceKey
 } from "./postbacks.js";
 import { handlePublicAccessCommand, registrationPrompt } from "./public-access-commands.js";
+import { memoryCommandCapabilityName, type MemoryCommandHandler } from "./memory-commands.js";
+import { pendingAttachmentPrompt } from "./attachment-intake.js";
 
 export interface AppDependencies {
   adminActionRegistry: AdminActionRegistry;
   adminActionRouter?: AdminActionRouterPort;
   postbackHandlers: PostbackHandlerRegistry;
   textMessageHandlers: TextMessageHandlerRegistry;
+  attachmentTextHandlers: TextMessageHandler[];
   adminHandlers: AdminHandlerRegistry;
   createLineReplyClient: (profile: BotProfileConfig) => LineReplyClient;
   createLineIdentityClient: (profile: BotProfileConfig) => LineIdentityClient;
@@ -117,7 +119,8 @@ export interface AppDependencies {
   confirmationStore?: ConfirmationStore;
   webhookEventStore: WebhookEventStore;
   textGenerator?: TextGenerationProvider;
-  agentRuntime?: AgentRuntime;
+  memoryCommands?: MemoryCommandHandler;
+  resourceMemory?: ResourceMemoryObserver;
   profileRuntime: ProfileRuntime;
   agentTraceStore: AgentTraceStore;
   sessionStore?: SessionStore;
@@ -262,6 +265,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         adminActionRouter,
         deps.postbackHandlers,
         deps.textMessageHandlers,
+        deps.attachmentTextHandlers,
         deps.adminHandlers,
         createReplyClient,
         createIdentityClient,
@@ -277,7 +281,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         agentTraceStore,
         textGenerator,
         textFallbackGenerator,
-        deps.agentRuntime,
+        deps.memoryCommands,
+        deps.resourceMemory,
         agentJobStore,
         conversationWindowStore,
         webhookEventStore,
@@ -301,6 +306,7 @@ async function handleWebhook(
   adminActionRouter: AdminActionRouterPort | undefined,
   postbackHandlers: PostbackHandlerRegistry,
   textMessageHandlers: TextMessageHandlerRegistry,
+  attachmentTextHandlers: TextMessageHandler[],
   adminHandlers: AdminHandlerRegistry,
   createReplyClient: (profile: BotProfileConfig) => LineReplyClient,
   createIdentityClient: (profile: BotProfileConfig) => LineIdentityClient,
@@ -316,7 +322,8 @@ async function handleWebhook(
   agentTraceStore: AgentTraceStore,
   textGenerator: TextGenerationProvider | undefined,
   textFallbackGenerator: TextGenerationProvider | undefined,
-  agentRuntime: AgentRuntime | undefined,
+  memoryCommands: MemoryCommandHandler | undefined,
+  resourceMemory: ResourceMemoryObserver | undefined,
   agentJobStore: AgentJobStore,
   conversationWindowStore: ConversationWindowStore,
   webhookEventStore: WebhookEventStore,
@@ -945,17 +952,17 @@ async function handleWebhook(
           : undefined
       );
       const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
-      const postbackFunctionName = completionEligible ? capability : undefined;
-      if (postbackFunctionName) {
-        await agentRuntime?.afterFunctionResult({
+      const postbackCapabilityName = completionEligible ? capability : undefined;
+      if (postbackCapabilityName) {
+        await resourceMemory?.afterFunctionResult({
           context: { profile: postbackProfile, event, requestId, requesterDisplayName },
-          action: postbackFunctionName,
+          action: postbackCapabilityName,
           arguments: {},
           result
         });
       }
       const durationMs = elapsedMs(startedAt);
-      const completedResult = postbackFunctionName
+      const completedResult = postbackCapabilityName
         ? await completionObserver.complete({
             context: {
               profile: postbackProfile,
@@ -964,7 +971,7 @@ async function handleWebhook(
               requesterDisplayName,
               requesterIsAdmin
             },
-            action: postbackFunctionName,
+            action: postbackCapabilityName,
             result,
             durationMs,
             clarificationCount: 0
@@ -999,7 +1006,7 @@ async function handleWebhook(
         sessionStore,
         maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
         now: new Date(),
-        textHandlers: attachmentTextHandlers(textMessageHandlers)
+        textHandlers: attachmentTextHandlers
       });
       if (attachmentResult) {
         await line.replyText(
@@ -1056,7 +1063,7 @@ async function handleWebhook(
         );
         continue;
       }
-      const memoryCommandFunction = memoryCommandFunctionName(event.message.text);
+      const memoryCommandFunction = memoryCommandCapabilityName(event.message.text);
       let agentCommandProfile = effectiveProfile;
       let agentCommandIsAdmin = requesterIsAdmin;
       if (memoryCommandFunction) {
@@ -1094,7 +1101,7 @@ async function handleWebhook(
         }
         agentCommandIsAdmin = turnAccountAuthorization.administrator() || requesterIsAdmin;
       }
-      const agentCommandResult = await agentRuntime?.handleCommand({
+      const agentCommandResult = await memoryCommands?.handleCommand({
         text: event.message.text,
         context: { profile: agentCommandProfile, event, requestId, requesterDisplayName },
         isAdmin: memoryCommandFunction
@@ -1406,7 +1413,7 @@ async function handleWebhook(
       requesterDisplayName,
       requesterIsAdmin,
       configuredFunctions: [...profile.enabledFunctions],
-      authorizeFunctions: async (names: FunctionName[]) => [
+      authorizeFunctions: async (names: CapabilityName[]) => [
         ...(await turnAccountAuthorization.allowedFunctions(names))
       ],
       accountAdministrator: turnAccountAuthorization.administrator
@@ -1442,7 +1449,7 @@ async function handleWebhook(
           sessionStore,
           maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
           now: new Date(),
-          textHandlers: attachmentTextHandlers(textMessageHandlers)
+          textHandlers: attachmentTextHandlers
         },
         completion: {
           profile: effectiveProfile,
@@ -1452,7 +1459,7 @@ async function handleWebhook(
           requesterIsAdmin,
           completionObserver,
           accessStore,
-          agentRuntime,
+          resourceMemory,
           routeObserver,
           lastRouteStore
         },
@@ -1487,7 +1494,7 @@ async function handleWebhook(
           requesterIsAdmin,
           authorizeFunctions: turnAccountAuthorization.allowedFunctions,
           sessionStore,
-          agentRuntime,
+          resourceMemory,
           completionObserver,
           accessStore,
           routeObserver,
@@ -1578,13 +1585,13 @@ async function handleWebhook(
 async function executeDeterministicTextContinuation(input: {
   event: LineEvent;
   profile: BotProfileConfig;
-  configuredFunctions: readonly FunctionName[];
+  configuredFunctions: readonly CapabilityName[];
   handlers: TextMessageHandlerRegistry;
   requesterDisplayName?: string;
   requesterIsAdmin: boolean;
-  authorizeFunctions(names: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  authorizeFunctions(names: readonly CapabilityName[]): Promise<readonly CapabilityName[]>;
   sessionStore?: SessionStore;
-  agentRuntime?: AgentRuntime;
+  resourceMemory?: ResourceMemoryObserver;
   completionObserver: FunctionCompletionObserver;
   accessStore: AccessStore;
   routeObserver?: RouteObserver;
@@ -1592,14 +1599,10 @@ async function executeDeterministicTextContinuation(input: {
   lastRouteStore: LastRouteStore;
   requestId: string;
 }): Promise<{ matched: boolean; result?: FunctionExecutionResult }> {
-  const handlers = Object.fromEntries(
-    Object.entries(input.handlers).filter(([, handler]) => handler.turnStage === "resolution")
-  );
-  const profile = await projectPendingResolutionAuthorization(input);
   const matched = await matchTextContinuation(
     input.event,
-    profile,
-    handlers,
+    input.profile,
+    input.handlers,
     input.requesterDisplayName,
     input.requesterIsAdmin,
     input.authorizeFunctions,
@@ -1615,6 +1618,7 @@ async function executeDeterministicTextContinuation(input: {
     requesterIsAdmin: input.requesterIsAdmin
   };
   try {
+    if ("matchError" in matched) throw matched.matchError;
     const result = await matched.handler.handle({ text: input.event.message?.text ?? "" }, context);
     if (!result) return { matched: true };
     const action = result.executedAction ?? matched.handler.capability;
@@ -1638,7 +1642,7 @@ async function executeDeterministicTextContinuation(input: {
       );
     }
     if (action && result.agentResource) {
-      await input.agentRuntime?.afterFunctionResult({
+      await input.resourceMemory?.afterFunctionResult({
         context,
         action,
         arguments: {},
@@ -1683,8 +1687,54 @@ async function executeDeterministicTextContinuation(input: {
   }
 }
 
-function attachmentTextHandlers(registry: TextMessageHandlerRegistry) {
-  return Object.values(registry).filter((handler) => handler.turnStage === "attachment");
+export async function matchTextContinuation(
+  event: LineEvent,
+  profile: BotProfileConfig,
+  handlers: TextMessageHandlerRegistry,
+  requesterDisplayName: string | undefined,
+  requesterIsAdmin: boolean,
+  authorizeFunctions: (names: readonly CapabilityName[]) => Promise<readonly CapabilityName[]>,
+  configuredFunctions: readonly CapabilityName[]
+) {
+  const text = event.message?.text;
+  if (event.type !== "message" || event.message?.type !== "text" || !text) return undefined;
+  for (const [name, handler] of Object.entries(handlers)) {
+    const capability = handler.capability;
+    const protectedCapability =
+      capability &&
+      configuredFunctions.includes(capability) &&
+      (profile.permissionRequiredFunctions.includes(capability) ||
+        !profile.enabledFunctions.includes(capability))
+        ? capability
+        : undefined;
+    const matchProfile =
+      protectedCapability && !profile.enabledFunctions.includes(protectedCapability)
+        ? { ...profile, enabledFunctions: [...profile.enabledFunctions, protectedCapability] }
+        : profile;
+    let matches: boolean;
+    try {
+      matches = await handler.matches(
+        { text },
+        { profile: matchProfile, event, requesterDisplayName, requesterIsAdmin }
+      );
+    } catch (matchError) {
+      return { name, handler, profile: matchProfile, matchError };
+    }
+    if (!matches) {
+      continue;
+    }
+    if (protectedCapability) {
+      try {
+        if (!(await authorizeFunctions([protectedCapability])).includes(protectedCapability)) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return { name, handler, profile: matchProfile };
+  }
+  return undefined;
 }
 
 async function executeAttachmentTextIntake(input: {
@@ -1724,7 +1774,7 @@ async function completeAttachmentIntake(input: {
   requesterIsAdmin: boolean;
   completionObserver: FunctionCompletionObserver;
   accessStore: AccessStore;
-  agentRuntime?: AgentRuntime;
+  resourceMemory?: ResourceMemoryObserver;
   routeObserver?: RouteObserver;
   lastRouteStore: LastRouteStore;
 }): Promise<FunctionExecutionResult> {
@@ -1746,7 +1796,7 @@ async function completeAttachmentIntake(input: {
     );
   }
   if (input.result.agentResource) {
-    await input.agentRuntime?.afterFunctionResult({
+    await input.resourceMemory?.afterFunctionResult({
       context,
       action,
       arguments: {},
@@ -1786,38 +1836,13 @@ async function completeAttachmentIntake(input: {
   return completed;
 }
 
-async function projectPendingResolutionAuthorization(input: {
-  event: LineEvent;
-  profile: BotProfileConfig;
-  configuredFunctions: readonly FunctionName[];
-  authorizeFunctions(names: readonly FunctionName[]): Promise<readonly FunctionName[]>;
-  sessionStore?: SessionStore;
-}): Promise<BotProfileConfig> {
-  const requesterUserId = input.event.source.userId;
-  if (!input.sessionStore || !requesterUserId) return input.profile;
-  const pending = await input.sessionStore.findPendingResolution({
-    profileName: input.profile.name,
-    source: input.event.source,
-    requesterUserId
-  });
-  if (!pending || !input.configuredFunctions.includes(pending.capability)) return input.profile;
-  const allowed = await input.authorizeFunctions([pending.capability]);
-  return {
-    ...input.profile,
-    enabledFunctions: [
-      ...input.profile.enabledFunctions.filter((name) => name !== pending.capability),
-      ...(allowed.includes(pending.capability) ? [pending.capability] : [])
-    ]
-  };
-}
-
 async function recordDeterministicFunctionWriteAudit(
   accessStore: AccessStore,
   context: {
     profile: BotProfileConfig;
     event: LineEvent;
   },
-  action: FunctionName,
+  action: CapabilityName,
   result: FunctionExecutionResult
 ): Promise<void> {
   const definition = getFunctionDefinition(action);
@@ -2012,17 +2037,6 @@ async function allowEvent(
         }))
       ) {
         return { allowed: true, reason: "group_action_review_active" };
-      }
-      if (
-        sessionStore &&
-        event.source.userId &&
-        (await sessionStore.findPendingCapabilityResolution({
-          profileName: profile.name,
-          source: event.source,
-          requesterUserId: event.source.userId
-        }))
-      ) {
-        return { allowed: true, reason: "group_capability_resolution_active" };
       }
       if (await hasAttachmentTextIntake(profile, event, sessionStore)) {
         return { allowed: true, reason: "group_attachment_intake_active" };
@@ -2453,8 +2467,8 @@ async function handleAdminAccessCommand(
           accessStore,
           principal.principalId
         );
-        const lastSuccessDisplayName = principal.lastSuccessFunctionName
-          ? getFunctionDefinition(principal.lastSuccessFunctionName)?.displayName
+        const lastSuccessDisplayName = principal.lastSuccessCapabilityName
+          ? getFunctionDefinition(principal.lastSuccessCapabilityName)?.displayName
           : undefined;
         return [
           base,
@@ -2724,7 +2738,7 @@ async function authorizeFunctions(
   accountAdminClient: AccountAdminClient,
   profile: BotProfileConfig,
   lineUserId: string | undefined,
-  functionNames: FunctionName[]
+  functionNames: CapabilityName[]
 ): Promise<FunctionAuthorizationState> {
   if (!lineUserId) {
     return { available: false, authorization: emptyFunctionAuthorization() };
@@ -2748,13 +2762,13 @@ function createTurnFunctionAuthorizer(
   profile: BotProfileConfig,
   lineUserId: string | undefined
 ): {
-  state(functionNames: readonly FunctionName[]): Promise<FunctionAuthorizationState>;
-  allowedFunctions(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  state(functionNames: readonly CapabilityName[]): Promise<FunctionAuthorizationState>;
+  allowedFunctions(functionNames: readonly CapabilityName[]): Promise<readonly CapabilityName[]>;
   administrator(): boolean;
 } {
   let authorization: Promise<FunctionAuthorizationState> | undefined;
   let resolvedState: FunctionAuthorizationState | undefined;
-  const state = (functionNames: readonly FunctionName[]): Promise<FunctionAuthorizationState> => {
+  const state = (functionNames: readonly CapabilityName[]): Promise<FunctionAuthorizationState> => {
     if (!authorization) {
       const restricted = new Set(profile.permissionRequiredFunctions);
       const requested = Array.from(
@@ -2950,7 +2964,6 @@ async function matchingTextMessageHandler(
     return undefined;
   }
   for (const [name, handler] of Object.entries(textMessageHandlers)) {
-    if (handler.turnStage === "attachment") continue;
     if (await handler.matches({ text }, { profile, event, requesterDisplayName })) {
       return { name, handler };
     }

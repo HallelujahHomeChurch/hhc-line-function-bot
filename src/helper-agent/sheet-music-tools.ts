@@ -1,13 +1,9 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { tool } from "langchain";
 import { z } from "zod";
 
 import type { PublicPageReader } from "../clients/public-page.js";
-import type {
-  FunctionHandlerContext,
-  FunctionName,
-  WebSearchClient,
-  WebSearchResult
-} from "../types.js";
+import type { FunctionHandlerContext, WebSearchClient, WebSearchResult } from "../types.js";
 import type { SessionStore } from "../state/session-store.js";
 import { takeToolCall } from "./budget.js";
 
@@ -23,7 +19,7 @@ export interface SheetMusicResearchToolsOptions {
   context: FunctionHandlerContext;
   pageReader: PublicPageReader;
   webSearch: WebSearchClient;
-  authorize?: (name: FunctionName) => Promise<boolean>;
+  authorize?: (name: CapabilityName) => Promise<boolean>;
   onDirectFileCandidates?: (candidates: WebSearchResult[]) => Promise<void>;
 }
 

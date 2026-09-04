@@ -1,9 +1,6 @@
 import { retrieveMemoryArgumentsSchema, saveMemoryArgumentsSchema } from "../function-arguments.js";
 import type { AgentMemoryStore, AgentTextMemoryRecord } from "../agent/memory-store.js";
 import type { FunctionHandler } from "../types.js";
-import type { SessionStore } from "../state/session-store.js";
-import { storePendingFunctionQuery } from "./pending-function.js";
-import { randomUUID } from "node:crypto";
 import type { EmbeddingClient } from "../clients/embedding.js";
 import type { TextGenerationProvider } from "../types.js";
 
@@ -11,16 +8,13 @@ const TEXT_MEMORY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface AgentMemoryFunctionOptions {
   memoryStore: AgentMemoryStore;
-  sessionStore?: SessionStore;
   now?: () => Date;
-  requestIdFactory?: () => string;
   embedding?: EmbeddingClient;
   textGenerator?: TextGenerationProvider;
 }
 
 export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): FunctionHandler {
   const now = options.now ?? (() => new Date());
-  const requestIdFactory = options.requestIdFactory ?? randomUUID;
   return async (rawArgs, context) => {
     const args = saveMemoryArgumentsSchema.parse(rawArgs);
     const content = (args.content || args.query || "").trim();
@@ -34,16 +28,6 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
     const visibility =
       context.event.source.type === "group" && args.visibility === "group" ? "group" : "private";
     if (!args.confirm) {
-      if (options.sessionStore && !context.agentTool) {
-        await storePendingFunctionQuery({
-          sessionStore: options.sessionStore,
-          requestId: requestIdFactory(),
-          action: "save_memory",
-          arguments: { title, content, query: args.query, visibility, confirm: true },
-          context,
-          now: now()
-        });
-      }
       return {
         ok: true,
         writePhase: "preview",

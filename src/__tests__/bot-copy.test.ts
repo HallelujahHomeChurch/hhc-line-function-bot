@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { getFunctionDefinition } from "../functions/definitions.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
 
 describe("bot-authored copy", () => {
   it("instructs the production helper persona to use first-person self-reference", () => {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
-import { matchTextContinuation } from "../application/turn/stages/text-continuation-stage.js";
+import { matchTextContinuation } from "../transport/line/webhook-routes.js";
 import { InMemoryAttachmentScanQueue } from "../attachments/scan-queue.js";
 import { InMemoryAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
@@ -518,98 +518,6 @@ describe("find_sheet_music", () => {
       }
     ]);
     expect(graph.createSharingLink).not.toHaveBeenCalled();
-  });
-
-  it("asks for consent before running external sheet music web search", async () => {
-    const graph: GraphDriveClient = {
-      listFolderChildren: vi.fn(),
-      listFolderFilesRecursive: vi.fn().mockResolvedValue([]),
-      createSharingLink: vi.fn()
-    };
-    const webSearch = { search: vi.fn().mockResolvedValue([]) };
-    const summarize = vi.fn().mockResolvedValue("unused");
-    const now = new Date("2026-07-04T10:00:00.000Z");
-    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
-    const handler = createFindPopSheetMusicHandler({
-      graph,
-      driveId: "drive-id",
-      folderItemId: "sheet-folder-id",
-      allowedExtensions: [".pdf"],
-      sessionStore,
-      externalSearch: { webSearch, summarize },
-      now: () => now,
-      requestIdFactory: () => "external-search-1"
-    });
-
-    const result = await handler({ query: "No Such Song" }, handlerContext());
-
-    expect(result.replyText).toContain("本地歌譜資料庫找不到");
-    expect(result.replyText).toContain("要不要上網找公開搜尋結果");
-    expect(webSearch.search).not.toHaveBeenCalled();
-    await expect(
-      sessionStore.findExternalSearchConsent({
-        action: "sheet_music_external_search",
-        profileName: "main",
-        source: handlerContext().event.source,
-        requesterUserId: "U1"
-      })
-    ).resolves.toMatchObject({
-      query: "No Such Song",
-      action: "sheet_music_external_search"
-    });
-  });
-
-  it("leaves external search consent for the helper research boundary", async () => {
-    const graph: GraphDriveClient = {
-      listFolderChildren: vi.fn(),
-      listFolderFilesRecursive: vi.fn().mockResolvedValue([]),
-      createSharingLink: vi.fn()
-    };
-    const webSearch = {
-      search: vi.fn().mockResolvedValue([
-        {
-          title: "No Such Song sheet music",
-          snippet: "Public search snippet",
-          url: "https://example.org/no-such-song"
-        }
-      ])
-    };
-    const summarize = vi
-      .fn()
-      .mockResolvedValue("我在公開搜尋結果找到一個可能相關的結果：No Such Song sheet music。");
-    const now = new Date("2026-07-04T10:00:00.000Z");
-    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
-    const handler = createFindPopSheetMusicHandler({
-      graph,
-      driveId: "drive-id",
-      folderItemId: "sheet-folder-id",
-      allowedExtensions: [".pdf"],
-      sessionStore,
-      externalSearch: { webSearch, summarize },
-      now: () => now,
-      requestIdFactory: () => "external-search-1"
-    });
-    const textHandler = createFindPopSheetMusicTextMessageHandler({
-      graph,
-      sessionStore,
-      externalSearch: { webSearch, summarize },
-      now: () => now
-    });
-    await handler({ query: "No Such Song" }, handlerContext());
-
-    await expect(textHandler.matches({ text: "好，上網找" }, handlerContext())).resolves.toBe(
-      false
-    );
-    expect(webSearch.search).not.toHaveBeenCalled();
-    expect(summarize).not.toHaveBeenCalled();
-    await expect(
-      sessionStore.findExternalSearchConsent({
-        action: "sheet_music_external_search",
-        profileName: "main",
-        source: handlerContext().event.source,
-        requesterUserId: "U1"
-      })
-    ).resolves.toMatchObject({ id: "external-search-1", query: "No Such Song" });
   });
 
   it("queues an authorized selected direct result for worker-side download and publication", async () => {

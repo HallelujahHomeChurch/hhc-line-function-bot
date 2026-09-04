@@ -448,18 +448,17 @@ async function groupRequesterIsolation(environment: KernelRedisEnvironment): Pro
   });
   const source = { type: "group" as const, groupId: "G1", userId: "U1" };
   await a.set({
-    id: "resolution",
-    type: "pending_resolution",
+    id: "attachment",
+    type: "pending_attachment",
+    action: "save_resource",
     profileName: "helper",
     requesterUserId: "U1",
     source,
-    capability: "query_schedule",
-    groundedArguments: {},
-    candidates: [{ id: "1", domainKey: "domain", displayName: "synthetic" }],
+    attachment: { messageId: "M1", messageType: "image" },
     expiresAt: EXPIRES_AT
   });
   assert(
-    (await b.findPendingResolution({
+    (await b.findPendingAttachment({
       profileName: "helper",
       source: { ...source, userId: "U2" },
       requesterUserId: "U2"
@@ -502,13 +501,12 @@ async function atomicInteractiveReplacement(environment: KernelRedisEnvironment)
     }),
     stores[1]!.set({
       id: "replace-b",
-      type: "pending_resolution",
+      type: "pending_attachment",
+      action: "save_resource",
       profileName: "helper",
       requesterUserId: "U1",
       source,
-      capability: "query_schedule",
-      groundedArguments: {},
-      candidates: [{ id: "1", domainKey: "domain", displayName: "synthetic" }],
+      attachment: { messageId: "M2", messageType: "image" },
       expiresAt: EXPIRES_AT
     })
   ]);
@@ -516,11 +514,9 @@ async function atomicInteractiveReplacement(environment: KernelRedisEnvironment)
   assert(keys.length === 1);
   const lookup = { profileName: "helper", source, requesterUserId: "U1" };
   const found =
-    (await stores[0]!.findPendingResolution(lookup)) ?? (await stores[0]!.takeUploadIntent(lookup));
+    (await stores[0]!.findPendingAttachment(lookup)) ?? (await stores[0]!.takeUploadIntent(lookup));
   assert(Boolean(found));
-  if (found?.type === "pending_resolution") {
-    await stores[0]!.delete(found.id);
-  }
+  if (found?.type === "pending_attachment") await stores[0]!.delete(found.id);
   const remainingKeys = await environment.clients[0].keys(
     `${environment.keyPrefix}:session:replace-*`
   );

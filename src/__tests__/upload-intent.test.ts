@@ -5,8 +5,8 @@ import {
   consumeUploadIntent,
   createUploadIntentTextMessageHandler,
   isUploadActivation
-} from "../functions/upload-intent.js";
-import { isSupportedAttachment } from "../functions/pending-attachment.js";
+} from "../transport/line/attachment-intake.js";
+import { isSupportedAttachment } from "../transport/line/attachment-intake.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 
 describe("group upload intent", () => {

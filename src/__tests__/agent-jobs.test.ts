@@ -124,8 +124,7 @@ describe("agent long-running jobs", () => {
         source: { type: "user", userId: "u1" },
         message: { type: "text", text: "slow" }
       },
-      requestId: "slow-ownerless",
-      allowRouting: true
+      requestId: "slow-ownerless"
     });
     const action = pendingReply?.quickReplies?.[0]?.action;
     const data = action?.type === "postback" ? action.data : "";

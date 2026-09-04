@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { createHash } from "node:crypto";
 
 import { ChatDeepSeek } from "@langchain/deepseek";
@@ -13,7 +14,7 @@ import type { FunctionExecutionResult } from "../application/contracts/function-
 import type { RouteObserver } from "../application/contracts/routing.js";
 import type { AgentTraceStore } from "../agent/trace-store.js";
 import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
-import { getFunctionDefinition } from "../functions/definitions.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
 import { requestFailedMessage } from "../messages.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
 import type { PublicPageReader } from "../clients/public-page.js";
@@ -28,7 +29,6 @@ import type { SessionStore } from "../state/session-store.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
-  FunctionName,
   FunctionRegistry,
   LineSource,
   WebSearchClient
@@ -180,9 +180,9 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           requesterDisplayName: input.requesterDisplayName,
           requesterIsAdmin: input.accountAdministrator?.() || input.requesterIsAdmin
         };
-        const domainResults: Array<{ name: FunctionName; result: FunctionExecutionResult }> = [];
+        const domainResults: Array<{ name: CapabilityName; result: FunctionExecutionResult }> = [];
         const authorize = input.authorizeFunctions
-          ? async (name: FunctionName) =>
+          ? async (name: CapabilityName) =>
               isUnrestrictedRead(input.profile, name) ||
               (await input.authorizeFunctions!([name])).includes(name)
           : undefined;
@@ -387,7 +387,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         requesterDisplayName: input.requesterDisplayName,
         requesterIsAdmin: input.accountAdministrator?.() || input.requesterIsAdmin
       };
-      const authorize = async (name: FunctionName) =>
+      const authorize = async (name: CapabilityName) =>
         isUnrestrictedRead(input.profile, name) ||
         Boolean((await input.authorizeFunctions?.([name]))?.includes(name));
       const executor = createActionExecutor({
@@ -540,7 +540,7 @@ async function effectiveProfile(input: ProfileTurnInput): Promise<BotProfileConf
   const configured = Array.from(
     new Set(input.configuredFunctions ?? input.profile.enabledFunctions)
   );
-  let explicitlyAllowed = new Set<FunctionName>();
+  let explicitlyAllowed = new Set<CapabilityName>();
   if (input.authorizeFunctions) {
     try {
       explicitlyAllowed = new Set(await input.authorizeFunctions(configured));
@@ -556,7 +556,7 @@ async function effectiveProfile(input: ProfileTurnInput): Promise<BotProfileConf
   };
 }
 
-function isUnrestrictedRead(profile: BotProfileConfig, name: FunctionName): boolean {
+function isUnrestrictedRead(profile: BotProfileConfig, name: CapabilityName): boolean {
   return (
     !profile.permissionRequiredFunctions.includes(name) &&
     getFunctionDefinition(name)?.sideEffectLevel === "read"

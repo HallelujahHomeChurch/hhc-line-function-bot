@@ -1,27 +1,27 @@
+import { CAPABILITY_NAMES } from "../capabilities/names.js";
 import { describe, expect, it } from "vitest";
 
 import {
-  FUNCTION_DEFINITIONS,
+  CAPABILITY_CATALOG,
   getFunctionDefinition,
   isFunctionGrantableForPrincipal
-} from "../functions/definitions.js";
-import { FUNCTION_NAMES } from "../types.js";
+} from "../capabilities/catalog.js";
 
 describe("function definitions", () => {
   it("defines every function name in one catalog", () => {
-    expect(FUNCTION_DEFINITIONS.map((definition) => definition.name).sort()).toEqual(
-      [...FUNCTION_NAMES].sort()
+    expect(CAPABILITY_CATALOG.map((definition) => definition.name).sort()).toEqual(
+      [...CAPABILITY_NAMES].sort()
     );
   });
 
   it("exposes Wikipedia lookup as a first-class read capability", () => {
-    expect(FUNCTION_NAMES).toContain("query_wikipedia");
+    expect(CAPABILITY_NAMES).toContain("query_wikipedia");
   });
 
   it("defines Weekly Paper download as a stateless profile read", () => {
     const definition = getFunctionDefinition("download_weekly_paper" as never);
 
-    expect(FUNCTION_NAMES).toContain("download_weekly_paper");
+    expect(CAPABILITY_NAMES).toContain("download_weekly_paper");
     expect(definition).toMatchObject({
       name: "download_weekly_paper",
       requires: ["hhc_web_api"],
@@ -44,7 +44,7 @@ describe("function definitions", () => {
   });
 
   it("uses find_sheet_music as the canonical sheet music function", () => {
-    expect(FUNCTION_NAMES).toContain("find_sheet_music");
+    expect(CAPABILITY_NAMES).toContain("find_sheet_music");
     expect(getFunctionDefinition("find_sheet_music")).toMatchObject({
       name: "find_sheet_music",
       sideEffectLevel: "read",

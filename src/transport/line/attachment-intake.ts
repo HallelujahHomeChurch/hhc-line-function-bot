@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../../capabilities/names.js";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -18,20 +19,81 @@ import type {
 } from "../../state/session-store.js";
 import type {
   BotProfileConfig,
+  FunctionHandlerContext,
   FunctionExecutionResult,
-  FunctionName,
   LineEvent,
+  LineMessage,
   LineSource,
+  QuickReplyItem,
   TextMessageHandler
 } from "../../types.js";
-import {
-  isSupportedAttachment,
-  pendingAttachmentPrompt,
-  storePendingAttachment
-} from "../../functions/pending-attachment.js";
 
 const ATTACHMENT_SESSION_TTL_MS = 10 * 60 * 1000;
 const UPLOAD_INTENT_TTL_MS = 2 * 60 * 1000;
+
+function canCreateRequesterScopedSession(source: LineSource): boolean {
+  return (source.type !== "group" && source.type !== "room") || Boolean(source.userId);
+}
+
+export async function storePendingAttachment(options: {
+  sessionStore: SessionStore;
+  requestId: string;
+  context: FunctionHandlerContext;
+  message: LineMessage;
+  now: Date;
+}): Promise<PendingAttachmentSession | undefined> {
+  if (
+    !canCreateRequesterScopedSession(options.context.event.source) ||
+    !isSupportedAttachment(options.message)
+  ) {
+    return undefined;
+  }
+  const session: PendingAttachmentSession = {
+    id: options.requestId,
+    type: "pending_attachment",
+    action: "save_resource",
+    stage: "awaiting_opt_in",
+    profileName: options.context.profile.name,
+    requesterUserId: options.context.event.source.userId,
+    source: options.context.event.source,
+    attachment: {
+      messageId: options.message.id,
+      messageType: options.message.type,
+      fileName: options.message.fileName,
+      fileSize: options.message.fileSize
+    },
+    expiresAt: new Date(options.now.getTime() + ATTACHMENT_SESSION_TTL_MS).toISOString()
+  };
+  await options.sessionStore.set(session);
+  return session;
+}
+
+export function pendingAttachmentPrompt(message: LineMessage): {
+  replyText: string;
+  quickReplies: QuickReplyItem[];
+} {
+  const label =
+    { image: "圖片", video: "影片", audio: "音訊", file: "檔案" }[message.type] ?? "檔案";
+  const fileName = message.fileName?.trim();
+  return {
+    replyText: [
+      `收到${label}${fileName ? `：${fileName}` : ""}。`,
+      "要我幫忙保存這個檔案嗎？",
+      "在你確認保存前，我不會下載或上傳這個檔案。"
+    ].join("\n"),
+    quickReplies: [
+      { label: "是", action: { type: "message", label: "是", text: "是" } },
+      { label: "否", action: { type: "message", label: "否", text: "否" } }
+    ]
+  };
+}
+
+export function isSupportedAttachment(message: LineMessage | undefined): message is LineMessage & {
+  id: string;
+  type: "image" | "file";
+} {
+  return Boolean(message?.id && (message.type === "image" || message.type === "file"));
+}
 
 export interface AttachmentIntakeInput {
   profile: BotProfileConfig;
@@ -39,8 +101,8 @@ export interface AttachmentIntakeInput {
   requestId: string;
   requesterDisplayName?: string;
   requesterIsAdmin?: boolean;
-  configuredFunctions?: readonly FunctionName[];
-  authorizeFunctions?: (names: readonly FunctionName[]) => Promise<readonly FunctionName[]>;
+  configuredFunctions?: readonly CapabilityName[];
+  authorizeFunctions?: (names: readonly CapabilityName[]) => Promise<readonly CapabilityName[]>;
   sessionStore?: SessionStore;
   maxAttachmentBytes: number;
   now: Date;
@@ -83,7 +145,7 @@ async function authorizedAttachmentProfile(
   ) {
     return input.profile;
   }
-  let allowed: readonly FunctionName[] = [];
+  let allowed: readonly CapabilityName[] = [];
   try {
     allowed = (await input.authorizeFunctions?.(["save_resource"])) ?? [];
   } catch {
@@ -206,7 +268,6 @@ export function createUploadIntentTextMessageHandler(input: {
 }): TextMessageHandler {
   const now = input.now ?? (() => new Date());
   return {
-    turnStage: "attachment",
     capability: "save_resource",
     matches: async (request, context) =>
       (context.event.source.type === "group" || context.event.source.type === "user") &&
@@ -258,7 +319,6 @@ export function createPendingAttachmentTextMessageHandler(
   const now = options.now ?? (() => new Date());
 
   return {
-    turnStage: "attachment",
     capability: "save_resource",
     matches: async (_request, context) =>
       Boolean(

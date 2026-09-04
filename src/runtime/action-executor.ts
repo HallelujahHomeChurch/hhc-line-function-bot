@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { createHash } from "node:crypto";
 
 import {
@@ -12,12 +13,11 @@ import { lineSourcesEqual } from "../state/session-safety.js";
 import type {
   FunctionExecutionResult,
   FunctionHandlerContext,
-  FunctionName,
   FunctionRegistry,
   JsonRecord
 } from "../types.js";
 import { DEFAULT_SCHEDULE_DOMAINS, resolveScheduleDomain } from "../schedules/domain-registry.js";
-import { getFunctionDefinition } from "../functions/definitions.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
 
 const actions = {
   propose_save_schedule: {
@@ -39,7 +39,7 @@ const actions = {
 } as const satisfies Record<
   HelperWriteToolName,
   {
-    capability: FunctionName;
+    capability: CapabilityName;
     schema: { safeParse(value: unknown): { success: boolean; data?: unknown } };
   }
 >;
@@ -47,7 +47,7 @@ const actions = {
 export interface ActionExecutorOptions {
   handlers: FunctionRegistry;
   jobs: AgentJobStore;
-  authorize(name: FunctionName, context: FunctionHandlerContext): Promise<boolean>;
+  authorize(name: CapabilityName, context: FunctionHandlerContext): Promise<boolean>;
   currentPolicyKey(context: FunctionHandlerContext): Promise<string> | string;
 }
 
@@ -242,7 +242,7 @@ function helperActionFor(toolName: string) {
   return Object.hasOwn(actions, toolName) ? actions[toolName as HelperWriteToolName] : undefined;
 }
 
-function actionAllowed(name: FunctionName, context: FunctionHandlerContext): boolean {
+function actionAllowed(name: CapabilityName, context: FunctionHandlerContext): boolean {
   const definition = getFunctionDefinition(name);
   if (!definition) return false;
   const source = context.event.source.type;

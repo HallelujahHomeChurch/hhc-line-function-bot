@@ -14,7 +14,8 @@ import {
 } from "../access/registration-invite-code-store.js";
 import { createAgentMemoryStore } from "../agent/create-agent-memory-store.js";
 import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
-import { createAgentRuntime } from "../agent/agent-runtime.js";
+import { createResourceMemoryObserver } from "../agent/resource-memory.js";
+import { createMemoryCommandHandler } from "../transport/line/memory-commands.js";
 import { createHelperModels, createHelperRuntime } from "../helper-agent/runtime.js";
 import { createHelperAgentState, createPostgresHelperAgentState } from "../helper-agent/state.js";
 import { createMainRuntime } from "../runtime/main-runtime.js";
@@ -40,11 +41,7 @@ import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createAssetApiClient } from "../clients/asset-api.js";
-import {
-  createLineSdkContentClient,
-  createLineSdkIdentityClient,
-  createLineSdkReplyClient
-} from "../clients/line.js";
+import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { createSearxngClient } from "../clients/searxng.js";
@@ -53,9 +50,6 @@ import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
 import { createPostgresPool, createPostgresRuntime } from "../db/postgres.js";
 import { MediaSyncManagementService } from "../media-sync/service.js";
-import { createFunctionRegistries } from "../functions/registry.js";
-import { FUNCTION_MODULES } from "../functions/modules.js";
-import { createQueryScheduleModule } from "../capabilities/query-schedule/module.js";
 import { createWebhookEventStore } from "../idempotency/create-webhook-event-store.js";
 import { createKnowledgeStore } from "../knowledge/create-store.js";
 import { createProfileAwareProvider } from "../llm/provider-runtime.js";
@@ -63,11 +57,10 @@ import { createLastErrorStore } from "../observability/create-last-error-store.j
 import { createLastRouteStore } from "../observability/create-last-route-store.js";
 import { createFirstSuccessStore } from "../observability/first-success-store.js";
 import { createConsoleRouteObserver } from "../observability/route-observer.js";
-import { createFunctionCompletionObserver } from "../application/turn/completion-observer.js";
+import { createFunctionCompletionObserver } from "../observability/function-completion.js";
 import { createRateLimiter } from "../rate-limit.js";
 import { createRedisRuntime } from "../redis.js";
 import { createScheduleStore } from "../schedules/create-schedule-store.js";
-import { createSheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
 import { createApp } from "../server.js";
 import { createSessionStore } from "../state/create-session-store.js";
 import type { AppConfig } from "../types.js";
@@ -76,6 +69,7 @@ import {
   type ApplicationRuntime,
   type ProductionRuntime
 } from "./runtime-contracts.js";
+import { composeCapabilities } from "./compose-capabilities.js";
 
 export async function createProductionRuntime(config: AppConfig): Promise<ProductionRuntime> {
   assertProductionPersistence(config);
@@ -148,7 +142,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
   const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
   const wikipedia = config.wikipedia ? createWikipediaClient(config.wikipedia) : undefined;
-  const lineContent = createLineSdkContentClient();
   const webSearch = config.webSearch?.searxngBaseUrl
     ? createSearxngClient({
         baseUrl: config.webSearch.searxngBaseUrl,
@@ -275,50 +268,30 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     redis,
     config: config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
   });
-  const registries = createFunctionRegistries(
-    config,
-    {
-      accountAdminClient,
-      graph,
-      notion,
-      wikipedia,
-      lineContent,
-      sessionStore,
-      cache,
-      catalog,
-      scheduleStore,
-      knowledgeStore,
-      embedding: knowledgeEmbedding,
-      knowledgeTextGenerator: smartTalkPrimary,
-      memoryStore,
-      accessStore,
-      agentJobStore,
-      attachmentScanWorkStore,
-      attachmentScanQueue,
-      mediaSyncStore: postgres?.mediaSyncStore,
-      webSearch,
-      sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
-        primary: wikipediaSummaryPrimary
-      }),
-      wikipediaSummarizer: createWikipediaSummarizer({
-        primary: wikipediaSummaryPrimary
-      })
-    },
-    FUNCTION_MODULES.map((module) =>
-      module.name === "query_schedule"
-        ? createQueryScheduleModule({
-            memoryStore,
-            scheduleStore,
-            notion,
-            databaseId: config.notion?.databaseId,
-            properties: config.notion?.properties,
-            timeZone: config.timeZone,
-            sessionStore
-          })
-        : module
-    )
-  );
-  const applicationAgentRuntime = createAgentRuntime({ memoryStore, graph, accessStore });
+  const registries = composeCapabilities(config, {
+    accountAdminClient,
+    graph,
+    notion,
+    wikipedia,
+    sessionStore,
+    cache,
+    catalog,
+    scheduleStore,
+    knowledgeStore,
+    embedding: knowledgeEmbedding,
+    knowledgeTextGenerator: smartTalkPrimary,
+    memoryStore,
+    accessStore,
+    agentJobStore,
+    attachmentScanWorkStore,
+    attachmentScanQueue,
+    mediaSyncStore: postgres?.mediaSyncStore,
+    wikipediaSummarizer: createWikipediaSummarizer({
+      primary: wikipediaSummaryPrimary
+    })
+  });
+  const resourceMemory = createResourceMemoryObserver({ memoryStore });
+  const memoryCommands = createMemoryCommandHandler({ memoryStore, accessStore });
   const helperProfile = config.profiles.find(
     (profile) => profile.name === "helper" && profile.agent
   );
@@ -393,6 +366,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     adminActionRouter,
     postbackHandlers: registries.postbacks,
     textMessageHandlers: registries.textMessages,
+    attachmentTextHandlers: registries.attachmentTextHandlers,
     adminHandlers: registries.adminHandlers,
     createLineReplyClient: createLineSdkReplyClient,
     createLineIdentityClient: createLineSdkIdentityClient,
@@ -409,7 +383,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     agentJobStore,
     conversationWindowStore,
     textGenerator: smartTalkPrimary,
-    agentRuntime: applicationAgentRuntime,
+    memoryCommands,
+    resourceMemory,
     profileRuntime,
     diagnostics: createDependencyDiagnostics({
       config,

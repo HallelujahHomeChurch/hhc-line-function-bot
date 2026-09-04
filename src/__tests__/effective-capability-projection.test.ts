@@ -1,3 +1,5 @@
+import { CAPABILITY_NAMES } from "../capabilities/names.js";
+import type { CapabilityName } from "../capabilities/names.js";
 import { describe, expect, it } from "vitest";
 
 import type { EffectiveAccessContext } from "../application/access/effective-access.js";
@@ -7,14 +9,14 @@ import {
   renderRegistrationCompletion
 } from "../application/capabilities/capability-presenters.js";
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
-import { getFunctionDefinition, type FunctionDefinition } from "../functions/definitions.js";
-import { FUNCTION_NAMES, type BotProfileConfig, type FunctionName } from "../types.js";
+import { getFunctionDefinition, type FunctionDefinition } from "../capabilities/catalog.js";
+import { type BotProfileConfig } from "../types.js";
 
 function context(
   input: {
     authorized?: boolean;
     sourceType?: EffectiveAccessContext["sourceType"];
-    enabledFunctions?: FunctionName[];
+    enabledFunctions?: CapabilityName[];
   } = {}
 ): EffectiveAccessContext {
   return {
@@ -40,7 +42,7 @@ function context(
   };
 }
 
-function definition(name: FunctionName, overrides: Partial<FunctionDefinition> = {}) {
+function definition(name: CapabilityName, overrides: Partial<FunctionDefinition> = {}) {
   const value = getFunctionDefinition(name);
   if (!value) throw new Error(`Missing definition: ${name}`);
   return { ...value, ...overrides };
@@ -201,7 +203,7 @@ describe("effective capability projection", () => {
 
   it("renders complete ordinary capability copy without implementation details", () => {
     const projection = projectEffectiveCapabilities({
-      context: context({ enabledFunctions: [...FUNCTION_NAMES] })
+      context: context({ enabledFunctions: [...CAPABILITY_NAMES] })
     });
     const help = renderCapabilityHelp(projection, "help");
     const introduction = renderCapabilityHelp(projection, "introduction");

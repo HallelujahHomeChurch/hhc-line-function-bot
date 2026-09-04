@@ -1,3 +1,5 @@
+import { CAPABILITY_NAMES } from "./capabilities/names.js";
+import type { CapabilityName } from "./capabilities/names.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -7,7 +9,7 @@ import { assertCanonicalWebhookPath } from "./profile-path.js";
 import { readTimeZone } from "./time-zone.js";
 import { providerCapabilities } from "./llm/provider-metadata.js";
 import { normalizeProviderPolicy } from "./llm/provider-policy.js";
-import { FUNCTION_NAMES, MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
+import { MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
 import { DEFAULT_MEETING_WINDOWS } from "./schedules/occurrence-policy.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "./schedules/domain-registry.js";
 import {
@@ -19,7 +21,6 @@ import {
 import type {
   AppConfig,
   DatabaseConfig,
-  FunctionName,
   GraphConfig,
   KnowledgeConfig,
   ModelProviderName,
@@ -185,8 +186,8 @@ const profileSchema = z.object({
   groupRequireWakeWord: z.boolean().default(true),
   wakeKeywords: z.array(z.string()).default([]),
   acceptMention: z.boolean().default(true),
-  enabledFunctions: z.array(z.enum(FUNCTION_NAMES)).default([]),
-  permissionRequiredFunctions: z.array(z.enum(FUNCTION_NAMES)).optional(),
+  enabledFunctions: z.array(z.enum(CAPABILITY_NAMES)).default([]),
+  permissionRequiredFunctions: z.array(z.enum(CAPABILITY_NAMES)).optional(),
   accountLink: accountLinkPresentationSchema.optional(),
   adminDirectOnly: z.boolean().default(true),
   directAccessPolicy: z.enum(["managed", "public", "blocked"]).optional(),
@@ -210,11 +211,6 @@ const profileSchema = z.object({
   providerPolicy: z
     .partialRecord(z.enum(MODEL_PROVIDER_LANE_NAMES), providerLanePolicySchema)
     .optional(),
-  agentRuntime: z
-    .object({
-      taskFrameSeconds: z.number().int().min(60).max(3600).default(600)
-    })
-    .default({ taskFrameSeconds: 600 }),
   schedulePolicy: schedulePolicySchema.default({
     meetingWindows: DEFAULT_MEETING_WINDOWS,
     domains: DEFAULT_SCHEDULE_DOMAINS
@@ -340,7 +336,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     },
     profiles: normalizedProfiles.map((profile) => ({
       ...profile,
-      enabledFunctions: profile.enabledFunctions as FunctionName[]
+      enabledFunctions: profile.enabledFunctions as CapabilityName[]
     })),
     llm: {
       provider: llmProvider,
@@ -487,7 +483,7 @@ type NormalizedProfile = Omit<
   allowedProviders: ModelProviderName[];
   allowSubscriptionProviders: boolean;
   providerPolicy: ProviderPolicy;
-  permissionRequiredFunctions: FunctionName[];
+  permissionRequiredFunctions: CapabilityName[];
   accountLink?: {
     displayName: string;
     lineId: string;

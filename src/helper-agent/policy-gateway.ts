@@ -1,4 +1,5 @@
-import { getFunctionDefinition } from "../functions/definitions.js";
+import type { CapabilityName } from "../capabilities/names.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
 import { takeToolCall } from "./budget.js";
 import {
   projectToolResult,
@@ -8,7 +9,6 @@ import {
 import type {
   FunctionExecutionResult,
   FunctionHandlerContext,
-  FunctionName,
   FunctionRegistry,
   JsonRecord
 } from "../types.js";
@@ -16,14 +16,14 @@ import type {
 export interface HelperToolGatewayOptions {
   context: FunctionHandlerContext;
   handlers: FunctionRegistry;
-  authorize?: (name: FunctionName) => Promise<boolean>;
-  onDomainResult?: (name: FunctionName, result: FunctionExecutionResult) => void;
+  authorize?: (name: CapabilityName) => Promise<boolean>;
+  onDomainResult?: (name: CapabilityName, result: FunctionExecutionResult) => void;
 }
 
 export function createHelperToolGateway(options: HelperToolGatewayOptions) {
   return {
     async execute(
-      name: FunctionName,
+      name: CapabilityName,
       args: JsonRecord,
       sourceType: HelperToolSourceType
     ): Promise<HelperToolResult> {

@@ -1,12 +1,8 @@
-import { getFunctionDefinitions } from "../functions/definitions.js";
+import { CAPABILITY_NAMES } from "../capabilities/names.js";
+import type { CapabilityName } from "../capabilities/names.js";
+import { getFunctionDefinitions } from "../capabilities/catalog.js";
 import { matchExactWholeMessageIntent } from "../functions/explicit-function-intent.js";
-import {
-  FUNCTION_NAMES,
-  type ActionName,
-  type AdminActionName,
-  type FunctionName,
-  type SystemActionName
-} from "../types.js";
+import { type ActionName, type AdminActionName, type SystemActionName } from "../types.js";
 
 export type ActionKind = "user_function" | "admin_action" | "system_action";
 export type ActionAuth = "public" | "registered" | "admin";
@@ -26,8 +22,8 @@ export interface ActionDefinition<Name extends ActionName = ActionName> {
   groupNaturalLanguage?: boolean;
 }
 
-const userFunctionActions: ActionDefinition<FunctionName>[] = getFunctionDefinitions([
-  ...FUNCTION_NAMES
+const userFunctionActions: ActionDefinition<CapabilityName>[] = getFunctionDefinitions([
+  ...CAPABILITY_NAMES
 ]).map((definition) => ({
   name: definition.name,
   kind: "user_function",

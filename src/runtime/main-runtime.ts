@@ -1,13 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
-import {
-  applyPendingSlotAnswer,
-  createSlotClarificationResult
-} from "../agent/slot-clarification.js";
 import { normalizeFunctionArguments } from "../functions/argument-normalization.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
 import { messages } from "../messages.js";
+import { withRequesterDisplayName } from "../requester-personalization.js";
 import type { SessionStore } from "../state/session-store.js";
 import type {
   FunctionExecutionResult,
@@ -74,11 +71,7 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
     });
     if (!review) return existingResult(options.jobs, input.resultJobId, scope);
     const stored = review.threadId ? await options.sessions.take(review.threadId) : undefined;
-    if (
-      stored?.type !== "pending_function" ||
-      stored.action !== "update_own_profile" ||
-      stored.reviewId !== review.id
-    ) {
+    if (stored?.type !== "profile_update" || stored.reviewId !== review.id) {
       await options.jobs.fail(review.resultJobId, "review_arguments_missing");
       return reviewResult(unavailableReview());
     }
@@ -141,11 +134,10 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
           })
         )?.result;
       }
-      const pending = await options.sessions.findPendingFunction({
+      const pending = await options.sessions.findProfileUpdate({
         profileName: "main",
         source: input.event.source,
-        requesterUserId,
-        action: "update_own_profile"
+        requesterUserId
       });
       if (!pending && !matchesOwnProfileUpdate(text)) {
         return { ok: true, replyText: messages.unsupported };
@@ -163,23 +155,14 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
         if (pending) await options.sessions.delete(pending.id);
         return { ok: true, replyText: "已取消這次操作。" };
       }
-      const args = pending
-        ? normalizeFunctionArguments(
-            "update_own_profile",
-            applyPendingSlotAnswer("update_own_profile", pending.arguments, text),
-            { text }
-          )
-        : {};
+      const args = normalizeFunctionArguments(
+        "update_own_profile",
+        pending ? applyProfileUpdateAnswer(pending.arguments, text) : {},
+        { text }
+      );
       if (pending) await options.sessions.delete(pending.id);
       const context = handlerContext(authorizedInput);
-      const clarification = await createSlotClarificationResult({
-        sessionStore: options.sessions,
-        action: "update_own_profile",
-        arguments: args,
-        context,
-        requestId: input.requestId,
-        now: now()
-      });
+      const clarification = await collectProfileUpdateSlot(args, context);
       if (clarification) return clarification;
       return createUpdateReview(authorizedInput, args, context);
     },
@@ -224,8 +207,7 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
       });
       await options.sessions.set({
         id: checkpointId,
-        type: "pending_function",
-        action: "update_own_profile",
+        type: "profile_update",
         profileName: "main",
         requesterUserId,
         source: input.event.source,
@@ -266,14 +248,48 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
         await options.jobs.fail(taken.resultJobId, "review_abandoned");
       }
     }
-    const pending = await options.sessions.findPendingFunction({
+    const pending = await options.sessions.findProfileUpdate({
       profileName: "main",
       source: input.event.source,
-      requesterUserId,
-      action: "update_own_profile"
+      requesterUserId
     });
     if (pending) await options.sessions.delete(pending.id);
   }
+
+  async function collectProfileUpdateSlot(
+    args: JsonRecord,
+    context: FunctionHandlerContext
+  ): Promise<FunctionExecutionResult | undefined> {
+    const missing =
+      typeof args.firstName !== "string"
+        ? "firstName"
+        : typeof args.lastName !== "string"
+          ? "lastName"
+          : undefined;
+    if (!missing || !context.event.source.userId) return undefined;
+    await options.sessions.set({
+      id: `${context.requestId ?? idFactory()}:profile-update`,
+      type: "profile_update",
+      profileName: "main",
+      requesterUserId: context.event.source.userId,
+      source: context.event.source,
+      arguments: args,
+      expiresAt: new Date(now().getTime() + REVIEW_TTL_MS).toISOString()
+    });
+    return {
+      ok: true,
+      replyText: withRequesterDisplayName(
+        context,
+        missing === "firstName" ? "請輸入名字（First name）。" : "請輸入姓氏（Last name）。"
+      )
+    };
+  }
+}
+
+function applyProfileUpdateAnswer(args: JsonRecord, answer: string): JsonRecord {
+  if (typeof args.firstName !== "string") return { ...args, firstName: answer };
+  if (typeof args.lastName !== "string") return { ...args, lastName: answer };
+  return args;
 }
 
 function handlerContext(input: ProfileTurnInput): FunctionHandlerContext {

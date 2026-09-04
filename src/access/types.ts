@@ -1,4 +1,4 @@
-import type { FunctionName } from "../types.js";
+import type { CapabilityName } from "../capabilities/names.js";
 
 export type AccessPrincipalType = "admin" | "user" | "group";
 export type RolePrincipalType = "user" | "group";
@@ -33,7 +33,7 @@ export interface AccessPrincipal {
   createdBy: string;
   disabledAt?: string;
   disabledBy?: string;
-  lastSuccessFunctionName?: FunctionName;
+  lastSuccessCapabilityName?: CapabilityName;
   lastSuccessAt?: string;
 }
 
@@ -52,7 +52,7 @@ export interface GroupFunctionGrant {
   id: string;
   profileName: string;
   groupId: string;
-  functionName: FunctionName;
+  functionName: CapabilityName;
   createdAt: string;
   createdBy: string;
   disabledAt?: string;
@@ -63,7 +63,7 @@ export interface UserFunctionGrant {
   id: string;
   profileName: string;
   userId: string;
-  functionName: FunctionName;
+  functionName: CapabilityName;
   createdAt: string;
   createdBy: string;
   disabledAt?: string;
@@ -89,7 +89,7 @@ export interface RecordPrincipalSuccessInput {
   profileName: string;
   type: "user" | "group";
   principalId: string;
-  functionName: FunctionName;
+  functionName: CapabilityName;
   occurredAt: string;
 }
 
@@ -105,28 +105,28 @@ export interface AccessAuditInput {
 export interface AddGroupFunctionGrantInput {
   profileName: string;
   groupId: string;
-  functionName: FunctionName;
+  functionName: CapabilityName;
   createdBy: string;
 }
 
 export interface DisableGroupFunctionGrantInput {
   profileName: string;
   groupId: string;
-  functionName: FunctionName;
+  functionName: CapabilityName;
   disabledBy: string;
 }
 
 export interface AddUserFunctionGrantInput {
   profileName: string;
   userId: string;
-  functionName: FunctionName;
+  functionName: CapabilityName;
   createdBy: string;
 }
 
 export interface DisableUserFunctionGrantInput {
   profileName: string;
   userId: string;
-  functionName: FunctionName;
+  functionName: CapabilityName;
   disabledBy: string;
 }
 
@@ -145,11 +145,11 @@ export interface AccessStore {
   recordPrincipalSuccess(input: RecordPrincipalSuccessInput): Promise<void>;
   recordAudit(input: AccessAuditInput): Promise<void>;
   listAuditEvents(profileName: string, limit: number): Promise<AccessAuditEvent[]>;
-  listGroupFunctionGrants(profileName: string, groupId: string): Promise<FunctionName[]>;
+  listGroupFunctionGrants(profileName: string, groupId: string): Promise<CapabilityName[]>;
   listAllGroupFunctionGrants(profileName: string): Promise<GroupFunctionGrant[]>;
   addGroupFunctionGrant(input: AddGroupFunctionGrantInput): Promise<GroupFunctionGrant>;
   disableGroupFunctionGrant(input: DisableGroupFunctionGrantInput): Promise<boolean>;
-  listUserFunctionGrants(profileName: string, userId: string): Promise<FunctionName[]>;
+  listUserFunctionGrants(profileName: string, userId: string): Promise<CapabilityName[]>;
   listAllUserFunctionGrants(profileName: string): Promise<UserFunctionGrant[]>;
   addUserFunctionGrant(input: AddUserFunctionGrantInput): Promise<UserFunctionGrant>;
   disableUserFunctionGrant(input: DisableUserFunctionGrantInput): Promise<boolean>;

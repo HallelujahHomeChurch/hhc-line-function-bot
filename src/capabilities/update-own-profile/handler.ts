@@ -1,16 +1,11 @@
-import { randomUUID } from "node:crypto";
-
 import { updateOwnProfileArgumentsSchema } from "../../function-arguments.js";
 import { messages } from "../../messages.js";
 import type { FunctionHandler } from "../../types.js";
-import { storePendingFunctionQuery } from "../../functions/pending-function.js";
 import type { UpdateOwnProfileDependencies } from "./ports.js";
 
 export function createUpdateOwnProfileHandler(
   dependencies: UpdateOwnProfileDependencies
 ): FunctionHandler {
-  const now = dependencies.now ?? (() => new Date());
-  const requestIdFactory = dependencies.requestIdFactory ?? randomUUID;
   return async (rawArguments, context) => {
     const argumentsValue = updateOwnProfileArgumentsSchema.parse(rawArguments);
     if (argumentsValue.cancel) return { ok: true, replyText: "已取消修改姓名。" };
@@ -21,20 +16,6 @@ export function createUpdateOwnProfileHandler(
       return { ok: true, replyText: messages.permissionDenied };
     }
     if (!argumentsValue.confirm) {
-      if (!context.agentTool) {
-        await storePendingFunctionQuery({
-          sessionStore: dependencies.sessionStore,
-          requestId: requestIdFactory(),
-          action: "update_own_profile",
-          arguments: {
-            firstName: argumentsValue.firstName,
-            lastName: argumentsValue.lastName,
-            confirm: true
-          },
-          context,
-          now: now()
-        });
-      }
       return {
         ok: true,
         writePhase: "preview",

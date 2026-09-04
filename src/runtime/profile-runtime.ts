@@ -1,5 +1,6 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
-import type { BotProfileConfig, FunctionName, LineEvent } from "../types.js";
+import type { BotProfileConfig, LineEvent } from "../types.js";
 
 export interface ProfileTurnInput {
   profile: BotProfileConfig;
@@ -7,8 +8,8 @@ export interface ProfileTurnInput {
   requestId: string;
   requesterDisplayName?: string;
   requesterIsAdmin?: boolean;
-  configuredFunctions?: FunctionName[];
-  authorizeFunctions?: (names: FunctionName[]) => Promise<FunctionName[]>;
+  configuredFunctions?: CapabilityName[];
+  authorizeFunctions?: (names: CapabilityName[]) => Promise<CapabilityName[]>;
   accountAdministrator?: () => boolean;
 }
 

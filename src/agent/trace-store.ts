@@ -1,5 +1,6 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { sanitizeActionTelemetryEvent } from "../observability/action-telemetry.js";
-import type { AgentPlanDisposition, FunctionName } from "../types.js";
+import type { AgentPlanDisposition } from "../types.js";
 import type { RetrievalDiagnostics } from "../observability/retrieval-diagnostics.js";
 
 export type AgentTurnTracePhase =
@@ -36,7 +37,7 @@ export interface AgentTurnTraceStep {
   errorName?: string;
   dedup?: string;
   durationMs?: number;
-  candidates?: FunctionName[];
+  candidates?: CapabilityName[];
   candidateCount?: number;
   groundedFieldCount?: number;
   droppedFieldCount?: number;

@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import {
   queryScheduleMemoryArgumentsSchema,
   saveScheduleMemoryArgumentsSchema,
@@ -13,21 +11,13 @@ import type {
   AgentScheduleType
 } from "../agent/memory-store.js";
 import { normalizeLookupText } from "../agent/memory-store.js";
-import type {
-  FunctionExecutionResult,
-  FunctionHandler,
-  FunctionHandlerContext,
-  FunctionName
-} from "../types.js";
-import type { SessionStore } from "../state/session-store.js";
-import { storePendingFunctionQuery } from "./pending-function.js";
+import type { FunctionExecutionResult, FunctionHandler, FunctionHandlerContext } from "../types.js";
 import { resolveScheduleResultRows, scheduleResultEnvelope } from "./schedule-result.js";
 import { selectFirstUpcomingOccurrence } from "../schedules/occurrence-policy.js";
 import type { MeetingWindowRule } from "../types.js";
 import { readTimeZone } from "../time-zone.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "../schedules/domain-registry.js";
-import { resolveScheduleDomain, scheduleDomainCandidate } from "../schedules/domain-registry.js";
-import { storePendingResolution } from "./pending-resolution.js";
+import { resolveScheduleDomain } from "../schedules/domain-registry.js";
 import type { ScheduleDomainConfig } from "../types.js";
 
 const SCHEDULE_MEMORY_TTL_MS = 365 * 24 * 60 * 60 * 1000;
@@ -47,10 +37,7 @@ export interface ParseScheduleMemoryContentInput {
 
 export interface ScheduleMemoryFunctionOptions {
   memoryStore: AgentMemoryStore;
-  sessionStore?: SessionStore;
   now?: () => Date;
-  requestIdFactory?: () => string;
-  action?: FunctionName;
   timeZone?: string;
 }
 
@@ -72,8 +59,6 @@ export function createSaveScheduleMemoryHandler(
   options: ScheduleMemoryFunctionOptions
 ): FunctionHandler {
   const now = options.now ?? (() => new Date());
-  const requestIdFactory = options.requestIdFactory ?? randomUUID;
-  const action = options.action ?? "save_schedule";
   return async (rawArgs, context) => {
     const args = saveScheduleMemoryArgumentsSchema.parse(rawArgs);
     const content = scheduleMemoryContent(args);
@@ -84,17 +69,6 @@ export function createSaveScheduleMemoryHandler(
 
     const domainResolution = resolveSaveScheduleDomain({ args, context, content });
     if (domainResolution.status === "ambiguous") {
-      if (!context.agentTool) {
-        await storePendingResolution({
-          sessionStore: options.sessionStore,
-          requestId: requestIdFactory(),
-          capability: action,
-          groundedArguments: args,
-          candidates: domainResolution.domains.map(scheduleDomainCandidate),
-          context,
-          now: now()
-        });
-      }
       const choices = domainResolution.domains.map(({ displayName }) => displayName);
       return {
         ok: true,
@@ -131,9 +105,7 @@ export function createSaveScheduleMemoryHandler(
         args: effectiveArgs,
         context,
         options,
-        now: now(),
-        action,
-        requestIdFactory
+        now: now()
       });
     }
 
@@ -168,24 +140,6 @@ export function createSaveScheduleMemoryHandler(
               schedule.scheduleType === parsed.scheduleType && schedule.periodKey === periodKey
           )
         : undefined;
-      if (options.sessionStore && !context.agentTool) {
-        await storePendingFunctionQuery({
-          sessionStore: options.sessionStore,
-          requestId: requestIdFactory(),
-          action,
-          arguments: {
-            scheduleType: parsed.scheduleType,
-            domainKey: effectiveArgs.domainKey,
-            domainRevision: effectiveArgs.domainRevision,
-            title: parsed.title,
-            content,
-            confirm: true
-          },
-          context,
-          now: now()
-        });
-      }
-
       return {
         ok: true,
         writePhase: "preview",
@@ -272,8 +226,6 @@ async function handleScheduleMutation(input: {
   context: FunctionHandlerContext;
   options: ScheduleMemoryFunctionOptions;
   now: Date;
-  action: FunctionName;
-  requestIdFactory: () => string;
 }): Promise<FunctionExecutionResult> {
   const { args, context, options } = input;
   if (args.operation !== "add_entry" && context.requesterIsAdmin !== true) {
@@ -284,7 +236,6 @@ async function handleScheduleMutation(input: {
       return { ok: true, replyText: "請告訴我要新增的日期、服事項目和家族或同工。" };
     }
     if (!args.confirm) {
-      await storeMutationConfirmation(input);
       return mutationPreview(
         ["請確認這筆新服事：", formatEntryInput(args.entry), "要新增嗎？"],
         "保存"
@@ -322,7 +273,6 @@ async function handleScheduleMutation(input: {
       };
     }
     if (!args.confirm) {
-      await storeMutationConfirmation(input);
       return mutationPreview([`要刪除整份「${target[0].title}」嗎？`], "刪除");
     }
     const removed = await options.memoryStore.forgetScheduleMemory({
@@ -369,7 +319,6 @@ async function handleScheduleMutation(input: {
     }
     const updated = { ...current, ...args.changes };
     if (!args.confirm) {
-      await storeMutationConfirmation(input);
       return mutationPreview(
         [
           "請確認這項修改：",
@@ -394,7 +343,6 @@ async function handleScheduleMutation(input: {
 
   if (args.operation === "delete_entry") {
     if (!args.confirm) {
-      await storeMutationConfirmation(input);
       return mutationPreview(
         ["請確認要刪除這筆服事：", formatEntryInput(current), "要刪除嗎？"],
         "刪除"
@@ -412,27 +360,6 @@ async function handleScheduleMutation(input: {
   }
 
   return { ok: true, replyText: "目前不支援這項服事表操作。" };
-}
-
-async function storeMutationConfirmation(input: {
-  args: SaveScheduleMemoryArguments;
-  context: FunctionHandlerContext;
-  options: ScheduleMemoryFunctionOptions;
-  now: Date;
-  action: FunctionName;
-  requestIdFactory: () => string;
-}): Promise<void> {
-  if (!input.options.sessionStore || input.context.agentTool) {
-    return;
-  }
-  await storePendingFunctionQuery({
-    sessionStore: input.options.sessionStore,
-    requestId: input.requestIdFactory(),
-    action: input.action,
-    arguments: { ...input.args, confirm: true },
-    context: input.context,
-    now: input.now
-  });
 }
 
 function mutationPreview(lines: string[], confirmLabel: string): FunctionExecutionResult {
@@ -455,7 +382,7 @@ function formatEntryInput(entry: AgentScheduleEntryInput): string {
 }
 
 export function createSaveScheduleHandler(options: ScheduleMemoryFunctionOptions): FunctionHandler {
-  return createSaveScheduleMemoryHandler({ ...options, action: "save_schedule" });
+  return createSaveScheduleMemoryHandler(options);
 }
 
 export function createQueryScheduleMemoryHandler(

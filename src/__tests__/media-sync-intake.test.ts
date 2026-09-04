@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { prepareMediaSyncIntake } from "../media-sync/intake.js";
-import { handleAttachmentMessage } from "../functions/attachment-entrance.js";
+import { handleAttachmentMessage } from "../transport/line/attachment-intake.js";
 import type { PostgresMediaSyncStore } from "../media-sync/store.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type { BotProfileConfig, LineEvent } from "../types.js";

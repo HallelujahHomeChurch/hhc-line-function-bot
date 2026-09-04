@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentResultEnvelope } from "../agent/result-envelope.js";
 import type { FunctionExecutionResult, QuickReplyItem } from "../types.js";
-import { getFunctionDefinition } from "../functions/definitions.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
 import {
   applyResultGuidance,
   type FunctionResultState
-} from "../application/turn/result-guidance.js";
+} from "../observability/function-completion.js";
 
 const existingChoice: QuickReplyItem = {
   label: "第一個結果",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FUNCTION_DEFINITIONS } from "../functions/definitions.js";
+import { CAPABILITY_CATALOG } from "../capabilities/catalog.js";
 
 const internalTerms = [
   "OneDrive",
@@ -20,7 +20,7 @@ const internalTerms = [
 
 describe("function capability contracts", () => {
   it("defines user-facing metadata for every function", () => {
-    for (const definition of FUNCTION_DEFINITIONS) {
+    for (const definition of CAPABILITY_CATALOG) {
       expect(definition.displayName, definition.name).toBeTruthy();
       expect(definition.shortDescription, definition.name).toBeTruthy();
       expect(definition.examples.length, definition.name).toBeGreaterThan(0);
@@ -39,7 +39,7 @@ describe("function capability contracts", () => {
   });
 
   it("keeps user-facing metadata free of implementation service names", () => {
-    for (const definition of FUNCTION_DEFINITIONS) {
+    for (const definition of CAPABILITY_CATALOG) {
       const userFacing = [
         definition.displayName,
         definition.shortDescription,

@@ -7,7 +7,7 @@ import {
   type AttachmentScanWorkStore
 } from "../attachments/scan-work-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
-import { createPendingAttachmentTextMessageHandler } from "../functions/attachment-save.js";
+import { createPendingAttachmentTextMessageHandler } from "../transport/line/attachment-intake.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import { handleAttachmentIntake } from "../transport/line/attachment-intake.js";
 import type {
@@ -194,12 +194,10 @@ async function setup(
 describe("attachment save pipeline", () => {
   it("keeps an unrelated group attachment silent without entering a text handler", async () => {
     const pendingAttachment = {
-      turnStage: "attachment" as const,
       matches: vi.fn(async () => false),
       handle: vi.fn()
     };
     const uploadActivation = {
-      turnStage: "attachment" as const,
       matches: vi.fn(async () => false),
       handle: vi.fn()
     };

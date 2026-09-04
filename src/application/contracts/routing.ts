@@ -1,7 +1,7 @@
+import type { CapabilityName } from "../../capabilities/names.js";
 import type { RetrievalDiagnostics } from "../../observability/retrieval-diagnostics.js";
 import type {
   AdminActionName,
-  FunctionName,
   JsonRecord,
   LineSource,
   ModelProviderLane,
@@ -13,7 +13,7 @@ import type {
 export interface RouteInput {
   profileName: string;
   text: string;
-  enabledFunctions: FunctionName[];
+  enabledFunctions: CapabilityName[];
   source: LineSource;
   runtimeContext?: string;
 }
@@ -21,7 +21,7 @@ export interface RouteInput {
 export type RouteResult =
   | {
       type: "execute";
-      action: FunctionName;
+      action: CapabilityName;
       arguments: JsonRecord;
       confidence?: number;
       provider: RouteProviderName;
@@ -103,7 +103,7 @@ export interface RouteObserverEvent {
   provider?: RouteResult["provider"];
   lane?: ModelProviderLane;
   outcome?: RouteResult["type"];
-  action?: FunctionName | string;
+  action?: CapabilityName | string;
   reason?: string;
   confidence?: number;
   fallbackProvider?: ModelProviderName;

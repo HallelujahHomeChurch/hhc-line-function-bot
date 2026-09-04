@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createAgentRuntime } from "../agent/agent-runtime.js";
+import { createResourceMemoryObserver } from "../agent/resource-memory.js";
+import { createMemoryCommandHandler } from "../transport/line/memory-commands.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
 import { PostgresAgentMemoryStore, type PgQueryable } from "../agent/postgres-memory-store.js";
 import {
@@ -396,14 +397,7 @@ describe("agent memory", () => {
       alias: "剛剛那份",
       resourceId: resource.id
     });
-    const runtime = createAgentRuntime({
-      memoryStore: store,
-      graph: {
-        listFolderChildren: vi.fn(),
-        createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/temporary")
-      },
-      now: () => now
-    });
+    const runtime = createResourceMemoryObserver({ memoryStore: store, now: () => now });
 
     expect(runtime).not.toHaveProperty("handleBeforeFunctionExecution");
   });
@@ -510,7 +504,7 @@ describe("agent memory", () => {
   it("lists text memories and keeps memory status admin-only", async () => {
     const now = new Date("2026-07-08T00:00:00.000Z");
     const store = new InMemoryAgentMemoryStore({ now: () => now });
-    const runtime = createAgentRuntime({ memoryStore: store, now: () => now });
+    const runtime = createMemoryCommandHandler({ memoryStore: store });
 
     await store.saveTextMemory({
       profileName: "helper",
@@ -539,7 +533,7 @@ describe("agent memory", () => {
   it("keeps text-memory commands isolated from resource and schedule records", async () => {
     const now = new Date("2026-07-08T00:00:00.000Z");
     const store = new InMemoryAgentMemoryStore({ now: () => now });
-    const runtime = createAgentRuntime({ memoryStore: store, now: () => now });
+    const runtime = createMemoryCommandHandler({ memoryStore: store });
     const textMemory = await store.saveTextMemory({
       profileName: "helper",
       source: context().event.source,

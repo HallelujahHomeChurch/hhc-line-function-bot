@@ -1,5 +1,5 @@
 import { queryScheduleArgumentsSchema } from "../../function-arguments.js";
-import type { FunctionDefinition } from "../../functions/definitions.js";
+import type { FunctionDefinition } from "../catalog.js";
 
 export const queryScheduleDefinition: FunctionDefinition = {
   name: "query_schedule",

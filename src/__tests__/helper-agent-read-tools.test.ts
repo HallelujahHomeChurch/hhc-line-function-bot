@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
@@ -6,12 +7,11 @@ import { createHelperReadTools } from "../helper-agent/read-tools.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
-  FunctionName,
   FunctionRegistry,
   LineSource
 } from "../types.js";
 
-const allReadFunctions: FunctionName[] = [
+const allReadFunctions: CapabilityName[] = [
   "query_schedule",
   "find_ppt_slides",
   "find_sheet_music",

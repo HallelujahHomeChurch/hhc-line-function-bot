@@ -1,8 +1,9 @@
-import type { FunctionName, JsonRecord } from "../types.js";
+import type { CapabilityName } from "../capabilities/names.js";
+import type { JsonRecord } from "../types.js";
 
 export interface ResolutionCandidate {
   id: string;
-  capability: FunctionName;
+  capability: CapabilityName;
   domainKey: string;
   displayName: string;
   evidenceKinds: string[];

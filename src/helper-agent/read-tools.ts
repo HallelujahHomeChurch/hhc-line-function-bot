@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { tool } from "langchain";
 import type { z } from "zod";
 
@@ -10,8 +11,8 @@ import {
   queryWikipediaAgentArgumentsSchema,
   retrieveMemoryAgentArgumentsSchema
 } from "../function-arguments.js";
-import { getFunctionDefinition } from "../functions/definitions.js";
-import type { FunctionName, JsonRecord } from "../types.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
+import type { JsonRecord } from "../types.js";
 import { createHelperToolGateway, type HelperToolGatewayOptions } from "./policy-gateway.js";
 import type { HelperToolSourceType } from "./tool-result.js";
 
@@ -60,7 +61,7 @@ const readToolDefinitions = [
   }
 ] as const satisfies readonly {
   name: string;
-  capability: FunctionName;
+  capability: CapabilityName;
   sourceType: HelperToolSourceType;
   schema: z.ZodObject;
 }[];

@@ -226,7 +226,6 @@ export function createQueryKnowledgeTextMessageHandler(
   options: QueryKnowledgeOptions & { sessionStore: SessionStore }
 ): TextMessageHandler {
   return {
-    turnStage: "resolution",
     capability: "query_knowledge",
     matches: async (request, context) =>
       context.profile.enabledFunctions.includes("query_knowledge") &&

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAccessStore } from "../access/memory-access-store.js";
-import { createFunctionCompletionObserver } from "../application/turn/completion-observer.js";
+import { createFunctionCompletionObserver } from "../observability/function-completion.js";
 import type { FunctionHandlerContext, RouteObserverEvent } from "../types.js";
 
 function context(): FunctionHandlerContext {
@@ -68,7 +68,7 @@ describe("controlled completion observer", () => {
       {
         type: "group",
         principalId: "C1",
-        lastSuccessFunctionName: "save_memory",
+        lastSuccessCapabilityName: "save_memory",
         lastSuccessAt: "2026-07-27T01:00:00.000Z"
       }
     ]);

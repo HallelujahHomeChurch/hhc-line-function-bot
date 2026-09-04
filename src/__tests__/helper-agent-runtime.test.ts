@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { FakeToolCallingModel, ToolMessage } from "langchain";
 import { countTokensApproximately } from "langchain";
@@ -17,12 +18,11 @@ import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
-  FunctionName,
   FunctionRegistry,
   LineSource
 } from "../types.js";
 
-const readFunctions: FunctionName[] = [
+const readFunctions: CapabilityName[] = [
   "query_schedule",
   "find_ppt_slides",
   "find_sheet_music",
@@ -92,6 +92,55 @@ function state(overrides: Partial<HelperAgentState> = {}): HelperAgentState {
 }
 
 describe("helper profile runtime", () => {
+  it("continues a schedule-domain ambiguity through the scoped checkpoint with a fresh tool call", async () => {
+    const model = new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "get_official_schedule", args: { query: "查服事表" }, id: "schedule-1" }],
+        [],
+        [
+          {
+            name: "get_official_schedule",
+            args: { query: "主日服事", domainKey: "sunday_service" },
+            id: "schedule-2"
+          }
+        ],
+        []
+      ]
+    });
+    vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const querySchedule = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        replyText: "你要查主日服事還是影音服事？",
+        agentResult: {
+          status: "ambiguous",
+          replyText: "你要查主日服事還是影音服事？",
+          clarification: { choices: ["主日服事", "影音服事"] }
+        }
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        replyText: "主日服事查詢完成。",
+        agentResult: { status: "success", replyText: "主日服事查詢完成。" }
+      });
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: createHelperAgentState({ checkpointer: new MemorySaver(), hmacKey: "state-key" }),
+      handlers: { query_schedule: querySchedule }
+    });
+
+    await runtime.handleTextTurn(input("查服事表"));
+    await runtime.handleTextTurn(input("主日服事"));
+
+    expect(querySchedule).toHaveBeenNthCalledWith(
+      2,
+      { query: "主日服事", domainKey: "sunday_service" },
+      expect.objectContaining({ agentTool: true })
+    );
+  });
+
   it("atomically enables research only for the requester-scoped consent", async () => {
     const sessions = new InMemorySessionStore({
       now: () => new Date("2026-09-04T00:00:00.000Z")
@@ -525,7 +574,7 @@ describe("helper profile runtime", () => {
       hmacKey: "test-hmac"
     });
     let granted = true;
-    const authorizeFunctions = vi.fn(async (names: readonly FunctionName[]) =>
+    const authorizeFunctions = vi.fn(async (names: readonly CapabilityName[]) =>
       granted ? names : names.filter((name) => name !== "query_schedule")
     );
     const runtime = createHelperRuntime({

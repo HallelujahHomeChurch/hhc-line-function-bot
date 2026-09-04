@@ -4,8 +4,7 @@ import { Pool } from "pg";
 
 import { runAccessMigrations } from "../../../access/migrations.js";
 import { runAgentMemoryMigrations } from "../../../agent/migrations.js";
-import { createSdkAgent } from "../../../agent/sdk-runtime.js";
-import { createPostgresSdkAgentState } from "../../../agent/sdk-state.js";
+import { createHelperAgent } from "../../../helper-agent/agent.js";
 import { runCatalogMigrations } from "../../../catalog/migrations.js";
 import { createPostgresHelperAgentState } from "../../../helper-agent/state.js";
 import { PostgresCatalogStore } from "../../../catalog/postgres-store.js";
@@ -48,11 +47,6 @@ export async function runPostgresIntegrationMatrix(
       caseId: "postgres/knowledge/rollback-and-stale-failure",
       boundary: "adapter_retrieval",
       run: async () => knowledgeRollbackAndStaleFailure(environment)
-    },
-    {
-      caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
-      boundary: "state_lifecycle",
-      run: async () => sdkAgentCheckpointRestartAndExpiry(environment)
     },
     {
       caseId: "postgres/helper-agent/source-ttl-and-reset",
@@ -107,11 +101,6 @@ const MATRIX_FAILURE_CODES = new Set([
   "knowledge_result_source_missing",
   "knowledge_result_anchor_missing",
   "knowledge_scoped_search_missing",
-  "sdk_checkpoint_not_persisted",
-  "sdk_checkpoint_not_restored",
-  "sdk_checkpoint_policy_not_invalidated",
-  "sdk_checkpoint_not_deleted",
-  "sdk_thread_metadata_not_deleted",
   "helper_direct_ttl_invalid",
   "helper_group_ttl_invalid",
   "helper_checkpoint_not_deleted",
@@ -129,69 +118,6 @@ function boundedFailureCode(error: unknown): string {
 }
 
 type KernelPgPool = KernelPostgresEnvironment["pools"][number];
-
-async function sdkAgentCheckpointRestartAndExpiry(
-  environment: KernelPostgresEnvironment
-): Promise<void> {
-  const pool = environment.pools[0];
-  const checkpointer = new PostgresSaver(pool);
-  let now = new Date("2026-09-04T00:00:00.000Z");
-  const createState = () =>
-    createPostgresSdkAgentState({
-      pool,
-      checkpointer,
-      hmacKey: "kernel-sdk-agent-state-key",
-      ttlMs: 1_000,
-      now: () => now
-    });
-  const firstState = createState();
-  await checkpointer.setup();
-  await firstState.setup();
-  const threadId = firstState.threadId({
-    profileName: PROFILE,
-    source: { type: "group", groupId: "kernel-group", userId: "kernel-user" }
-  });
-  if (!threadId) throw new Error("sdk_checkpoint_not_persisted");
-
-  const invoke = (
-    state: ReturnType<typeof createState>,
-    content: string,
-    policyKey = "kernel-policy-v1"
-  ) =>
-    state.run(threadId, policyKey, () =>
-      createSdkAgent({
-        checkpointer,
-        model: new FakeToolCallingModel({ toolCalls: [[]] })
-      }).invoke(
-        { messages: [{ role: "user", content }] },
-        { configurable: { thread_id: threadId } }
-      )
-    );
-
-  const first = await invoke(firstState, "first");
-  if (first.messages.length < 2) throw new Error("sdk_checkpoint_not_persisted");
-  const secondState = createState();
-  await secondState.setup();
-  const second = await invoke(secondState, "second");
-  if (second.messages.length <= first.messages.length) {
-    throw new Error("sdk_checkpoint_not_restored");
-  }
-  const changedPolicy = await invoke(secondState, "third", "kernel-policy-v2");
-  if (changedPolicy.messages.length >= second.messages.length) {
-    throw new Error("sdk_checkpoint_policy_not_invalidated");
-  }
-
-  now = new Date("2026-09-04T00:00:02.000Z");
-  if ((await secondState.cleanupExpired()) !== 1) {
-    throw new Error("sdk_thread_metadata_not_deleted");
-  }
-  const [checkpointRows, threadRows] = await Promise.all([
-    pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [threadId]),
-    pool.query("select 1 from agent_sdk_threads where thread_id = $1", [threadId])
-  ]);
-  if (checkpointRows.rowCount) throw new Error("sdk_checkpoint_not_deleted");
-  if (threadRows.rowCount) throw new Error("sdk_thread_metadata_not_deleted");
-}
 
 async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironment): Promise<void> {
   const pool = new Pool({ ...environment.pools[0].options, max: 1 });
@@ -231,9 +157,10 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
         policyKey: "kernel-policy-v1",
         source,
         task: () =>
-          createSdkAgent({
+          createHelperAgent({
             checkpointer,
-            model: new FakeToolCallingModel({ toolCalls: [[]] })
+            model: new FakeToolCallingModel({ toolCalls: [[]] }),
+            summaryModel: new FakeToolCallingModel({ toolCalls: [[]] })
           }).invoke(
             { messages: [{ role: "user", content: "kernel" }] },
             { configurable: { thread_id: threadId } }

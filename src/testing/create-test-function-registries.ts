@@ -1,23 +1,17 @@
-import type { AppConfig, LineContentClient } from "../types.js";
+import type { AppConfig } from "../types.js";
 import {
-  createFunctionRegistries,
-  type FunctionRegistries,
-  type RegistryClients
-} from "../functions/registry.js";
+  composeCapabilities,
+  type CapabilityComposition,
+  type CapabilityCompositionDependencies
+} from "../bootstrap/compose-capabilities.js";
 import { createTestRuntime } from "./create-test-runtime.js";
-
-const unusedLineContent: LineContentClient = {
-  async getMessageContent() {
-    throw new Error("Test line content client was not configured");
-  }
-};
 
 export function createTestFunctionRegistries(
   config: AppConfig,
-  overrides: Partial<RegistryClients> = {}
-): FunctionRegistries {
+  overrides: Partial<CapabilityCompositionDependencies> = {}
+): CapabilityComposition {
   const runtime = createTestRuntime();
-  return createFunctionRegistries(config, {
+  return composeCapabilities(config, {
     accountAdminClient: overrides.accountAdminClient,
     sessionStore: overrides.sessionStore ?? runtime.stores.session,
     cache: overrides.cache ?? runtime.stores.cache,
@@ -25,13 +19,10 @@ export function createTestFunctionRegistries(
     catalog: overrides.catalog ?? runtime.stores.catalog,
     knowledgeStore: overrides.knowledgeStore ?? runtime.stores.knowledge,
     scheduleStore: overrides.scheduleStore ?? runtime.stores.schedule,
-    lineContent: overrides.lineContent ?? unusedLineContent,
     graph: overrides.graph,
     notion: overrides.notion,
     wikipedia: overrides.wikipedia,
     wikipediaSummarizer: overrides.wikipediaSummarizer,
-    webSearch: overrides.webSearch,
-    sheetMusicExternalSearchSummarizer: overrides.sheetMusicExternalSearchSummarizer,
     embedding: overrides.embedding,
     knowledgeTextGenerator: overrides.knowledgeTextGenerator,
     accessStore: overrides.accessStore,
