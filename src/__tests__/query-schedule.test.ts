@@ -274,10 +274,7 @@ describe("query_schedule", () => {
       timeZone: "Asia/Taipei"
     });
 
-    const result = await query(
-      { query: "下一場服事", dateIntent: "next_meeting" },
-      context("下一場服事")
-    );
+    const result = await query({ query: "最新的" }, context("最新的"));
 
     expect(result.replyText).toContain("7月17日");
     expect(result.replyText).toContain("下一場同工");
