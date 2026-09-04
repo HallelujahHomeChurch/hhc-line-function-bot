@@ -63,10 +63,9 @@ describe("helper tool policy gateway", () => {
       authorize: async () => false
     });
 
-    await expect(gateway.execute("query_schedule", { query: "查服事表" })).resolves.toEqual({
-      status: "denied",
-      sourceType: "official"
-    });
+    await expect(
+      gateway.execute("query_schedule", { query: "查服事表" }, "official")
+    ).resolves.toEqual({ status: "denied", sourceType: "official" });
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -83,26 +82,30 @@ describe("helper tool policy gateway", () => {
     });
 
     await expect(
-      roomGateway.execute("query_schedule", { query: "查服事表" })
+      roomGateway.execute("query_schedule", { query: "查服事表" }, "official")
     ).resolves.toMatchObject({
       status: "denied"
     });
     await expect(
-      userGateway.execute("query_schedule", { dateIntent: "specific_date" })
+      userGateway.execute("query_schedule", { dateIntent: "specific_date" }, "official")
     ).resolves.toMatchObject({ status: "denied" });
     await expect(
-      userGateway.execute("save_memory", { content: "待確認資料", confirm: true })
+      userGateway.execute("save_memory", { content: "待確認資料", confirm: true }, "saved_note")
     ).resolves.toMatchObject({ status: "denied" });
     await expect(
-      userGateway.execute("save_schedule", {
-        operation: "add_entry",
-        entry: {
-          serviceDate: "2026-09-06",
-          meetingName: "主日",
-          assignee: "同工甲",
-          untrusted: "model-only"
-        }
-      })
+      userGateway.execute(
+        "save_schedule",
+        {
+          operation: "add_entry",
+          entry: {
+            serviceDate: "2026-09-06",
+            meetingName: "主日",
+            assignee: "同工甲",
+            untrusted: "model-only"
+          }
+        },
+        "official"
+      )
     ).resolves.toMatchObject({ status: "denied" });
     expect(handler).not.toHaveBeenCalled();
   });
@@ -113,7 +116,7 @@ describe("helper tool policy gateway", () => {
     await expect(
       runWithAgentBudget("normal", async () => {
         for (let index = 0; index < 5; index += 1) {
-          await gateway.execute("query_schedule", { query: "查服事表" });
+          await gateway.execute("query_schedule", { query: "查服事表" }, "official");
         }
       })
     ).rejects.toThrow("agent_tool_budget_exceeded");
@@ -124,6 +127,51 @@ describe("helper tool policy gateway", () => {
     expect(projectToolResult(successfulScheduleResult(), "saved_note").sourceType).toBe(
       "saved_note"
     );
+  });
+
+  it("requires callers to supply source authority", () => {
+    const gateway = createHelperToolGateway({ handlers: {}, context: helperContext() });
+
+    expect(gateway.execute).toHaveLength(3);
+  });
+
+  it("fails closed for a permission-required read without a live authorizer", async () => {
+    const handler = vi.fn(async () => successfulScheduleResult());
+    const context = helperContext();
+    context.profile = { ...context.profile, permissionRequiredFunctions: ["query_schedule"] };
+    const gateway = createHelperToolGateway({ context, handlers: { query_schedule: handler } });
+
+    await expect(
+      gateway.execute("query_schedule", { query: "查服事表" }, "official")
+    ).resolves.toEqual({ status: "denied", sourceType: "official" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("converts authorization and handler failures to unavailable results", async () => {
+    const unavailable = { status: "unavailable", sourceType: "official" };
+    const authorizationFailure = createHelperToolGateway({
+      context: helperContext(),
+      handlers: { query_schedule: vi.fn(async () => successfulScheduleResult()) },
+      authorize: async () => {
+        throw new Error("authorization secret");
+      }
+    });
+    const handlerFailure = createHelperToolGateway({
+      context: helperContext(),
+      handlers: {
+        query_schedule: async () => {
+          throw new Error("handler secret");
+        }
+      },
+      authorize: async () => true
+    });
+
+    await expect(
+      authorizationFailure.execute("query_schedule", { query: "查服事表" }, "official")
+    ).resolves.toEqual(unavailable);
+    await expect(
+      handlerFailure.execute("query_schedule", { query: "查服事表" }, "official")
+    ).resolves.toEqual(unavailable);
   });
 
   it("removes links and internal fields while capping records before model exposure", () => {
@@ -145,7 +193,14 @@ describe("helper tool policy gateway", () => {
           replyText: "不應暴露的回覆",
           replyData: {
             kind: "schedule",
-            fields: { sourceId: "source-1", meeting: "主日" },
+            fields: {
+              sourceId: "source-1",
+              sourceKey: "source-key",
+              sourceIds: ["source-2"],
+              documentKey: "document-key",
+              sectionKey: "section-key",
+              meeting: "主日"
+            },
             records: Array.from({ length: 20 }, (_, index) => ({
               date: `2026-09-${String(index + 1).padStart(2, "0")}`,
               documentId: `document-${index}`,
@@ -159,7 +214,26 @@ describe("helper tool policy gateway", () => {
 
     expect(projected.data?.records).toHaveLength(10);
     expect(JSON.stringify(projected)).not.toContain("https://temporary.example");
-    expect(JSON.stringify(projected)).not.toMatch(/source-1|document-/u);
+    expect(JSON.stringify(projected)).not.toMatch(
+      /source-1|source-2|source-key|document-|section-key/u
+    );
     expect(JSON.stringify(projected).length).toBeLessThanOrEqual(2_000);
+  });
+
+  it("drops URL-like reply-data kinds", () => {
+    const projected = projectToolResult(
+      {
+        ok: true,
+        replyText: "safe",
+        agentResult: {
+          status: "success",
+          replyText: "safe",
+          replyData: { kind: "https://temporary.example/private", fields: { meeting: "主日" } }
+        }
+      },
+      "public"
+    );
+
+    expect(projected).toEqual({ status: "success", sourceType: "public" });
   });
 });

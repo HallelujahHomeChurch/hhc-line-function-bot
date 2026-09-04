@@ -25,7 +25,7 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
     async execute(
       name: FunctionName,
       args: JsonRecord,
-      sourceType: HelperToolSourceType = "official"
+      sourceType: HelperToolSourceType
     ): Promise<HelperToolResult> {
       takeToolCall();
       const definition = getFunctionDefinition(name);
@@ -41,14 +41,25 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
       ) {
         return denied(sourceType);
       }
-      if (!options.authorize && definition.sideEffectLevel !== "read") return denied(sourceType);
-      if (options.authorize && !(await options.authorize(name))) return denied(sourceType);
+      const requiresAccount =
+        definition.sideEffectLevel !== "read" ||
+        options.context.profile.permissionRequiredFunctions.includes(name);
+      if (requiresAccount && !options.authorize) return denied(sourceType);
+      if (options.authorize) {
+        try {
+          if (!(await options.authorize(name))) return denied(sourceType);
+        } catch {
+          return unavailable(sourceType);
+        }
+      }
       const handler = options.handlers[name];
-      if (!handler) return { status: "unavailable", sourceType };
-      const result = await handler(parsedArgs, {
-        ...options.context,
-        agentTool: true
-      });
+      if (!handler) return unavailable(sourceType);
+      let result: FunctionExecutionResult;
+      try {
+        result = await handler(parsedArgs, { ...options.context, agentTool: true });
+      } catch {
+        return unavailable(sourceType);
+      }
       options.onDomainResult?.(name, result);
       return projectToolResult(result, sourceType);
     }
@@ -57,6 +68,10 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
 
 function denied(sourceType: HelperToolSourceType): HelperToolResult {
   return { status: "denied", sourceType };
+}
+
+function unavailable(sourceType: HelperToolSourceType): HelperToolResult {
+  return { status: "unavailable", sourceType };
 }
 
 function allowedSource(

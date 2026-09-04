@@ -18,7 +18,7 @@ const MAX_CHARS = 2_000;
 const MAX_RECORDS = 10;
 const MAX_STRING_CHARS = 320;
 const blockedField =
-  /(?:secret|token|password|authorization|api[_-]?key|prompt|payload|response[_-]?data|source[_-]?id|document[_-]?id|memory[_-]?id|resource[_-]?id|drive[_-]?id|item[_-]?id|url|uri|link|href)/iu;
+  /(?:secret|token|password|authorization|api[_-]?key|prompt|payload|response[_-]?data|url|uri|link|href|(?:id|key)s?$|source|document|section|resource|memory|drive|item)/iu;
 const url = /(?:https?|ftp):\/\/|www\./iu;
 
 export function projectToolResult(
@@ -39,13 +39,15 @@ export function projectToolResult(
 
 function projectReplyData(replyData: AgentReplyData | undefined): AgentReplyData | undefined {
   if (!replyData) return undefined;
+  const kind = safeString(replyData.kind);
+  if (!kind) return undefined;
   const fields = safeRecord(replyData.fields);
   const records = replyData.records
     ?.slice(0, MAX_RECORDS)
     .map(safeRecord)
     .filter((record) => Object.keys(record).length > 0);
   if (!Object.keys(fields).length && !records?.length) return undefined;
-  return { kind: replyData.kind.slice(0, 80), fields, ...(records?.length ? { records } : {}) };
+  return { kind: kind.slice(0, 80), fields, ...(records?.length ? { records } : {}) };
 }
 
 function safeRecord(value: JsonRecord): JsonRecord {
