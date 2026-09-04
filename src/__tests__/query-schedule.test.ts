@@ -59,6 +59,71 @@ function notionSchedulePage(
 }
 
 describe("query_schedule", () => {
+  it("resolves an omitted period to the current canonical schedule despite a roster-like note", async () => {
+    const now = () => new Date("2026-09-04T00:00:00.000Z");
+    const memoryStore = new InMemoryAgentMemoryStore({ now });
+    await memoryStore.saveTextMemory({
+      profileName: "helper",
+      source: { type: "user", userId: "U1" },
+      createdBy: "U1",
+      title: "非正式服事提醒",
+      content: "2026-09-06 敬拜是筆記同工"
+    });
+    const scheduleStore = new InMemoryScheduleStore();
+    await scheduleStore.upsertItem({
+      profileName: "helper",
+      sourceKey: "official-service",
+      origin: "notion",
+      externalId: "official-2026-09-06",
+      serviceDate: "2026-09-06",
+      meeting: "主日",
+      role: "敬拜",
+      assignee: "正式同工"
+    });
+    const querySchedule = createQueryScheduleHandler({
+      memoryStore,
+      scheduleStore,
+      now,
+      timeZone: "Asia/Taipei"
+    });
+    const queryContext = context("查服事表", { type: "user", userId: "U1" });
+    queryContext.profile.schedulePolicy = {
+      meetingWindows: [],
+      domains: [
+        {
+          key: "official_service",
+          displayName: "正式服事表",
+          aliases: ["服事表"],
+          routingHints: [],
+          schemaVersion: 1,
+          inputSchema: "assignment_rows_v1",
+          occurrencePolicy: "profile_meeting_windows_v1",
+          binding: {
+            kind: "canonical",
+            sourceKeys: ["official-service"],
+            allowLiveFallback: false
+          },
+          origins: ["notion"],
+          writePolicy: { mode: "read_only", allowedOperations: [] },
+          priority: 100,
+          revision: "1",
+          freshnessPolicy: { maxAgeSeconds: 86_400, staleBehavior: "reject" }
+        }
+      ]
+    };
+
+    const result = await querySchedule({ query: "查服事表" }, queryContext);
+
+    expect(result).toMatchObject({
+      agentResult: {
+        status: "success",
+        replyData: { kind: "schedule" }
+      }
+    });
+    expect(result.replyText).toContain("正式同工");
+    expect(result.replyText).not.toContain("筆記同工");
+  });
+
   it("keeps a planner-grounded role when wrapper text leaves a misleading residual", async () => {
     const now = () => new Date("2026-07-20T00:00:00.000Z");
     const schedules = new InMemoryScheduleStore();

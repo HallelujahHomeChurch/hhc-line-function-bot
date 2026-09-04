@@ -63,7 +63,7 @@ describe("agent memory", () => {
     })({ query: "敬拜" }, toolContext);
 
     expect(completeText).not.toHaveBeenCalled();
-    expect(result.responseData).toEqual({
+    expect(result.agentResult?.replyData).toEqual({
       kind: "memory_evidence",
       fields: {},
       records: [
@@ -73,6 +73,7 @@ describe("agent memory", () => {
         })
       ]
     });
+    expect(result).not.toHaveProperty("responseData");
   });
 
   it("deduplicates resource metadata by stable storage identity and refreshes verification", async () => {

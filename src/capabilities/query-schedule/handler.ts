@@ -194,6 +194,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       : undefined;
 
   return async (rawArgs, context) => {
+    const currentTime = now();
     const args = queryScheduleArgumentsSchema.parse(rawArgs);
     if (isScheduleListRequest(args.query)) {
       const schedules = await options.memoryStore.listScheduleMemories({
@@ -210,13 +211,13 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
               )
       };
     }
-    const refinement = refineScheduleQuery(args, now(), timeZone);
+    const refinement = refineScheduleQuery(args, currentTime, timeZone);
     const roleFocus =
       args.role ??
       extractScheduleRoleFocus({
         query: args.query,
         hasContinuation: false,
-        now: now(),
+        now: currentTime,
         timeZone
       });
     const refinedArgs = queryScheduleArgumentsSchema.parse({
@@ -248,7 +249,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
         args: refinedArgs,
         context,
         options,
-        now: now()
+        now: currentTime
       });
     }
     const selectedDomainKey =
@@ -267,7 +268,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
           options,
           memoryHandler,
           serviceHandler,
-          now: now(),
+          now: currentTime,
           timeZone
         })
       });
@@ -306,7 +307,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
         args: refinedArgs,
         context,
         options,
-        now: now()
+        now: currentTime
       });
     }
     if (found.length === 1) {

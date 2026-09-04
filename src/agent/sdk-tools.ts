@@ -272,12 +272,13 @@ async function executeFunction(
 
 function projectResult(result: FunctionExecutionResult, functionName?: FunctionName) {
   const informationResult = functionName && informationFunctions.includes(functionName);
+  const modelData = result.agentResult?.replyData ?? result.responseData;
   return {
     status: result.agentResult?.status ?? (result.ok ? "success" : "error"),
     ...(result.writePhase ? { writePhase: result.writePhase } : {}),
     ...(!informationResult && result.agentResult ? { evidence: result.agentResult } : {}),
-    ...(functionName && modelDataFunctions.includes(functionName) && result.responseData
-      ? { data: result.responseData }
+    ...(functionName && modelDataFunctions.includes(functionName) && modelData
+      ? { data: modelData }
       : {})
   };
 }

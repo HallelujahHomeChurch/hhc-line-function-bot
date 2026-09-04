@@ -122,28 +122,21 @@ export function createRetrieveMemoryHandler(options: AgentMemoryFunctionOptions)
     return {
       ok: true,
       replyText: answer,
-      responseData: context.agentTool
-        ? {
-            kind: "memory_evidence",
-            fields: {},
-            records: memories.map((memory) => ({
-              sourceKind: "visible_note",
-              excerpt: memory.content,
-              updatedAt: memory.createdAt,
-              expiresAt: memory.expiresAt
-            }))
-          }
+      ...(context.agentTool
+        ? {}
         : {
-            kind: "memory",
-            fields: {
-              answer,
-              ...(memories.length === 1 ? { title: memories[0].title ?? "已保存資訊" } : {})
-            },
-            records: memories.map((memory) => ({
-              title: memory.title ?? "已保存資訊",
-              answer: memory.content
-            }))
-          },
+            responseData: {
+              kind: "memory",
+              fields: {
+                answer,
+                ...(memories.length === 1 ? { title: memories[0].title ?? "已保存資訊" } : {})
+              },
+              records: memories.map((memory) => ({
+                title: memory.title ?? "已保存資訊",
+                answer: memory.content
+              }))
+            }
+          }),
       agentResult: {
         status: "success",
         replyText: "記憶查詢完成。",
@@ -152,7 +145,21 @@ export function createRetrieveMemoryHandler(options: AgentMemoryFunctionOptions)
           kind: "saved_memory",
           reference: { memoryId: id }
         })),
-        supportedOperations: ["continue", "refine", "view_full"]
+        supportedOperations: ["continue", "refine", "view_full"],
+        ...(context.agentTool
+          ? {
+              replyData: {
+                kind: "memory_evidence",
+                fields: {},
+                records: memories.map((memory) => ({
+                  sourceKind: "visible_note",
+                  excerpt: memory.content,
+                  updatedAt: memory.createdAt,
+                  expiresAt: memory.expiresAt
+                }))
+              }
+            }
+          : {})
       }
     };
   };

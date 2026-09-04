@@ -158,7 +158,7 @@ describe("Wikipedia lookup handler", () => {
     const result = await handler({ query: "馬丁路德" }, { ...context, agentTool: true });
 
     expect(summarize).not.toHaveBeenCalled();
-    expect(result.responseData).toEqual({
+    expect(result.agentResult?.replyData).toEqual({
       kind: "wikipedia_evidence",
       fields: {},
       records: [
@@ -170,6 +170,7 @@ describe("Wikipedia lookup handler", () => {
         }
       ]
     });
+    expect(result).not.toHaveProperty("responseData");
   });
 
   it("falls back to English Wikipedia only after Chinese has no results", async () => {

@@ -58,6 +58,7 @@ export const findPptSlidesArgumentsSchema = z
     matchMode: z.enum(["fuzzy", "exact"]).optional()
   })
   .strip();
+export const findPptSlidesAgentArgumentsSchema = findPptSlidesArgumentsSchema.strict();
 
 export const queryServiceScheduleArgumentsSchema = z
   .object({
@@ -139,6 +140,7 @@ export const findPopSheetMusicArgumentsSchema = z
     matchMode: z.enum(["fuzzy", "exact"]).optional()
   })
   .strip();
+export const findPopSheetMusicAgentArgumentsSchema = findPopSheetMusicArgumentsSchema.strict();
 
 export const findResourceArgumentsSchema = z
   .object({
@@ -149,6 +151,7 @@ export const findResourceArgumentsSchema = z
     limit: numericLimitSchema.optional()
   })
   .strip();
+export const findResourceAgentArgumentsSchema = findResourceArgumentsSchema.strict();
 
 export const queryKnowledgeArgumentsSchema = z
   .object({
@@ -166,6 +169,7 @@ export const queryKnowledgeArgumentsSchema = z
     limit: numericLimitSchema.optional()
   })
   .strip();
+export const queryKnowledgeAgentArgumentsSchema = queryKnowledgeArgumentsSchema.strict();
 
 export const saveMemoryArgumentsSchema = z
   .object({
@@ -202,12 +206,14 @@ export const retrieveMemoryArgumentsSchema = z
     memoryId: z.string().optional()
   })
   .strip();
+export const retrieveMemoryAgentArgumentsSchema = retrieveMemoryArgumentsSchema.strict();
 
 export const queryWikipediaArgumentsSchema = z
   .object({
     query: z.string().optional().default("")
   })
   .strip();
+export const queryWikipediaAgentArgumentsSchema = queryWikipediaArgumentsSchema.strict();
 
 export const saveScheduleMemoryArgumentsSchema = z
   .object({

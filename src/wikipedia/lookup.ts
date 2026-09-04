@@ -60,22 +60,25 @@ export function createWikipediaLookupHandler(
 
     const pageId = opaquePageId(article);
     if (context.agentTool) {
+      const agentResult = successEnvelope(article.language, pageId);
       return {
         ok: true,
         replyText: "維基百科查詢完成。",
-        responseData: {
-          kind: "wikipedia_evidence",
-          fields: {},
-          records: [
-            {
-              sourceKind: "wikipedia",
-              title: article.title,
-              excerpt: article.extract,
-              sourceUrl: article.articleUrl
-            }
-          ]
-        },
-        agentResult: successEnvelope(article.language, pageId)
+        agentResult: {
+          ...agentResult,
+          replyData: {
+            kind: "wikipedia_evidence",
+            fields: {},
+            records: [
+              {
+                sourceKind: "wikipedia",
+                title: article.title,
+                excerpt: article.extract,
+                sourceUrl: article.articleUrl
+              }
+            ]
+          }
+        }
       };
     }
 

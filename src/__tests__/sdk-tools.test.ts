@@ -220,10 +220,14 @@ describe("SDK function tools", () => {
         retrieve_memory: vi.fn(async () => ({
           ok: true,
           replyText: "raw reply",
-          responseData: {
-            kind: "memory_evidence",
-            fields: {},
-            records: [{ sourceKind: "visible_note", excerpt: "待確認服事" }]
+          agentResult: {
+            status: "success" as const,
+            replyText: "記憶查詢完成。",
+            replyData: {
+              kind: "memory_evidence",
+              fields: {},
+              records: [{ sourceKind: "visible_note", excerpt: "待確認服事" }]
+            }
           }
         }))
       }
