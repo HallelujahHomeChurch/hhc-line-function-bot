@@ -2247,7 +2247,13 @@ function createTurnFunctionAuthorizer(
       );
       if (protectedFunctions.length === 0) return localReads;
 
-      const result = await state(protectedFunctions);
+      const result = await authorizeFunctions(
+        accountAdminClient,
+        profile,
+        lineUserId,
+        protectedFunctions
+      );
+      resolvedState = result;
       if (!result.available || !result.authorization.active) return localReads;
       const explicitlyAllowed = new Set(result.authorization.allowedFunctions);
       return [

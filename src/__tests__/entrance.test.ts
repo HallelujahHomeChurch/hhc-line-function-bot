@@ -1058,6 +1058,66 @@ describe("LINE entrance", () => {
     expect(String(replyText.mock.calls.at(-1)?.[1])).not.toContain("/memories");
   });
 
+  it("refreshes protected function authorization for each runtime callback in one event", async () => {
+    const config = providerFreeMainConfig();
+    config.profiles[0]!.enabledFunctions = ["query_schedule"];
+    config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+    const authorizeFunctions = vi
+      .fn()
+      .mockResolvedValueOnce({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: ["query_schedule"]
+      })
+      .mockResolvedValueOnce({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: []
+      });
+    const callbackResults: Array<readonly string[]> = [];
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(config, {
+      accountAdminClient: { authorizeFunctions },
+      profileRuntime: {
+        async handleTextTurn(input) {
+          callbackResults.push(await input.authorizeFunctions!(["query_schedule"]));
+          callbackResults.push(await input.authorizeFunctions!(["query_schedule"]));
+          return { ok: true, replyText: "done" };
+        }
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-live-function-authorization",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "查詢測試" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(callbackResults).toEqual([["query_schedule"], []]);
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
+    expect(authorizeFunctions).toHaveBeenNthCalledWith(1, {
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: ["query_schedule"]
+    });
+    expect(authorizeFunctions).toHaveBeenNthCalledWith(2, {
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: ["query_schedule"]
+    });
+  });
+
   it.each([
     {
       label: "denied",
@@ -1095,7 +1155,7 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(authorize).toHaveBeenCalledOnce();
+    expect(authorize).toHaveBeenCalledTimes(2);
     expect(handleCommand).not.toHaveBeenCalled();
     expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("權限");
   });
@@ -1241,7 +1301,7 @@ describe("LINE entrance", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledTimes(2);
       expect(handleCommand).toHaveBeenCalledTimes(expectedCalls);
       expect(String(replyText.mock.calls.at(-1)?.[1])).toContain(expectedReply);
     }
@@ -1279,7 +1339,7 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
     expect(handleCommand).toHaveBeenCalledOnce();
     expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("removed");
   });
@@ -5336,7 +5396,7 @@ describe("LINE entrance", () => {
       undefined
     );
     expect(continuePendingAttachment).toHaveBeenCalledOnce();
-    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
+    expect(authorizeFunctions).toHaveBeenCalledTimes(3);
     expect(authorizeFunctions.mock.calls[1]?.[0]).toMatchObject({
       functionNames: ["save_resource"]
     });
@@ -5767,7 +5827,7 @@ describe("LINE entrance", () => {
       "authorized selection",
       undefined
     );
-    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
     expect(authorizeFunctions).toHaveBeenCalledWith({
       lineUserId: "Uallowed",
       profileName: "main",
@@ -5819,7 +5879,7 @@ describe("LINE entrance", () => {
       expect(response.statusCode).toBe(200);
       expect(handle).not.toHaveBeenCalled();
       expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
-      expect(authorize).toHaveBeenCalledOnce();
+      expect(authorize).toHaveBeenCalledTimes(2);
     }
   );
 
@@ -5885,7 +5945,7 @@ describe("LINE entrance", () => {
 
       expect(response.statusCode).toBe(200);
       expect(replyText.mock.calls.at(-1)?.[1]).toContain(expectedReply);
-      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledTimes(2);
       expect(authorizeFunctions).toHaveBeenCalledWith({
         lineUserId: "Uallowed",
         profileName: "main",
@@ -5934,7 +5994,7 @@ describe("LINE entrance", () => {
     expect(response.statusCode).toBe(200);
     expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
     expect(replyText.mock.calls.at(-1)?.[1]).not.toContain("unsafe stored result");
-    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
   });
 
   it("fails a legacy completed slow job without an owning capability closed after resolving role", async () => {
@@ -6056,7 +6116,7 @@ describe("LINE entrance", () => {
 
       expect(response.statusCode).toBe(200);
       expect(replyText.mock.calls.at(-1)?.[1]).toContain(expectedReply);
-      expect(authorize).toHaveBeenCalledOnce();
+      expect(authorize).toHaveBeenCalledTimes(2);
       expect(authorize).toHaveBeenCalledWith({
         lineUserId: "Uallowed",
         profileName: "main",
@@ -6100,7 +6160,7 @@ describe("LINE entrance", () => {
     expect(response.statusCode).toBe(200);
     expect(handle).not.toHaveBeenCalled();
     expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
-    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
   });
 
   it("invokes the shared completion boundary exactly once for an executed postback", async () => {
