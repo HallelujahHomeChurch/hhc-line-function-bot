@@ -11,6 +11,7 @@ import {
   emptyEvalMetrics,
   helperProfile,
   instrumentedFakeModel,
+  syntheticScheduleDomain as officialDomain,
   type EvalMetrics
 } from "../evals/synthetic-runtime-fixture.js";
 import { createQueryScheduleHandler } from "../functions/query-schedule.js";
@@ -540,6 +541,8 @@ async function providerFailureSupportId(): Promise<Partial<EvalMetrics>> {
 
 async function replyFailureDurableResult(): Promise<Partial<EvalMetrics>> {
   let commits = 0;
+  let replyAttempts = 0;
+  let replyFailures = 0;
   const probe = createEvalProbe();
   const fixture = createSyntheticRuntimeFixture({
     model: instrumentedFakeModel(
@@ -557,6 +560,11 @@ async function replyFailureDurableResult(): Promise<Partial<EvalMetrics>> {
     profile: { permissionRequiredFunctions: ["save_memory"], directAccessPolicy: "public" }
   });
   let failReply = false;
+  const assertReplyState = (attempts: number, failures: number, pendingFailure: boolean) => {
+    assert(
+      replyAttempts === attempts && replyFailures === failures && failReply === pendingFailure
+    );
+  };
   const config: AppConfig = {
     serviceName: "eval",
     host: "127.0.0.1",
@@ -584,8 +592,10 @@ async function replyFailureDurableResult(): Promise<Partial<EvalMetrics>> {
     }),
     createLineReplyClient: () => ({
       replyText: async () => {
+        replyAttempts += 1;
         if (failReply) {
           failReply = false;
+          replyFailures += 1;
           throw new Error("synthetic_reply_failure");
         }
       }
@@ -603,6 +613,7 @@ async function replyFailureDurableResult(): Promise<Partial<EvalMetrics>> {
     headers: signedHeaders(message, fixture.profile.channelSecret),
     payload: message
   });
+  assertReplyState(1, 0, false);
   const review = await currentReview(fixture, fixture.source);
   const postback = (token: string) =>
     lineBody({
@@ -619,6 +630,7 @@ async function replyFailureDurableResult(): Promise<Partial<EvalMetrics>> {
     headers: signedHeaders(failed, fixture.profile.channelSecret),
     payload: failed
   });
+  assertReplyState(2, 1, false);
   const scope = buildAgentJobScope("helper", fixture.source)!;
   const durable = await fixture.jobs.get(review.resultJobId, scope);
   assert(
@@ -635,6 +647,7 @@ async function replyFailureDurableResult(): Promise<Partial<EvalMetrics>> {
     (await fixture.jobs.get(review.resultJobId, scope))?.result?.replyText ===
       durable.result?.replyText && commits === 1
   );
+  assertReplyState(3, 1, false);
   await app.close();
   return probe.values();
 }
@@ -819,8 +832,9 @@ function liveFollowUpCase(apiKey: string, id: string) {
       await fixture.runtime.handleTextTurn(fixture.turn("查最新合成服事表。"));
       await fixture.runtime.handleTextTurn(fixture.turn("同一類服事表的下個期間呢？"));
       const calls = fixture.calls.get("query_schedule") ?? [];
-      assert(calls.length === 2 && calls[1]?.args.domainKey === "official_service");
-      assert(calls[1]?.args.dateIntent === "upcoming" || Boolean(calls[1]?.args.specificDate));
+      const [domain] = fixture.profile.schedulePolicy?.domains ?? [];
+      assert(domain && calls.length === 2 && calls[1]?.args.domainKey === domain.key);
+      assert(calls[1]?.args.dateIntent === "upcoming" && calls[1]?.args.specificDate === undefined);
       return checkedLiveMetrics(fixture.probe);
     }
   };
@@ -932,28 +946,6 @@ function success(kind: string) {
       replyText: "synthetic",
       replyData: { kind, fields: { value: "synthetic" } }
     }
-  };
-}
-
-function officialDomain(
-  key = "official_service",
-  displayName = "正式服事表",
-  sourceKey = "official-service"
-): ScheduleDomainConfig {
-  return {
-    key,
-    displayName,
-    aliases: [],
-    routingHints: [],
-    schemaVersion: 1,
-    inputSchema: "assignment_rows_v1",
-    occurrencePolicy: "profile_meeting_windows_v1",
-    binding: { kind: "canonical", sourceKeys: [sourceKey], allowLiveFallback: false },
-    origins: ["notion"],
-    writePolicy: { mode: "read_only", allowedOperations: [] },
-    priority: 100,
-    revision: "1",
-    freshnessPolicy: { maxAgeSeconds: 86_400, staleBehavior: "reject" }
   };
 }
 

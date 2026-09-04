@@ -14,6 +14,7 @@ import type {
   FunctionRegistry,
   JsonRecord,
   LineSource,
+  ScheduleDomainConfig,
   WebSearchClient
 } from "../types.js";
 import type { PublicPageReader } from "../clients/public-page.js";
@@ -180,7 +181,29 @@ export function helperProfile(
     agent: { personaPrompt: "synthetic", memoryPolicyPrompt: "synthetic" },
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: [] }
+    schedulePolicy: { meetingWindows: [], domains: [syntheticScheduleDomain()] }
+  };
+}
+
+export function syntheticScheduleDomain(
+  key = "official_service",
+  displayName = "正式服事表",
+  sourceKey = "official-service"
+): ScheduleDomainConfig {
+  return {
+    key,
+    displayName,
+    aliases: [displayName, "服事表"],
+    routingHints: [],
+    schemaVersion: 1,
+    inputSchema: "assignment_rows_v1",
+    occurrencePolicy: "profile_meeting_windows_v1",
+    binding: { kind: "canonical", sourceKeys: [sourceKey], allowLiveFallback: false },
+    origins: ["notion"],
+    writePolicy: { mode: "read_only", allowedOperations: [] },
+    priority: 100,
+    revision: "synthetic-1",
+    freshnessPolicy: { maxAgeSeconds: 86_400, staleBehavior: "reject" }
   };
 }
 
