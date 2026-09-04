@@ -38,6 +38,7 @@ export interface FunctionExecutionResult {
   executedAction?: FunctionName;
   writePhase?: "preview" | "commit";
   quickReplies?: QuickReplyItem[];
+  /** The sole server-owned source for bounded helper-tool projection. */
   agentResult?: AgentResultEnvelope;
   /** Ephemeral response-only data. Never persist in task frames or traces. */
   responseData?: AgentReplyData;
