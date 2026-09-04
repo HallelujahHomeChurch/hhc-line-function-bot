@@ -254,7 +254,9 @@ Multi-result PPT and sheet music searches store short-lived in-memory sessions a
 
 If any enabled function is missing a required slot, the bot stores a short-lived pending function session and asks for one value at a time. The same requester can answer without repeating the function name; cancellation clears the task, while an explicit new-function request releases it and starts a new plan. Multi-slot functions continue collecting until their declarative contract is complete, then call the registered handler. Group sessions remain requester-scoped.
 
-If a request only selects a capability—such as `查投影片`, `查流行歌譜`, `查維基百科`, or `查服事表`—the bot asks for the required title, topic, date, meeting, or schedule type before any lookup runs. This rule is declared on the function's required slot, so it also overrides a model-inferred query that the user did not supply.
+If a request only selects a capability—such as `查投影片`, `查流行歌譜`, or `查維基百科`—the bot asks for the required title or topic before any lookup runs. A generic `查服事表` defaults to the next valid meeting; genuine schedule-domain ambiguity still asks the requester to choose.
+
+Read functions use the latest valid published data. Matching catalog resources are ordered by their source modification time, explicit memories prefer the newest equally relevant record, and knowledge queries use the current promoted source snapshot. Multiple equally plausible results still require a choice.
 
 ## Catalog Sources
 

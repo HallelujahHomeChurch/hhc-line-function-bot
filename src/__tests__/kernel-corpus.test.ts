@@ -5,10 +5,10 @@ import { SDK_AGENT_ACCEPTANCE_CASES, validateSdkAgentCorpus } from "../evals/ker
 describe("SDK agent acceptance corpus", () => {
   it("keeps the approved multi-turn, cross-source, write-safety, and main isolation coverage", () => {
     expect(validateSdkAgentCorpus()).toEqual([]);
-    expect(SDK_AGENT_ACCEPTANCE_CASES).toHaveLength(30);
+    expect(SDK_AGENT_ACCEPTANCE_CASES).toHaveLength(31);
     expect(
       SDK_AGENT_ACCEPTANCE_CASES.filter(({ category }) => category === "cross_source")
-    ).toHaveLength(20);
+    ).toHaveLength(21);
     expect(
       SDK_AGENT_ACCEPTANCE_CASES.filter(({ expected }) => expected.writes === 1).every(
         ({ expected }) => expected.approvalRequired

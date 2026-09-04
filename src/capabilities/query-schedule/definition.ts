@@ -24,32 +24,7 @@ export const queryScheduleDefinition: FunctionDefinition = {
     operations: ["continue", "refine", "advance", "select"]
   },
   allowedSources: ["user", "group"],
-  requiredSlots: [
-    {
-      name: "schedule_range_or_type",
-      argument: "query",
-      missingWhen: "blank",
-      genericRequest: {
-        phrases: [
-          "服事",
-          "服事表",
-          "服事人員",
-          "服事安排",
-          "聚會服事",
-          "聚會服事表",
-          "聚會服事人員"
-        ],
-        clearArguments: ["date", "dateIntent", "specificDate", "meeting", "role"]
-      },
-      prompt: "要查哪一天、哪一場聚會，或哪一類服事？",
-      quickReplies: [
-        { label: "下一場", text: "下一場服事" },
-        { label: "本週", text: "本週服事" },
-        { label: "主日", text: "主日服事" },
-        { label: "舉牌", text: "查舉牌服事" }
-      ]
-    }
-  ],
+  requiredSlots: [],
   resourcePolicy: { kind: "none", remember: false, alias: false },
   memoryPolicy: { kind: "retrieve_text" },
   clarificationPrompt: "要查哪一天、哪一場聚會，或哪一類服事？",

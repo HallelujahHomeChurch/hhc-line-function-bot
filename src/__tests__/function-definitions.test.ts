@@ -58,7 +58,6 @@ describe("function definitions", () => {
   it("uses one declarative generic-slot contract for user-facing lookups", () => {
     const lookupNames = [
       "find_ppt_slides",
-      "query_schedule",
       "find_sheet_music",
       "query_wikipedia",
       "retrieve_memory"
@@ -69,6 +68,7 @@ describe("function definitions", () => {
       expect(slot?.missingWhen).toBe("blank");
       expect(slot?.genericRequest?.phrases.length).toBeGreaterThan(0);
     }
+    expect(getFunctionDefinition("query_schedule")?.requiredSlots).toEqual([]);
   });
 
   it("carries agent capability and quick reply metadata for sheet music", () => {

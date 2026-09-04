@@ -211,8 +211,8 @@ describe("query_schedule", () => {
     });
 
     const result = await query(
-      { query: "下一場服事", dateIntent: "next_meeting" },
-      context("下一場服事", { type: "user", userId: "U1" })
+      { query: "查服事表" },
+      context("查服事表", { type: "user", userId: "U1" })
     );
 
     expect(result.agentResult).toMatchObject({
@@ -274,10 +274,7 @@ describe("query_schedule", () => {
       timeZone: "Asia/Taipei"
     });
 
-    const result = await query(
-      { query: "下一場服事", dateIntent: "next_meeting" },
-      context("下一場服事")
-    );
+    const result = await query({ query: "最新的" }, context("最新的"));
 
     expect(result.replyText).toContain("7月17日");
     expect(result.replyText).toContain("下一場同工");
@@ -641,7 +638,8 @@ describe("query_schedule", () => {
       notion,
       databaseId: "database-1",
       properties: { date: "日期", meeting: "聚會", role: "角色", person: "同工" },
-      timeZone: "Asia/Taipei"
+      timeZone: "Asia/Taipei",
+      now: () => new Date("2026-07-11T00:00:00.000Z")
     });
 
     const result = await query({ query: "主日服事" }, context("小哈查主日服事"));

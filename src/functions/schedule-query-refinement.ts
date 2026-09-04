@@ -58,7 +58,7 @@ const DATE_INTENT_TERMS: Array<{
   { intent: "this_week", terms: ["本週", "本周", "這週", "這周", "这週", "这周"] },
   {
     intent: "next_meeting",
-    terms: ["最近一場", "下一次", "下一場", "下次", "下場"]
+    terms: ["最新一場", "最新的", "最近一場", "下一次", "下一場", "最新", "下次", "下場"]
   }
 ];
 

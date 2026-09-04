@@ -99,6 +99,29 @@ describe("catalog store", () => {
     });
   });
 
+  it("returns newer matching catalog items first", async () => {
+    const store = new InMemoryCatalogStore();
+    const source = await store.upsertSource(helperSource);
+    await store.upsertItem({
+      ...audioItem(source.id, "A old weekly report"),
+      externalUpdatedAt: "2026-07-01T00:00:00.000Z"
+    });
+    await store.upsertItem({
+      ...audioItem(source.id, "Z new weekly report"),
+      externalUpdatedAt: "2026-07-12T00:00:00.000Z"
+    });
+
+    const results = await store.searchItems({
+      profileName: "helper",
+      query: "weekly report"
+    });
+
+    expect(results.map(({ title }) => title)).toEqual([
+      "Z new weekly report",
+      "A old weekly report"
+    ]);
+  });
+
   it("filters catalog search by profile, source, item kind, and deleted state", async () => {
     const store = new InMemoryCatalogStore();
     const helper = await store.upsertSource(helperSource);

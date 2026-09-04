@@ -50,6 +50,13 @@ describe("query refinement", () => {
         structuredArguments: { dateIntent: "next_meeting" },
         residualQuery: "青年"
       }
+    ],
+    [
+      { query: "最新的" },
+      {
+        structuredArguments: { dateIntent: "next_meeting" },
+        residualQuery: ""
+      }
     ]
   ])("refines schedule query %#", (args, expected) => {
     expect(

@@ -679,10 +679,23 @@ describe("find_ppt_slides", () => {
 });
 
 describe("query_schedule", () => {
-  it("softly personalizes generic service schedule clarification", async () => {
+  it("defaults a generic service schedule query to the next meeting", async () => {
     const now = new Date("2026-07-04T10:00:00.000Z");
+    const notion: NotionDatabaseClient = {
+      queryDatabase: vi.fn().mockResolvedValue([
+        {
+          id: "next-service",
+          properties: {
+            date: { type: "date", date: { start: "2026-07-20" } },
+            meeting: { type: "rich_text", rich_text: [{ plain_text: "主日" }] },
+            role: { type: "rich_text", rich_text: [{ plain_text: "音控" }] },
+            person: { type: "rich_text", rich_text: [{ plain_text: "測試同工" }] }
+          }
+        }
+      ])
+    };
     const handler = createQueryServiceScheduleHandler({
-      notion: { queryDatabase: vi.fn() },
+      notion,
       databaseId: "database-id",
       properties: {
         date: "date",
@@ -690,15 +703,14 @@ describe("query_schedule", () => {
         role: "role",
         person: "person"
       },
-      sessionStore: new InMemorySessionStore({ now: () => now }),
       now: () => now
     });
 
     const result = await handler({ query: "服事表" }, personalizedHandlerContext());
 
-    expect(result.replyText).toContain(
-      "Ray，要查哪個服事表範圍？請選擇或直接回覆：下一場、本週、明天、主日。"
-    );
+    expect(result.replyText).toContain("7月20日");
+    expect(result.replyText).toContain("測試同工");
+    expect(notion.queryDatabase).toHaveBeenCalledOnce();
   });
 
   it("maps Notion properties from env-style configuration", async () => {
@@ -723,7 +735,8 @@ describe("query_schedule", () => {
         meeting: "Meeting",
         role: "Role",
         person: "Person"
-      }
+      },
+      now: () => new Date("2026-07-04T10:00:00.000Z")
     });
 
     const result = await handler({ query: "主日司會" }, handlerContext());
@@ -857,7 +870,7 @@ describe("query_schedule", () => {
         filter: expect.objectContaining({
           and: expect.arrayContaining([
             expect.objectContaining({ date: { on_or_after: "2026-07-04" } }),
-            expect.objectContaining({ date: { before: "2026-07-11" } })
+            expect.objectContaining({ date: { before: "9999-12-31" } })
           ])
         })
       })

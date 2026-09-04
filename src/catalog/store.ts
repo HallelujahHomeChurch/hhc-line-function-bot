@@ -432,7 +432,12 @@ export class InMemoryCatalogStore implements CatalogStore {
         (item) => allowedSourceKeys.size === 0 || allowedSourceKeys.has(item.source.sourceKey)
       )
       .filter((item) => !query || searchableText(item).includes(query))
-      .sort((a, b) => a.title.localeCompare(b.title, "zh-Hant"));
+      .sort(
+        (a, b) =>
+          (Date.parse(b.externalUpdatedAt ?? "") || 0) -
+            (Date.parse(a.externalUpdatedAt ?? "") || 0) ||
+          a.title.localeCompare(b.title, "zh-Hant")
+      );
 
     return records.slice(0, input.limit ?? 5);
   }

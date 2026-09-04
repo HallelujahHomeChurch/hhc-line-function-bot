@@ -34,11 +34,14 @@ function profile(name: "helper" | "main" = "helper"): BotProfileConfig {
   };
 }
 
-function event(source: LineEvent["source"] = { type: "user", userId: "U1" }): LineEvent {
+function event(
+  source: LineEvent["source"] = { type: "user", userId: "U1" },
+  text = "這週日誰服事？"
+): LineEvent {
   return {
     type: "message",
     source,
-    message: { type: "text", text: "這週日誰服事？" }
+    message: { type: "text", text }
   };
 }
 
@@ -132,7 +135,7 @@ describe("SDK agent turn runtime", () => {
           [
             {
               name: "query_schedule",
-              args: { query: "這週日" },
+              args: { query: "查服事表" },
               id: "schedule-1"
             }
           ],
@@ -145,12 +148,16 @@ describe("SDK agent turn runtime", () => {
     const result = await runtime.handleTextTurn({
       profile: profile(),
       configuredFunctions: ["query_schedule"],
-      event: event(),
+      event: event({ type: "user", userId: "U1" }, "查服事表"),
       requestId: "request-helper",
       authorizeFunctions: async (names) => names
     });
 
     expect(querySchedule).toHaveBeenCalledOnce();
+    expect(querySchedule).toHaveBeenCalledWith(
+      { query: "查服事表" },
+      expect.objectContaining({ agentTool: true })
+    );
     expect(result).toEqual(expect.objectContaining({ ok: true, replyText: expect.any(String) }));
   });
 

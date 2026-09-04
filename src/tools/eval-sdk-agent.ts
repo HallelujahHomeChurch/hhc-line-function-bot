@@ -77,7 +77,9 @@ const result = await createSdkAgent({
   tools: [querySchedule, searchInformation],
   systemPrompt: "先查正式服事表；沒有資料時查可見資訊。必須說明筆記不是正式服事表。"
 }).invoke(
-  { messages: [{ role: "user", content: "這週日誰帶敬拜？那司琴呢？" }] },
+  {
+    messages: [{ role: "user", content: live ? "查服事表" : "這週日誰帶敬拜？那司琴呢？" }]
+  },
   {
     configurable: { thread_id: live ? "sdk-live-eval" : "sdk-offline-eval" },
     recursionLimit: 50

@@ -79,6 +79,11 @@ const crossSourceCases: SdkAgentAcceptanceCase[] = [
     evidenceSource: "formal_schedule",
     requiredTools: ["query_schedule"]
   }),
+  helperCase("sdk-v1/schedule/latest-follow-up@1", "cross_source", ["查服事表", "最新的"], {
+    writes: 0,
+    evidenceSource: "formal_schedule",
+    requiredTools: ["query_schedule"]
+  }),
   helperCase(
     "sdk-v1/memory/requester-private-isolation@1",
     "cross_source",
