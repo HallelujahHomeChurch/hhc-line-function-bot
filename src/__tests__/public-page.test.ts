@@ -44,4 +44,42 @@ describe("public page reader", () => {
     );
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("rejects an oversized declared response before parsing page content", async () => {
+    const reader = createPublicPageReader({
+      maxBytes: 1024,
+      maxRedirects: 0,
+      request: vi.fn(async () => ({
+        statusCode: 200,
+        headers: { "content-type": "text/html", "content-length": "2048" },
+        body: new TextEncoder().encode("small partial body")
+      })),
+      resolve: resolvePublic,
+      timeoutMs: 1000
+    });
+
+    await expect(reader.read("https://scores.example.test/page")).rejects.toThrow(
+      "public_page_too_large"
+    );
+  });
+
+  it("revalidates every redirect before another request", async () => {
+    const request = vi.fn(async () => ({
+      statusCode: 302,
+      headers: { location: "https://127.0.0.1/private" },
+      body: new Uint8Array()
+    }));
+    const reader = createPublicPageReader({
+      maxBytes: 1024,
+      maxRedirects: 1,
+      request,
+      resolve: resolvePublic,
+      timeoutMs: 1000
+    });
+
+    await expect(reader.read("https://scores.example.test/page")).rejects.toThrow(
+      "external_binary_unsafe_address"
+    );
+    expect(request).toHaveBeenCalledOnce();
+  });
 });

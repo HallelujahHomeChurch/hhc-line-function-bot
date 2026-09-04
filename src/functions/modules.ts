@@ -19,8 +19,10 @@ import {
 import { queryScheduleModule } from "../capabilities/query-schedule/module.js";
 import { createWikipediaLookupHandler } from "../wikipedia/lookup.js";
 import { createRetrieveMemoryHandler, createSaveMemoryHandler } from "./agent-memory-functions.js";
-import { createPendingAttachmentTextMessageHandler } from "./attachment-save.js";
-import { createUploadIntentTextMessageHandler } from "./upload-intent.js";
+import {
+  createPendingAttachmentTextMessageHandler,
+  createUploadIntentTextMessageHandler
+} from "../transport/line/attachment-intake.js";
 import { createFindResourceHandler } from "./find-resource.js";
 import { createSaveResourceHandler } from "./save-resource.js";
 import {

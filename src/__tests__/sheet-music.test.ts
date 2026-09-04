@@ -559,7 +559,7 @@ describe("find_sheet_music", () => {
     });
   });
 
-  it("runs external sheet music web search only after requester consent", async () => {
+  it("leaves external search consent for the helper research boundary", async () => {
     const graph: GraphDriveClient = {
       listFolderChildren: vi.fn(),
       listFolderFilesRecursive: vi.fn().mockResolvedValue([]),
@@ -597,26 +597,11 @@ describe("find_sheet_music", () => {
     });
     await handler({ query: "No Such Song" }, handlerContext());
 
-    const result = await textHandler.handle({ text: "好，上網找" }, handlerContext());
-
-    expect(webSearch.search).toHaveBeenCalledWith({
-      query: "No Such Song 歌譜",
-      limit: 5,
-      language: "zh-TW"
-    });
-    expect(summarize).toHaveBeenCalledWith({
-      profileName: "main",
-      query: "No Such Song",
-      results: [
-        {
-          title: "No Such Song sheet music",
-          snippet: "Public search snippet",
-          url: "https://example.org/no-such-song"
-        }
-      ]
-    });
-    expect(result?.replyText).toContain("公開搜尋結果");
-    expect(result?.replyText).toContain("No Such Song sheet music");
+    await expect(textHandler.matches({ text: "好，上網找" }, handlerContext())).resolves.toBe(
+      false
+    );
+    expect(webSearch.search).not.toHaveBeenCalled();
+    expect(summarize).not.toHaveBeenCalled();
     await expect(
       sessionStore.findExternalSearchConsent({
         action: "sheet_music_external_search",
@@ -624,7 +609,7 @@ describe("find_sheet_music", () => {
         source: handlerContext().event.source,
         requesterUserId: "U1"
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ id: "external-search-1", query: "No Such Song" });
   });
 
   it("queues an authorized selected direct result for worker-side download and publication", async () => {

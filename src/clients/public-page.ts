@@ -52,6 +52,10 @@ async function readPage(
 ): Promise<PublicPageReadResult> {
   const target = await validateExternalBinaryUrl(rawUrl, resolve);
   const response = await request(target);
+  const declaredLength = Number(header(response.headers, "content-length") ?? 0);
+  if (Number.isFinite(declaredLength) && declaredLength > options.maxBytes) {
+    throw new Error("public_page_too_large");
+  }
   if (response.body.byteLength > options.maxBytes) throw new Error("public_page_too_large");
 
   if (response.statusCode >= 300 && response.statusCode < 400) {

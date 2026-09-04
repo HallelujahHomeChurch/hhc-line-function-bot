@@ -97,7 +97,11 @@ export function createAgentTurnRuntime(options: AgentTurnRuntimeOptions): AgentT
       const matched = await matchTextContinuation(
         input.event,
         input.profile,
-        options.textMessageHandlers,
+        Object.fromEntries(
+          Object.entries(options.textMessageHandlers).filter(
+            ([, handler]) => handler.turnStage !== "attachment"
+          )
+        ),
         input.requesterDisplayName,
         input.requesterIsAdmin,
         input.authorizeFunctions,

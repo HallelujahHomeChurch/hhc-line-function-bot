@@ -9,6 +9,7 @@ import {
 import { InMemoryCatalogStore } from "../catalog/store.js";
 import { createPendingAttachmentTextMessageHandler } from "../functions/attachment-save.js";
 import { InMemorySessionStore } from "../state/session-store.js";
+import { handleAttachmentIntake } from "../transport/line/attachment-intake.js";
 import type {
   BotProfileConfig,
   FunctionHandlerContext,
@@ -191,6 +192,36 @@ async function setup(
 }
 
 describe("attachment save pipeline", () => {
+  it("keeps an unrelated group attachment silent without entering a text handler", async () => {
+    const pendingAttachment = {
+      turnStage: "attachment" as const,
+      matches: vi.fn(async () => false),
+      handle: vi.fn()
+    };
+    const uploadActivation = {
+      turnStage: "attachment" as const,
+      matches: vi.fn(async () => false),
+      handle: vi.fn()
+    };
+    const result = await handleAttachmentIntake({
+      profile: profile(),
+      event: {
+        type: "message",
+        source: { type: "group", groupId: "C1", userId: "U1" },
+        message: { id: "file-unrelated", type: "file", fileName: "notes.pdf" }
+      },
+      requestId: "req-unrelated",
+      sessionStore: new InMemorySessionStore(),
+      maxAttachmentBytes: 25 * 1024 * 1024,
+      now: new Date("2026-07-11T10:00:00.000Z"),
+      textHandlers: [uploadActivation, pendingAttachment]
+    });
+
+    expect(result).toBeUndefined();
+    expect(pendingAttachment.matches).not.toHaveBeenCalled();
+    expect(uploadActivation.matches).not.toHaveBeenCalled();
+  });
+
   it("confirms the existing media-sync work without creating another scan or download", async () => {
     const { sessionStore, agentJobStore, scanWorkStore, scanQueue, mediaSyncStore, handler } =
       await setup();

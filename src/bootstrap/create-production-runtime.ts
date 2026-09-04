@@ -48,6 +48,7 @@ import {
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { createSearxngClient } from "../clients/searxng.js";
+import { createPublicPageReader } from "../clients/public-page.js";
 import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
 import { createPostgresPool, createPostgresRuntime } from "../db/postgres.js";
@@ -152,6 +153,13 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     ? createSearxngClient({
         baseUrl: config.webSearch.searxngBaseUrl,
         timeoutMs: config.webSearch.timeoutMs
+      })
+    : undefined;
+  const publicPageReader = webSearch
+    ? createPublicPageReader({
+        maxBytes: 512 * 1024,
+        maxRedirects: config.externalResources.maxRedirects,
+        timeoutMs: config.externalResources.downloadTimeoutMs
       })
     : undefined;
   const registrationInviteCodeStore = redis
@@ -371,6 +379,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       handlers: registries.functions,
       sessions: sessionStore,
       jobs: agentJobStore,
+      webSearch,
+      pageReader: publicPageReader,
       lastErrorStore,
       traceStore: agentTraceStore,
       routeObserver,

@@ -25,6 +25,7 @@ export interface ProfileActionReviewResult {
 
 export interface ProfileRuntime {
   readonly observesCompletion?: boolean;
+  acceptSheetMusicResearch?(input: ProfileTurnInput): Promise<boolean>;
   handleTextTurn(input: ProfileTurnInput): Promise<FunctionExecutionResult | undefined>;
   handleActionReview?(
     input: ProfileActionReviewInput
@@ -35,6 +36,11 @@ export function createProfileRuntimeDispatcher(
   runtimes: Partial<Record<string, ProfileRuntime>>
 ): ProfileRuntime {
   return {
+    acceptSheetMusicResearch(input) {
+      return (
+        runtimes[input.profile.name]?.acceptSheetMusicResearch?.(input) ?? Promise.resolve(false)
+      );
+    },
     handleTextTurn(input) {
       return runtimes[input.profile.name]?.handleTextTurn(input) ?? Promise.resolve(undefined);
     },

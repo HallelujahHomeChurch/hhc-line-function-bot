@@ -5428,7 +5428,7 @@ describe("LINE entrance", () => {
       accountAdminClient: { authorizeFunctions },
       textMessageHandlers: {
         role_probe: {
-          turnStage: "attachment",
+          turnStage: "resolution",
           capability: "query_schedule",
           matches: vi.fn().mockResolvedValue(true),
           handle
@@ -6526,7 +6526,7 @@ describe("LINE entrance", () => {
     expect(replyText).toHaveBeenCalledOnce();
   });
 
-  it("runs deterministic resolution and attachment continuations before a production-shaped profile dispatcher", async () => {
+  it("routes consented research to helper while keeping other deterministic continuations outside it", async () => {
     const config = accessConfig();
     const helper = config.profiles[0]!;
     helper.enabledFunctions = ["find_sheet_music", "find_ppt_slides", "save_resource"];
@@ -6561,7 +6561,7 @@ describe("LINE entrance", () => {
       pending_attachment_answer: {
         turnStage: "attachment" as const,
         capability: "save_resource" as const,
-        matches: ({ text }: { text: string }) => text === "是",
+        matches: vi.fn(({ text }: { text: string }) => text === "是"),
         handle: vi.fn(async () => ({ ok: true, replyText: "請選用途" }))
       }
     };
@@ -6572,7 +6572,10 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
       profileRuntime: createProfileRuntimeDispatcher({
-        helper: { handleTextTurn: profileTurn }
+        helper: {
+          acceptSheetMusicResearch: async ({ event }) => event.message?.text === "上網找",
+          handleTextTurn: profileTurn
+        }
       }),
       textMessageHandlers: handlers,
       agentRuntime,
@@ -6596,18 +6599,14 @@ describe("LINE entrance", () => {
       expect(response.statusCode).toBe(200);
     }
 
-    expect(handlers.sheet_music_numeric_selection.handle).toHaveBeenCalledOnce();
+    expect(handlers.sheet_music_numeric_selection.handle).not.toHaveBeenCalled();
     expect(handlers.ppt_numeric_selection.handle).toHaveBeenCalledOnce();
     expect(handlers.pending_attachment_answer.handle).toHaveBeenCalledOnce();
-    expect(profileTurn).not.toHaveBeenCalled();
-    expect(afterFunctionResult).toHaveBeenCalledOnce();
-    await expect(memoryStore.summary()).resolves.toMatchObject({ resources: 1 });
-    expect(complete).toHaveBeenCalledTimes(2);
-    expect(replyText.mock.calls.map(([, text]) => text)).toEqual([
-      "外部歌譜",
-      "投影片 1",
-      "請選用途"
-    ]);
+    expect(profileTurn).toHaveBeenCalledOnce();
+    expect(afterFunctionResult).not.toHaveBeenCalled();
+    await expect(memoryStore.summary()).resolves.toMatchObject({ resources: 0 });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(replyText.mock.calls.map(([, text]) => text)).toEqual(["model", "投影片 1", "請選用途"]);
   });
 
   it.each([

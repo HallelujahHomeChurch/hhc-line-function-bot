@@ -91,6 +91,91 @@ function state(overrides: Partial<HelperAgentState> = {}): HelperAgentState {
 }
 
 describe("helper profile runtime", () => {
+  it("atomically enables research only for the requester-scoped consent", async () => {
+    const sessions = new InMemorySessionStore({
+      now: () => new Date("2026-09-04T00:00:00.000Z")
+    });
+    await sessions.set({
+      id: "consent-1",
+      type: "external_search_consent",
+      action: "sheet_music_external_search",
+      profileName: "helper",
+      requesterUserId: "LINE_USER_ID",
+      source: { type: "group", groupId: "G1", userId: "LINE_USER_ID" },
+      query: "奇異恩典",
+      expiresAt: "2026-09-04T00:10:00.000Z"
+    });
+    const helperState = state();
+    const model = new FakeToolCallingModel({ toolCalls: [[]] });
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: helperState,
+      handlers: handlers(),
+      sessions,
+      webSearch: { search: vi.fn() },
+      pageReader: { read: vi.fn() },
+      now: () => new Date("2026-09-04T00:00:00.000Z")
+    });
+
+    await expect(
+      runtime.acceptSheetMusicResearch?.(
+        input("上網找", { type: "group", groupId: "G1", userId: "OTHER_USER" })
+      )
+    ).resolves.toBe(false);
+    await expect(
+      runtime.acceptSheetMusicResearch?.(
+        input("上網找", { type: "group", groupId: "G1", userId: "LINE_USER_ID" })
+      )
+    ).resolves.toBe(true);
+    await expect(
+      runtime.acceptSheetMusicResearch?.(
+        input("上網找", { type: "group", groupId: "G1", userId: "LINE_USER_ID" })
+      )
+    ).resolves.toBe(false);
+    expect(helperState.allowExternalSheetMusic).toHaveBeenCalledOnce();
+    expect(helperState.allowExternalSheetMusic).toHaveBeenCalledWith(
+      "helper-LINE_USER_ID",
+      { type: "group", groupId: "G1", userId: "LINE_USER_ID" },
+      new Date("2026-09-04T00:15:00.000Z")
+    );
+  });
+
+  it("uses the research budget tool set without model-controlled writes", async () => {
+    const model = new FakeToolCallingModel({ toolCalls: [[]] });
+    const bindTools = vi.spyOn(model, "bindTools").mockReturnValue(model);
+    const helperState = state({ externalSheetMusicAllowed: vi.fn(async () => true) });
+    const writeProfile = {
+      ...profile(),
+      enabledFunctions: [...readFunctions, "save_resource" as const],
+      permissionRequiredFunctions: ["save_resource" as const]
+    };
+    const runtime = createHelperRuntime({
+      model,
+      summaryModel: model,
+      state: helperState,
+      handlers: { ...handlers(), save_resource: vi.fn() },
+      sessions: new InMemorySessionStore(),
+      jobs: new InMemoryAgentJobStore(),
+      webSearch: { search: vi.fn(async () => []) },
+      pageReader: { read: vi.fn() }
+    });
+
+    await runtime.handleTextTurn({
+      ...input("上網找"),
+      profile: writeProfile,
+      configuredFunctions: writeProfile.enabledFunctions,
+      authorizeFunctions: async (names) => names
+    });
+
+    expect(bindTools.mock.calls.at(-1)?.[0].map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["search_sheet_music_web", "read_sheet_music_page"])
+    );
+    expect(bindTools.mock.calls.at(-1)?.[0].map(({ name }) => name)).not.toContain(
+      "propose_save_resource"
+    );
+  });
+
   it("does not invoke a model for a group without a requester", async () => {
     const model = new FakeToolCallingModel({ toolCalls: [[]] });
     const invoke = vi.spyOn(model, "invoke");

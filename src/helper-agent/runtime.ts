@@ -16,6 +16,7 @@ import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
 import { getFunctionDefinition } from "../functions/definitions.js";
 import { requestFailedMessage } from "../messages.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
+import type { PublicPageReader } from "../clients/public-page.js";
 import { emitProductEvent, type ProductResultClass } from "../observability/product-events.js";
 import type {
   ProfileActionReviewResult,
@@ -29,7 +30,8 @@ import type {
   FunctionHandlerContext,
   FunctionName,
   FunctionRegistry,
-  LineSource
+  LineSource,
+  WebSearchClient
 } from "../types.js";
 import { createHelperAgent } from "./agent.js";
 import { createBudgetedFetch, runWithAgentBudget } from "./budget.js";
@@ -39,7 +41,11 @@ import {
   createActionReviewLifecycleObserver,
   resumeHelperReview
 } from "./review.js";
-import type { HelperAgentState } from "./state.js";
+import { helperThreadIdleTtlMs, type HelperAgentState } from "./state.js";
+import {
+  createSheetMusicResearchTools,
+  storeSheetMusicImportCandidates
+} from "./sheet-music-tools.js";
 import { createHelperWriteTools } from "./write-tools.js";
 
 export interface HelperRuntimeOptions {
@@ -49,6 +55,8 @@ export interface HelperRuntimeOptions {
   handlers: FunctionRegistry;
   sessions?: SessionStore;
   jobs?: AgentJobStore;
+  webSearch?: WebSearchClient;
+  pageReader?: PublicPageReader;
   lastErrorStore?: LastErrorStore;
   traceStore?: AgentTraceStore;
   routeObserver?: RouteObserver;
@@ -84,6 +92,41 @@ export function createHelperModels(options: HelperModelOptions) {
 export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRuntime {
   const now = options.now ?? (() => new Date());
   const runtime: ProfileRuntime = {
+    async acceptSheetMusicResearch(input) {
+      if (
+        input.profile.name !== "helper" ||
+        !input.profile.agent ||
+        !options.sessions ||
+        !options.webSearch ||
+        !options.pageReader ||
+        !/^(?:上網找|同意上網找|可以上網找)[！!。\s]*$/u.test(input.event.message?.text ?? "")
+      ) {
+        return false;
+      }
+      const threadId = options.state.threadId({
+        profileName: input.profile.name,
+        source: input.event.source
+      });
+      if (!threadId) return false;
+      const profile = await effectiveProfile(input);
+      if (!profile.enabledFunctions.includes("find_sheet_music")) return false;
+      const consent = await options.sessions.findExternalSearchConsent({
+        action: "sheet_music_external_search",
+        profileName: input.profile.name,
+        source: input.event.source,
+        requesterUserId: input.event.source.userId
+      });
+      if (!consent) return false;
+      const claimed = await options.sessions.take(consent.id);
+      if (claimed?.type !== "external_search_consent") return false;
+      await options.state.allowExternalSheetMusic(
+        threadId,
+        input.event.source,
+        new Date(now().getTime() + helperThreadIdleTtlMs(input.event.source))
+      );
+      return true;
+    },
+
     async handleTextTurn(input) {
       if (input.profile.name !== "helper" || !input.profile.agent) return undefined;
       const text = input.event.message?.text?.trim();
@@ -150,10 +193,30 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           options.sessions && actionExecutor
             ? createHelperWriteTools({ context, executor: actionExecutor })
             : [];
-        const tools = [...readTools, ...writeTools];
-        const runMode = (await options.state.externalSheetMusicAllowed(threadId))
-          ? "sheet_music_research"
-          : "normal";
+        const researchAllowed = await options.state.externalSheetMusicAllowed(threadId);
+        const runMode = researchAllowed ? "sheet_music_research" : "normal";
+        const researchTools =
+          researchAllowed && options.webSearch && options.pageReader
+            ? createSheetMusicResearchTools({
+                consented: true,
+                context,
+                webSearch: options.webSearch,
+                pageReader: options.pageReader,
+                authorize,
+                onDirectFileCandidates: options.sessions
+                  ? (candidates) =>
+                      storeSheetMusicImportCandidates({
+                        sessions: options.sessions!,
+                        context,
+                        requestId: input.requestId,
+                        query: text,
+                        candidates,
+                        now: now()
+                      })
+                  : undefined
+              })
+            : [];
+        const tools = [...readTools, ...(researchAllowed ? researchTools : writeTools)];
         const turn = await runWithAgentBudget(runMode, () =>
           options.state.run({
             threadId,
@@ -167,10 +230,11 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                 runMode,
                 systemPrompt: helperSystemPrompt(profile, input.event.source, now()),
                 tools,
-                writeReview: writeTools.length > 0,
-                prepareWriteArguments: actionExecutor
-                  ? (name, args) => actionExecutor.prepare(name, args, context)
-                  : undefined
+                writeReview: !researchAllowed && writeTools.length > 0,
+                prepareWriteArguments:
+                  !researchAllowed && actionExecutor
+                    ? (name, args) => actionExecutor.prepare(name, args, context)
+                    : undefined
               }).invoke(
                 { messages: [{ role: "user", content: text }] },
                 {
@@ -666,5 +730,7 @@ const HELPER_TOOL_NAMES = new Set([
   "find_resource",
   "search_knowledge",
   "search_saved_notes",
-  "query_wikipedia"
+  "query_wikipedia",
+  "search_sheet_music_web",
+  "read_sheet_music_page"
 ]);

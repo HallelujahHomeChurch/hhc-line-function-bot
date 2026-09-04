@@ -42,7 +42,6 @@ import {
   groupEngagementIgnoredReason
 } from "../../engagement.js";
 import { getFunctionDefinition } from "../../functions/definitions.js";
-import { handleAttachmentMessage } from "../../functions/attachment-entrance.js";
 import { pendingAttachmentPrompt } from "../../functions/pending-attachment.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
 import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
@@ -57,6 +56,7 @@ import {
 } from "../../llm/provider-runtime.js";
 import { messages, requestFailedMessage } from "../../messages.js";
 import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
+import { handleAttachmentIntake, isUploadActivation } from "./attachment-intake.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
 import { emitProductEvent } from "../../observability/product-events.js";
 import { resolveRequesterDisplayName } from "../../requester-personalization.js";
@@ -991,14 +991,15 @@ async function handleWebhook(
       if (!event.replyToken) {
         continue;
       }
-      const attachmentResult = await handleAttachmentMessage({
+      const attachmentResult = await handleAttachmentIntake({
         profile: effectiveProfile,
         event,
         requestId,
         requesterDisplayName,
         sessionStore,
         maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
-        now: new Date()
+        now: new Date(),
+        textHandlers: attachmentTextHandlers(textMessageHandlers)
       });
       if (attachmentResult) {
         await line.replyText(
@@ -1398,23 +1399,76 @@ async function handleWebhook(
       continue;
     }
 
-    const continuation = await executeDeterministicTextContinuation({
-      event,
+    const profileTurnInput = {
       profile: effectiveProfile,
-      configuredFunctions: profile.enabledFunctions,
-      handlers: textMessageHandlers,
+      event,
+      requestId,
       requesterDisplayName,
       requesterIsAdmin,
-      authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-      sessionStore,
-      agentRuntime,
-      completionObserver,
-      accessStore,
-      routeObserver,
-      lastErrorStore,
-      lastRouteStore,
-      requestId
-    });
+      configuredFunctions: [...profile.enabledFunctions],
+      authorizeFunctions: async (names: FunctionName[]) => [
+        ...(await turnAccountAuthorization.allowedFunctions(names))
+      ],
+      accountAdministrator: turnAccountAuthorization.administrator
+    };
+    const researchAccepted = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
+    if (!researchAccepted) {
+      const attachmentResult = await handleAttachmentIntake({
+        profile: effectiveProfile,
+        event,
+        requestId,
+        requesterDisplayName,
+        requesterIsAdmin,
+        configuredFunctions: profile.enabledFunctions,
+        authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+        sessionStore,
+        maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
+        now: new Date(),
+        textHandlers: attachmentTextHandlers(textMessageHandlers)
+      });
+      if (attachmentResult) {
+        const completed = await completeAttachmentIntake({
+          result: attachmentResult,
+          profile: effectiveProfile,
+          event,
+          requestId,
+          requesterDisplayName,
+          requesterIsAdmin,
+          completionObserver,
+          accessStore,
+          agentRuntime,
+          routeObserver,
+          lastRouteStore
+        });
+        await line.replyText(
+          event.replyToken,
+          completed.replyText,
+          completed.quickReplies ? { quickReplies: completed.quickReplies } : undefined
+        );
+        await recordConversationReply(conversationWindowStore, effectiveProfile, event, completed);
+        continue;
+      }
+    }
+
+    const continuation = researchAccepted
+      ? { matched: false as const }
+      : await executeDeterministicTextContinuation({
+          event,
+          profile: effectiveProfile,
+          configuredFunctions: profile.enabledFunctions,
+          handlers: textMessageHandlers,
+          requesterDisplayName,
+          requesterIsAdmin,
+          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+          sessionStore,
+          agentRuntime,
+          completionObserver,
+          accessStore,
+          routeObserver,
+          lastErrorStore,
+          lastRouteStore,
+          requestId
+        });
     if (continuation.matched) {
       if (continuation.result) {
         await line.replyText(
@@ -1435,6 +1489,7 @@ async function handleWebhook(
     }
 
     const routingAllowed =
+      Boolean(researchAccepted) ||
       Boolean(pendingActionReview) ||
       !groupEngagement ||
       groupEngagementAllowsReply(groupEngagement) ||
@@ -1444,14 +1499,7 @@ async function handleWebhook(
       ? await handleAgentTextTurnWithLongJob({
           runtime: profileRuntime,
           jobStore: agentJobStore,
-          profile: effectiveProfile,
-          event,
-          requestId,
-          requesterDisplayName,
-          requesterIsAdmin,
-          configuredFunctions: profile.enabledFunctions,
-          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-          accountAdministrator: turnAccountAuthorization.administrator,
+          ...profileTurnInput,
           completeResult: (result) =>
             result.executedAction &&
             result.writePhase !== "preview" &&
@@ -1519,9 +1567,7 @@ async function executeDeterministicTextContinuation(input: {
   requestId: string;
 }): Promise<{ matched: boolean; result?: FunctionExecutionResult }> {
   const handlers = Object.fromEntries(
-    Object.entries(input.handlers).filter(([, handler]) =>
-      ["resolution", "attachment"].includes(handler.turnStage)
-    )
+    Object.entries(input.handlers).filter(([, handler]) => handler.turnStage === "resolution")
   );
   const profile = await projectPendingResolutionAuthorization(input);
   const matched = await matchTextContinuation(
@@ -1609,6 +1655,81 @@ async function executeDeterministicTextContinuation(input: {
       result: { ok: false, replyText: requestFailedMessage(input.requestId) }
     };
   }
+}
+
+function attachmentTextHandlers(registry: TextMessageHandlerRegistry) {
+  return Object.values(registry).filter((handler) => handler.turnStage === "attachment");
+}
+
+async function completeAttachmentIntake(input: {
+  result: FunctionExecutionResult;
+  profile: BotProfileConfig;
+  event: LineEvent;
+  requestId: string;
+  requesterDisplayName?: string;
+  requesterIsAdmin: boolean;
+  completionObserver: FunctionCompletionObserver;
+  accessStore: AccessStore;
+  agentRuntime?: AgentRuntime;
+  routeObserver?: RouteObserver;
+  lastRouteStore: LastRouteStore;
+}): Promise<FunctionExecutionResult> {
+  const startedAt = Date.now();
+  const context = {
+    profile: input.profile,
+    event: input.event,
+    requestId: input.requestId,
+    requesterDisplayName: input.requesterDisplayName,
+    requesterIsAdmin: input.requesterIsAdmin
+  };
+  const action = input.result.executedAction ?? "save_resource";
+  if (input.result.executedAction) {
+    await recordDeterministicFunctionWriteAudit(
+      input.accessStore,
+      context,
+      input.result.executedAction,
+      input.result
+    );
+  }
+  if (input.result.agentResource) {
+    await input.agentRuntime?.afterFunctionResult({
+      context,
+      action,
+      arguments: {},
+      result: input.result
+    });
+  }
+  const durationMs = elapsedMs(startedAt);
+  const completed = input.result.executedAction
+    ? await input.completionObserver.complete({
+        context,
+        action: input.result.executedAction,
+        result: input.result,
+        durationMs,
+        clarificationCount: 0
+      })
+    : input.result;
+  await emitRouteEvent(input.routeObserver, {
+    kind: "text_handler",
+    profileName: input.profile.name,
+    sourceType: input.event.source.type,
+    requestId: input.requestId,
+    handler: "attachment_intake",
+    action,
+    ok: input.result.ok,
+    durationMs
+  });
+  await input.lastRouteStore.record({
+    requestId: input.requestId,
+    occurredAt: new Date().toISOString(),
+    profileName: input.profile.name,
+    sourceType: input.event.source.type,
+    phase: "function",
+    action,
+    ok: input.result.ok,
+    durationMs
+  });
+  return completed;
 }
 
 async function projectPendingResolutionAuthorization(input: {
@@ -1848,6 +1969,9 @@ async function allowEvent(
         }))
       ) {
         return { allowed: true, reason: "group_capability_resolution_active" };
+      }
+      if (await hasAttachmentTextIntake(profile, event, sessionStore)) {
+        return { allowed: true, reason: "group_attachment_intake_active" };
       }
       if (
         await matchingTextMessageHandler(
@@ -2772,11 +2896,38 @@ async function matchingTextMessageHandler(
     return undefined;
   }
   for (const [name, handler] of Object.entries(textMessageHandlers)) {
+    if (handler.turnStage === "attachment") continue;
     if (await handler.matches({ text }, { profile, event, requesterDisplayName })) {
       return { name, handler };
     }
   }
   return undefined;
+}
+
+async function hasAttachmentTextIntake(
+  profile: BotProfileConfig,
+  event: LineEvent,
+  sessionStore?: SessionStore
+): Promise<boolean> {
+  const text = event.message?.text;
+  const requesterUserId = event.source.userId;
+  if (
+    event.type !== "message" ||
+    event.message?.type !== "text" ||
+    !text ||
+    !requesterUserId ||
+    !profile.enabledFunctions.includes("save_resource")
+  ) {
+    return false;
+  }
+  if (isUploadActivation(text)) return true;
+  return Boolean(
+    await sessionStore?.findPendingAttachment({
+      profileName: profile.name,
+      source: event.source,
+      requesterUserId
+    })
+  );
 }
 
 async function emitRouteEvent(
