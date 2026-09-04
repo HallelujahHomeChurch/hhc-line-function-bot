@@ -21,6 +21,7 @@ import {
   type FirstSuccessStore
 } from "../observability/first-success-store.js";
 import { InMemoryRateLimiter } from "../rate-limit.js";
+import type { ProfileRuntime } from "../runtime/profile-runtime.js";
 import {
   createApp as createTransportApp,
   type AppDependencies
@@ -30,6 +31,7 @@ import type { AdminActionRouterPort, FunctionRegistry } from "../types.js";
 
 export type TestAppDependencies = Partial<AppDependencies> & {
   router?: FunctionRouterPort;
+  profileRuntime?: ProfileRuntime;
   adminActionRouter?: AdminActionRouterPort;
   functionRegistry?: FunctionRegistry;
   firstSuccessStore?: FirstSuccessStore;
@@ -138,9 +140,16 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
       firstSuccessStore,
       completionObserver
     });
-  const agentTurnRuntime = overrides.router
-    ? createRouterTestRuntime(overrides.router, continuationRuntime, functionRegistry, sessionStore)
-    : continuationRuntime;
+  const agentTurnRuntime = overrides.profileRuntime
+    ? createProfileRuntimeTestAdapter(overrides.profileRuntime)
+    : overrides.router
+      ? createRouterTestRuntime(
+          overrides.router,
+          continuationRuntime,
+          functionRegistry,
+          sessionStore
+        )
+      : continuationRuntime;
 
   return createTransportApp(config, {
     adminActionRegistry,
@@ -175,6 +184,27 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     accountAdminClient,
     mediaSyncStore: overrides.mediaSyncStore
   });
+}
+
+function createProfileRuntimeTestAdapter(profileRuntime: ProfileRuntime) {
+  return {
+    handleTextTurn(
+      input: Parameters<ReturnType<typeof createAgentTurnRuntime>["handleTextTurn"]>[0]
+    ) {
+      return profileRuntime.handleTextTurn({
+        profile: input.profile,
+        event: input.event,
+        requestId: input.requestId,
+        requesterDisplayName: input.requesterDisplayName,
+        requesterIsAdmin: input.requesterIsAdmin,
+        configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
+        authorizeFunctions: input.authorizeFunctions
+          ? async (names) => [...(await input.authorizeFunctions!(names))]
+          : undefined,
+        accountAdministrator: input.accountAdministrator
+      });
+    }
+  };
 }
 
 function createRouterTestRuntime(

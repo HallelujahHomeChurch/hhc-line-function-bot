@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
+import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import { createUpdateOwnProfileTextMessageHandler } from "../capabilities/update-own-profile/module.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type { BotProfileConfig, LineEvent } from "../types.js";
@@ -52,16 +53,32 @@ describe("main provider-free direct functions", () => {
     const handler = createDownloadWeeklyPaperTextMessageHandler(fetchImpl);
 
     expect(await handler.matches({ text: "下載第 1733 期週報" }, { profile, event })).toBe(true);
-    const result = await handler.handle(
+    const weeklyPaperReply = await handler.handle(
       { text: "下載第 1733 期週報" },
       { profile, event, requestId: "weekly" }
     );
 
     expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({
+    expect(weeklyPaperReply.ok).toBe(true);
+    expect(weeklyPaperReply).toMatchObject({
       executedAction: "download_weekly_paper",
       quickReplies: [expect.objectContaining({ label: "下載週報" })]
     });
+  });
+
+  it("keeps own-profile updates in preview until the caller confirms", async () => {
+    const handler = createUpdateOwnProfileHandler({
+      accountClient: { updateOwnProfile: vi.fn() },
+      sessionStore: new InMemorySessionStore(),
+      requestIdFactory: () => "profile-preview"
+    });
+
+    const profilePreview = await handler(
+      { firstName: "家睿", lastName: "王" },
+      { profile, event, requestId: "profile-preview" }
+    );
+
+    expect(profilePreview.writePhase).toBe("preview");
   });
 
   it("starts the existing preview flow for an exact own-profile request", async () => {

@@ -4015,10 +4015,11 @@ describe("LINE entrance", () => {
       reason: "not_matched",
       provider: "deepseek"
     });
+    const replyText = vi.fn<LineReplyClient["replyText"]>();
     const app = createTestApp(accessConfig(), {
       router: { route },
       accessStore: new InMemoryAccessStore(),
-      createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
+      createLineReplyClient: () => ({ replyText })
     });
 
     const directBody = lineBody({
@@ -4051,6 +4052,7 @@ describe("LINE entrance", () => {
     expect(groupRes.statusCode).toBe(200);
     expect(groupRes.json()).toMatchObject({ ok: true, ignored: true, reason: "group_blocked" });
     expect(route).toHaveBeenCalledOnce();
+    expect(replyText).toHaveBeenCalledOnce();
   });
 
   it.each([
