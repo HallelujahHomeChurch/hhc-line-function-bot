@@ -7,6 +7,7 @@ import type { FunctionExecutionResult } from "../application/contracts/function-
 import type { AgentTextTurnInput, AgentTurnRuntime } from "../application/turn/runtime.js";
 import type { PublicPageReader } from "../clients/public-page.js";
 import { requestFailedMessage } from "../messages.js";
+import type { LastErrorStore } from "../observability/last-error-store.js";
 import type { SessionStore } from "../state/session-store.js";
 import type {
   FunctionHandlerContext,
@@ -22,6 +23,7 @@ import { createSdkFunctionTools } from "./sdk-tools.js";
 interface SdkAgentTurnRuntimeOptions {
   fallback: AgentTurnRuntime;
   functionRegistry: FunctionRegistry;
+  lastErrorStore?: LastErrorStore;
   model: CreateAgentParams["model"];
   state: SdkAgentState;
   sessionStore?: SessionStore;
@@ -118,7 +120,16 @@ export function createSdkAgentTurnRuntime(options: SdkAgentTurnRuntimeOptions): 
         return (
           results.at(-1)?.result ?? { ok: false, replyText: requestFailedMessage(input.requestId) }
         );
-      } catch {
+      } catch (error) {
+        await options.lastErrorStore?.record({
+          requestId: input.requestId,
+          occurredAt: (options.now?.() ?? new Date()).toISOString(),
+          profileName: input.profile.name,
+          sourceType: input.event.source.type,
+          phase: "router",
+          errorName: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error)
+        });
         return (
           results.at(-1)?.result ?? { ok: false, replyText: requestFailedMessage(input.requestId) }
         );

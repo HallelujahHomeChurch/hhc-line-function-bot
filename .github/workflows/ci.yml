@@ -35,8 +35,8 @@ jobs:
     env:
       KERNEL_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/line_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Enable pnpm

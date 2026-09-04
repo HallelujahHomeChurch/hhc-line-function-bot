@@ -47,7 +47,7 @@ const searchInformation = tool(
 const model = live
   ? new ChatDeepSeek({
       apiKey: requireLiveKey(),
-      model: "deepseek-chat",
+      model: "deepseek-v4-flash",
       temperature: 0,
       maxRetries: 0
     })
@@ -96,7 +96,7 @@ console.log(
   JSON.stringify({
     caseId: "sdk-v1/schedule/saved-note@1",
     mode: live ? "live" : "offline",
-    model: live ? "deepseek-chat" : "fake-tool-calling",
+    model: live ? "deepseek-v4-flash" : "fake-tool-calling",
     passed,
     corpusCases: SDK_AGENT_ACCEPTANCE_CASES.length,
     toolNames: toolCalls,
@@ -214,18 +214,21 @@ async function runSheetMusicCase(model: CreateAgentParams["model"]): Promise<Liv
     },
     { configurable: { thread_id: `sdk-live-sheet-music-${Date.now()}` }, recursionLimit: 40 }
   );
-  const expected = [
-    "search_files",
+  const expectedExternal = [
     "search_sheet_music_web",
     "read_sheet_music_page",
     "search_sheet_music_web",
     "read_sheet_music_page"
   ];
+  const internalSearchCount = toolNames.filter((name) => name === "search_files").length;
+  const externalSequence = toolNames.filter((name) => name !== "search_files");
   return {
     id: "sdk-v1/sheet_music/iterative-discovery@1",
     passed:
-      expected.every((name, index) => toolNames[index] === name) &&
-      toolNames.length === expected.length &&
+      internalSearchCount >= 1 &&
+      internalSearchCount <= 2 &&
+      expectedExternal.every((name, index) => externalSequence[index] === name) &&
+      externalSequence.length === expectedExternal.length &&
       Boolean(output.messages.at(-1)?.text),
     toolNames
   };

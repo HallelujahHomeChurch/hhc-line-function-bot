@@ -28,9 +28,9 @@ jobs:
       PERIODIC_POLL_INTERVAL_SECONDS: "5"
       PERIODIC_RECENT_SCAN_MAX_AGE_SECONDS: "604800"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Sign in to Azure with OIDC
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -42,7 +42,7 @@ jobs:
         run: bash scripts/run-periodic-assurance.sh
       - name: Upload periodic assurance report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: periodic-assurance-${{ github.run_id }}
           path: artifacts/release-assurance/periodic-report.json

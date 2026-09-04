@@ -370,6 +370,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     agentTurnRuntime = createSdkAgentTurnRuntime({
       fallback: directTurnRuntime,
       functionRegistry: registries.functions,
+      lastErrorStore,
       model: new ChatDeepSeek({
         apiKey: config.llm.deepseekApiKey,
         model: config.llm.deepseekModel,
