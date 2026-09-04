@@ -151,7 +151,9 @@ export const findResourceArgumentsSchema = z
     limit: numericLimitSchema.optional()
   })
   .strip();
-export const findResourceAgentArgumentsSchema = findResourceArgumentsSchema.strict();
+export const findResourceAgentArgumentsSchema = findResourceArgumentsSchema
+  .safeExtend({ limit: z.number().int().min(1).max(10).optional() })
+  .strict();
 
 export const queryKnowledgeArgumentsSchema = z
   .object({
@@ -169,7 +171,12 @@ export const queryKnowledgeArgumentsSchema = z
     limit: numericLimitSchema.optional()
   })
   .strip();
-export const queryKnowledgeAgentArgumentsSchema = queryKnowledgeArgumentsSchema.strict();
+export const queryKnowledgeAgentArgumentsSchema = queryKnowledgeArgumentsSchema
+  .safeExtend({
+    ordinal: z.number().int().min(0).optional(),
+    limit: z.number().int().min(1).max(10).optional()
+  })
+  .strict();
 
 export const saveMemoryArgumentsSchema = z
   .object({

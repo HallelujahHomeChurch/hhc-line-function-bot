@@ -62,6 +62,8 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
     case "authorized":
     case "ok":
     case "retry":
+    case "contextEdited":
+    case "summarized":
       return typeof value === "boolean" ? value : undefined;
     case "errorName":
       return presentMarker(value) ? "Error" : undefined;
@@ -130,6 +132,21 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       );
     case "clarificationCountBucket":
       return allowedString(value, new Set(["zero", "one", "multiple"]));
+    case "modelCallCount":
+    case "toolCallCount":
+      return boundedTelemetryCount(value, 6);
+    case "estimatedInputTokens":
+    case "estimatedOutputTokens":
+      return boundedTelemetryCount(value, 1_000_000);
+    case "selectedToolNames":
+      return Array.isArray(value)
+        ? [...new Set(value.filter((item): item is string => HELPER_TOOL_NAMES.has(item)))].slice(
+            0,
+            6
+          )
+        : undefined;
+    case "finalStatus":
+      return allowedString(value, FINAL_STATUSES);
     default:
       return undefined;
   }
@@ -199,8 +216,19 @@ const PRODUCT_EVENT_NAMES = new Set([
   "retry_observed",
   "first_success",
   "account_link_started",
-  "account_link_finalized"
+  "account_link_finalized",
+  "helper_agent_turn"
 ]);
+const HELPER_TOOL_NAMES = new Set([
+  "get_official_schedule",
+  "find_presentation",
+  "find_sheet_music",
+  "find_resource",
+  "search_knowledge",
+  "search_saved_notes",
+  "query_wikipedia"
+]);
+const FINAL_STATUSES = new Set(["success", "not_found", "ambiguous", "unavailable", "error"]);
 const SOURCE_TYPES = new Set(["user", "group", "room"]);
 const PHASES = new Set([
   "context",

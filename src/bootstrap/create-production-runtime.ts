@@ -19,6 +19,8 @@ import { createAgentRuntime } from "../agent/agent-runtime.js";
 import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
 import { createSdkAgentTurnRuntime } from "../agent/sdk-turn-runtime.js";
 import { createPostgresSdkAgentState, createSdkAgentState } from "../agent/sdk-state.js";
+import { createHelperModels, createHelperRuntime } from "../helper-agent/runtime.js";
+import { createHelperAgentState, createPostgresHelperAgentState } from "../helper-agent/state.js";
 import { createWikipediaSummarizer } from "../wikipedia/summarizer.js";
 import { InMemoryAgentJobStore, RedisAgentJobStore } from "../agent/jobs.js";
 import { createAzureAttachmentScanQueue } from "../attachments/scan-queue.js";
@@ -342,6 +344,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   let agentTurnRuntime = directTurnRuntime;
   if (helperProfile) {
     let sdkState;
+    let helperState;
     if (postgres?.pool) {
       const checkpointer = new PostgresSaver(postgres.pool);
       await checkpointer.setup();
@@ -353,20 +356,48 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       });
       await postgresState.setup();
       await postgresState.cleanupExpired();
+      const postgresHelperState = createPostgresHelperAgentState({
+        pool: postgres.pool,
+        checkpointer,
+        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
+      });
+      await postgresHelperState.setup();
+      await postgresHelperState.cleanupExpired();
       const timer = setInterval(
-        () => void postgresState.cleanupExpired().catch(() => undefined),
+        () => void postgresHelperState.cleanupExpired().catch(() => undefined),
         300_000
       );
       timer.unref();
       stopSdkStateCleanup = () => clearInterval(timer);
       sdkState = postgresState;
+      helperState = postgresHelperState;
     } else {
       sdkState = createSdkAgentState({
         checkpointer: new MemorySaver(),
         hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
         ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
       });
+      helperState = createHelperAgentState({
+        checkpointer: new MemorySaver(),
+        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
+      });
     }
+    const helperModels = createHelperModels({
+      apiKey: config.llm.deepseekApiKey,
+      baseUrl: config.llm.deepseekBaseUrl,
+      model: config.llm.deepseekModel,
+      timeoutMs: config.llm.deepseekTimeoutMs
+    });
+    const stagedHelperRuntime = createHelperRuntime({
+      ...helperModels,
+      state: helperState,
+      handlers: registries.functions,
+      lastErrorStore,
+      traceStore: agentTraceStore,
+      routeObserver,
+      observabilityHmacKey: config.observability?.hmacKey
+    });
+    void stagedHelperRuntime;
     agentTurnRuntime = createSdkAgentTurnRuntime({
       fallback: directTurnRuntime,
       functionRegistry: registries.functions,

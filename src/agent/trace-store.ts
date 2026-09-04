@@ -53,6 +53,14 @@ export interface AgentTurnTraceStep {
   sourceRevision?: RetrievalDiagnostics["sourceRevision"];
   queryFingerprint?: string;
   referenceFingerprint?: string;
+  modelCallCount?: number;
+  toolCallCount?: number;
+  estimatedInputTokens?: number;
+  estimatedOutputTokens?: number;
+  contextEdited?: boolean;
+  summarized?: boolean;
+  selectedToolNames?: string[];
+  finalStatus?: "success" | "not_found" | "ambiguous" | "unavailable" | "error";
 }
 
 export type AgentTaskLifecycleOutcome =
@@ -247,7 +255,13 @@ function formatStep(step: AgentTurnTraceStep): string {
     step.executionMode ? `mode:${step.executionMode}` : undefined,
     step.stateAgeBucket ? `age:${step.stateAgeBucket}` : undefined,
     step.freshnessStatus ? `freshness:${step.freshnessStatus}` : undefined,
-    step.sourceRevision ? `revision:${step.sourceRevision}` : undefined
+    step.sourceRevision ? `revision:${step.sourceRevision}` : undefined,
+    typeof step.modelCallCount === "number" ? `models:${step.modelCallCount}` : undefined,
+    typeof step.toolCallCount === "number" ? `tools:${step.toolCallCount}` : undefined,
+    step.selectedToolNames?.length ? `toolNames:${step.selectedToolNames.join(",")}` : undefined,
+    step.contextEdited ? "contextEdited:true" : undefined,
+    step.summarized ? "summarized:true" : undefined,
+    step.finalStatus ? `final:${step.finalStatus}` : undefined
   ]
     .filter(Boolean)
     .join(":");

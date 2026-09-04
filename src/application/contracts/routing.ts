@@ -129,6 +129,14 @@ export interface RouteObserverEvent {
   latencyBucket?: string;
   clarificationCountBucket?: string;
   retry?: boolean;
+  modelCallCount?: number;
+  toolCallCount?: number;
+  estimatedInputTokens?: number;
+  estimatedOutputTokens?: number;
+  contextEdited?: boolean;
+  summarized?: boolean;
+  selectedToolNames?: string[];
+  finalStatus?: string;
 }
 
 export type RouteObserver = (event: RouteObserverEvent) => void | Promise<void>;

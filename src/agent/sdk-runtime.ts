@@ -28,36 +28,10 @@ export function createSdkAgent({
   toolCallLimit = 6,
   tools = []
 }: SdkAgentOptions) {
-  const executedToolCalls = new Set<string>();
   return createAgent({
     checkpointer,
     middleware: [
-      createMiddleware({
-        name: "ExactToolCallDeduplication",
-        wrapToolCall: async (request, handler) => {
-          if (!request.tool) throw new Error(`${request.toolCall.name} is not a valid tool`);
-          const key = JSON.stringify([request.toolCall.name, request.toolCall.args]);
-          if (executedToolCalls.has(key)) {
-            return new ToolMessage({
-              content: JSON.stringify({
-                status: "denied",
-                reason: "duplicate_tool_call",
-                instruction: "Use the previous result and do not repeat this tool call."
-              }),
-              tool_call_id: request.toolCall.id ?? key,
-              name: request.toolCall.name,
-              status: "error"
-            });
-          }
-          executedToolCalls.add(key);
-          try {
-            return await handler(request);
-          } catch (error) {
-            executedToolCalls.delete(key);
-            throw error;
-          }
-        }
-      }),
+      exactToolCallDeduplicationMiddleware(),
       modelCallLimitMiddleware({
         runLimit: modelCallLimit,
         exitBehavior: "error"
@@ -71,5 +45,35 @@ export function createSdkAgent({
     model,
     systemPrompt,
     tools
+  });
+}
+
+export function exactToolCallDeduplicationMiddleware() {
+  const executedToolCalls = new Set<string>();
+  return createMiddleware({
+    name: "ExactToolCallDeduplication",
+    wrapToolCall: async (request, handler) => {
+      if (!request.tool) throw new Error(`${request.toolCall.name} is not a valid tool`);
+      const key = JSON.stringify([request.toolCall.name, request.toolCall.args]);
+      if (executedToolCalls.has(key)) {
+        return new ToolMessage({
+          content: JSON.stringify({
+            status: "denied",
+            reason: "duplicate_tool_call",
+            instruction: "Use the previous result and do not repeat this tool call."
+          }),
+          tool_call_id: request.toolCall.id ?? key,
+          name: request.toolCall.name,
+          status: "error"
+        });
+      }
+      executedToolCalls.add(key);
+      try {
+        return await handler(request);
+      } catch (error) {
+        executedToolCalls.delete(key);
+        throw error;
+      }
+    }
   });
 }
