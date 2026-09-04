@@ -119,7 +119,11 @@ describe("helper agent state", () => {
     let now = new Date("2026-09-04T00:00:00.000Z");
     const state = createHelperAgentState(testStateOptions(new MemorySaver(), () => now));
 
-    await state.allowExternalSheetMusic("helper-a", new Date("2026-09-04T00:01:00.000Z"));
+    await state.allowExternalSheetMusic(
+      "helper-a",
+      { type: "group", groupId: "G1", userId: "U1" },
+      new Date("2026-09-04T00:01:00.000Z")
+    );
 
     expect(await state.externalSheetMusicAllowed("helper-a")).toBe(true);
     expect(await state.externalSheetMusicAllowed("helper-b")).toBe(false);

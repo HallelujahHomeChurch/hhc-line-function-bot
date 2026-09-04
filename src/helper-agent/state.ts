@@ -24,7 +24,7 @@ export interface HelperAgentState {
     task: () => Promise<T>;
   }): Promise<T>;
   reset(threadId: string): Promise<void>;
-  allowExternalSheetMusic(threadId: string, expiresAt: Date): Promise<void>;
+  allowExternalSheetMusic(threadId: string, source: LineSource, expiresAt: Date): Promise<void>;
   externalSheetMusicAllowed(threadId: string): Promise<boolean>;
 }
 
@@ -79,7 +79,7 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
           policyKeys
         })
       ),
-    async allowExternalSheetMusic(threadId, expiration) {
+    async allowExternalSheetMusic(threadId, _source, expiration) {
       externalSearchExpiresAt.set(threadId, expiration.getTime());
     },
     async externalSheetMusicAllowed(threadId) {
@@ -106,8 +106,8 @@ export function createPostgresHelperAgentState(
         alter table helper_agent_threads add column if not exists policy_key text
       `);
     },
-    run: (input) =>
-      withPgThreadLock(options.pool, input.threadId, async (client) => {
+    async run(input) {
+      const outcome = await withPgThreadLock(options.pool, input.threadId, async (client) => {
         const current = await client.query<{ expires_at: Date; policy_key: string | null }>(
           "select expires_at, policy_key from helper_agent_threads where thread_id = $1",
           [input.threadId]
@@ -136,26 +136,33 @@ export function createPostgresHelperAgentState(
               input.policyKey
             ]
           );
-          return result;
+          return { kind: "success" as const, result };
         } catch (error) {
           await options.checkpointer.deleteThread(input.threadId);
           await client.query("delete from helper_agent_threads where thread_id = $1", [
             input.threadId
           ]);
-          throw error;
+          return { kind: "failure" as const, error };
         }
-      }),
+      });
+      if (outcome.kind === "failure") throw outcome.error;
+      return outcome.result;
+    },
     reset: (threadId) =>
       withPgThreadLock(options.pool, threadId, async (client) => {
         await options.checkpointer.deleteThread(threadId);
         await client.query("delete from helper_agent_threads where thread_id = $1", [threadId]);
       }),
-    async allowExternalSheetMusic(threadId, expiration) {
-      await options.pool.query(
-        `insert into helper_agent_threads (thread_id, expires_at, external_search_expires_at)
+    async allowExternalSheetMusic(threadId, source, expiration) {
+      await withPgThreadLock(options.pool, threadId, (client) =>
+        client.query(
+          `insert into helper_agent_threads (thread_id, expires_at, external_search_expires_at)
          values ($1, $2, $3)
-         on conflict (thread_id) do update set external_search_expires_at = excluded.external_search_expires_at`,
-        [threadId, new Date(now().getTime() + 30 * 60_000), expiration]
+         on conflict (thread_id) do update
+         set expires_at = excluded.expires_at,
+             external_search_expires_at = excluded.external_search_expires_at`,
+          [threadId, new Date(now().getTime() + helperThreadIdleTtlMs(source)), expiration]
+        )
       );
     },
     async externalSheetMusicAllowed(threadId) {

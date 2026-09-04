@@ -113,7 +113,8 @@ const MATRIX_FAILURE_CODES = new Set([
   "sdk_thread_metadata_not_deleted",
   "helper_direct_ttl_invalid",
   "helper_group_ttl_invalid",
-  "helper_checkpoint_not_deleted"
+  "helper_checkpoint_not_deleted",
+  "helper_failed_run_metadata_retained"
 ]);
 
 function boundedFailureCode(error: unknown): string {
@@ -208,6 +209,8 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
     source: { type: "group", groupId: "kernel-group", userId: "kernel-group-user" }
   });
   if (!direct || !group) throw new Error("helper_checkpoint_not_deleted");
+  const groupSource = { type: "group", groupId: "kernel-group", userId: "kernel-group-user" };
+  await state.allowExternalSheetMusic(group, groupSource, new Date("2026-09-04T00:01:00.000Z"));
 
   const invoke = (threadId: string, source: { type: string; userId: string; groupId?: string }) =>
     state.run({
@@ -225,11 +228,7 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
     });
 
   await invoke(direct, { type: "user", userId: "kernel-direct-user" });
-  await invoke(group, {
-    type: "group",
-    groupId: "kernel-group",
-    userId: "kernel-group-user"
-  });
+  await invoke(group, groupSource);
   const metadata = await pool.query<{ thread_id: string; expires_at: Date }>(
     "select thread_id, expires_at from helper_agent_threads where thread_id = any($1::text[])",
     [[direct, group]]
@@ -247,6 +246,40 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
     group
   ]);
   if (checkpoint.rowCount) throw new Error("helper_checkpoint_not_deleted");
+
+  const failed = state.threadId({
+    profileName: PROFILE,
+    source: { type: "group", groupId: "kernel-failed-group", userId: "kernel-failed-user" }
+  });
+  if (!failed) throw new Error("helper_failed_run_metadata_retained");
+  const failedSource = {
+    type: "group",
+    groupId: "kernel-failed-group",
+    userId: "kernel-failed-user"
+  };
+  await invoke(failed, failedSource);
+  await state.allowExternalSheetMusic(failed, failedSource, new Date("2026-09-04T00:01:00.000Z"));
+  try {
+    await state.run({
+      threadId: failed,
+      policyKey: "kernel-policy-v1",
+      source: failedSource,
+      task: async () => {
+        throw new Error("kernel_expected_failure");
+      }
+    });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "kernel_expected_failure") {
+      throw error;
+    }
+  }
+  const [failedMetadata, failedCheckpoint] = await Promise.all([
+    pool.query("select 1 from helper_agent_threads where thread_id = $1", [failed]),
+    pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [failed])
+  ]);
+  if (failedMetadata.rowCount || failedCheckpoint.rowCount) {
+    throw new Error("helper_failed_run_metadata_retained");
+  }
 }
 
 async function installCatalogOverlapTrigger(pool: KernelPgPool): Promise<void> {
