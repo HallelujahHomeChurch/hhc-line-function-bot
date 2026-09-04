@@ -6,6 +6,8 @@ import { createSdkAgentState } from "../agent/sdk-state.js";
 import { createSdkAgentTurnRuntime } from "../agent/sdk-turn-runtime.js";
 import type { AgentTurnRuntime } from "../agent/turn-runtime.js";
 import { InMemorySessionStore } from "../state/session-store.js";
+import { InMemoryLastErrorStore } from "../observability/last-error-store.js";
+import { createSupportId } from "../observability/opaque-identifiers.js";
 import type { BotProfileConfig, FunctionRegistry, LineEvent } from "../types.js";
 
 function profile(name: "helper" | "main" = "helper"): BotProfileConfig {
@@ -49,6 +51,37 @@ function state() {
 }
 
 describe("SDK agent turn runtime", () => {
+  it("records provider failures under the reply support id", async () => {
+    const errors = new InMemoryLastErrorStore(10);
+    const model = new FakeToolCallingModel({ toolCalls: [[]] });
+    vi.spyOn(model, "bindTools").mockReturnValue(model);
+    vi.spyOn(model, "_generate").mockRejectedValue(new Error("provider failed"));
+    const runtime = createSdkAgentTurnRuntime({
+      fallback: { handleTextTurn: vi.fn(async () => undefined) },
+      functionRegistry: { query_schedule: vi.fn() },
+      lastErrorStore: errors,
+      model,
+      state: state()
+    });
+
+    const result = await runtime.handleTextTurn({
+      profile: profile(),
+      configuredFunctions: ["query_schedule"],
+      event: event(),
+      requestId: "request-provider-failure"
+    });
+
+    expect(result?.replyText).toContain(createSupportId("request-provider-failure"));
+    await expect(errors.list()).resolves.toEqual([
+      expect.objectContaining({
+        supportId: createSupportId("request-provider-failure"),
+        phase: "router",
+        errorName: "Error",
+        message: "redacted"
+      })
+    ]);
+  });
+
   it("keeps main on its provider-free fallback", async () => {
     const fallbackResult = { ok: true, replyText: "main result" };
     const fallback: AgentTurnRuntime = {

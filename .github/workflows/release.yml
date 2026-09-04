@@ -68,9 +68,9 @@ jobs:
       LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}
       RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Sign in to Azure with OIDC
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -88,7 +88,7 @@ jobs:
             --file Dockerfile \
             .
       - name: Refresh Azure OIDC session before deploy
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -117,7 +117,7 @@ jobs:
           echo "image=${live_image}" >> "${GITHUB_OUTPUT}"
       - name: Upload release assurance report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-assurance-${{ github.run_id }}
           path: artifacts/release-assurance/report.json
@@ -139,7 +139,7 @@ jobs:
       RELEASE_IMAGE: ${{ needs.release.outputs.image }}
       FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Validate publication configuration
         shell: bash
         run: |
@@ -147,7 +147,7 @@ jobs:
             test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
           done
       - name: Sign in with API docs publisher identity
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}

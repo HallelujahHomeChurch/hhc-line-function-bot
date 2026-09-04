@@ -49,9 +49,13 @@ export function createSdkAgent({
               status: "error"
             });
           }
-          const result = await handler(request);
-          if (ToolMessage.isInstance(result)) executedToolCalls.add(key);
-          return result;
+          executedToolCalls.add(key);
+          try {
+            return await handler(request);
+          } catch (error) {
+            executedToolCalls.delete(key);
+            throw error;
+          }
         }
       }),
       modelCallLimitMiddleware({

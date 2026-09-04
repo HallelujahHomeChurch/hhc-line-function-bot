@@ -124,6 +124,9 @@ export const queryScheduleArgumentsSchema = z
       });
     }
   });
+export const queryScheduleAgentArgumentsSchema = queryScheduleArgumentsSchema
+  .safeExtend({ limit: z.number().int().min(1).max(10).optional() })
+  .strict();
 
 export const findPopSheetMusicArgumentsSchema = z
   .object({

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ChatDeepSeek } from "@langchain/deepseek";
 
 import { createSdkFunctionTools } from "../agent/sdk-tools.js";
 import type { BotProfileConfig, FunctionHandlerContext, FunctionRegistry } from "../types.js";
@@ -44,6 +45,31 @@ function profileWith(enabledFunctions: BotProfileConfig["enabledFunctions"]): Bo
 }
 
 describe("SDK function tools", () => {
+  it("converts the full helper tool surface to provider JSON schemas", () => {
+    const enabledFunctions = [
+      "query_schedule",
+      "query_wikipedia",
+      "save_schedule",
+      "save_memory",
+      "save_resource",
+      "query_knowledge",
+      "retrieve_memory",
+      "find_ppt_slides",
+      "find_sheet_music",
+      "find_resource"
+    ] as const;
+    const toolContext = context();
+    toolContext.profile = profileWith([...enabledFunctions]);
+    const functionRegistry = Object.fromEntries(
+      enabledFunctions.map((name) => [name, vi.fn()])
+    ) as FunctionRegistry;
+
+    const tools = createSdkFunctionTools({ context: toolContext, functionRegistry });
+
+    const model = new ChatDeepSeek({ apiKey: "test", model: "deepseek-v4-flash" });
+    expect(() => model.bindTools(tools)).not.toThrow();
+  });
+
   it("exposes only configured, enabled functions", () => {
     const registry: FunctionRegistry = {
       query_schedule: vi.fn(),

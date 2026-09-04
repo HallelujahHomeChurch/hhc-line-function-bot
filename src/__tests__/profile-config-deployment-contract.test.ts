@@ -760,17 +760,17 @@ describe("production profile configuration deployment contract", () => {
     expect(releaseWorkflow).toContain(
       "RELEASE_REPORT_PATH: artifacts/release-assurance/report.json"
     );
-    expect(releaseWorkflow).toContain("uses: actions/upload-artifact@v4");
+    expect(releaseWorkflow).toContain("uses: actions/upload-artifact@v6");
     expect(releaseWorkflow).toContain("if: always()");
     expect(releaseWorkflow).toContain("path: artifacts/release-assurance/report.json");
     expect(releaseWorkflow).toContain("if-no-files-found: error");
     expect(releaseWorkflow).not.toContain("pnpm ");
-    const azureLoginSteps = [...releaseWorkflow.matchAll(/uses: azure\/login@v2/gu)];
+    const azureLoginSteps = [...releaseWorkflow.matchAll(/uses: azure\/login@v3/gu)];
     const finalImageBuild = releaseWorkflow.lastIndexOf("az acr build");
     const refreshedLogin = azureLoginSteps.at(1)?.index ?? -1;
     const docsLogin = azureLoginSteps.at(2)?.index ?? -1;
     const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
-    const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v4");
+    const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v6");
     expect(azureLoginSteps).toHaveLength(3);
     expect(finalImageBuild).toBeGreaterThanOrEqual(0);
     expect(refreshedLogin).toBeGreaterThan(finalImageBuild);
@@ -787,7 +787,7 @@ describe("production profile configuration deployment contract", () => {
     expect(workflow).toContain('cron: "30 20 * * 1"');
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).toContain("permissions:\n  contents: read\n  id-token: write");
-    expect(workflow).toContain("uses: azure/login@v2");
+    expect(workflow).toContain("uses: azure/login@v3");
     expect(workflow).toContain("client-id: ${{ vars.AZURE_CLIENT_ID }}");
     expect(workflow).toContain("tenant-id: ${{ vars.AZURE_TENANT_ID }}");
     expect(workflow).toContain("subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}");
@@ -797,14 +797,14 @@ describe("production profile configuration deployment contract", () => {
     expect(workflow).toContain(
       "PERIODIC_REPORT_PATH: artifacts/release-assurance/periodic-report.json"
     );
-    expect(workflow).toContain("uses: actions/upload-artifact@v4");
+    expect(workflow).toContain("uses: actions/upload-artifact@v6");
     expect(workflow).toContain("path: artifacts/release-assurance/periodic-report.json");
     expect(workflow).not.toMatch(/containerapp (?:update|revision|ingress)/);
     expect(workflow).not.toMatch(/deepseek|embedding|eval:agent:live/iu);
-    const login = workflow.indexOf("uses: azure/login@v2");
+    const login = workflow.indexOf("uses: azure/login@v3");
     const extension = workflow.indexOf("az extension add --name containerapp");
     const runner = workflow.indexOf("bash scripts/run-periodic-assurance.sh");
-    const upload = workflow.indexOf("uses: actions/upload-artifact@v4");
+    const upload = workflow.indexOf("uses: actions/upload-artifact@v6");
     const runnerStepStart = workflow.lastIndexOf("- name:", runner);
     const uploadStepStart = workflow.lastIndexOf("- name:", upload);
     const runnerStep = workflow.slice(runnerStepStart, uploadStepStart);

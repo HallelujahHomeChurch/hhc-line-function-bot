@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
 import type { PublicPageReader } from "../clients/public-page.js";
 import {
+  queryScheduleAgentArgumentsSchema,
   saveMemoryAgentArgumentsSchema,
   saveResourceAgentArgumentsSchema,
   saveScheduleAgentArgumentsSchema
@@ -45,7 +46,8 @@ const fileFunctions = {
   sheet_music: "find_sheet_music",
   resource: "find_resource"
 } as const satisfies Record<string, FunctionName>;
-const writeSchemas = {
+const agentArgumentSchemas = {
+  query_schedule: queryScheduleAgentArgumentsSchema,
   save_schedule: saveScheduleAgentArgumentsSchema,
   save_memory: saveMemoryAgentArgumentsSchema,
   save_resource: saveResourceAgentArgumentsSchema
@@ -68,8 +70,8 @@ function createDirectTool(options: SdkFunctionToolsOptions, functionName: Functi
   const definition = availableDefinition(options, functionName);
   if (!definition || !(definition.argumentSchema instanceof z.ZodObject)) return [];
   const schema =
-    functionName in writeSchemas
-      ? writeSchemas[functionName as keyof typeof writeSchemas]
+    functionName in agentArgumentSchemas
+      ? agentArgumentSchemas[functionName as keyof typeof agentArgumentSchemas]
       : definition.argumentSchema.strict();
   return [
     tool((args) => executeFunction(options, functionName, args as JsonRecord), {

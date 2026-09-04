@@ -121,6 +121,34 @@ describe("SDK agent runtime", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
+  it("executes parallel identical tool calls only once", async () => {
+    const execute = vi.fn(async () => ({ status: "success", value: "Taiwan" }));
+    const queryWikipedia = tool(execute, {
+      name: "query_wikipedia",
+      description: "Query Wikipedia.",
+      schema: z.object({ query: z.string() }).strict()
+    });
+    const agent = createSdkAgent({
+      model: new FakeToolCallingModel({
+        toolCalls: [
+          [
+            { name: "query_wikipedia", args: { query: "Taiwan" }, id: "wiki-1" },
+            { name: "query_wikipedia", args: { query: "Taiwan" }, id: "wiki-2" }
+          ],
+          []
+        ]
+      }),
+      tools: [queryWikipedia]
+    });
+
+    await agent.invoke(
+      { messages: [{ role: "user", content: "Taiwan" }] },
+      config("sdk-parallel-dedup")
+    );
+
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it("never executes a tool that was not exposed", async () => {
     const agent = createSdkAgent({
       model: new FakeToolCallingModel({
