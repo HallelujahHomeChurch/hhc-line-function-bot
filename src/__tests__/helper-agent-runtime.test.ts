@@ -884,7 +884,7 @@ describe("helper profile runtime", () => {
     expect(prompt).toContain("group");
   });
 
-  it("constructs response and summary models with one budgeted transport and 800 output tokens", () => {
+  it("constructs non-thinking response and summary models with one budgeted transport and 800 output tokens", () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const models = createHelperModels({
       apiKey: "test",
@@ -896,6 +896,12 @@ describe("helper profile runtime", () => {
 
     expect(models.model.maxTokens).toBe(800);
     expect(models.summaryModel.maxTokens).toBe(800);
+    expect(models.model.invocationParams()).toMatchObject({
+      thinking: { type: "disabled" }
+    });
+    expect(models.summaryModel.invocationParams()).toMatchObject({
+      thinking: { type: "disabled" }
+    });
     expect(models.model.clientConfig.fetch).toBe(models.summaryModel.clientConfig.fetch);
     expect(models.model.clientConfig.fetch).not.toBe(fetchImpl);
     expect(fetchImpl).not.toHaveBeenCalled();

@@ -82,6 +82,7 @@ export function createHelperModels(options: HelperModelOptions) {
     temperature: 0,
     maxTokens: 800,
     maxRetries: 1,
+    modelKwargs: { thinking: { type: "disabled" } },
     timeout: options.timeoutMs,
     configuration: { baseURL: options.baseUrl, fetch: budgetedFetch }
   } as const;

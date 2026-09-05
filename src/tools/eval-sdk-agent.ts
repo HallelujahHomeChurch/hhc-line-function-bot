@@ -934,6 +934,7 @@ function createLiveModel(apiKey: string, probe: ReturnType<typeof createEvalProb
     temperature: 0,
     maxTokens: 800,
     maxRetries: 1,
+    modelKwargs: { thinking: { type: "disabled" } },
     timeout: 8_000,
     callbacks: probe.callbacks,
     configuration: { baseURL: "https://api.deepseek.com", fetch: createBudgetedFetch() }
