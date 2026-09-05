@@ -1018,7 +1018,7 @@ function success(kind: string) {
 }
 
 function schedulePolicy(domains: ScheduleDomainConfig[]) {
-  return { meetingWindows: [], domains };
+  return { meetingReferences: [], domains };
 }
 
 function writeResult(commit: boolean): FunctionExecutionResult {

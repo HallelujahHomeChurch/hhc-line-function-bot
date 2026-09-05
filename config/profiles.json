@@ -48,48 +48,30 @@
       "conversationWindowSeconds": 60
     },
     "schedulePolicy": {
-      "meetingWindows": [
+      "meetingReferences": [
         {
-          "key": "morning_prayer",
-          "aliases": ["晨更"],
-          "weekdays": [2, 5],
-          "start": "06:30",
-          "end": "08:30"
+          "key": "morning-prayer",
+          "aliases": ["晨更"]
         },
         {
           "key": "cinderella",
-          "aliases": ["仙履奇緣"],
-          "weekdays": [4],
-          "start": "06:30",
-          "end": "09:00"
+          "aliases": ["仙履奇緣"]
         },
         {
-          "key": "gospel_meal",
-          "aliases": ["福音餐會"],
-          "weekdays": [4],
-          "start": "12:00",
-          "end": "14:00"
+          "key": "gospel-meal",
+          "aliases": ["福音餐會"]
         },
         {
-          "key": "discipleship_prayer",
-          "aliases": ["門訓禱告會"],
-          "weekdays": [5],
-          "start": "19:00",
-          "end": "21:30"
+          "key": "discipleship-prayer",
+          "aliases": ["門訓禱告會"]
         },
         {
-          "key": "kingdom_prayer",
-          "aliases": ["國度禱告會"],
-          "weekdays": [6],
-          "start": "09:00",
-          "end": "11:30"
+          "key": "kingdom-prayer",
+          "aliases": ["國度禱告會"]
         },
         {
           "key": "sunday",
-          "aliases": ["主日"],
-          "weekdays": [0],
-          "start": "09:00",
-          "end": "12:00"
+          "aliases": ["主日"]
         }
       ]
     },

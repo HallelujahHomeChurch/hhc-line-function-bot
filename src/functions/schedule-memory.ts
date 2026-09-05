@@ -1,3 +1,4 @@
+import type { ReadMeetingOccurrences, MeetingOccurrence } from "../clients/meeting-occurrences.js";
 import {
   queryScheduleMemoryArgumentsSchema,
   saveScheduleMemoryArgumentsSchema,
@@ -14,7 +15,7 @@ import { normalizeLookupText } from "../agent/memory-store.js";
 import type { FunctionExecutionResult, FunctionHandler, FunctionHandlerContext } from "../types.js";
 import { resolveScheduleResultRows, scheduleResultEnvelope } from "./schedule-result.js";
 import { selectFirstUpcomingOccurrence } from "../schedules/occurrence-policy.js";
-import type { MeetingWindowRule } from "../types.js";
+import type { MeetingReference } from "../types.js";
 import { readTimeZone } from "../time-zone.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "../schedules/domain-registry.js";
 import { resolveScheduleDomain } from "../schedules/domain-registry.js";
@@ -36,6 +37,7 @@ export interface ParseScheduleMemoryContentInput {
 }
 
 export interface ScheduleMemoryFunctionOptions {
+  readMeetingOccurrences?: ReadMeetingOccurrences;
   memoryStore: AgentMemoryStore;
   now?: () => Date;
   timeZone?: string;
@@ -417,8 +419,11 @@ export function createQueryScheduleMemoryHandler(
       args,
       now(),
       undefined,
-      context.profile.schedulePolicy?.meetingWindows,
-      timeZone
+      context.profile.schedulePolicy?.meetingReferences,
+      timeZone,
+      args.dateIntent === "next_meeting"
+        ? ((await options.readMeetingOccurrences?.(now())) ?? [])
+        : []
     );
     const roleResolution = resolveScheduleResultRows(entries, args.role);
     entries =
@@ -682,8 +687,9 @@ function applyScheduleDateIntent(
   args: QueryScheduleMemoryArguments,
   now: Date,
   afterDate?: string,
-  meetingWindows?: MeetingWindowRule[],
-  timeZone = "UTC"
+  meetingReferences?: MeetingReference[],
+  timeZone = "UTC",
+  occurrences: MeetingOccurrence[] = []
 ): AgentScheduleEntryRecord[] {
   const today = toDateKey(now);
   switch (args.dateIntent) {
@@ -699,8 +705,13 @@ function applyScheduleDateIntent(
         rows: candidates,
         now,
         timeZone,
-        meetingWindows
-      }).map(({ entry }) => entry);
+        meetingReferences,
+        occurrences
+      }).map(({ entry, serviceDate, meeting }) => ({
+        ...entry,
+        serviceDate,
+        meetingName: meeting
+      }));
     }
     case "upcoming":
       return entries.filter((entry) => entry.serviceDate >= today);

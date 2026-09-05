@@ -1,3 +1,7 @@
+import type {
+  ReadMeetingOccurrences,
+  MeetingOccurrence
+} from "../../clients/meeting-occurrences.js";
 import {
   queryScheduleArgumentsSchema,
   type QueryScheduleArguments,
@@ -28,8 +32,11 @@ import {
   resolveScheduleResultRows,
   scheduleResultEnvelope
 } from "../../functions/schedule-result.js";
-import { selectFirstUpcomingOccurrence } from "../../schedules/occurrence-policy.js";
-import type { MeetingWindowRule } from "../../types.js";
+import {
+  selectFirstUpcomingOccurrence,
+  includeMovedOccurrenceDates
+} from "../../schedules/occurrence-policy.js";
+import type { MeetingReference } from "../../types.js";
 import { resolveScheduleDomain, scheduleDomainChoices } from "../../functions/schedule-resolver.js";
 import type { ScheduleDomainConfig } from "../../types.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "../../schedules/domain-registry.js";
@@ -40,6 +47,7 @@ const DEFAULT_MEDIA_SOURCE_KEYS = (() => {
 })();
 
 export interface QueryScheduleFunctionOptions {
+  readMeetingOccurrences?: ReadMeetingOccurrences;
   memoryStore: AgentMemoryStore;
   scheduleStore?: ScheduleStore;
   notion?: NotionDatabaseClient;
@@ -88,7 +96,8 @@ async function queryScheduleDomain(input: {
         timeZone: input.timeZone,
         afterDate: input.afterDate,
         sourceKeys: input.domain.binding.sourceKeys,
-        meetingWindows: input.context.profile.schedulePolicy?.meetingWindows
+        meetingReferences: input.context.profile.schedulePolicy?.meetingReferences,
+        readMeetingOccurrences: input.options.readMeetingOccurrences
       })
     : undefined;
   if (readModel && !isNoScheduleResult(readModel.replyText)) {
@@ -159,6 +168,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
   const timeZone = readTimeZone(options.timeZone, "timeZone");
   const memoryHandler = createQueryScheduleMemoryHandler({
     memoryStore: options.memoryStore,
+    readMeetingOccurrences: options.readMeetingOccurrences,
     now,
     timeZone
   });
@@ -166,6 +176,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
     options.notion && options.databaseId && options.properties
       ? createQueryServiceScheduleHandler({
           notion: options.notion,
+          readMeetingOccurrences: options.readMeetingOccurrences,
           databaseId: options.databaseId,
           properties: options.properties,
           timeZone: options.timeZone,
@@ -346,10 +357,16 @@ async function queryScheduleReadModel(input: {
   afterDate?: string;
   availableRoles?: string[];
   sourceKeys?: string[];
-  meetingWindows?: MeetingWindowRule[];
+  meetingReferences?: MeetingReference[];
+  readMeetingOccurrences?: ReadMeetingOccurrences;
 }): Promise<Awaited<ReturnType<FunctionHandler>>> {
   const serviceArgs = input.args as QueryServiceScheduleArguments;
   const filters = deriveFilters(serviceArgs, input.now, input.timeZone);
+  const occurrences = filters.nextMeetingOnly
+    ? ((await input.readMeetingOccurrences?.(input.now)) ?? [])
+    : [];
+  if (filters.nextMeetingOnly)
+    filters.range = includeMovedOccurrenceDates(filters.range, occurrences, input.now);
   const rows = await input.scheduleStore.searchItems({
     profileName: input.profileName,
     sourceKeys: input.sourceKeys,
@@ -368,7 +385,13 @@ async function queryScheduleReadModel(input: {
         : (filters.limit ?? 10)
   });
   const meetingRows = filters.nextMeetingOnly
-    ? limitToFirstReadModelGroup(rows, input.now, input.timeZone, input.meetingWindows)
+    ? limitToFirstReadModelGroup(
+        rows,
+        input.now,
+        input.timeZone,
+        input.meetingReferences,
+        occurrences
+      )
     : rows;
   const roleResolution = resolveScheduleResultRows(meetingRows, filters.role);
   const limitedRows =
@@ -436,7 +459,8 @@ function limitToFirstReadModelGroup<T extends { serviceDate: string; meeting: st
   rows: T[],
   now: Date,
   timeZone: string,
-  meetingWindows?: MeetingWindowRule[]
+  meetingReferences: MeetingReference[] | undefined,
+  occurrences: MeetingOccurrence[]
 ): T[] {
-  return selectFirstUpcomingOccurrence({ rows, now, timeZone, meetingWindows });
+  return selectFirstUpcomingOccurrence({ rows, now, timeZone, meetingReferences, occurrences });
 }

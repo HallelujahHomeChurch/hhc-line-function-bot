@@ -1,3 +1,4 @@
+import { readTestMeetingOccurrences } from "../testing/meeting-occurrences.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -686,7 +687,7 @@ describe("query_schedule", () => {
         {
           id: "next-service",
           properties: {
-            date: { type: "date", date: { start: "2026-07-20" } },
+            date: { type: "date", date: { start: "2026-07-19" } },
             meeting: { type: "rich_text", rich_text: [{ plain_text: "主日" }] },
             role: { type: "rich_text", rich_text: [{ plain_text: "音控" }] },
             person: { type: "rich_text", rich_text: [{ plain_text: "測試同工" }] }
@@ -695,6 +696,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "database-id",
       properties: {
@@ -708,7 +710,7 @@ describe("query_schedule", () => {
 
     const result = await handler({ query: "服事表" }, personalizedHandlerContext());
 
-    expect(result.replyText).toContain("7月20日");
+    expect(result.replyText).toContain("7月19日");
     expect(result.replyText).toContain("測試同工");
     expect(notion.queryDatabase).toHaveBeenCalledOnce();
   });
@@ -728,6 +730,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -760,6 +763,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -805,6 +809,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -847,6 +852,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -904,6 +910,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -957,6 +964,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1004,6 +1012,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1051,6 +1060,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1098,6 +1108,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1145,6 +1156,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1168,7 +1180,7 @@ describe("query_schedule", () => {
     expect(result.replyText).not.toContain("Sunday");
   });
 
-  it("uses explicit Notion datetime instead of inferred meeting windows", async () => {
+  it("uses central meeting timing instead of a conflicting Notion datetime", async () => {
     const notion: NotionDatabaseClient = {
       queryDatabase: vi.fn().mockResolvedValue([
         {
@@ -1198,6 +1210,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1216,9 +1229,9 @@ describe("query_schedule", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toContain("7月9日(四) 福音餐會");
-    expect(result.replyText).toContain("ExplicitEvening");
-    expect(result.replyText).not.toContain("NextDay");
+    expect(result.replyText).toContain("7月10日(五) 門訓禱告會");
+    expect(result.replyText).not.toContain("ExplicitEvening");
+    expect(result.replyText).toContain("NextDay");
   });
 
   it("uses structured next-meeting metadata even when the query text is generic", async () => {
@@ -1248,6 +1261,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1313,6 +1327,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1385,6 +1400,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1439,6 +1455,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1492,6 +1509,7 @@ describe("query_schedule", () => {
       ])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {
@@ -1527,6 +1545,7 @@ describe("query_schedule", () => {
       queryDatabase: vi.fn().mockResolvedValue([])
     };
     const handler = createQueryServiceScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       notion,
       databaseId: "notion-db",
       properties: {

@@ -26,7 +26,7 @@ const profile: BotProfileConfig = {
   allowedProviders: [],
   allowSubscriptionProviders: false,
   providerPolicy: {},
-  schedulePolicy: { meetingWindows: [], domains: [] }
+  schedulePolicy: { meetingReferences: [], domains: [] }
 };
 
 describe("main provider-free direct functions", () => {

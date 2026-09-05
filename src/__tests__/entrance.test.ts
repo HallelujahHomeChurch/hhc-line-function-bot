@@ -259,7 +259,7 @@ function providerFreeMainConfig(): AppConfig {
       allowedProviders: [],
       allowSubscriptionProviders: false,
       providerPolicy: {},
-      schedulePolicy: { meetingWindows: [], domains: [] },
+      schedulePolicy: { meetingReferences: [], domains: [] },
       generalAgent: { enabled: false, conversationWindowSeconds: 60 }
     }
   ];

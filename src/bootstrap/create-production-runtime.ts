@@ -1,3 +1,4 @@
+import { createMeetingOccurrenceReader } from "../clients/meeting-occurrences.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 
@@ -269,6 +270,9 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     config: config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
   });
   const registries = composeCapabilities(config, {
+    readMeetingOccurrences: createMeetingOccurrenceReader({
+      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method"
+    }),
     accountAdminClient,
     graph,
     notion,

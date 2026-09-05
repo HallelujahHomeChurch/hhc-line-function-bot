@@ -1,3 +1,4 @@
+import { readTestMeetingOccurrences } from "../testing/meeting-occurrences.js";
 import { describe, expect, it } from "vitest";
 
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
@@ -161,7 +162,7 @@ describe("schedule memory", () => {
         ...context(),
         profile: {
           ...profile(),
-          schedulePolicy: { meetingWindows: [], domains: DEFAULT_SCHEDULE_DOMAINS }
+          schedulePolicy: { meetingReferences: [], domains: DEFAULT_SCHEDULE_DOMAINS }
         }
       }
     );
@@ -182,7 +183,7 @@ describe("schedule memory", () => {
         ...context(),
         profile: {
           ...profile(),
-          schedulePolicy: { meetingWindows: [], domains: DEFAULT_SCHEDULE_DOMAINS }
+          schedulePolicy: { meetingReferences: [], domains: DEFAULT_SCHEDULE_DOMAINS }
         }
       }
     );
@@ -195,6 +196,7 @@ describe("schedule memory", () => {
     });
     const save = createSaveScheduleMemoryHandler({ memoryStore: store });
     const query = createQueryScheduleMemoryHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: store,
       now: () => new Date("2026-07-20T00:00:00.000Z")
     });
@@ -202,7 +204,7 @@ describe("schedule memory", () => {
       ...context("保存兒童主日服事"),
       profile: {
         ...profile(),
-        schedulePolicy: { meetingWindows: [], domains: DEFAULT_SCHEDULE_DOMAINS }
+        schedulePolicy: { meetingReferences: [], domains: DEFAULT_SCHEDULE_DOMAINS }
       }
     };
     const saved = await save({ content: "7/26 兒童主日 主領：Ray", confirm: true }, ctx);
@@ -223,7 +225,10 @@ describe("schedule memory", () => {
       memoryStore: store,
       now: () => new Date("2026-07-09T00:00:00.000Z")
     });
-    const query = createQueryScheduleMemoryHandler({ memoryStore: store });
+    const query = createQueryScheduleMemoryHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
+      memoryStore: store
+    });
 
     await save(
       { content: morningPrayerText, scheduleType: "morning_prayer_family", confirm: true },
