@@ -1,15 +1,20 @@
+import type { ReadMeetingOccurrences, MeetingOccurrence } from "../clients/meeting-occurrences.js";
 import {
   queryServiceScheduleArgumentsSchema,
   type QueryServiceScheduleArguments
 } from "../function-arguments.js";
 import { readTimeZone } from "../time-zone.js";
-import { selectFirstUpcomingOccurrence } from "../schedules/occurrence-policy.js";
-import type { MeetingWindowRule } from "../types.js";
+import {
+  selectFirstUpcomingOccurrence,
+  includeMovedOccurrenceDates
+} from "../schedules/occurrence-policy.js";
+import type { MeetingReference } from "../types.js";
 import type { FunctionHandler, JsonRecord, NotionDatabaseClient } from "../types.js";
 import { normalizeNotionSchedulePage } from "../schedules/notion-adapter.js";
 import { resolveScheduleResultRows, scheduleResultEnvelope } from "./schedule-result.js";
 
 export interface QueryServiceScheduleOptions {
+  readMeetingOccurrences?: ReadMeetingOccurrences;
   notion: NotionDatabaseClient;
   databaseId: string;
   properties: {
@@ -52,6 +57,11 @@ export function createQueryServiceScheduleHandler(
     const args = queryServiceScheduleArgumentsSchema.parse(rawArgs);
 
     const derivedFilters = deriveFilters(args, now(), timeZone);
+    const occurrences = derivedFilters.nextMeetingOnly
+      ? ((await options.readMeetingOccurrences?.(now())) ?? [])
+      : [];
+    if (derivedFilters.nextMeetingOnly)
+      derivedFilters.range = includeMovedOccurrenceDates(derivedFilters.range, occurrences, now());
     const pages = await options.notion.queryDatabase(
       options.databaseId,
       buildNotionQuery(derivedFilters, options.properties.date)
@@ -86,7 +96,8 @@ export function createQueryServiceScheduleHandler(
           filteredRows,
           now(),
           timeZone,
-          context.profile.schedulePolicy?.meetingWindows
+          context.profile.schedulePolicy?.meetingReferences,
+          occurrences
         )
       : filteredRows;
     const roleResolution = resolveScheduleResultRows(meetingRows, derivedFilters.role);
@@ -251,7 +262,8 @@ function limitToFirstUpcomingGroup(
   rows: ServiceRow[],
   now: Date,
   timeZone: string,
-  meetingWindows?: MeetingWindowRule[]
+  meetingReferences: MeetingReference[] | undefined,
+  occurrences: MeetingOccurrence[]
 ): ServiceRow[] {
   const candidates = rows.map((row) => ({
     serviceDate: row.date,
@@ -262,8 +274,9 @@ function limitToFirstUpcomingGroup(
     rows: candidates,
     now,
     timeZone,
-    meetingWindows
-  }).map(({ row }) => row);
+    meetingReferences,
+    occurrences
+  }).map(({ row, serviceDate, meeting }) => ({ ...row, date: serviceDate, meeting }));
 }
 
 function upcomingRange(now: Date, timeZone: string): NonNullable<DerivedFilters["range"]> {

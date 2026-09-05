@@ -34,7 +34,7 @@ function profile(): BotProfileConfig {
     permissionRequiredFunctions: ["save_schedule", "save_memory", "save_resource"],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: [] }
+    schedulePolicy: { meetingReferences: [], domains: [] }
   };
 }
 

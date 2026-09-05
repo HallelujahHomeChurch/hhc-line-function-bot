@@ -19,7 +19,7 @@ function turnInput(name: string) {
     permissionRequiredFunctions: [],
     allowedProviders: [],
     allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: [] }
+    schedulePolicy: { meetingReferences: [], domains: [] }
   };
   const event: LineEvent = {
     type: "message",

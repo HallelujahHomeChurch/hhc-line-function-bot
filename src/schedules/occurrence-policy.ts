@@ -1,18 +1,13 @@
-import type { MeetingWindowRule } from "../types.js";
+import type { MeetingOccurrence } from "../clients/meeting-occurrences.js";
+import type { MeetingReference } from "../types.js";
 
-export const DEFAULT_MEETING_WINDOWS: MeetingWindowRule[] = [
-  { key: "morning_prayer", aliases: ["晨更"], weekdays: [2, 5], start: "06:30", end: "08:30" },
-  { key: "cinderella", aliases: ["仙履奇緣"], weekdays: [4], start: "06:30", end: "09:00" },
-  { key: "gospel_meal", aliases: ["福音餐會"], weekdays: [4], start: "12:00", end: "14:00" },
-  {
-    key: "discipleship_prayer",
-    aliases: ["門訓禱告會"],
-    weekdays: [5],
-    start: "19:00",
-    end: "21:30"
-  },
-  { key: "kingdom_prayer", aliases: ["國度禱告會"], weekdays: [6], start: "09:00", end: "11:30" },
-  { key: "sunday", aliases: ["主日"], weekdays: [0], start: "09:00", end: "12:00" }
+export const DEFAULT_MEETING_REFERENCES: MeetingReference[] = [
+  { key: "morning-prayer", aliases: ["晨更"] },
+  { key: "cinderella", aliases: ["仙履奇緣"] },
+  { key: "gospel-meal", aliases: ["福音餐會"] },
+  { key: "discipleship-prayer", aliases: ["門訓禱告會"] },
+  { key: "kingdom-prayer", aliases: ["國度禱告會"] },
+  { key: "sunday", aliases: ["主日"] }
 ];
 
 export interface ScheduleOccurrenceRow {
@@ -24,7 +19,8 @@ export function selectFirstUpcomingOccurrence<T extends ScheduleOccurrenceRow>(i
   rows: T[];
   now: Date;
   timeZone: string;
-  meetingWindows?: MeetingWindowRule[];
+  meetingReferences?: MeetingReference[];
+  occurrences: MeetingOccurrence[];
 }): T[] {
   const groups = groupRows(input.rows);
   const today = dateKey(input.now, input.timeZone);
@@ -33,17 +29,27 @@ export function selectFirstUpcomingOccurrence<T extends ScheduleOccurrenceRow>(i
       group,
       window: occurrenceWindow(
         group,
-        input.timeZone,
-        input.meetingWindows ?? DEFAULT_MEETING_WINDOWS
+        input.meetingReferences ?? DEFAULT_MEETING_REFERENCES,
+        input.occurrences
       )
     }))
     .filter(({ group, window }) => {
+      const reference = (input.meetingReferences ?? DEFAULT_MEETING_REFERENCES).find((rule) =>
+        rule.aliases.some((alias) => group.meeting.includes(alias))
+      );
+      if (reference) return Boolean(window && window.end > input.now);
       if (group.serviceDate > today) return true;
       if (group.serviceDate < today) return false;
       return Boolean(window && window.end > input.now);
     })
     .sort((left, right) => {
-      const dateOrder = left.group.serviceDate.localeCompare(right.group.serviceDate);
+      const leftDate =
+        (left.window ? dateKey(left.window.start, input.timeZone) : undefined) ??
+        left.group.serviceDate;
+      const rightDate =
+        (right.window ? dateKey(right.window.start, input.timeZone) : undefined) ??
+        right.group.serviceDate;
+      const dateOrder = leftDate.localeCompare(rightDate);
       if (dateOrder !== 0) return dateOrder;
       const leftTime = left.window?.start.getTime() ?? Number.MAX_SAFE_INTEGER;
       const rightTime = right.window?.start.getTime() ?? Number.MAX_SAFE_INTEGER;
@@ -51,7 +57,15 @@ export function selectFirstUpcomingOccurrence<T extends ScheduleOccurrenceRow>(i
         leftTime - rightTime || left.group.meeting.localeCompare(right.group.meeting, "zh-Hant")
       );
     })[0];
-  return first?.group.rows ?? [];
+  if (!first) return [];
+  const resolvedDate = first.window?.resolvedDate;
+  return resolvedDate && resolvedDate !== first.group.serviceDate
+    ? first.group.rows.map((row) => ({
+        ...row,
+        serviceDate: resolvedDate,
+        meeting: first.window?.meetingName ?? row.meeting
+      }))
+    : first.group.rows;
 }
 
 interface ScheduleOccurrenceGroup<T> {
@@ -74,24 +88,30 @@ function groupRows<T extends ScheduleOccurrenceRow>(rows: T[]): Array<ScheduleOc
 
 function occurrenceWindow<T>(
   group: ScheduleOccurrenceGroup<T>,
-  timeZone: string,
-  rules: MeetingWindowRule[]
-): { start: Date; end: Date } | undefined {
-  const explicit = parseExplicitWindow(
-    (group.rows[0] as ScheduleOccurrenceRow | undefined)?.serviceDate ?? ""
+  rules: MeetingReference[],
+  occurrences: MeetingOccurrence[]
+): { start: Date; end: Date; resolvedDate?: string; meetingName?: string } | undefined {
+  const reference = rules.find((candidate) =>
+    candidate.aliases.some((alias) => group.meeting.includes(alias))
   );
-  if (explicit) return explicit;
-  const weekday = weekdayFromDateKey(group.serviceDate);
-  const rule = rules.find(
-    (candidate) =>
-      candidate.aliases.some((alias) => group.meeting.includes(alias)) &&
-      (!candidate.weekdays || candidate.weekdays.includes(weekday))
+  if (!reference)
+    return parseExplicitWindow(
+      (group.rows[0] as ScheduleOccurrenceRow | undefined)?.serviceDate ?? ""
+    );
+  const occurrence = occurrences.find(
+    (item) =>
+      item.meetingKey === reference.key &&
+      item.occurrenceDate === group.serviceDate &&
+      item.status === "scheduled"
   );
-  if (!rule) return undefined;
-  return {
-    start: zonedDateTimeToUtc(group.serviceDate, rule.start, timeZone),
-    end: zonedDateTimeToUtc(group.serviceDate, rule.end, timeZone)
-  };
+  return occurrence
+    ? {
+        start: new Date(occurrence.startsAt),
+        end: new Date(occurrence.endsAt),
+        resolvedDate: dateKey(new Date(occurrence.startsAt), occurrence.timezone),
+        meetingName: occurrence.meetingName
+      }
+    : undefined;
 }
 
 function parseExplicitWindow(value: string): { start: Date; end: Date } | undefined {
@@ -106,46 +126,6 @@ function parseExplicitWindow(value: string): { start: Date; end: Date } | undefi
   };
 }
 
-function weekdayFromDateKey(value: string): number {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
-}
-
-function zonedDateTimeToUtc(date: string, time: string, timeZone: string): Date {
-  const [year, month, day] = date.split("-").map(Number);
-  const [hour, minute] = time.split(":").map(Number);
-  const guess = new Date(Date.UTC(year, month - 1, day, hour, minute));
-  return new Date(guess.getTime() - timeZoneOffsetMs(guess, timeZone));
-}
-
-function timeZoneOffsetMs(date: Date, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  })
-    .formatToParts(date)
-    .reduce<Record<string, string>>((output, part) => {
-      if (part.type !== "literal") output[part.type] = part.value;
-      return output;
-    }, {});
-  return (
-    Date.UTC(
-      Number(parts.year),
-      Number(parts.month) - 1,
-      Number(parts.day),
-      Number(parts.hour),
-      Number(parts.minute),
-      Number(parts.second)
-    ) - date.getTime()
-  );
-}
-
 function dateKey(date: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -153,4 +133,16 @@ function dateKey(date: Date, timeZone: string): string {
     month: "2-digit",
     day: "2-digit"
   }).format(date);
+}
+
+export function includeMovedOccurrenceDates(
+  range: { start: string; endExclusive: string } | undefined,
+  occurrences: MeetingOccurrence[],
+  now: Date
+): { start: string; endExclusive: string } | undefined {
+  if (!range) return range;
+  const originalDates = occurrences
+    .filter((item) => item.status === "scheduled" && Date.parse(item.endsAt) > now.getTime())
+    .map((item) => item.occurrenceDate);
+  return { ...range, start: [range.start, ...originalDates].sort()[0] };
 }

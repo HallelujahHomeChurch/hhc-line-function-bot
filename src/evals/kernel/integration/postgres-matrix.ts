@@ -746,7 +746,7 @@ async function assertKnowledgeResultAnchor(store: PostgresKnowledgeStore): Promi
     permissionRequiredFunctions: [],
     allowedProviders: ["deepseek" as const],
     allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: [] }
+    schedulePolicy: { meetingReferences: [], domains: [] }
   };
   const event = {
     type: "message" as const,

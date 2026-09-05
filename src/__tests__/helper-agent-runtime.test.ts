@@ -51,7 +51,7 @@ function profile(): BotProfileConfig {
     agent: { personaPrompt: "合成人設", memoryPolicyPrompt: "合成記憶政策" },
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: [] }
+    schedulePolicy: { meetingReferences: [], domains: [] }
   };
 }
 

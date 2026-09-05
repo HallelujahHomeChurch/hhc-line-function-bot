@@ -22,7 +22,7 @@ const profile: BotProfileConfig = {
   allowedProviders: [],
   allowSubscriptionProviders: false,
   providerPolicy: {},
-  schedulePolicy: { meetingWindows: [], domains: [] }
+  schedulePolicy: { meetingReferences: [], domains: [] }
 };
 
 function input(text: string, eventSource = source) {

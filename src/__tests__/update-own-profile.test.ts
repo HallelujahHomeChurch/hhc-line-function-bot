@@ -24,7 +24,7 @@ const profile: BotProfileConfig = {
   allowedProviders: [],
   allowSubscriptionProviders: false,
   providerPolicy: {},
-  schedulePolicy: { meetingWindows: [], domains: [] }
+  schedulePolicy: { meetingReferences: [], domains: [] }
 };
 
 describe("update_own_profile capability", () => {

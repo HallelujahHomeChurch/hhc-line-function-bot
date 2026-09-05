@@ -221,7 +221,7 @@ export function helperProfile(
     agent: { personaPrompt: "synthetic", memoryPolicyPrompt: "synthetic" },
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: [syntheticScheduleDomain()] }
+    schedulePolicy: { meetingReferences: [], domains: [syntheticScheduleDomain()] }
   };
 }
 

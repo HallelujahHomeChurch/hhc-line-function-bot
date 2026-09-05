@@ -194,16 +194,13 @@ export interface GeneralAgentConfig {
   conversationWindowSeconds: number;
 }
 
-export interface MeetingWindowRule {
+export interface MeetingReference {
   key: string;
   aliases: string[];
-  weekdays?: number[];
-  start: string;
-  end: string;
 }
 
 export interface SchedulePolicyConfig {
-  meetingWindows: MeetingWindowRule[];
+  meetingReferences: MeetingReference[];
   domains: ScheduleDomainConfig[];
 }
 

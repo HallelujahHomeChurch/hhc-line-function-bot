@@ -1,3 +1,4 @@
+import { readTestMeetingOccurrences } from "../testing/meeting-occurrences.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
@@ -59,6 +60,45 @@ function notionSchedulePage(
 }
 
 describe("query_schedule", () => {
+  it("finds a centrally moved meeting whose original roster date is already past", async () => {
+    const schedules = new InMemoryScheduleStore();
+    await schedules.upsertItem({
+      profileName: "helper",
+      sourceKey: "media_team_service_schedule",
+      origin: "notion",
+      externalId: "moved",
+      serviceDate: "2026-07-12",
+      meeting: "主日",
+      role: "音控",
+      assignee: "Moved Team"
+    });
+    const query = createQueryScheduleHandler({
+      memoryStore: new InMemoryAgentMemoryStore(),
+      scheduleStore: schedules,
+      now: () => new Date("2026-07-13T00:00:00Z"),
+      timeZone: "Asia/Taipei",
+      readMeetingOccurrences: async () => [
+        {
+          occurrenceId: "moved",
+          meetingKey: "sunday",
+          meetingName: "主日",
+          occurrenceDate: "2026-07-12",
+          timezone: "Asia/Taipei",
+          startsAt: "2026-07-14T09:00:00+08:00",
+          endsAt: "2026-07-14T12:00:00+08:00",
+          status: "scheduled"
+        }
+      ]
+    });
+    const result = await query(
+      { query: "下一場影視團隊服事表", dateIntent: "next_meeting" },
+      context("下一場影視團隊服事表")
+    );
+    expect(result.replyText).toContain("Moved Team");
+    expect(result.replyText).toContain("7月14日");
+    expect(result.replyText).not.toContain("7月12日");
+  });
+
   it("resolves an omitted period to the current canonical schedule despite a roster-like note", async () => {
     const now = () => new Date("2026-09-04T00:00:00.000Z");
     const memoryStore = new InMemoryAgentMemoryStore({ now });
@@ -81,6 +121,7 @@ describe("query_schedule", () => {
       assignee: "正式同工"
     });
     const querySchedule = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore,
       scheduleStore,
       now,
@@ -88,7 +129,7 @@ describe("query_schedule", () => {
     });
     const queryContext = context("查服事表", { type: "user", userId: "U1" });
     queryContext.profile.schedulePolicy = {
-      meetingWindows: [],
+      meetingReferences: [],
       domains: [
         {
           key: "official_service",
@@ -138,6 +179,7 @@ describe("query_schedule", () => {
       assignee: "黃弘家族1"
     });
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore({ now }),
       scheduleStore: schedules,
       now,
@@ -145,7 +187,7 @@ describe("query_schedule", () => {
     });
     const ctx = context("下一場晨更家族服事的帶領家族是誰");
     ctx.profile.schedulePolicy = {
-      meetingWindows: [],
+      meetingReferences: [],
       domains: [
         {
           key: "future_family",
@@ -211,6 +253,7 @@ describe("query_schedule", () => {
       assignee: "資恆"
     });
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore,
       scheduleStore,
       now,
@@ -257,6 +300,7 @@ describe("query_schedule", () => {
     });
     const sessionStore = new InMemorySessionStore({ now });
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore,
       scheduleStore,
       sessionStore,
@@ -291,6 +335,7 @@ describe("query_schedule", () => {
       assignee: "資恆"
     });
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore,
       now: () => new Date("2026-07-15T00:00:00.000Z"),
@@ -323,6 +368,7 @@ describe("query_schedule", () => {
       });
     }
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: schedules,
       now: () => new Date("2026-07-14T08:40:00.000Z"),
@@ -343,12 +389,13 @@ describe("query_schedule", () => {
       sourceKey: "media_team_service_schedule",
       origin: "notion",
       externalId: "page-media-1",
-      serviceDate: "2026-07-18",
+      serviceDate: "2026-07-19",
       meeting: "主日",
       role: "音控",
       assignee: "Ray"
     });
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: schedules,
       now: () => new Date("2026-07-12T00:00:00.000Z"),
@@ -368,7 +415,7 @@ describe("query_schedule", () => {
     expect(mediaResult.agentResult).toMatchObject({
       status: "success",
       anchors: {
-        date: "2026-07-18",
+        date: "2026-07-19",
         meeting: "主日",
         sourceKeys: ["media_team_service_schedule"]
       },
@@ -395,6 +442,7 @@ describe("query_schedule", () => {
       });
     }
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: schedules,
       now: () => new Date("2026-07-12T00:00:00.000Z"),
@@ -419,6 +467,7 @@ describe("query_schedule", () => {
         ])
     };
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: new InMemoryScheduleStore(),
       notion,
@@ -462,6 +511,7 @@ describe("query_schedule", () => {
         ])
     };
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       notion,
       databaseId: "database-1",
@@ -512,6 +562,7 @@ describe("query_schedule", () => {
       assignee: "姵穎"
     });
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: schedules,
       now: () => new Date("2026-07-13T00:00:00.000Z"),
@@ -555,6 +606,7 @@ describe("query_schedule", () => {
       });
     }
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: schedules,
       now: () => new Date("2026-07-13T00:00:00.000Z"),
@@ -595,6 +647,7 @@ describe("query_schedule", () => {
       });
     }
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: schedules,
       now: () => new Date("2026-07-13T00:00:00.000Z"),
@@ -623,7 +676,11 @@ describe("query_schedule", () => {
     const now = () => new Date("2026-07-12T00:00:00.000Z");
     const store = new InMemoryAgentMemoryStore({ now });
     const save = createSaveScheduleHandler({ memoryStore: store, now });
-    const query = createQueryScheduleHandler({ memoryStore: store, now });
+    const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
+      memoryStore: store,
+      now
+    });
     await save(
       {
         title: "青年出隊服事表",
@@ -648,7 +705,10 @@ describe("query_schedule", () => {
       memoryStore: store,
       now: () => new Date("2026-07-09T00:00:00.000Z")
     });
-    const query = createQueryScheduleHandler({ memoryStore: store });
+    const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
+      memoryStore: store
+    });
     await save(
       { content: "7/19黃弘家族(音樂人)", scheduleType: "street_sign_service", confirm: true },
       context("小哈記住舉牌服事表")
@@ -689,6 +749,7 @@ describe("query_schedule", () => {
       ])
     };
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       notion,
       databaseId: "database-1",
@@ -720,6 +781,7 @@ describe("query_schedule", () => {
       queryDatabase: vi.fn().mockResolvedValue([])
     };
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: schedules,
       notion,
@@ -757,6 +819,7 @@ describe("query_schedule", () => {
       ])
     };
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: store,
       notion,
       databaseId: "database-1",
@@ -793,6 +856,7 @@ describe("query_schedule", () => {
     });
     const save = createSaveScheduleHandler({ memoryStore: store });
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: store,
       now: () => new Date("2026-07-10T00:00:00.000Z")
     });
@@ -824,7 +888,10 @@ describe("query_schedule", () => {
       now: () => new Date("2026-07-10T00:00:00.000Z")
     });
     const save = createSaveScheduleHandler({ memoryStore: store });
-    const query = createQueryScheduleHandler({ memoryStore: store });
+    const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
+      memoryStore: store
+    });
     await save(
       {
         title: "七月份家族晨更安排",
@@ -846,6 +913,7 @@ describe("query_schedule", () => {
 
   it("returns a not-found envelope while preserving schedule recovery replies", async () => {
     const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
       memoryStore: new InMemoryAgentMemoryStore(),
       scheduleStore: new InMemoryScheduleStore()
     });
@@ -892,7 +960,12 @@ describe("query_schedule", () => {
       role: "音控",
       assignee: "同步同工"
     });
-    const query = createQueryScheduleHandler({ memoryStore, scheduleStore: schedules, now });
+    const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
+      memoryStore,
+      scheduleStore: schedules,
+      now
+    });
 
     const result = await query(
       { query: "", date: "2026-07-19", meeting: "主日" },
@@ -937,7 +1010,12 @@ describe("query_schedule", () => {
       role: "後攝影",
       assignee: "後方同工"
     });
-    const query = createQueryScheduleHandler({ memoryStore, scheduleStore: schedules, now });
+    const query = createQueryScheduleHandler({
+      readMeetingOccurrences: readTestMeetingOccurrences,
+      memoryStore,
+      scheduleStore: schedules,
+      now
+    });
 
     const result = await query(
       { query: "攝影是誰", date: "2026-07-19", meeting: "主日" },

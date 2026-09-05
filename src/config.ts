@@ -10,7 +10,7 @@ import { readTimeZone } from "./time-zone.js";
 import { providerCapabilities } from "./llm/provider-metadata.js";
 import { normalizeProviderPolicy } from "./llm/provider-policy.js";
 import { MODEL_PROVIDER_LANE_NAMES, MODEL_PROVIDER_NAMES } from "./types.js";
-import { DEFAULT_MEETING_WINDOWS } from "./schedules/occurrence-policy.js";
+import { DEFAULT_MEETING_REFERENCES } from "./schedules/occurrence-policy.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "./schedules/domain-registry.js";
 import {
   AZURE_OPENAI_EMBEDDING_API_VERSION,
@@ -62,22 +62,16 @@ const agentPromptFilesSchema = z
   })
   .strict();
 
-const timeOfDaySchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u);
-const meetingWindowSchema = z
+const meetingReferenceSchema = z
   .object({
     key: z.string().trim().min(1).max(80),
-    aliases: z.array(z.string().trim().min(1).max(100)).min(1),
-    weekdays: z.array(z.number().int().min(0).max(6)).min(1).optional(),
-    start: timeOfDaySchema,
-    end: timeOfDaySchema
+    aliases: z.array(z.string().trim().min(1).max(100)).min(1)
   })
-  .refine(({ start, end }) => start < end, {
-    message: "Meeting window end must be after start"
-  });
+  .strict();
 
 const schedulePolicySchema = z
   .object({
-    meetingWindows: z.array(meetingWindowSchema).min(1),
+    meetingReferences: z.array(meetingReferenceSchema).min(1),
     domains: z
       .array(
         z.object({
@@ -123,15 +117,15 @@ const schedulePolicySchema = z
       .min(1)
       .default(DEFAULT_SCHEDULE_DOMAINS)
   })
-  .superRefine(({ meetingWindows, domains }, ctx) => {
+  .superRefine(({ meetingReferences, domains }, ctx) => {
     const keys = new Set<string>();
     const aliases = new Set<string>();
-    for (const [index, window] of meetingWindows.entries()) {
+    for (const [index, window] of meetingReferences.entries()) {
       if (keys.has(window.key)) {
         ctx.addIssue({
           code: "custom",
-          path: ["meetingWindows", index, "key"],
-          message: "Duplicate meeting window key"
+          path: ["meetingReferences", index, "key"],
+          message: "Duplicate meeting reference key"
         });
       }
       keys.add(window.key);
@@ -140,8 +134,8 @@ const schedulePolicySchema = z
         if (aliases.has(normalized)) {
           ctx.addIssue({
             code: "custom",
-            path: ["meetingWindows", index, "aliases"],
-            message: "Duplicate meeting window alias"
+            path: ["meetingReferences", index, "aliases"],
+            message: "Duplicate meeting reference alias"
           });
         }
         aliases.add(normalized);
@@ -212,7 +206,7 @@ const profileSchema = z.object({
     .partialRecord(z.enum(MODEL_PROVIDER_LANE_NAMES), providerLanePolicySchema)
     .optional(),
   schedulePolicy: schedulePolicySchema.default({
-    meetingWindows: DEFAULT_MEETING_WINDOWS,
+    meetingReferences: DEFAULT_MEETING_REFERENCES,
     domains: DEFAULT_SCHEDULE_DOMAINS
   }),
   generalAgent: z

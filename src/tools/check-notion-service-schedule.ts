@@ -215,7 +215,7 @@ function handlerContext(): FunctionHandlerContext {
     permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: DEFAULT_SCHEDULE_DOMAINS }
+    schedulePolicy: { meetingReferences: [], domains: DEFAULT_SCHEDULE_DOMAINS }
   };
 
   return {

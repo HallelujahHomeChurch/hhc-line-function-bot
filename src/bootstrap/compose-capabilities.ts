@@ -1,3 +1,4 @@
+import type { ReadMeetingOccurrences } from "../clients/meeting-occurrences.js";
 import type { AccountAdminClient } from "../account/account-admin-client.js";
 import type { AccessStore } from "../access/types.js";
 import type { AgentJobStore } from "../agent/jobs.js";
@@ -58,6 +59,7 @@ import type { WikipediaClient } from "../wikipedia/client.js";
 import { createWikipediaLookupHandler, type WikipediaSummarizer } from "../wikipedia/lookup.js";
 
 export interface CapabilityCompositionDependencies {
+  readMeetingOccurrences?: ReadMeetingOccurrences;
   accountAdminClient?: AccountAdminClient;
   accessStore?: AccessStore;
   graph?: GraphDriveClient;
@@ -100,6 +102,7 @@ export function composeCapabilities(
       accountClient: clients.accountAdminClient ?? missingAccountClient()
     }),
     query_schedule: createQueryScheduleHandler({
+      readMeetingOccurrences: clients.readMeetingOccurrences,
       memoryStore: clients.memoryStore,
       scheduleStore: clients.scheduleStore,
       notion: clients.notion,

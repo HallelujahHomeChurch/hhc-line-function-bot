@@ -1,3 +1,4 @@
+import { readTestMeetingOccurrences } from "../testing/meeting-occurrences.js";
 import type { CapabilityName } from "../capabilities/names.js";
 import { describe, expect, it, vi } from "vitest";
 
@@ -37,7 +38,7 @@ function profile(enabledFunctions = allReadFunctions): BotProfileConfig {
     permissionRequiredFunctions: [],
     allowedProviders: ["deepseek"],
     allowSubscriptionProviders: false,
-    schedulePolicy: { meetingWindows: [], domains: [] }
+    schedulePolicy: { meetingReferences: [], domains: [] }
   };
 }
 
@@ -146,7 +147,12 @@ describe("helper read tools", () => {
     const [schedule] = createHelperReadTools({
       context: context(["query_schedule"]),
       handlers: {
-        query_schedule: createQueryScheduleHandler({ memoryStore, now, timeZone: "Asia/Taipei" })
+        query_schedule: createQueryScheduleHandler({
+          readMeetingOccurrences: readTestMeetingOccurrences,
+          memoryStore,
+          now,
+          timeZone: "Asia/Taipei"
+        })
       }
     });
 
