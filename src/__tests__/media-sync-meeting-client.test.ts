@@ -33,6 +33,31 @@ describe("MeetingWindowClient", () => {
     await expect(client.isWarm(new Date("2026-09-06T02:10:00.001Z"))).resolves.toBe(false);
   });
 
+  it("keeps the full post-meeting tail when the API filters by interval overlap", async () => {
+    const start = Date.parse("2026-09-06T01:00:00Z");
+    const end = Date.parse("2026-09-06T02:00:00Z");
+    const fetcher = vi.fn(async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      const from = Date.parse(url.searchParams.get("from")!);
+      const to = Date.parse(url.searchParams.get("to")!);
+      return new Response(
+        JSON.stringify({
+          data:
+            start < to && end > from
+              ? [{ startsAt: new Date(start).toISOString(), endsAt: new Date(end).toISOString() }]
+              : []
+        })
+      );
+    });
+    const client = new MeetingWindowClient({
+      baseUrl: "https://meeting.internal",
+      getAccessToken: async () => "token",
+      fetcher
+    });
+    await expect(client.isWarm(new Date(end + 9 * 60_000))).resolves.toBe(true);
+    await expect(client.isWarm(new Date(end + 11 * 60_000))).resolves.toBe(false);
+  });
+
   it("does not retain a failed refresh", async () => {
     const fetcher = vi
       .fn()

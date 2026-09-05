@@ -46,8 +46,8 @@ export class MeetingWindowClient {
     const lead = this.options.leadMs ?? 5 * 60_000;
     const tail = this.options.tailMs ?? 10 * 60_000;
     const url = new URL("/priv/meeting-sync-windows", this.options.baseUrl);
-    url.searchParams.set("from", new Date(now.getTime() - lead).toISOString());
-    url.searchParams.set("to", new Date(now.getTime() + tail).toISOString());
+    url.searchParams.set("from", new Date(now.getTime() - tail).toISOString());
+    url.searchParams.set("to", new Date(now.getTime() + lead).toISOString());
     const response = await (this.options.fetcher ?? fetch)(url, {
       headers: { authorization: `Bearer ${await this.options.getAccessToken()}` },
       signal: AbortSignal.timeout(10_000)
