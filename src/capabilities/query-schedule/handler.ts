@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import {
   queryScheduleArgumentsSchema,
   type QueryScheduleArguments,
@@ -12,7 +10,6 @@ import type {
   FunctionHandler,
   FunctionHandlerContext
 } from "../../application/contracts/function-execution.js";
-import type { SessionStore } from "../../state/session-store.js";
 import type { ScheduleStore } from "../../schedules/store.js";
 import { createQueryScheduleMemoryHandler } from "../../functions/schedule-memory.js";
 import {
@@ -36,7 +33,6 @@ import type { MeetingWindowRule } from "../../types.js";
 import { resolveScheduleDomain, scheduleDomainChoices } from "../../functions/schedule-resolver.js";
 import type { ScheduleDomainConfig } from "../../types.js";
 import { DEFAULT_SCHEDULE_DOMAINS } from "../../schedules/domain-registry.js";
-import { storePendingResolution } from "../../functions/pending-resolution.js";
 
 const DEFAULT_MEDIA_SOURCE_KEYS = (() => {
   const binding = DEFAULT_SCHEDULE_DOMAINS.find(({ key }) => key === "media_team_service")?.binding;
@@ -55,9 +51,7 @@ export interface QueryScheduleFunctionOptions {
     person: string;
   };
   timeZone?: string;
-  sessionStore?: SessionStore;
   now?: () => Date;
-  requestIdFactory?: () => string;
 }
 
 async function queryScheduleDomain(input: {
@@ -124,22 +118,9 @@ function stripDomainAliases(query: string, aliases: string[]): string {
     .trim();
 }
 
-async function storeAndReplyWithDomainClarification(input: {
+function replyWithDomainClarification(input: {
   candidates: ReturnType<typeof scheduleDomainChoices>;
-  args: QueryScheduleArguments;
-  context: FunctionHandlerContext;
-  options: QueryScheduleFunctionOptions;
-  now: Date;
-}): Promise<FunctionExecutionResult> {
-  await storePendingResolution({
-    sessionStore: input.options.sessionStore,
-    requestId: input.options.requestIdFactory?.() ?? input.context.requestId ?? randomUUID(),
-    capability: "query_schedule",
-    groundedArguments: input.args,
-    candidates: input.candidates,
-    context: input.context,
-    now: input.now
-  });
+}): FunctionExecutionResult {
   const replyText = `你要查哪一類服事：${input.candidates
     .map((item) => item.displayName)
     .join("、")}？`;
@@ -194,29 +175,42 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       : undefined;
 
   return async (rawArgs, context) => {
+    const currentTime = now();
     const args = queryScheduleArgumentsSchema.parse(rawArgs);
     if (isScheduleListRequest(args.query)) {
       const schedules = await options.memoryStore.listScheduleMemories({
         profileName: context.profile.name,
         limit: args.limit ?? 10
       });
+      const replyText =
+        schedules.length === 0
+          ? "目前沒有保存的服事表。"
+          : ["目前保存的服事表：", ...schedules.map((schedule) => `- ${schedule.title}`)].join(
+              "\n"
+            );
       return {
         ok: true,
-        replyText:
-          schedules.length === 0
-            ? "目前沒有保存的服事表。"
-            : ["目前保存的服事表：", ...schedules.map((schedule) => `- ${schedule.title}`)].join(
-                "\n"
-              )
+        replyText,
+        agentResult: schedules.length
+          ? {
+              status: "success",
+              replyText: "服事表清單查詢完成。",
+              replyData: {
+                kind: "schedule_list",
+                fields: { count: schedules.length },
+                records: schedules.map(({ title }) => ({ title }))
+              }
+            }
+          : { status: "not_found", replyText }
       };
     }
-    const refinement = refineScheduleQuery(args, now(), timeZone);
+    const refinement = refineScheduleQuery(args, currentTime, timeZone);
     const roleFocus =
       args.role ??
       extractScheduleRoleFocus({
         query: args.query,
         hasContinuation: false,
-        now: now(),
+        now: currentTime,
         timeZone
       });
     const refinedArgs = queryScheduleArgumentsSchema.parse({
@@ -243,13 +237,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       activeDomainKey: undefined
     });
     if (resolution.status === "ambiguous") {
-      return storeAndReplyWithDomainClarification({
-        candidates: resolution.candidates,
-        args: refinedArgs,
-        context,
-        options,
-        now: now()
-      });
+      return replyWithDomainClarification({ candidates: resolution.candidates });
     }
     const selectedDomainKey =
       resolution.status === "selected" ? resolution.candidate.domainKey : undefined;
@@ -267,7 +255,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
           options,
           memoryHandler,
           serviceHandler,
-          now: now(),
+          now: currentTime,
           timeZone
         })
       });
@@ -301,13 +289,7 @@ export function createQueryScheduleHandler(options: QueryScheduleFunctionOptions
       const candidates = scheduleDomainChoices(domains).filter((candidate) =>
         foundDomainKeys.has(candidate.domainKey)
       );
-      return storeAndReplyWithDomainClarification({
-        candidates,
-        args: refinedArgs,
-        context,
-        options,
-        now: now()
-      });
+      return replyWithDomainClarification({ candidates });
     }
     if (found.length === 1) {
       return found[0].result;

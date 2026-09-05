@@ -54,6 +54,51 @@ describe("catalog publication freshness", () => {
     ).resolves.toMatchObject({ status: "not_found", revision: "slides:1" });
   });
 
+  it("searches only the latest atomically published source snapshot", async () => {
+    const catalog = new InMemoryCatalogStore();
+    const source = await catalog.upsertSource(sourceInput);
+    const first = await catalog.publishSourceSnapshot({
+      sourceId: source.id,
+      expectedRevision: "0",
+      publishedAt: "2026-07-20T00:00:00.000Z",
+      items: [
+        {
+          sourceId: source.id,
+          itemKind: "ppt_slide",
+          domain: "presentation",
+          title: "舊版投影片.pptx",
+          storageRef: { provider: "graph", driveId: "d", itemId: "old" }
+        }
+      ]
+    });
+    await catalog.publishSourceSnapshot({
+      sourceId: source.id,
+      expectedRevision: first!.revision,
+      publishedAt: "2026-07-20T00:05:00.000Z",
+      items: [
+        {
+          sourceId: source.id,
+          itemKind: "ppt_slide",
+          domain: "presentation",
+          title: "新版投影片.pptx",
+          storageRef: { provider: "graph", driveId: "d", itemId: "new" }
+        }
+      ]
+    });
+
+    await expect(
+      searchCatalogWithFreshness({
+        catalog,
+        search: { profileName: "helper", query: "投影片", domains: ["presentation"] },
+        now: new Date("2026-07-20T00:06:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      status: "fresh",
+      revision: "slides:2",
+      items: [expect.objectContaining({ title: "新版投影片.pptx" })]
+    });
+  });
+
   it("carries the actual stale snapshot timestamp for reply presentation", async () => {
     const catalog = new InMemoryCatalogStore();
     const source = await catalog.upsertSource(sourceInput);

@@ -11,6 +11,7 @@ export const KERNEL_INTEGRATION_CASE_CONTRACTS = [
   { caseId: "redis/webhook/cross-replica-deduplication", boundary: "entrance_access" },
   { caseId: "redis/cache/cross-replica-invalidation", boundary: "freshness_invalidation" },
   { caseId: "redis/confirmation/actor-safe-consume", boundary: "write_workflow" },
+  { caseId: "redis/review/atomic-owner-consume", boundary: "write_workflow" },
   { caseId: "redis/session/group-requester-isolation", boundary: "slot_ambiguity_resolution" },
   { caseId: "redis/session/atomic-interactive-replacement", boundary: "state_lifecycle" },
   { caseId: "redis/restart/aof-policy", boundary: "deployment_configuration" },
@@ -23,10 +24,7 @@ export const KERNEL_INTEGRATION_CASE_CONTRACTS = [
   { caseId: "postgres/catalog/concurrent-publication", boundary: "freshness_invalidation" },
   { caseId: "postgres/catalog/rollback-and-visibility", boundary: "adapter_retrieval" },
   { caseId: "postgres/knowledge/rollback-and-stale-failure", boundary: "adapter_retrieval" },
-  {
-    caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
-    boundary: "state_lifecycle"
-  },
+  { caseId: "postgres/helper-agent/source-ttl-and-reset", boundary: "state_lifecycle" },
   { caseId: "harness/namespace-cleanup", boundary: "deployment_configuration" },
   { caseId: "harness/compose-cleanup", boundary: "deployment_configuration" }
 ] as const;

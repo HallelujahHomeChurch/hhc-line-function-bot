@@ -1,6 +1,7 @@
+import type { CapabilityName } from "./capabilities/names.js";
 import { z } from "zod";
 
-import type { FunctionName, JsonRecord } from "./types.js";
+import type { JsonRecord } from "./types.js";
 
 const numericLimitSchema = z.preprocess((value) => {
   if (typeof value === "string" && value.trim()) {
@@ -40,6 +41,9 @@ export const updateOwnProfileArgumentsSchema = z
     cancel: z.boolean().optional()
   })
   .strip();
+export const updateOwnProfileReviewArgumentsSchema = updateOwnProfileArgumentsSchema
+  .omit({ confirm: true, cancel: true })
+  .strict();
 export const scheduleTypeSchema = z
   .string()
   .trim()
@@ -58,6 +62,7 @@ export const findPptSlidesArgumentsSchema = z
     matchMode: z.enum(["fuzzy", "exact"]).optional()
   })
   .strip();
+export const findPptSlidesAgentArgumentsSchema = findPptSlidesArgumentsSchema.strict();
 
 export const queryServiceScheduleArgumentsSchema = z
   .object({
@@ -139,6 +144,7 @@ export const findPopSheetMusicArgumentsSchema = z
     matchMode: z.enum(["fuzzy", "exact"]).optional()
   })
   .strip();
+export const findPopSheetMusicAgentArgumentsSchema = findPopSheetMusicArgumentsSchema.strict();
 
 export const findResourceArgumentsSchema = z
   .object({
@@ -149,6 +155,9 @@ export const findResourceArgumentsSchema = z
     limit: numericLimitSchema.optional()
   })
   .strip();
+export const findResourceAgentArgumentsSchema = findResourceArgumentsSchema
+  .safeExtend({ limit: z.number().int().min(1).max(10).optional() })
+  .strict();
 
 export const queryKnowledgeArgumentsSchema = z
   .object({
@@ -166,6 +175,12 @@ export const queryKnowledgeArgumentsSchema = z
     limit: numericLimitSchema.optional()
   })
   .strip();
+export const queryKnowledgeAgentArgumentsSchema = queryKnowledgeArgumentsSchema
+  .safeExtend({
+    ordinal: z.number().int().min(0).optional(),
+    limit: z.number().int().min(1).max(10).optional()
+  })
+  .strict();
 
 export const saveMemoryArgumentsSchema = z
   .object({
@@ -179,6 +194,11 @@ export const saveMemoryArgumentsSchema = z
   .strip();
 export const saveMemoryAgentArgumentsSchema = saveMemoryArgumentsSchema
   .omit({ confirm: true, cancel: true })
+  .safeExtend({
+    title: z.string().trim().optional(),
+    content: z.string().trim().optional().default(""),
+    query: z.string().trim().optional()
+  })
   .strict();
 
 export const saveResourceArgumentsSchema = z
@@ -194,6 +214,11 @@ export const saveResourceArgumentsSchema = z
   .strip();
 export const saveResourceAgentArgumentsSchema = saveResourceArgumentsSchema
   .omit({ confirm: true, cancel: true })
+  .safeExtend({
+    url: z.string().trim().optional().default(""),
+    title: z.string().trim().optional(),
+    description: z.string().trim().optional()
+  })
   .strict();
 
 export const retrieveMemoryArgumentsSchema = z
@@ -202,12 +227,14 @@ export const retrieveMemoryArgumentsSchema = z
     memoryId: z.string().optional()
   })
   .strip();
+export const retrieveMemoryAgentArgumentsSchema = retrieveMemoryArgumentsSchema.strict();
 
 export const queryWikipediaArgumentsSchema = z
   .object({
     query: z.string().optional().default("")
   })
   .strip();
+export const queryWikipediaAgentArgumentsSchema = queryWikipediaArgumentsSchema.strict();
 
 export const saveScheduleMemoryArgumentsSchema = z
   .object({
@@ -257,6 +284,13 @@ export const saveScheduleMemoryArgumentsSchema = z
 export const saveScheduleArgumentsSchema = saveScheduleMemoryArgumentsSchema;
 export const saveScheduleAgentArgumentsSchema = saveScheduleMemoryArgumentsSchema
   .omit({ confirm: true, cancel: true })
+  .safeExtend({
+    title: z.string().trim().optional(),
+    content: z.string().trim().optional().default(""),
+    query: z.string().trim().optional(),
+    targetQuery: z.string().trim().optional(),
+    domainRevision: z.string().trim().min(1).max(80).optional()
+  })
   .strict();
 
 export const queryScheduleMemoryArgumentsSchema = z
@@ -302,7 +336,7 @@ export type SaveScheduleArguments = z.infer<typeof saveScheduleArgumentsSchema>;
 export type QueryScheduleMemoryArguments = z.infer<typeof queryScheduleMemoryArgumentsSchema>;
 
 export function parseFunctionArguments(
-  action: FunctionName,
+  action: CapabilityName,
   rawArguments: unknown
 ): JsonRecord | undefined {
   const schema = {

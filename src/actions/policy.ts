@@ -1,9 +1,9 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { getActionDefinition, type ActionSideEffect } from "./catalog.js";
 import {
-  isFunctionName,
+  isCapabilityName,
   type ActionName,
   type BotProfileConfig,
-  type FunctionName,
   type LineSource
 } from "../types.js";
 
@@ -12,7 +12,7 @@ export interface ActionPolicyInput {
   profile: BotProfileConfig;
   source: LineSource;
   requesterIsAdmin?: boolean;
-  effectiveFunctions?: FunctionName[];
+  effectiveFunctions?: CapabilityName[];
   confirmed?: boolean;
 }
 
@@ -44,7 +44,7 @@ export async function evaluateActionPolicy(
   if (definition.auth === "admin" && input.requesterIsAdmin !== true) {
     return { allowed: false, reason: "admin_required" };
   }
-  if (definition.kind === "user_function" && isFunctionName(input.action)) {
+  if (definition.kind === "user_function" && isCapabilityName(input.action)) {
     const enabledFunctions = input.effectiveFunctions ?? input.profile.enabledFunctions;
     if (!enabledFunctions.includes(input.action)) {
       return { allowed: false, reason: "function_disabled" };

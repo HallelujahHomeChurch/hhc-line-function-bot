@@ -1,13 +1,12 @@
 import type {
+  ActionReviewLookup,
+  ActionReviewSession,
   ConversationSession,
   ExternalSearchConsentLookup,
   ExternalSearchConsentSession,
   ExternalSheetMusicImportSession,
   PendingAttachmentSession,
-  PendingCapabilityResolutionSession,
-  PendingFunctionLookup,
-  PendingFunctionSession,
-  PendingResolutionSession,
+  ProfileUpdateSession,
   PptSelectionLookup,
   PptSelectionSession,
   SelectionLookup,
@@ -18,7 +17,7 @@ import type {
   UploadIntentSession
 } from "./session-store.js";
 import type { LineSource } from "../types.js";
-import { requesterMatchesForSource } from "./session-safety.js";
+import { lineSourcesEqual, requesterMatchesForSource } from "./session-safety.js";
 
 export interface RedisSessionClient {
   get(key: string): Promise<string | null>;
@@ -45,6 +44,32 @@ local current = redis.call('GET', KEYS[1])
 if current == ARGV[1] then
   redis.call('DEL', KEYS[1])
 end
+return value
+`;
+
+const TAKE_ACTION_REVIEW_SCRIPT = `
+local value = redis.call('GET', KEYS[2])
+if not value then return nil end
+local session = cjson.decode(value)
+local source = session.source or {}
+local function same(optional, expected)
+  if optional == nil or optional == cjson.null then optional = '' end
+  return optional == expected
+end
+if session.type ~= 'action_review'
+  or session.id ~= ARGV[1]
+  or session.profileName ~= ARGV[2]
+  or session.requesterUserId ~= ARGV[3]
+  or source.type ~= ARGV[4]
+  or not same(source.userId, ARGV[5])
+  or not same(source.groupId, ARGV[6])
+  or not same(source.roomId, ARGV[7])
+  or session.expiresAt <= ARGV[8] then
+  return nil
+end
+redis.call('DEL', KEYS[2])
+local current = redis.call('GET', KEYS[1])
+if current == ARGV[1] then redis.call('DEL', KEYS[1]) end
 return value
 `;
 
@@ -220,14 +245,16 @@ export class RedisSessionStore implements SessionStore {
     return latestSession(liveSessions);
   }
 
-  async findPendingFunction(
-    lookup: PendingFunctionLookup
-  ): Promise<PendingFunctionSession | undefined> {
-    const session = await this.indexedInteractiveSession(lookup);
-    return session?.type === "pending_function" &&
-      (!lookup.action || session.action === lookup.action)
-      ? session
-      : undefined;
+  async findProfileUpdate(lookup: PptSelectionLookup): Promise<ProfileUpdateSession | undefined> {
+    return latestSession(
+      (await this.liveSessions())
+        .filter((session): session is ProfileUpdateSession => session.type === "profile_update")
+        .filter((session) => session.profileName === lookup.profileName)
+        .filter((session) => sourceMatches(session.source, lookup.source))
+        .filter((session) =>
+          requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
+        )
+    );
   }
 
   async findPendingAttachment(
@@ -248,20 +275,6 @@ export class RedisSessionStore implements SessionStore {
       PendingAttachmentSession | undefined;
   }
 
-  async findPendingResolution(
-    lookup: PptSelectionLookup
-  ): Promise<PendingResolutionSession | undefined> {
-    const session = await this.indexedInteractiveSession(lookup);
-    return session?.type === "pending_resolution" ? session : undefined;
-  }
-
-  async findPendingCapabilityResolution(
-    lookup: PptSelectionLookup
-  ): Promise<PendingCapabilityResolutionSession | undefined> {
-    const session = await this.indexedInteractiveSession(lookup);
-    return session?.type === "pending_capability_resolution" ? session : undefined;
-  }
-
   async takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined> {
     const candidate = await this.indexedInteractiveSession(lookup);
     const selected = candidate?.type === "upload_intent" ? candidate : undefined;
@@ -270,6 +283,34 @@ export class RedisSessionStore implements SessionStore {
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as UploadIntentSession) as
       UploadIntentSession | undefined;
+  }
+
+  async takeActionReview(lookup: ActionReviewLookup): Promise<ActionReviewSession | undefined> {
+    const indexKey = this.interactiveIndexKey(lookup);
+    if (!indexKey || !this.options.client.eval) return undefined;
+    const raw = await this.options.client.eval(TAKE_ACTION_REVIEW_SCRIPT, {
+      keys: [indexKey, this.key(lookup.id)],
+      arguments: [
+        lookup.id,
+        lookup.profileName,
+        lookup.requesterUserId,
+        lookup.source.type,
+        lookup.source.userId ?? "",
+        lookup.source.groupId ?? "",
+        lookup.source.roomId ?? "",
+        this.now().toISOString()
+      ]
+    });
+    return typeof raw === "string" ? (JSON.parse(raw) as ActionReviewSession) : undefined;
+  }
+
+  async findActionReview(lookup: PptSelectionLookup): Promise<ActionReviewSession | undefined> {
+    const session = await this.indexedInteractiveSession(lookup);
+    return session?.type === "action_review" &&
+      session.requesterUserId === lookup.requesterUserId &&
+      lineSourcesEqual(session.source, lookup.source)
+      ? session
+      : undefined;
   }
 
   async promoteUploadIntent(
@@ -517,13 +558,7 @@ export class RedisSessionStore implements SessionStore {
 }
 
 function isInteractiveSession(session: ConversationSession): boolean {
-  return [
-    "pending_function",
-    "pending_resolution",
-    "pending_capability_resolution",
-    "pending_attachment",
-    "upload_intent"
-  ].includes(session.type);
+  return ["pending_attachment", "upload_intent", "action_review"].includes(session.type);
 }
 
 function ttlSeconds(ttlMs: number): number {

@@ -1,0 +1,514 @@
+import type { CapabilityName } from "./names.js";
+import type { z } from "zod";
+
+import {
+  findResourceArgumentsSchema,
+  findPopSheetMusicArgumentsSchema,
+  findPptSlidesArgumentsSchema,
+  queryWikipediaArgumentsSchema,
+  queryKnowledgeArgumentsSchema,
+  retrieveMemoryArgumentsSchema,
+  saveMemoryArgumentsSchema,
+  saveResourceArgumentsSchema,
+  saveScheduleArgumentsSchema
+} from "../function-arguments.js";
+import { downloadWeeklyPaperDefinition } from "../capabilities/download-weekly-paper.js";
+import { queryScheduleDefinition } from "../capabilities/query-schedule/definition.js";
+import { updateOwnProfileDefinition } from "../capabilities/update-own-profile/definition.js";
+import type { AgentResourceType } from "../types.js";
+
+export type FunctionSideEffectLevel = "read" | "write" | "admin" | "destructive";
+export type FunctionAllowedSource = "user" | "group";
+export type FunctionRequiredSlotMissingWhen = "blank";
+
+export interface FunctionGenericRequest {
+  phrases: string[];
+  clearArguments?: string[];
+}
+
+export interface FunctionRequiredSlot {
+  name: string;
+  argument: string;
+  missingWhen: FunctionRequiredSlotMissingWhen;
+  genericRequest?: FunctionGenericRequest;
+  prompt: string;
+  quickReplies?: Array<{
+    label: string;
+    text: string;
+  }>;
+}
+
+export interface FunctionResourcePolicy {
+  kind: "none" | "graph_file" | "external_link";
+  resourceTypes?: AgentResourceType[];
+  remember: boolean;
+  alias: boolean;
+}
+
+export interface FunctionMemoryPolicy {
+  kind: "none" | "resource_metadata" | "explicit_text" | "retrieve_text";
+}
+
+export interface FunctionGrantPolicy {
+  principals: Array<"user" | "group">;
+}
+
+export type AgentOperation = "continue" | "refine" | "advance" | "select" | "view_full";
+
+export interface AgentCapabilityContract {
+  intents: string[];
+  exactIntents?: boolean;
+  semanticDescription: string;
+  retrievalEvidence?: { provider: string; queryStopWords?: string[] };
+  operations?: AgentOperation[];
+}
+
+export interface FunctionDefinition {
+  name: CapabilityName;
+  displayName: string;
+  shortDescription: string;
+  examples: string[];
+  requires: Array<
+    "graph" | "notion" | "session" | "cache" | "memory" | "wikipedia" | "knowledge" | "hhc_web_api"
+  >;
+  scope: "profile" | "group_capable";
+  sideEffectLevel: FunctionSideEffectLevel;
+  agentCapability?: AgentCapabilityContract;
+  allowedSources: FunctionAllowedSource[];
+  requiredSlots: FunctionRequiredSlot[];
+  resourcePolicy: FunctionResourcePolicy;
+  memoryPolicy: FunctionMemoryPolicy;
+  grantPolicy?: FunctionGrantPolicy;
+  clarificationPrompt: string;
+  description: string;
+  argumentSchema: z.ZodType;
+  quickReply: {
+    label: string;
+    command: string;
+  };
+  helpText: string;
+}
+
+export const CAPABILITY_CATALOG: FunctionDefinition[] = [
+  downloadWeeklyPaperDefinition,
+  updateOwnProfileDefinition,
+  {
+    name: "find_ppt_slides",
+    displayName: "查投影片",
+    shortDescription: "幫你找聚會或詩歌需要的投影片。",
+    examples: ["小哈 查投影片 奇異恩典", "小哈 查主日報告投影片"],
+    requires: ["graph", "session"],
+    scope: "group_capable",
+    sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查投影片", "找投影片", "搜尋投影片", "查簡報", "找簡報"],
+      semanticDescription: "依名稱或關鍵字搜尋教會投影片檔案。",
+      retrievalEvidence: {
+        provider: "catalog_presentation",
+        queryStopWords: ["投影片", "簡報", "ppt", "powerpoint", "slides", "keynote", "odp"]
+      },
+      operations: ["continue", "refine", "select", "view_full"]
+    },
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "query",
+        argument: "query",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["投影片", "ppt", "powerpoint", "slides", "keynote", "odp"]
+        },
+        prompt: "要查哪一份投影片？請直接回覆名稱。"
+      }
+    ],
+    resourcePolicy: {
+      kind: "graph_file",
+      resourceTypes: ["ppt_slide"],
+      remember: true,
+      alias: true
+    },
+    memoryPolicy: { kind: "resource_metadata" },
+    clarificationPrompt: "要查哪一份投影片？請直接回覆名稱。",
+    description:
+      '- find_ppt_slides: find church presentation files by title or keyword. Only pptx, ppt, key, and odp files are searchable. Arguments: {"query":"extracted filename/title keyword", "originalQuery":"full user request optional", "matchMode":"fuzzy|exact optional"}. Use fuzzy for typo-tolerant song/title lookup.',
+    argumentSchema: findPptSlidesArgumentsSchema,
+    quickReply: {
+      label: "查投影片",
+      command: "小哈 查投影片"
+    },
+    helpText: "查教會投影片，找到後回 1 天有效下載連結。"
+  },
+  queryScheduleDefinition,
+  {
+    name: "query_knowledge",
+    displayName: "查已加入知識",
+    shortDescription: "查詢管理員已加入的計畫、SOP與其他內部知識。",
+    examples: ["小哈 這次出遊第一個地點是哪裡", "小哈 聚會結束後場地怎麼復原"],
+    requires: ["knowledge"],
+    scope: "group_capable",
+    sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查知識", "知識查詢", "找知識"],
+      semanticDescription: "從管理員已加入的內部知識回答問題。",
+      retrievalEvidence: { provider: "knowledge", queryStopWords: ["知識", "查知識", "知識查詢"] },
+      operations: ["continue", "refine", "select"]
+    },
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "query",
+        argument: "query",
+        missingWhen: "blank",
+        genericRequest: { phrases: ["查知識", "知識查詢"] },
+        prompt: "想查已加入知識中的哪一項資訊？"
+      }
+    ],
+    resourcePolicy: { kind: "none", remember: false, alias: false },
+    memoryPolicy: { kind: "none" },
+    clarificationPrompt: "想查已加入知識中的哪一項資訊？",
+    description:
+      '- query_knowledge: answer from administrator-registered internal knowledge sources. Arguments: {"query":"full user question","sourceKey":"eligible source key optional","sourceId":"opaque source id optional","documentId":"opaque document id optional","sectionKey":"opaque section id optional","ordinal":"zero-based requested item optional","limit":number optional}. Never use it for service schedules when query_schedule applies.',
+    argumentSchema: queryKnowledgeArgumentsSchema,
+    quickReply: { label: "查知識", command: "小哈 查知識" },
+    helpText: "查詢管理員已加入的計畫、SOP與其他內部資訊。"
+  },
+  {
+    name: "save_schedule",
+    displayName: "記服事表",
+    shortDescription: "把文字版服事表整理為可查詢的共用資料。",
+    examples: ["小哈幫我記住這份晨更服事表：七/10五黃弘家族2"],
+    requires: ["memory", "session"],
+    scope: "group_capable",
+    sideEffectLevel: "write",
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "content",
+        argument: "content",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["服事表", "記住服事表", "保存服事表", "儲存服事表"]
+        },
+        prompt: "請貼上要記住的服事表文字內容。"
+      }
+    ],
+    resourcePolicy: { kind: "none", remember: false, alias: false },
+    memoryPolicy: { kind: "explicit_text" },
+    grantPolicy: { principals: ["user"] },
+    agentCapability: {
+      intents: [
+        "服事表",
+        "幫我記住服事表",
+        "記住服事表",
+        "保存服事表",
+        "儲存服事表",
+        "新增服事",
+        "修改服事",
+        "刪除服事"
+      ],
+      semanticDescription: "整理並保存使用者明確提供的共用服事表。",
+      operations: []
+    },
+    clarificationPrompt: "請貼上要記住的服事表文字內容。",
+    description:
+      '- save_schedule: manage the profile-shared canonical service schedule. Use operation "replace" with content for a full pasted schedule; "add_entry" with scheduleType and entry; "update_entry" with targetQuery and changes; "delete_entry" with targetQuery; or "delete_schedule" with targetQuery. Every write previews first unless confirm is true. Never invent content, targets, titles, or changes.',
+    argumentSchema: saveScheduleArgumentsSchema,
+    quickReply: {
+      label: "記服事表",
+      command: "小哈 幫我記住服事表"
+    },
+    helpText: "貼上文字版服事表，先整理預覽，確認後保存一年。"
+  },
+  {
+    name: "find_sheet_music",
+    displayName: "查歌譜",
+    shortDescription: "搜尋已設定的流行歌譜與詩歌歌譜，並回傳可開啟的臨時連結。",
+    examples: ["小哈 查歌譜 Yesterday", "小哈 找 A TIME FOR US 歌譜"],
+    requires: ["graph", "cache"],
+    scope: "group_capable",
+    sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查歌譜", "找歌譜", "搜尋歌譜", "查樂譜", "找樂譜"],
+      semanticDescription: "依歌名、演出者或檔案類型搜尋歌譜。",
+      retrievalEvidence: {
+        provider: "catalog_sheet_music",
+        queryStopWords: ["歌譜", "樂譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"]
+      },
+      operations: ["continue", "refine", "select", "view_full"]
+    },
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "query",
+        argument: "query",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["歌譜", "樂譜", "查譜", "流行歌譜", "詩歌歌譜", "sheet music", "score"]
+        },
+        prompt: "請告訴我要查哪一首歌的歌譜。"
+      }
+    ],
+    resourcePolicy: {
+      kind: "graph_file",
+      resourceTypes: ["sheet_music"],
+      remember: true,
+      alias: true
+    },
+    memoryPolicy: { kind: "resource_metadata" },
+    clarificationPrompt: "請告訴我要查哪一首歌的歌譜。",
+    description:
+      '- find_sheet_music: find configured sheet music PDF/image files by song title or artist. It may search multiple configured catalog item kinds such as pop_sheet and hymn_sheet without asking the user to choose an internal source. Arguments: {"query":"song title keyword", "artist":"artist optional", "fileType":"pdf|image|any optional", "matchMode":"fuzzy|exact optional"}.',
+    argumentSchema: findPopSheetMusicArgumentsSchema,
+    quickReply: {
+      label: "查歌譜",
+      command: "小哈 查歌譜"
+    },
+    helpText: "查詢已設定的流行歌譜或詩歌歌譜；本地找不到時可詢問是否上網找公開結果。"
+  },
+  {
+    name: "find_resource",
+    displayName: "查教會資料",
+    shortDescription: "搜尋目前可用的泛用教會資料。",
+    examples: ["小哈 查教會資料 週報音檔", "小哈 找 2026-07 週報音檔"],
+    requires: ["graph"],
+    scope: "group_capable",
+    sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查教會資料", "找教會資料", "查小哈資料庫", "找小哈資料庫"],
+      semanticDescription: "搜尋已授權的泛用教會文件、圖片或音檔資源。",
+      retrievalEvidence: {
+        provider: "catalog_general",
+        queryStopWords: ["教會資料", "小哈資料庫", "檔案", "文件", "音檔"]
+      },
+      operations: ["continue", "refine", "select", "view_full"]
+    },
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "query",
+        argument: "query",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["教會資料", "小哈資料庫", "文件", "音檔"]
+        },
+        prompt: "請告訴我要查什麼教會資料。"
+      }
+    ],
+    resourcePolicy: { kind: "none", remember: false, alias: false },
+    memoryPolicy: { kind: "none" },
+    clarificationPrompt: "請告訴我要查什麼教會資料。",
+    description:
+      '- find_resource: search the authorized internal church catalog for general resources such as documents, images, or future audio sources. Do not use this for clear schedule, presentation, or sheet-music requests; use the specialized functions instead. Arguments: {"query":"keyword", "itemKind":"optional catalog item kind", "domain":"optional domain", "limit":number optional}.',
+    argumentSchema: findResourceArgumentsSchema,
+    quickReply: {
+      label: "查教會資料",
+      command: "小哈 查教會資料"
+    },
+    helpText: "查詢目前可用的泛用教會資料。"
+  },
+  {
+    name: "query_wikipedia",
+    displayName: "查維基百科",
+    shortDescription: "查詢維基百科條目並整理重點。",
+    examples: ["小哈 查維基百科 馬丁路德", "小哈 維基百科告訴我什麼是量子力學"],
+    requires: ["wikipedia"],
+    scope: "group_capable",
+    sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查維基百科", "找維基百科", "查wiki", "查wikipedia"],
+      semanticDescription: "查詢一個維基百科主題並回答相關事實問題。",
+      operations: ["continue", "refine", "view_full"]
+    },
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "query",
+        argument: "query",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["維基百科", "wiki", "wikipedia"]
+        },
+        prompt: "想查哪個維基百科主題？"
+      }
+    ],
+    resourcePolicy: { kind: "none", remember: false, alias: false },
+    memoryPolicy: { kind: "none" },
+    clarificationPrompt: "想查哪個維基百科主題？",
+    description:
+      '- query_wikipedia: look up one encyclopedia topic in Wikipedia. Arguments: {"query":"topic or person to look up"}. Use only for requests that explicitly ask for Wikipedia or ask for a factual encyclopedia explanation.',
+    argumentSchema: queryWikipediaArgumentsSchema,
+    quickReply: {
+      label: "查維基百科",
+      command: "小哈 查維基百科"
+    },
+    helpText: "查維基百科條目並整理重點。"
+  },
+  {
+    name: "save_memory",
+    displayName: "記住資訊",
+    shortDescription: "保存使用者明確請我記住的文字資訊。",
+    examples: ["小哈幫我記住這個月服事表：主日導播是小明"],
+    requires: ["memory"],
+    scope: "profile",
+    sideEffectLevel: "write",
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "content",
+        argument: "content",
+        missingWhen: "blank",
+        prompt: "請直接告訴我要記住的內容。"
+      }
+    ],
+    resourcePolicy: { kind: "none", remember: false, alias: false },
+    memoryPolicy: { kind: "explicit_text" },
+    grantPolicy: { principals: ["user"] },
+    agentCapability: {
+      intents: ["幫我記住", "記住這個", "幫我保存", "幫我儲存", "保存這段資訊"],
+      semanticDescription: "保存使用者明確要求記住的文字資訊。",
+      operations: []
+    },
+    clarificationPrompt: "請直接告訴我要記住的內容。",
+    description:
+      '- save_memory: save explicit user-provided text memory only when the user clearly asks the bot to remember/save/store information. Arguments: {"title":"short optional title", "content":"the exact text to remember", "query":"optional lookup phrase"}. Do not use for passive group chatter.',
+    argumentSchema: saveMemoryArgumentsSchema,
+    quickReply: {
+      label: "記住資訊",
+      command: "小哈幫我記住："
+    },
+    helpText: "保存你明確交代我記住的文字資訊，預設只保留一段時間。"
+  },
+  {
+    name: "save_resource",
+    displayName: "保存檔案",
+    shortDescription: "上傳圖片或檔案，選擇用途與名稱，預覽確認後經驗證掃毒再保存發布。",
+    examples: ["小哈我要上傳檔案", "小哈幫我存檔案"],
+    requires: ["memory", "session"],
+    scope: "group_capable",
+    sideEffectLevel: "write",
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "url",
+        argument: "url",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["小哈我要上傳檔案", "小哈要上傳檔案", "小哈幫我存檔案"],
+          clearArguments: [
+            "url",
+            "resourceType",
+            "title",
+            "description",
+            "visibility",
+            "confirm",
+            "cancel"
+          ]
+        },
+        prompt: "請直接上傳一個圖片或檔案。"
+      },
+      {
+        name: "resource_type",
+        argument: "resourceType",
+        missingWhen: "blank",
+        prompt: "這是投影片還是歌譜？"
+      },
+      {
+        name: "title",
+        argument: "title",
+        missingWhen: "blank",
+        prompt: "請提供這份資源的名稱。"
+      }
+    ],
+    resourcePolicy: {
+      kind: "external_link",
+      resourceTypes: ["ppt_slide", "sheet_music"],
+      remember: true,
+      alias: false
+    },
+    memoryPolicy: { kind: "explicit_text" },
+    agentCapability: {
+      intents: ["保存檔案", "上傳檔案", "幫我存檔案", "保存連結", "幫我保存"],
+      semanticDescription:
+        "啟動受控附件流程，上傳圖片或檔案後選擇用途、輸入名稱、預覽確認，通過驗證與掃毒後發布；也保留明確外部連結匯入。",
+      operations: []
+    },
+    clarificationPrompt: "請先上傳圖片或檔案；之後我會依序詢問用途與名稱，再讓你預覽確認。",
+    description:
+      '- save_resource: start the controlled attachment intake for an explicit upload activation. The attachment workflow owns purpose, title, preview, confirmation, validation, malware scanning, and publication. An explicit HTTPS URL import remains supported through {"url":"https URL", "resourceType":"ppt_slide|sheet_music", "title":"user-provided title"}. Never bypass preview or confirmation.',
+    argumentSchema: saveResourceArgumentsSchema,
+    quickReply: {
+      label: "保存檔案",
+      command: "小哈我要上傳檔案"
+    },
+    helpText: "上傳圖片或檔案，選擇用途與名稱，預覽確認後經驗證掃毒再保存發布。"
+  },
+  {
+    name: "retrieve_memory",
+    displayName: "查記住的資訊",
+    shortDescription: "查詢使用者曾明確請我記住的資訊。",
+    examples: ["小哈查我記住的服事表"],
+    requires: ["memory"],
+    scope: "profile",
+    sideEffectLevel: "read",
+    agentCapability: {
+      intents: ["查我記住的", "查我保存的", "查我儲存的", "查記住的資訊"],
+      semanticDescription: "查詢目前來源中可見且未過期的明確文字記憶。",
+      retrievalEvidence: {
+        provider: "memory",
+        queryStopWords: ["記憶", "記住的資訊", "已記住的資訊", "保存的資訊", "已保存的資訊"]
+      },
+      operations: ["continue", "refine", "select", "view_full"]
+    },
+    allowedSources: ["user", "group"],
+    requiredSlots: [
+      {
+        name: "query",
+        argument: "query",
+        missingWhen: "blank",
+        genericRequest: {
+          phrases: ["記憶", "記住的資訊", "已記住的資訊", "保存的資訊", "已保存的資訊"]
+        },
+        prompt: "要查哪一段記住的資訊？請回覆關鍵字。"
+      }
+    ],
+    resourcePolicy: { kind: "none", remember: false, alias: false },
+    memoryPolicy: { kind: "retrieve_text" },
+    clarificationPrompt: "請告訴我要查哪一段記住的資訊。",
+    description:
+      '- retrieve_memory: retrieve explicit saved text memories. Arguments: {"query":"keyword or topic to search"}. Use only when the user asks what the bot remembered/saved/stored.',
+    argumentSchema: retrieveMemoryArgumentsSchema,
+    quickReply: {
+      label: "查記憶",
+      command: "小哈查我記住的"
+    },
+    helpText: "查詢先前明確保存的文字資訊。"
+  }
+];
+
+export function getFunctionDefinition(name: CapabilityName): FunctionDefinition | undefined {
+  return CAPABILITY_CATALOG.find((definition) => definition.name === name);
+}
+
+export function getFunctionDefinitions(names: CapabilityName[]): FunctionDefinition[] {
+  return names
+    .map((name) => getFunctionDefinition(name))
+    .filter((definition): definition is FunctionDefinition => Boolean(definition));
+}
+
+export function isGrantableCapabilityName(name: CapabilityName): boolean {
+  return Boolean(getFunctionDefinition(name));
+}
+
+export function isFunctionGrantableForPrincipal(
+  name: CapabilityName,
+  principal: "user" | "group"
+): boolean {
+  const definition = getFunctionDefinition(name);
+  return Boolean(
+    definition && (definition.grantPolicy?.principals ?? ["user", "group"]).includes(principal)
+  );
+}
+
+export function userFacingCapabilityNames(): CapabilityName[] {
+  return CAPABILITY_CATALOG.map((definition) => definition.name);
+}

@@ -210,7 +210,7 @@ describe("query_knowledge", () => {
       }
     );
     expect(completeText).not.toHaveBeenCalled();
-    expect(evidenceResult.responseData).toEqual({
+    expect(evidenceResult.agentResult?.replyData).toEqual({
       kind: "knowledge_evidence",
       fields: {},
       records: [
@@ -220,6 +220,7 @@ describe("query_knowledge", () => {
         })
       ]
     });
+    expect(evidenceResult).not.toHaveProperty("responseData");
   });
 
   it("falls back to lexical retrieval and a controlled excerpt when providers fail", async () => {

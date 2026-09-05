@@ -9,6 +9,14 @@ export interface PostgresRuntime {
   mediaSyncStore: PostgresMediaSyncStore;
 }
 
+export function createPostgresPool(config: DatabaseConfig): pg.Pool {
+  return new pg.Pool({
+    connectionString: config.url,
+    ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+    max: 2
+  });
+}
+
 export async function createPostgresRuntime(
   config: DatabaseConfig | undefined
 ): Promise<PostgresRuntime | undefined> {
@@ -16,10 +24,7 @@ export async function createPostgresRuntime(
     return undefined;
   }
 
-  const pool = new pg.Pool({
-    connectionString: config.url,
-    ssl: config.ssl ? { rejectUnauthorized: false } : undefined
-  });
+  const pool = createPostgresPool(config);
 
   try {
     await pool.query("select 1");

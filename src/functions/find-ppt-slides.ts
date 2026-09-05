@@ -11,7 +11,6 @@ import {
   type CatalogStore
 } from "../catalog/store.js";
 import { searchCatalogWithFreshness, type CatalogRetrievalStatus } from "../catalog/retrieval.js";
-import { storePendingFunctionQuery } from "./pending-function.js";
 import { buildPostbackQuickReply } from "../line-reply.js";
 import { withRequesterDisplayName } from "../requester-personalization.js";
 import { canCreateRequesterScopedSession } from "../state/session-safety.js";
@@ -115,14 +114,6 @@ export function createFindPptSlidesHandler(options: FindPptSlidesOptions): Funct
     }
 
     if (!rawQuery) {
-      await storePendingFunctionQuery({
-        sessionStore,
-        requestId: requestIdFactory(),
-        action: "find_ppt_slides",
-        arguments: args,
-        context,
-        now: now()
-      });
       return {
         ok: true,
         replyText: withRequesterDisplayName(context, "要查哪一份投影片？請直接回覆名稱。"),
@@ -382,7 +373,6 @@ export function createFindPptSlidesTextMessageHandler(
   const now = options.now ?? (() => new Date());
 
   return {
-    turnStage: "resolution",
     capability: "find_ppt_slides",
     matches: async (request, context) =>
       context.profile.enabledFunctions.includes("find_ppt_slides") &&

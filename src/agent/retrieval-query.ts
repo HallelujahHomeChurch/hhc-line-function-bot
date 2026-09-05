@@ -1,4 +1,4 @@
-import type { FunctionDefinition } from "../functions/definitions.js";
+import type { FunctionDefinition } from "../capabilities/catalog.js";
 
 const LEADING_REQUEST_PHRASES = [
   "我想查詢",

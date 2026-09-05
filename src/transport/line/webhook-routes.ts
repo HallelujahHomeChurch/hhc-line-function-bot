@@ -1,17 +1,19 @@
+import type { CapabilityName } from "../../capabilities/names.js";
 import fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { AdminActionRegistry } from "../../actions/admin-registry.js";
 import {
+  enabledNaturalLanguageAdminActionNames,
+  matchesGroupScopedNaturalLanguageAdminActionHint,
   matchesNaturalLanguageAdminActionHint,
   matchNaturalLanguageSystemActionHint
 } from "../../actions/catalog.js";
 import { evaluateActionPolicy } from "../../actions/policy.js";
 import type { ConfirmationStore } from "../../actions/confirmation-store.js";
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
-import { memoryCommandFunctionName, type AgentRuntime } from "../../agent/agent-runtime.js";
+import type { ResourceMemoryObserver } from "../../agent/resource-memory.js";
 import { matchExactWholeMessageIntent } from "../../functions/explicit-function-intent.js";
-import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
 import type { AgentJobStore } from "../../agent/jobs.js";
 import {
   type ConversationWindowScope,
@@ -28,7 +30,7 @@ import {
 } from "../../account/account-admin-client.js";
 import { resolveEffectiveAccessContext } from "../../application/access/effective-access.js";
 import type { EffectiveAccessContext } from "../../application/access/effective-access.js";
-import type { FunctionCompletionObserver } from "../../application/turn/completion-observer.js";
+import type { FunctionCompletionObserver } from "../../observability/function-completion.js";
 import { projectEffectiveCapabilities } from "../../application/capabilities/effective-capability-projection.js";
 import {
   type AccountSurfacePresentation,
@@ -39,9 +41,7 @@ import {
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
 } from "../../engagement.js";
-import { getFunctionDefinition } from "../../functions/definitions.js";
-import { handleAttachmentMessage } from "../../functions/attachment-entrance.js";
-import { pendingAttachmentPrompt } from "../../functions/pending-attachment.js";
+import { getFunctionDefinition } from "../../capabilities/catalog.js";
 import type { WebhookEventStore } from "../../idempotency/webhook-event-store.js";
 import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
 import { prepareMediaSyncIntake } from "../../media-sync/intake.js";
@@ -53,7 +53,9 @@ import {
   allowedProvidersForProfile,
   providerIsAllowedForProfile
 } from "../../llm/provider-runtime.js";
-import { messages } from "../../messages.js";
+import { messages, requestFailedMessage } from "../../messages.js";
+import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
+import { handleAttachmentIntake, isUploadActivation } from "./attachment-intake.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
 import { emitProductEvent } from "../../observability/product-events.js";
 import { resolveRequesterDisplayName } from "../../requester-personalization.js";
@@ -66,6 +68,7 @@ import type {
   AppConfig,
   AppDiagnostics,
   AdminHandlerRegistry,
+  AdminActionRouterPort,
   BotProfileConfig,
   FunctionExecutionResult,
   LineAccountLinkEvent,
@@ -75,11 +78,11 @@ import type {
   ModelProviderName,
   LineReplyClient,
   LineWebhookPayload,
-  FunctionName,
   PostbackHandlerRegistry,
   RouteObserver,
   RouteObserverEvent,
   TextGenerationProvider,
+  TextMessageHandler,
   TextMessageHandlerRegistry
 } from "../../types.js";
 import { registerHealthRoutes } from "../http/health-routes.js";
@@ -93,11 +96,15 @@ import {
   sourceKey
 } from "./postbacks.js";
 import { handlePublicAccessCommand, registrationPrompt } from "./public-access-commands.js";
+import { memoryCommandCapabilityName, type MemoryCommandHandler } from "./memory-commands.js";
+import { pendingAttachmentPrompt } from "./attachment-intake.js";
 
 export interface AppDependencies {
   adminActionRegistry: AdminActionRegistry;
+  adminActionRouter?: AdminActionRouterPort;
   postbackHandlers: PostbackHandlerRegistry;
   textMessageHandlers: TextMessageHandlerRegistry;
+  attachmentTextHandlers: TextMessageHandler[];
   adminHandlers: AdminHandlerRegistry;
   createLineReplyClient: (profile: BotProfileConfig) => LineReplyClient;
   createLineIdentityClient: (profile: BotProfileConfig) => LineIdentityClient;
@@ -112,8 +119,9 @@ export interface AppDependencies {
   confirmationStore?: ConfirmationStore;
   webhookEventStore: WebhookEventStore;
   textGenerator?: TextGenerationProvider;
-  agentRuntime?: AgentRuntime;
-  agentTurnRuntime: AgentTurnRuntime;
+  memoryCommands?: MemoryCommandHandler;
+  resourceMemory?: ResourceMemoryObserver;
+  profileRuntime: ProfileRuntime;
   agentTraceStore: AgentTraceStore;
   sessionStore?: SessionStore;
   agentJobStore: AgentJobStore;
@@ -219,6 +227,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   const accessStore = deps.accessStore;
   const registrationInviteCodeStore = deps.registrationInviteCodeStore;
   const adminActionRegistry = deps.adminActionRegistry;
+  const adminActionRouter = deps.adminActionRouter;
   const lastErrorStore = deps.lastErrorStore;
   const lastRouteStore = deps.lastRouteStore;
   const rateLimiter = deps.rateLimiter;
@@ -229,7 +238,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   const agentTraceStore = deps.agentTraceStore;
   const agentJobStore = deps.agentJobStore;
   const conversationWindowStore = deps.conversationWindowStore;
-  const agentTurnRuntime = deps.agentTurnRuntime;
+  const profileRuntime = deps.profileRuntime;
 
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
@@ -253,8 +262,10 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         profile,
         config,
         adminActionRegistry,
+        adminActionRouter,
         deps.postbackHandlers,
         deps.textMessageHandlers,
+        deps.attachmentTextHandlers,
         deps.adminHandlers,
         createReplyClient,
         createIdentityClient,
@@ -266,11 +277,12 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         accessStore,
         registrationInviteCodeStore,
         diagnostics,
-        agentTurnRuntime,
+        profileRuntime,
         agentTraceStore,
         textGenerator,
         textFallbackGenerator,
-        deps.agentRuntime,
+        deps.memoryCommands,
+        deps.resourceMemory,
         agentJobStore,
         conversationWindowStore,
         webhookEventStore,
@@ -291,8 +303,10 @@ async function handleWebhook(
   profile: BotProfileConfig,
   config: AppConfig,
   adminActionRegistry: AdminActionRegistry,
+  adminActionRouter: AdminActionRouterPort | undefined,
   postbackHandlers: PostbackHandlerRegistry,
   textMessageHandlers: TextMessageHandlerRegistry,
+  attachmentTextHandlers: TextMessageHandler[],
   adminHandlers: AdminHandlerRegistry,
   createReplyClient: (profile: BotProfileConfig) => LineReplyClient,
   createIdentityClient: (profile: BotProfileConfig) => LineIdentityClient,
@@ -304,11 +318,12 @@ async function handleWebhook(
   accessStore: AccessStore,
   registrationInviteCodeStore: RegistrationInviteCodeStore,
   diagnostics: AppDiagnostics,
-  agentTurnRuntime: AgentTurnRuntime,
+  profileRuntime: ProfileRuntime,
   agentTraceStore: AgentTraceStore,
   textGenerator: TextGenerationProvider | undefined,
   textFallbackGenerator: TextGenerationProvider | undefined,
-  agentRuntime: AgentRuntime | undefined,
+  memoryCommands: MemoryCommandHandler | undefined,
+  resourceMemory: ResourceMemoryObserver | undefined,
   agentJobStore: AgentJobStore,
   conversationWindowStore: ConversationWindowStore,
   webhookEventStore: WebhookEventStore,
@@ -893,20 +908,61 @@ async function handleWebhook(
         requesterDisplayName,
         agentJobStore,
         profile.enabledFunctions,
-        turnAccountAuthorization.allowedFunctions
+        turnAccountAuthorization.allowedFunctions,
+        profileRuntime.handleActionReview
+          ? async (review) => {
+              const reviewOutcome = await profileRuntime.handleActionReview!({
+                profile: review.profile,
+                event: review.event,
+                requestId: review.requestId,
+                requesterDisplayName: review.requesterDisplayName,
+                requesterIsAdmin,
+                configuredFunctions: [...profile.enabledFunctions],
+                authorizeFunctions: async (names) => [
+                  ...(await turnAccountAuthorization.allowedFunctions(names))
+                ],
+                accountAdministrator: turnAccountAuthorization.administrator,
+                reviewId: review.reviewId,
+                resultJobId: review.resultJobId,
+                text: review.text
+              });
+              if (!reviewOutcome) return { ok: true, replyText: messages.postbackUnsupported };
+              const reviewResult = reviewOutcome.result;
+              if (
+                reviewOutcome.freshExecution &&
+                reviewResult.writePhase === "commit" &&
+                reviewResult.executedAction
+              ) {
+                return completionObserver.complete({
+                  context: {
+                    profile: review.profile,
+                    event: review.event,
+                    requestId: review.requestId,
+                    requesterDisplayName: review.requesterDisplayName,
+                    requesterIsAdmin
+                  },
+                  action: reviewResult.executedAction,
+                  result: reviewResult,
+                  durationMs: elapsedMs(startedAt),
+                  clarificationCount: 0
+                });
+              }
+              return reviewResult;
+            }
+          : undefined
       );
       const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
-      const postbackFunctionName = completionEligible ? capability : undefined;
-      if (postbackFunctionName) {
-        await agentRuntime?.afterFunctionResult({
+      const postbackCapabilityName = completionEligible ? capability : undefined;
+      if (postbackCapabilityName) {
+        await resourceMemory?.afterFunctionResult({
           context: { profile: postbackProfile, event, requestId, requesterDisplayName },
-          action: postbackFunctionName,
+          action: postbackCapabilityName,
           arguments: {},
           result
         });
       }
       const durationMs = elapsedMs(startedAt);
-      const completedResult = postbackFunctionName
+      const completedResult = postbackCapabilityName
         ? await completionObserver.complete({
             context: {
               profile: postbackProfile,
@@ -915,7 +971,7 @@ async function handleWebhook(
               requesterDisplayName,
               requesterIsAdmin
             },
-            action: postbackFunctionName,
+            action: postbackCapabilityName,
             result,
             durationMs,
             clarificationCount: 0
@@ -942,14 +998,15 @@ async function handleWebhook(
       if (!event.replyToken) {
         continue;
       }
-      const attachmentResult = await handleAttachmentMessage({
+      const attachmentResult = await handleAttachmentIntake({
         profile: effectiveProfile,
         event,
         requestId,
         requesterDisplayName,
         sessionStore,
         maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
-        now: new Date()
+        now: new Date(),
+        textHandlers: attachmentTextHandlers
       });
       if (attachmentResult) {
         await line.replyText(
@@ -1006,7 +1063,7 @@ async function handleWebhook(
         );
         continue;
       }
-      const memoryCommandFunction = memoryCommandFunctionName(event.message.text);
+      const memoryCommandFunction = memoryCommandCapabilityName(event.message.text);
       let agentCommandProfile = effectiveProfile;
       let agentCommandIsAdmin = requesterIsAdmin;
       if (memoryCommandFunction) {
@@ -1044,7 +1101,7 @@ async function handleWebhook(
         }
         agentCommandIsAdmin = turnAccountAuthorization.administrator() || requesterIsAdmin;
       }
-      const agentCommandResult = await agentRuntime?.handleCommand({
+      const agentCommandResult = await memoryCommands?.handleCommand({
         text: event.message.text,
         context: { profile: agentCommandProfile, event, requestId, requesterDisplayName },
         isAdmin: memoryCommandFunction
@@ -1174,11 +1231,99 @@ async function handleWebhook(
       continue;
     }
 
+    if (requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
+      if (
+        event.source.type !== "user" &&
+        !matchesGroupScopedNaturalLanguageAdminActionHint(event.message.text)
+      ) {
+        await line.replyText(event.replyToken, "管理操作請到個人對話使用。", undefined);
+        continue;
+      }
+      if (!adminActionRouter) {
+        await line.replyText(event.replyToken, "目前無法辨識這個管理操作。", undefined);
+        continue;
+      }
+      const adminRouteStartedAt = Date.now();
+      const route = await adminActionRouter.route({
+        profileName: effectiveProfile.name,
+        text: event.message.text,
+        enabledActions: enabledNaturalLanguageAdminActionNames(),
+        source: event.source
+      });
+      const adminRouteDurationMs = elapsedMs(adminRouteStartedAt);
+      await emitRouteEvent(routeObserver, {
+        kind: "admin_action_route",
+        profileName: effectiveProfile.name,
+        sourceType: event.source.type,
+        requestId,
+        provider: route.provider,
+        lane: route.lane,
+        outcome: route.type,
+        action: route.type === "execute" ? route.action : undefined,
+        reason: route.type === "deny" ? route.reason : undefined,
+        durationMs: adminRouteDurationMs
+      });
+      await lastRouteStore.record({
+        requestId,
+        occurredAt: new Date().toISOString(),
+        profileName: effectiveProfile.name,
+        sourceType: event.source.type,
+        phase: "admin_route",
+        provider: route.provider,
+        outcome: route.type,
+        action: route.type === "execute" ? route.action : undefined,
+        reason: route.type === "deny" ? route.reason : undefined,
+        durationMs: adminRouteDurationMs
+      });
+      if (route.type !== "execute") {
+        await line.replyText(event.replyToken, "目前無法辨識這個管理操作。", undefined);
+        continue;
+      }
+      const adminResult = await adminActionRegistry.execute({
+        action: route.action,
+        profile: effectiveProfile,
+        event,
+        arguments: route.arguments,
+        requesterIsAdmin: true
+      });
+      await emitRouteEvent(routeObserver, {
+        kind: "admin_action_result",
+        profileName: effectiveProfile.name,
+        sourceType: event.source.type,
+        requestId,
+        action: route.action,
+        ok: adminResult.ok
+      });
+      await lastRouteStore.record({
+        requestId,
+        occurredAt: new Date().toISOString(),
+        profileName: effectiveProfile.name,
+        sourceType: event.source.type,
+        phase: "admin_action",
+        action: route.action,
+        ok: adminResult.ok
+      });
+      await line.replyText(
+        event.replyToken,
+        adminResult.replyText,
+        adminResult.quickReplies ? { quickReplies: adminResult.quickReplies } : undefined
+      );
+      continue;
+    }
+
     if (await shouldPromptManagedRegistration(profile, event, accessStore, requesterIsAdmin)) {
       await line.replyText(event.replyToken, registrationPrompt(profile, event), undefined);
       continue;
     }
 
+    const pendingActionReview =
+      sessionStore && event.source.userId
+        ? await sessionStore.findActionReview({
+            profileName: profile.name,
+            source: event.source,
+            requesterUserId: event.source.userId
+          })
+        : undefined;
     const groupEngagement =
       event.source.type === "group"
         ? classifyGroupEngagement(effectiveProfile, event.message)
@@ -1261,23 +1406,153 @@ async function handleWebhook(
       continue;
     }
 
-    const routingAllowed =
-      !groupEngagement || groupEngagementAllowsReply(groupEngagement) || conversationWindowActive;
-
-    const agentTurnResult = await handleAgentTextTurnWithLongJob({
-      runtime: agentTurnRuntime,
-      jobStore: agentJobStore,
+    const profileTurnInput = {
       profile: effectiveProfile,
       event,
       requestId,
       requesterDisplayName,
       requesterIsAdmin,
-      configuredFunctions: profile.enabledFunctions,
-      engagement: conversationWindowActive ? "conversation_window" : groupEngagement?.kind,
-      allowRouting: routingAllowed,
-      authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+      configuredFunctions: [...profile.enabledFunctions],
+      authorizeFunctions: async (names: CapabilityName[]) => [
+        ...(await turnAccountAuthorization.allowedFunctions(names))
+      ],
       accountAdministrator: turnAccountAuthorization.administrator
-    });
+    };
+    const researchOutcome = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
+    if (researchOutcome?.kind === "handled") {
+      await line.replyText(
+        event.replyToken,
+        researchOutcome.result.replyText,
+        researchOutcome.result.quickReplies
+          ? { quickReplies: researchOutcome.result.quickReplies }
+          : undefined
+      );
+      await recordConversationReply(
+        conversationWindowStore,
+        effectiveProfile,
+        event,
+        researchOutcome.result
+      );
+      continue;
+    }
+    const researchAccepted = researchOutcome?.kind === "accepted";
+    if (!researchAccepted) {
+      const attachmentResult = await executeAttachmentTextIntake({
+        intake: {
+          profile: effectiveProfile,
+          event,
+          requestId,
+          requesterDisplayName,
+          requesterIsAdmin,
+          configuredFunctions: profile.enabledFunctions,
+          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+          sessionStore,
+          maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
+          now: new Date(),
+          textHandlers: attachmentTextHandlers
+        },
+        completion: {
+          profile: effectiveProfile,
+          event,
+          requestId,
+          requesterDisplayName,
+          requesterIsAdmin,
+          completionObserver,
+          accessStore,
+          resourceMemory,
+          routeObserver,
+          lastRouteStore
+        },
+        lastErrorStore
+      });
+      if (attachmentResult) {
+        await line.replyText(
+          event.replyToken,
+          attachmentResult.replyText,
+          attachmentResult.quickReplies
+            ? { quickReplies: attachmentResult.quickReplies }
+            : undefined
+        );
+        await recordConversationReply(
+          conversationWindowStore,
+          effectiveProfile,
+          event,
+          attachmentResult
+        );
+        continue;
+      }
+    }
+
+    const continuation = researchAccepted
+      ? { matched: false as const }
+      : await executeDeterministicTextContinuation({
+          event,
+          profile: effectiveProfile,
+          configuredFunctions: profile.enabledFunctions,
+          handlers: textMessageHandlers,
+          requesterDisplayName,
+          requesterIsAdmin,
+          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+          sessionStore,
+          resourceMemory,
+          completionObserver,
+          accessStore,
+          routeObserver,
+          lastErrorStore,
+          lastRouteStore,
+          requestId
+        });
+    if (continuation.matched) {
+      if (continuation.result) {
+        await line.replyText(
+          event.replyToken,
+          continuation.result.replyText,
+          continuation.result.quickReplies
+            ? { quickReplies: continuation.result.quickReplies }
+            : undefined
+        );
+        await recordConversationReply(
+          conversationWindowStore,
+          effectiveProfile,
+          event,
+          continuation.result
+        );
+      }
+      continue;
+    }
+
+    const routingAllowed =
+      Boolean(researchAccepted) ||
+      Boolean(pendingActionReview) ||
+      !groupEngagement ||
+      groupEngagementAllowsReply(groupEngagement) ||
+      conversationWindowActive;
+
+    const agentTurnResult = routingAllowed
+      ? await handleAgentTextTurnWithLongJob({
+          runtime: profileRuntime,
+          jobStore: agentJobStore,
+          ...profileTurnInput,
+          completeResult: (result) =>
+            result.executedAction &&
+            result.writePhase !== "preview" &&
+            !profileRuntime.observesCompletion
+              ? completionObserver.complete({
+                  context: {
+                    profile: effectiveProfile,
+                    event,
+                    requestId,
+                    requesterDisplayName,
+                    requesterIsAdmin
+                  },
+                  action: result.executedAction,
+                  result,
+                  durationMs: 0,
+                  clarificationCount: 0
+                })
+              : Promise.resolve(result)
+        })
+      : undefined;
     if (agentTurnResult) {
       await line.replyText(
         event.replyToken,
@@ -1304,6 +1579,282 @@ async function handleWebhook(
     ok: true,
     allowedEvents: admittedEvents,
     ignored: ignoredCounts.size > 0 ? formatIgnoredSummary(ignoredCounts) : undefined
+  });
+}
+
+async function executeDeterministicTextContinuation(input: {
+  event: LineEvent;
+  profile: BotProfileConfig;
+  configuredFunctions: readonly CapabilityName[];
+  handlers: TextMessageHandlerRegistry;
+  requesterDisplayName?: string;
+  requesterIsAdmin: boolean;
+  authorizeFunctions(names: readonly CapabilityName[]): Promise<readonly CapabilityName[]>;
+  sessionStore?: SessionStore;
+  resourceMemory?: ResourceMemoryObserver;
+  completionObserver: FunctionCompletionObserver;
+  accessStore: AccessStore;
+  routeObserver?: RouteObserver;
+  lastErrorStore: LastErrorStore;
+  lastRouteStore: LastRouteStore;
+  requestId: string;
+}): Promise<{ matched: boolean; result?: FunctionExecutionResult }> {
+  const matched = await matchTextContinuation(
+    input.event,
+    input.profile,
+    input.handlers,
+    input.requesterDisplayName,
+    input.requesterIsAdmin,
+    input.authorizeFunctions,
+    input.configuredFunctions
+  );
+  if (!matched) return { matched: false };
+  const startedAt = Date.now();
+  const context = {
+    profile: matched.profile,
+    event: input.event,
+    requestId: input.requestId,
+    requesterDisplayName: input.requesterDisplayName,
+    requesterIsAdmin: input.requesterIsAdmin
+  };
+  try {
+    if ("matchError" in matched) throw matched.matchError;
+    const result = await matched.handler.handle({ text: input.event.message?.text ?? "" }, context);
+    if (!result) return { matched: true };
+    const action = result.executedAction ?? matched.handler.capability;
+    const durationMs = elapsedMs(startedAt);
+    await emitRouteEvent(input.routeObserver, {
+      kind: "text_handler",
+      profileName: input.profile.name,
+      sourceType: input.event.source.type,
+      requestId: input.requestId,
+      handler: matched.name,
+      action,
+      ok: result.ok,
+      durationMs
+    });
+    if (result.executedAction) {
+      await recordDeterministicFunctionWriteAudit(
+        input.accessStore,
+        context,
+        result.executedAction,
+        result
+      );
+    }
+    if (action && result.agentResource) {
+      await input.resourceMemory?.afterFunctionResult({
+        context,
+        action,
+        arguments: {},
+        result
+      });
+    }
+    const completed = result.executedAction
+      ? await input.completionObserver.complete({
+          context,
+          action: result.executedAction,
+          result,
+          durationMs,
+          clarificationCount: 0
+        })
+      : result;
+    await input.lastRouteStore.record({
+      requestId: input.requestId,
+      occurredAt: new Date().toISOString(),
+      profileName: input.profile.name,
+      sourceType: input.event.source.type,
+      phase: "function",
+      action,
+      ok: result.ok,
+      durationMs
+    });
+    return { matched: true, result: completed };
+  } catch (error) {
+    await input.lastErrorStore.record({
+      requestId: input.requestId,
+      occurredAt: new Date().toISOString(),
+      profileName: input.profile.name,
+      sourceType: input.event.source.type,
+      phase: "function",
+      action: matched.handler.capability,
+      errorName: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return {
+      matched: true,
+      result: { ok: false, replyText: requestFailedMessage(input.requestId) }
+    };
+  }
+}
+
+export async function matchTextContinuation(
+  event: LineEvent,
+  profile: BotProfileConfig,
+  handlers: TextMessageHandlerRegistry,
+  requesterDisplayName: string | undefined,
+  requesterIsAdmin: boolean,
+  authorizeFunctions: (names: readonly CapabilityName[]) => Promise<readonly CapabilityName[]>,
+  configuredFunctions: readonly CapabilityName[]
+) {
+  const text = event.message?.text;
+  if (event.type !== "message" || event.message?.type !== "text" || !text) return undefined;
+  for (const [name, handler] of Object.entries(handlers)) {
+    const capability = handler.capability;
+    const protectedCapability =
+      capability &&
+      configuredFunctions.includes(capability) &&
+      (profile.permissionRequiredFunctions.includes(capability) ||
+        !profile.enabledFunctions.includes(capability))
+        ? capability
+        : undefined;
+    const matchProfile =
+      protectedCapability && !profile.enabledFunctions.includes(protectedCapability)
+        ? { ...profile, enabledFunctions: [...profile.enabledFunctions, protectedCapability] }
+        : profile;
+    let matches: boolean;
+    try {
+      matches = await handler.matches(
+        { text },
+        { profile: matchProfile, event, requesterDisplayName, requesterIsAdmin }
+      );
+    } catch (matchError) {
+      return { name, handler, profile: matchProfile, matchError };
+    }
+    if (!matches) {
+      continue;
+    }
+    if (protectedCapability) {
+      try {
+        if (!(await authorizeFunctions([protectedCapability])).includes(protectedCapability)) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return { name, handler, profile: matchProfile };
+  }
+  return undefined;
+}
+
+async function executeAttachmentTextIntake(input: {
+  intake: Parameters<typeof handleAttachmentIntake>[0];
+  completion: Omit<Parameters<typeof completeAttachmentIntake>[0], "result">;
+  lastErrorStore: LastErrorStore;
+}): Promise<FunctionExecutionResult | undefined> {
+  try {
+    const result = await handleAttachmentIntake(input.intake);
+    if (!result) return undefined;
+    return await completeAttachmentIntake({ ...input.completion, result });
+  } catch (error) {
+    try {
+      await input.lastErrorStore.record({
+        requestId: input.intake.requestId,
+        occurredAt: new Date().toISOString(),
+        profileName: input.intake.profile.name,
+        sourceType: input.intake.event.source.type,
+        phase: "function",
+        action: "save_resource",
+        errorName: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } catch {
+      // Error telemetry must never replace the bounded support response.
+    }
+    return { ok: false, replyText: requestFailedMessage(input.intake.requestId) };
+  }
+}
+
+async function completeAttachmentIntake(input: {
+  result: FunctionExecutionResult;
+  profile: BotProfileConfig;
+  event: LineEvent;
+  requestId: string;
+  requesterDisplayName?: string;
+  requesterIsAdmin: boolean;
+  completionObserver: FunctionCompletionObserver;
+  accessStore: AccessStore;
+  resourceMemory?: ResourceMemoryObserver;
+  routeObserver?: RouteObserver;
+  lastRouteStore: LastRouteStore;
+}): Promise<FunctionExecutionResult> {
+  const startedAt = Date.now();
+  const context = {
+    profile: input.profile,
+    event: input.event,
+    requestId: input.requestId,
+    requesterDisplayName: input.requesterDisplayName,
+    requesterIsAdmin: input.requesterIsAdmin
+  };
+  const action = input.result.executedAction ?? "save_resource";
+  if (input.result.executedAction) {
+    await recordDeterministicFunctionWriteAudit(
+      input.accessStore,
+      context,
+      input.result.executedAction,
+      input.result
+    );
+  }
+  if (input.result.agentResource) {
+    await input.resourceMemory?.afterFunctionResult({
+      context,
+      action,
+      arguments: {},
+      result: input.result
+    });
+  }
+  const durationMs = elapsedMs(startedAt);
+  const completed = input.result.executedAction
+    ? await input.completionObserver.complete({
+        context,
+        action: input.result.executedAction,
+        result: input.result,
+        durationMs,
+        clarificationCount: 0
+      })
+    : input.result;
+  await emitRouteEvent(input.routeObserver, {
+    kind: "text_handler",
+    profileName: input.profile.name,
+    sourceType: input.event.source.type,
+    requestId: input.requestId,
+    handler: "attachment_intake",
+    action,
+    ok: input.result.ok,
+    durationMs
+  });
+  await input.lastRouteStore.record({
+    requestId: input.requestId,
+    occurredAt: new Date().toISOString(),
+    profileName: input.profile.name,
+    sourceType: input.event.source.type,
+    phase: "function",
+    action,
+    ok: input.result.ok,
+    durationMs
+  });
+  return completed;
+}
+
+async function recordDeterministicFunctionWriteAudit(
+  accessStore: AccessStore,
+  context: {
+    profile: BotProfileConfig;
+    event: LineEvent;
+  },
+  action: CapabilityName,
+  result: FunctionExecutionResult
+): Promise<void> {
+  const definition = getFunctionDefinition(action);
+  const actorUserId = context.event.source.userId;
+  if (!actorUserId || !result.ok || !definition || definition.sideEffectLevel === "read") return;
+  await accessStore.recordAudit({
+    profileName: context.profile.name,
+    actorUserId,
+    action: `function.${definition.sideEffectLevel}.${result.writePhase ?? "preview"}`,
+    targetType: "function",
+    targetId: action,
+    metadata: { sourceType: context.event.source.type }
   });
 }
 
@@ -1479,13 +2030,16 @@ async function allowEvent(
       if (
         sessionStore &&
         event.source.userId &&
-        (await sessionStore.findPendingCapabilityResolution({
+        (await sessionStore.findActionReview({
           profileName: profile.name,
           source: event.source,
           requesterUserId: event.source.userId
         }))
       ) {
-        return { allowed: true, reason: "group_capability_resolution_active" };
+        return { allowed: true, reason: "group_action_review_active" };
+      }
+      if (await hasAttachmentTextIntake(profile, event, sessionStore)) {
+        return { allowed: true, reason: "group_attachment_intake_active" };
       }
       if (
         await matchingTextMessageHandler(
@@ -1913,8 +2467,8 @@ async function handleAdminAccessCommand(
           accessStore,
           principal.principalId
         );
-        const lastSuccessDisplayName = principal.lastSuccessFunctionName
-          ? getFunctionDefinition(principal.lastSuccessFunctionName)?.displayName
+        const lastSuccessDisplayName = principal.lastSuccessCapabilityName
+          ? getFunctionDefinition(principal.lastSuccessCapabilityName)?.displayName
           : undefined;
         return [
           base,
@@ -2184,7 +2738,7 @@ async function authorizeFunctions(
   accountAdminClient: AccountAdminClient,
   profile: BotProfileConfig,
   lineUserId: string | undefined,
-  functionNames: FunctionName[]
+  functionNames: CapabilityName[]
 ): Promise<FunctionAuthorizationState> {
   if (!lineUserId) {
     return { available: false, authorization: emptyFunctionAuthorization() };
@@ -2208,13 +2762,13 @@ function createTurnFunctionAuthorizer(
   profile: BotProfileConfig,
   lineUserId: string | undefined
 ): {
-  state(functionNames: readonly FunctionName[]): Promise<FunctionAuthorizationState>;
-  allowedFunctions(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  state(functionNames: readonly CapabilityName[]): Promise<FunctionAuthorizationState>;
+  allowedFunctions(functionNames: readonly CapabilityName[]): Promise<readonly CapabilityName[]>;
   administrator(): boolean;
 } {
   let authorization: Promise<FunctionAuthorizationState> | undefined;
   let resolvedState: FunctionAuthorizationState | undefined;
-  const state = (functionNames: readonly FunctionName[]): Promise<FunctionAuthorizationState> => {
+  const state = (functionNames: readonly CapabilityName[]): Promise<FunctionAuthorizationState> => {
     if (!authorization) {
       const restricted = new Set(profile.permissionRequiredFunctions);
       const requested = Array.from(
@@ -2247,7 +2801,13 @@ function createTurnFunctionAuthorizer(
       );
       if (protectedFunctions.length === 0) return localReads;
 
-      const result = await state(protectedFunctions);
+      const result = await authorizeFunctions(
+        accountAdminClient,
+        profile,
+        lineUserId,
+        protectedFunctions
+      );
+      resolvedState = result;
       if (!result.available || !result.authorization.active) return localReads;
       const explicitlyAllowed = new Set(result.authorization.allowedFunctions);
       return [
@@ -2409,6 +2969,32 @@ async function matchingTextMessageHandler(
     }
   }
   return undefined;
+}
+
+async function hasAttachmentTextIntake(
+  profile: BotProfileConfig,
+  event: LineEvent,
+  sessionStore?: SessionStore
+): Promise<boolean> {
+  const text = event.message?.text;
+  const requesterUserId = event.source.userId;
+  if (
+    event.type !== "message" ||
+    event.message?.type !== "text" ||
+    !text ||
+    !requesterUserId ||
+    !profile.enabledFunctions.includes("save_resource")
+  ) {
+    return false;
+  }
+  if (isUploadActivation(text)) return true;
+  return Boolean(
+    await sessionStore?.findPendingAttachment({
+      profileName: profile.name,
+      source: event.source,
+      requesterUserId
+    })
+  );
 }
 
 async function emitRouteEvent(

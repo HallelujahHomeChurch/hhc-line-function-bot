@@ -23,6 +23,15 @@ export function requesterMatchesForSource(
   );
 }
 
+export function lineSourcesEqual(left: LineSource, right: LineSource): boolean {
+  return (
+    left.type === right.type &&
+    left.userId === right.userId &&
+    left.groupId === right.groupId &&
+    left.roomId === right.roomId
+  );
+}
+
 function requiresRequesterUserId(source: LineSource): boolean {
   return source.type === "group" || source.type === "room";
 }

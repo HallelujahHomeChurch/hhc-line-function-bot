@@ -1,5 +1,6 @@
-import { isFunctionName } from "../types.js";
-import type { AccountLinkPresentation, FunctionName } from "../types.js";
+import type { CapabilityName } from "../capabilities/names.js";
+import { isCapabilityName } from "../types.js";
+import type { AccountLinkPresentation } from "../types.js";
 
 export type LineBindingTerminalStatus = "completed" | "failed" | "conflict" | "expired";
 
@@ -13,12 +14,12 @@ export interface CreateLineBindingInput {
 export interface AuthorizeLineFunctionsInput {
   lineUserId: string;
   profileName: string;
-  functionNames: FunctionName[];
+  functionNames: CapabilityName[];
 }
 
 export interface VerifyLineFunctionPermissionsInput {
   profileName: string;
-  functionNames: FunctionName[];
+  functionNames: CapabilityName[];
 }
 
 export interface UpdateOwnProfileInput {
@@ -32,7 +33,7 @@ export interface LineFunctionAuthorization {
   bound: boolean;
   active: boolean;
   administrator: boolean;
-  allowedFunctions: FunctionName[];
+  allowedFunctions: CapabilityName[];
   account?: {
     displayName: string;
     maskedEmail: string;
@@ -84,7 +85,7 @@ export interface AccountAdminClient {
   ): Promise<MediaSyncAclSubjectSearchResult>;
   authorizeAdministrator(lineUserId: string): Promise<{ bound: boolean; allowed: boolean }>;
   authorizeFunctions(input: AuthorizeLineFunctionsInput): Promise<LineFunctionAuthorization>;
-  verifyFunctionPermissions(input: VerifyLineFunctionPermissionsInput): Promise<FunctionName[]>;
+  verifyFunctionPermissions(input: VerifyLineFunctionPermissionsInput): Promise<CapabilityName[]>;
   updateOwnProfile(input: UpdateOwnProfileInput): Promise<{ firstName: string; lastName: string }>;
   createBinding(input: CreateLineBindingInput): Promise<{ bindingUrl: string; expiresAt: string }>;
   finalizeBinding(input: FinalizeLineBindingInput): Promise<{ status: LineBindingTerminalStatus }>;
@@ -343,7 +344,7 @@ function validProfileName(value: unknown): value is string {
 
 function parseFunctionAuthorization(
   value: unknown,
-  requestedFunctions: readonly FunctionName[]
+  requestedFunctions: readonly CapabilityName[]
 ): LineFunctionAuthorization | undefined {
   if (!isExactRecord(value, ["bound", "active", "administrator", "allowed_functions", "account"])) {
     return undefined;
@@ -370,11 +371,11 @@ function parseFunctionAuthorization(
 
 function isCanonicalAllowedFunctions(
   value: unknown[],
-  requested: readonly FunctionName[]
-): value is FunctionName[] {
+  requested: readonly CapabilityName[]
+): value is CapabilityName[] {
   let previousIndex = -1;
   for (const candidate of value) {
-    if (typeof candidate !== "string" || !isFunctionName(candidate)) return false;
+    if (typeof candidate !== "string" || !isCapabilityName(candidate)) return false;
     const index = requested.indexOf(candidate);
     if (index <= previousIndex) return false;
     previousIndex = index;

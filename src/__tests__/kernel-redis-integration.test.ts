@@ -55,6 +55,7 @@ describe("kernel Redis integration environment", () => {
       "redis/webhook/cross-replica-deduplication",
       "redis/cache/cross-replica-invalidation",
       "redis/confirmation/actor-safe-consume",
+      "redis/review/atomic-owner-consume",
       "redis/session/group-requester-isolation",
       "redis/session/atomic-interactive-replacement"
     ]);
@@ -261,7 +262,7 @@ describe("kernel Redis integration environment", () => {
     ).resolves.toEqual(original);
   });
 
-  it.each(["upload_intent", "pending_resolution"] as const)(
+  it.each(["upload_intent", "pending_attachment"] as const)(
     "clears the interactive index after the %s side wins replacement",
     async (winner) => {
       environment ??= await createKernelRedisEnvironment();
@@ -279,23 +280,22 @@ describe("kernel Redis integration environment", () => {
         source,
         expiresAt
       };
-      const resolution = {
-        id: `resolution-${suffix}`,
-        type: "pending_resolution" as const,
+      const attachment = {
+        id: `attachment-${suffix}`,
+        type: "pending_attachment" as const,
+        action: "save_resource" as const,
         profileName: "helper",
         requesterUserId: "U-race",
         source,
-        capability: "query_schedule" as const,
-        groundedArguments: {},
-        candidates: [{ id: "synthetic", domainKey: "synthetic", displayName: "synthetic" }],
+        attachment: { messageId: "M-race", messageType: "image" as const },
         expiresAt
       };
       if (winner === "upload_intent") {
-        await stores[1]!.set(resolution);
+        await stores[1]!.set(attachment);
         await stores[0]!.set(upload);
       } else {
         await stores[0]!.set(upload);
-        await stores[1]!.set(resolution);
+        await stores[1]!.set(attachment);
       }
 
       const selectedUpload = await stores[0]!.takeUploadIntent({
@@ -303,13 +303,13 @@ describe("kernel Redis integration environment", () => {
         requesterUserId: "U-race",
         source
       });
-      const selectedResolution = await stores[0]!.findPendingResolution({
+      const selectedAttachment = await stores[0]!.findPendingAttachment({
         profileName: "helper",
         requesterUserId: "U-race",
         source
       });
-      expect((selectedUpload ?? selectedResolution)?.type).toBe(winner);
-      if (selectedResolution) await stores[0]!.delete(selectedResolution.id);
+      expect((selectedUpload ?? selectedAttachment)?.type).toBe(winner);
+      if (selectedAttachment) await stores[0]!.delete(selectedAttachment.id);
       expect(
         await environment.clients[0].keys(`${environment.keyPrefix}:interactive-session-v1:*`)
       ).toHaveLength(0);

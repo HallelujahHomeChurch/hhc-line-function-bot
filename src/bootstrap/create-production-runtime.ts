@@ -1,4 +1,3 @@
-import { ChatDeepSeek } from "@langchain/deepseek";
 import { MemorySaver } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 
@@ -15,10 +14,12 @@ import {
 } from "../access/registration-invite-code-store.js";
 import { createAgentMemoryStore } from "../agent/create-agent-memory-store.js";
 import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
-import { createAgentRuntime } from "../agent/agent-runtime.js";
-import { createAgentTurnRuntime } from "../agent/turn-runtime.js";
-import { createSdkAgentTurnRuntime } from "../agent/sdk-turn-runtime.js";
-import { createPostgresSdkAgentState, createSdkAgentState } from "../agent/sdk-state.js";
+import { createResourceMemoryObserver } from "../agent/resource-memory.js";
+import { createMemoryCommandHandler } from "../transport/line/memory-commands.js";
+import { createHelperModels, createHelperRuntime } from "../helper-agent/runtime.js";
+import { createHelperAgentState, createPostgresHelperAgentState } from "../helper-agent/state.js";
+import { createMainRuntime } from "../runtime/main-runtime.js";
+import { createProfileRuntimeDispatcher, type ProfileRuntime } from "../runtime/profile-runtime.js";
 import { createWikipediaSummarizer } from "../wikipedia/summarizer.js";
 import { InMemoryAgentJobStore, RedisAgentJobStore } from "../agent/jobs.js";
 import { createAzureAttachmentScanQueue } from "../attachments/scan-queue.js";
@@ -40,22 +41,15 @@ import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createAssetApiClient } from "../clients/asset-api.js";
-import {
-  createLineSdkContentClient,
-  createLineSdkIdentityClient,
-  createLineSdkReplyClient
-} from "../clients/line.js";
+import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
 import { createSearxngClient } from "../clients/searxng.js";
 import { createPublicPageReader } from "../clients/public-page.js";
 import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
-import { createPostgresRuntime } from "../db/postgres.js";
+import { createPostgresPool, createPostgresRuntime } from "../db/postgres.js";
 import { MediaSyncManagementService } from "../media-sync/service.js";
-import { createFunctionRegistries } from "../functions/registry.js";
-import { FUNCTION_MODULES } from "../functions/modules.js";
-import { createQueryScheduleModule } from "../capabilities/query-schedule/module.js";
 import { createWebhookEventStore } from "../idempotency/create-webhook-event-store.js";
 import { createKnowledgeStore } from "../knowledge/create-store.js";
 import { createProfileAwareProvider } from "../llm/provider-runtime.js";
@@ -63,11 +57,10 @@ import { createLastErrorStore } from "../observability/create-last-error-store.j
 import { createLastRouteStore } from "../observability/create-last-route-store.js";
 import { createFirstSuccessStore } from "../observability/first-success-store.js";
 import { createConsoleRouteObserver } from "../observability/route-observer.js";
-import { createFunctionCompletionObserver } from "../application/turn/completion-observer.js";
+import { createFunctionCompletionObserver } from "../observability/function-completion.js";
 import { createRateLimiter } from "../rate-limit.js";
 import { createRedisRuntime } from "../redis.js";
 import { createScheduleStore } from "../schedules/create-schedule-store.js";
-import { createSheetMusicExternalSearchSummarizer } from "../search/sheet-music-external-summarizer.js";
 import { createApp } from "../server.js";
 import { createSessionStore } from "../state/create-session-store.js";
 import type { AppConfig } from "../types.js";
@@ -76,6 +69,7 @@ import {
   type ApplicationRuntime,
   type ProductionRuntime
 } from "./runtime-contracts.js";
+import { composeCapabilities } from "./compose-capabilities.js";
 
 export async function createProductionRuntime(config: AppConfig): Promise<ProductionRuntime> {
   assertProductionPersistence(config);
@@ -148,7 +142,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
   const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
   const wikipedia = config.wikipedia ? createWikipediaClient(config.wikipedia) : undefined;
-  const lineContent = createLineSdkContentClient();
   const webSearch = config.webSearch?.searxngBaseUrl
     ? createSearxngClient({
         baseUrl: config.webSearch.searxngBaseUrl,
@@ -275,120 +268,107 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     redis,
     config: config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
   });
-  const registries = createFunctionRegistries(
-    config,
-    {
-      accountAdminClient,
-      graph,
-      notion,
-      wikipedia,
-      lineContent,
-      sessionStore,
-      cache,
-      catalog,
-      scheduleStore,
-      knowledgeStore,
-      embedding: knowledgeEmbedding,
-      knowledgeTextGenerator: smartTalkPrimary,
-      memoryStore,
-      accessStore,
-      agentJobStore,
-      attachmentScanWorkStore,
-      attachmentScanQueue,
-      mediaSyncStore: postgres?.mediaSyncStore,
-      webSearch,
-      sheetMusicExternalSearchSummarizer: createSheetMusicExternalSearchSummarizer({
-        primary: wikipediaSummaryPrimary
-      }),
-      wikipediaSummarizer: createWikipediaSummarizer({
-        primary: wikipediaSummaryPrimary
-      })
-    },
-    FUNCTION_MODULES.map((module) =>
-      module.name === "query_schedule"
-        ? createQueryScheduleModule({
-            memoryStore,
-            scheduleStore,
-            notion,
-            databaseId: config.notion?.databaseId,
-            properties: config.notion?.properties,
-            timeZone: config.timeZone,
-            sessionStore
-          })
-        : module
-    )
-  );
-  const applicationAgentRuntime = createAgentRuntime({ memoryStore, graph, accessStore });
-  const directTurnRuntime = createAgentTurnRuntime({
-    functionRegistry: registries.functions,
-    textMessageHandlers: registries.textMessages,
-    adminActionRouter,
-    adminActionRegistry: knowledgeAdminActionRegistry,
-    accessStore,
+  const registries = composeCapabilities(config, {
+    accountAdminClient,
+    graph,
+    notion,
+    wikipedia,
     sessionStore,
-    agentRuntime: applicationAgentRuntime,
-    traceStore: agentTraceStore,
-    lastErrorStore,
-    lastRouteStore,
-    firstSuccessStore,
-    routeObserver,
-    completionObserver,
-    observabilityHmacKey: config.observability?.hmacKey
+    cache,
+    catalog,
+    scheduleStore,
+    knowledgeStore,
+    embedding: knowledgeEmbedding,
+    knowledgeTextGenerator: smartTalkPrimary,
+    memoryStore,
+    accessStore,
+    agentJobStore,
+    attachmentScanWorkStore,
+    attachmentScanQueue,
+    mediaSyncStore: postgres?.mediaSyncStore,
+    externalResearchEnabled: Boolean(webSearch && publicPageReader),
+    wikipediaSummarizer: createWikipediaSummarizer({
+      primary: wikipediaSummaryPrimary
+    })
   });
+  const resourceMemory = createResourceMemoryObserver({ memoryStore });
+  const memoryCommands = createMemoryCommandHandler({ memoryStore, accessStore });
   const helperProfile = config.profiles.find(
     (profile) => profile.name === "helper" && profile.agent
   );
   let stopSdkStateCleanup: (() => void) | undefined;
-  let agentTurnRuntime = directTurnRuntime;
-  if (helperProfile) {
-    let sdkState;
-    if (postgres?.pool) {
-      const checkpointer = new PostgresSaver(postgres.pool);
-      await checkpointer.setup();
-      const postgresState = createPostgresSdkAgentState({
-        pool: postgres.pool,
-        checkpointer,
-        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
-        ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
-      });
-      await postgresState.setup();
-      await postgresState.cleanupExpired();
-      const timer = setInterval(
-        () => void postgresState.cleanupExpired().catch(() => undefined),
-        300_000
-      );
-      timer.unref();
-      stopSdkStateCleanup = () => clearInterval(timer);
-      sdkState = postgresState;
-    } else {
-      sdkState = createSdkAgentState({
-        checkpointer: new MemorySaver(),
-        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret,
-        ttlMs: (helperProfile.agentRuntime?.taskFrameSeconds ?? 600) * 1000
-      });
-    }
-    agentTurnRuntime = createSdkAgentTurnRuntime({
-      fallback: directTurnRuntime,
-      functionRegistry: registries.functions,
-      lastErrorStore,
-      model: new ChatDeepSeek({
-        apiKey: config.llm.deepseekApiKey,
-        model: config.llm.deepseekModel,
-        temperature: 0,
-        maxRetries: 1,
-        timeout: config.llm.deepseekTimeoutMs,
-        configuration: { baseURL: config.llm.deepseekBaseUrl }
-      }),
-      state: sdkState,
-      sessionStore,
-      webSearch,
-      pageReader: publicPageReader
+  let helperStateLockPool: ReturnType<typeof createPostgresPool> | undefined;
+  const runtimes: Partial<Record<string, ProfileRuntime>> = {};
+  if (config.profiles.some(({ name }) => name === "main")) {
+    runtimes.main = createMainRuntime({
+      handlers: registries.functions,
+      sessions: sessionStore,
+      jobs: agentJobStore
     });
   }
+  if (helperProfile) {
+    let helperState;
+    if (postgres?.pool) {
+      if (!config.database) throw new Error("helper_postgres_config_required");
+      const checkpointer = new PostgresSaver(postgres.pool);
+      await checkpointer.setup();
+      helperStateLockPool = createPostgresPool(config.database);
+      try {
+        await helperStateLockPool.query("select 1");
+        const postgresHelperState = createPostgresHelperAgentState({
+          pool: postgres.pool,
+          lockPool: helperStateLockPool,
+          checkpointer,
+          hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
+        });
+        await postgresHelperState.setup();
+        await postgresHelperState.cleanupExpired();
+        const timer = setInterval(
+          () => void postgresHelperState.cleanupExpired().catch(() => undefined),
+          300_000
+        );
+        timer.unref();
+        stopSdkStateCleanup = () => clearInterval(timer);
+        helperState = postgresHelperState;
+      } catch (error) {
+        await helperStateLockPool.end().catch(() => undefined);
+        helperStateLockPool = undefined;
+        throw error;
+      }
+    } else {
+      helperState = createHelperAgentState({
+        checkpointer: new MemorySaver(),
+        hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
+      });
+    }
+    const helperModels = createHelperModels({
+      apiKey: config.llm.deepseekApiKey,
+      baseUrl: config.llm.deepseekBaseUrl,
+      model: config.llm.deepseekModel,
+      timeoutMs: config.llm.deepseekTimeoutMs
+    });
+    runtimes.helper = createHelperRuntime({
+      ...helperModels,
+      state: helperState,
+      handlers: registries.functions,
+      sessions: sessionStore,
+      jobs: agentJobStore,
+      webSearch,
+      pageReader: publicPageReader,
+      resourceMemory,
+      lastErrorStore,
+      traceStore: agentTraceStore,
+      routeObserver,
+      observabilityHmacKey: config.observability?.hmacKey
+    });
+  }
+  const profileRuntime = createProfileRuntimeDispatcher(runtimes);
   const app = createApp(config, {
     adminActionRegistry: knowledgeAdminActionRegistry,
+    adminActionRouter,
     postbackHandlers: registries.postbacks,
     textMessageHandlers: registries.textMessages,
+    attachmentTextHandlers: registries.attachmentTextHandlers,
     adminHandlers: registries.adminHandlers,
     createLineReplyClient: createLineSdkReplyClient,
     createLineIdentityClient: createLineSdkIdentityClient,
@@ -405,8 +385,9 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     agentJobStore,
     conversationWindowStore,
     textGenerator: smartTalkPrimary,
-    agentRuntime: applicationAgentRuntime,
-    agentTurnRuntime,
+    memoryCommands,
+    resourceMemory,
+    profileRuntime,
     diagnostics: createDependencyDiagnostics({
       config,
       postgres: postgres?.pool,
@@ -429,6 +410,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       stopMediaSyncOutbox?.();
       await app.close();
       await redis?.close();
+      await helperStateLockPool?.end();
       await postgres?.pool.end();
     }
   };

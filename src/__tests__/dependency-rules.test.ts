@@ -7,6 +7,57 @@ function check(files: SourceFile[]) {
 }
 
 describe("modular dependency rules", () => {
+  it("rejects helper imports from retired turn orchestration", () => {
+    expect(
+      check([
+        {
+          path: "src/helper-agent/bad.ts",
+          source: 'import "../application/turn/runtime.js";'
+        }
+      ])
+    ).toEqual([
+      {
+        importer: "src/helper-agent/bad.ts",
+        imported: "src/application/turn/runtime.ts",
+        rule: "helper-agent cannot import retired turn orchestration"
+      }
+    ]);
+  });
+
+  it("keeps the main runtime provider-free", () => {
+    expect(
+      check([
+        {
+          path: "src/runtime/main-runtime.ts",
+          source: 'import "../helper-agent/runtime.js";'
+        }
+      ])
+    ).toEqual([
+      {
+        importer: "src/runtime/main-runtime.ts",
+        imported: "src/helper-agent/runtime.ts",
+        rule: "main runtime must remain provider-free"
+      }
+    ]);
+  });
+
+  it("rejects production imports from retired compatibility namespaces", () => {
+    expect(
+      check([
+        {
+          path: "src/bootstrap/bad.ts",
+          source: 'import "../agent/sdk-runtime.js";'
+        }
+      ])
+    ).toEqual([
+      {
+        importer: "src/bootstrap/bad.ts",
+        imported: "src/agent/sdk-runtime.ts",
+        rule: "production cannot import retired LINE agent architecture"
+      }
+    ]);
+  });
+
   it.each([
     {
       importer: "src/capabilities/example/handler.ts",

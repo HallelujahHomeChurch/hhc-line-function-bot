@@ -1,18 +1,18 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import type { AccessStore } from "../access/types.js";
 import type { RegistrationInviteCodeStore } from "../access/registration-invite-code-store.js";
 import { isDefaultUserFunctionAvailable } from "../application/access/effective-access.js";
 import { InMemoryConfirmationStore, type ConfirmationStore } from "./confirmation-store.js";
 import {
   isFunctionGrantableForPrincipal,
-  isGrantableFunctionName,
-  userFacingFunctionNames
-} from "../functions/definitions.js";
+  isGrantableCapabilityName,
+  userFacingCapabilityNames
+} from "../capabilities/catalog.js";
 import {
-  isFunctionName,
+  isCapabilityName,
   type AdminActionName,
   type BotProfileConfig,
   type FunctionExecutionResult,
-  type FunctionName,
   type JsonRecord,
   type LineEvent
 } from "../types.js";
@@ -358,7 +358,7 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
         await this.options.accessStore.listUserFunctionGrants(input.profile.name, target.userId)
       ).filter((name) => isFunctionGrantableForPrincipal(name, "user"));
       const profileDefaults = input.profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
-      const effectiveFunctions = mergeFunctionNames(profileDefaults, userGrants);
+      const effectiveFunctions = mergeCapabilityNames(profileDefaults, userGrants);
       return {
         ok: true,
         replyText: [
@@ -375,7 +375,7 @@ class DefaultAdminActionRegistry implements AdminActionRegistry {
       await this.options.accessStore.listGroupFunctionGrants(input.profile.name, target.groupId)
     ).filter((name) => isFunctionGrantableForPrincipal(name, "group"));
     const profileDefaults = input.profile.enabledFunctions.filter(isDefaultUserFunctionAvailable);
-    const effectiveFunctions = mergeFunctionNames(profileDefaults, groupGrants);
+    const effectiveFunctions = mergeCapabilityNames(profileDefaults, groupGrants);
     return {
       ok: true,
       replyText: [
@@ -649,18 +649,18 @@ function parseFunctionScopeArgs(input: AdminActionExecutionInput):
       ok: true;
       actorUserId: string;
       target: FunctionScopeTarget;
-      functionName: FunctionName;
+      functionName: CapabilityName;
     }
   | { ok: false; replyText: string } {
   const actorUserId = input.event.source.userId;
   if (!actorUserId) {
     return { ok: false, replyText: "你沒有權限使用 admin 指令。" };
   }
-  const functionName = readFunctionName(input.arguments);
+  const functionName = readCapabilityName(input.arguments);
   if (!functionName) {
     return {
       ok: false,
-      replyText: `請提供 functionName，可用功能：${userFacingFunctionNames().join(", ")}`
+      replyText: `請提供 functionName，可用功能：${userFacingCapabilityNames().join(", ")}`
     };
   }
   const target = readFunctionScopeTarget(input.arguments, input.event);
@@ -672,9 +672,9 @@ function parseFunctionScopeArgs(input: AdminActionExecutionInput):
 
 type FunctionScopeTarget = { type: "group"; groupId: string } | { type: "user"; userId: string };
 
-function readFunctionName(args: JsonRecord | undefined): FunctionName | undefined {
+function readCapabilityName(args: JsonRecord | undefined): CapabilityName | undefined {
   const value = readStringArg(args, ["functionName", "function", "function_name", "name"]);
-  return value && isFunctionName(value) && isGrantableFunctionName(value) ? value : undefined;
+  return value && isCapabilityName(value) && isGrantableCapabilityName(value) ? value : undefined;
 }
 
 function readTargetGroupId(args: JsonRecord | undefined, event: LineEvent): string | undefined {
@@ -731,6 +731,6 @@ function readStringArrayArg(args: JsonRecord | undefined, keys: string[]): strin
   return [];
 }
 
-function mergeFunctionNames(left: FunctionName[], right: FunctionName[]): FunctionName[] {
+function mergeCapabilityNames(left: CapabilityName[], right: CapabilityName[]): CapabilityName[] {
   return Array.from(new Set([...left, ...right]));
 }

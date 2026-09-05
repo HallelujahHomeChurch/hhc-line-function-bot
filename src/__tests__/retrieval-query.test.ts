@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { projectRetrievalQuery } from "../agent/retrieval-query.js";
-import { getFunctionDefinition } from "../functions/definitions.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
 
 describe("retrieval query projection", () => {
   it("removes conversational wrappers while preserving the resource identity", () => {

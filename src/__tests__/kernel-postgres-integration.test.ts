@@ -170,7 +170,7 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
     ).resolves.toContainEqual(
       expect.objectContaining({
         principalId: "synthetic-branch-group",
-        lastSuccessFunctionName: "query_schedule",
+        lastSuccessCapabilityName: "query_schedule",
         lastSuccessAt: "2026-07-26T08:00:00.000Z"
       })
     );
@@ -306,7 +306,7 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
         "postgres/catalog/concurrent-publication",
         "postgres/catalog/rollback-and-visibility",
         "postgres/knowledge/rollback-and-stale-failure",
-        "postgres/sdk-agent/checkpoint-restart-and-expiry"
+        "postgres/helper-agent/source-ttl-and-reset"
       ]);
       expect(results.filter((result) => !result.passed || result.failureCode)).toEqual([]);
     } finally {

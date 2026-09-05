@@ -1,3 +1,4 @@
+import type { CapabilityName } from "../capabilities/names.js";
 import { AccountApiError } from "../account/account-admin-client.js";
 import type {
   AccountAdminClient,
@@ -5,11 +6,10 @@ import type {
   FinalizeLineBindingInput,
   VerifyLineFunctionPermissionsInput
 } from "../account/account-admin-client.js";
-import type { FunctionName } from "../types.js";
 
 export interface AccountPermissionRequirement {
   profileName: string;
-  functionNames: FunctionName[];
+  functionNames: CapabilityName[];
 }
 
 type AccountPreflightClient = Pick<
@@ -19,7 +19,7 @@ type AccountPreflightClient = Pick<
 
 export interface AccountDeploymentPreflightResult {
   status: "passed" | "failed";
-  functions: Array<{ name: FunctionName; outcome: "configured" | "missing" }>;
+  functions: Array<{ name: CapabilityName; outcome: "configured" | "missing" }>;
   outcomes: {
     identityLookup: "unbound" | "failed";
     binding: "rejected" | "failed";

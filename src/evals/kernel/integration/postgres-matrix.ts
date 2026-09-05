@@ -1,11 +1,12 @@
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { FakeToolCallingModel } from "langchain";
+import { Pool } from "pg";
 
 import { runAccessMigrations } from "../../../access/migrations.js";
 import { runAgentMemoryMigrations } from "../../../agent/migrations.js";
-import { createSdkAgent } from "../../../agent/sdk-runtime.js";
-import { createPostgresSdkAgentState } from "../../../agent/sdk-state.js";
+import { createHelperAgent } from "../../../helper-agent/agent.js";
 import { runCatalogMigrations } from "../../../catalog/migrations.js";
+import { createPostgresHelperAgentState } from "../../../helper-agent/state.js";
 import { PostgresCatalogStore } from "../../../catalog/postgres-store.js";
 import { catalogStorageIdentity, type CatalogItemInput } from "../../../catalog/store.js";
 import { runKnowledgeMigrations } from "../../../knowledge/migrations.js";
@@ -48,9 +49,9 @@ export async function runPostgresIntegrationMatrix(
       run: async () => knowledgeRollbackAndStaleFailure(environment)
     },
     {
-      caseId: "postgres/sdk-agent/checkpoint-restart-and-expiry",
+      caseId: "postgres/helper-agent/source-ttl-and-reset",
       boundary: "state_lifecycle",
-      run: async () => sdkAgentCheckpointRestartAndExpiry(environment)
+      run: async () => helperAgentSourceTtlAndReset(environment)
     }
   ];
 
@@ -100,11 +101,14 @@ const MATRIX_FAILURE_CODES = new Set([
   "knowledge_result_source_missing",
   "knowledge_result_anchor_missing",
   "knowledge_scoped_search_missing",
-  "sdk_checkpoint_not_persisted",
-  "sdk_checkpoint_not_restored",
-  "sdk_checkpoint_policy_not_invalidated",
-  "sdk_checkpoint_not_deleted",
-  "sdk_thread_metadata_not_deleted"
+  "helper_direct_ttl_invalid",
+  "helper_group_ttl_invalid",
+  "helper_checkpoint_not_deleted",
+  "helper_expired_research_exposed",
+  "helper_failed_run_metadata_retained",
+  "helper_observation_instant_invalid",
+  "helper_state_pool_deadlock",
+  "helper_data_pool_not_saturated"
 ]);
 
 function boundedFailureCode(error: unknown): string {
@@ -115,67 +119,159 @@ function boundedFailureCode(error: unknown): string {
 
 type KernelPgPool = KernelPostgresEnvironment["pools"][number];
 
-async function sdkAgentCheckpointRestartAndExpiry(
-  environment: KernelPostgresEnvironment
-): Promise<void> {
-  const pool = environment.pools[0];
-  const checkpointer = new PostgresSaver(pool);
-  let now = new Date("2026-09-04T00:00:00.000Z");
-  const createState = () =>
-    createPostgresSdkAgentState({
+async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironment): Promise<void> {
+  const pool = new Pool({ ...environment.pools[0].options, max: 1 });
+  try {
+    const checkpointer = new PostgresSaver(pool);
+    let now = new Date("2026-09-04T00:00:00.000Z");
+    let countObservation = false;
+    let observationCalls = 0;
+    const state = createPostgresHelperAgentState({
       pool,
+      lockPool: environment.pools[1],
       checkpointer,
-      hmacKey: "kernel-sdk-agent-state-key",
-      ttlMs: 1_000,
-      now: () => now
+      hmacKey: "kernel-helper-agent-state-key",
+      now: () => {
+        if (!countObservation) return now;
+        observationCalls += 1;
+        return new Date(now.getTime() + observationCalls);
+      }
     });
-  const firstState = createState();
-  await checkpointer.setup();
-  await firstState.setup();
-  const threadId = firstState.threadId({
-    profileName: PROFILE,
-    source: { type: "group", groupId: "kernel-group", userId: "kernel-user" }
-  });
-  if (!threadId) throw new Error("sdk_checkpoint_not_persisted");
+    await checkpointer.setup();
+    await state.setup();
+    const direct = state.threadId({
+      profileName: PROFILE,
+      source: { type: "user", userId: "kernel-direct-user" }
+    });
+    const group = state.threadId({
+      profileName: PROFILE,
+      source: { type: "group", groupId: "kernel-group", userId: "kernel-group-user" }
+    });
+    if (!direct || !group) throw new Error("helper_checkpoint_not_deleted");
+    const groupSource = { type: "group", groupId: "kernel-group", userId: "kernel-group-user" };
+    await state.allowExternalSheetMusic(group, groupSource, new Date("2026-09-04T00:01:00.000Z"));
 
-  const invoke = (
-    state: ReturnType<typeof createState>,
-    content: string,
-    policyKey = "kernel-policy-v1"
-  ) =>
-    state.run(threadId, policyKey, () =>
-      createSdkAgent({
-        checkpointer,
-        model: new FakeToolCallingModel({ toolCalls: [[]] })
-      }).invoke(
-        { messages: [{ role: "user", content }] },
-        { configurable: { thread_id: threadId } }
-      )
+    const invoke = (threadId: string, source: { type: string; userId: string; groupId?: string }) =>
+      state.run({
+        threadId,
+        policyKey: "kernel-policy-v1",
+        source,
+        task: () =>
+          createHelperAgent({
+            checkpointer,
+            model: new FakeToolCallingModel({ toolCalls: [[]] }),
+            summaryModel: new FakeToolCallingModel({ toolCalls: [[]] })
+          }).invoke(
+            { messages: [{ role: "user", content: "kernel" }] },
+            { configurable: { thread_id: threadId } }
+          )
+      });
+
+    if (pool.options.max !== 1) throw new Error("helper_data_pool_not_saturated");
+    await withinHelperStateTimeout(invoke(direct, { type: "user", userId: "kernel-direct-user" }));
+    const researchAllowed = await state.run({
+      threadId: group,
+      policyKey: "kernel-policy-v1",
+      source: groupSource,
+      task: async (snapshot) => snapshot.externalSheetMusicAllowed
+    });
+    if (!researchAllowed) throw new Error("helper_research_snapshot_not_allowed");
+    await invoke(group, groupSource);
+    const metadata = await pool.query<{ thread_id: string; expires_at: Date }>(
+      "select thread_id, expires_at from agent_sdk_threads where thread_id = any($1::text[])",
+      [[direct, group]]
     );
+    const expiresAt = new Map(metadata.rows.map((row) => [row.thread_id, row.expires_at]));
+    if (expiresAt.get(direct)?.getTime() !== now.getTime() + 30 * 60_000) {
+      throw new Error("helper_direct_ttl_invalid");
+    }
+    if (expiresAt.get(group)?.getTime() !== now.getTime() + 15 * 60_000) {
+      throw new Error("helper_group_ttl_invalid");
+    }
+    now = new Date("2026-09-04T00:01:00.000Z");
+    const expiredResearchAllowed = await state.run({
+      threadId: group,
+      policyKey: "kernel-policy-v1",
+      source: groupSource,
+      task: async (snapshot) => snapshot.externalSheetMusicAllowed
+    });
+    if (expiredResearchAllowed) throw new Error("helper_research_snapshot_not_expired");
 
-  const first = await invoke(firstState, "first");
-  if (first.messages.length < 2) throw new Error("sdk_checkpoint_not_persisted");
-  const secondState = createState();
-  await secondState.setup();
-  const second = await invoke(secondState, "second");
-  if (second.messages.length <= first.messages.length) {
-    throw new Error("sdk_checkpoint_not_restored");
-  }
-  const changedPolicy = await invoke(secondState, "third", "kernel-policy-v2");
-  if (changedPolicy.messages.length >= second.messages.length) {
-    throw new Error("sdk_checkpoint_policy_not_invalidated");
-  }
+    await state.allowExternalSheetMusic(group, groupSource, new Date("2026-09-04T00:30:00.000Z"));
+    now = new Date("2026-09-04T00:17:00.000Z");
+    countObservation = true;
+    const researchAfterIdleExpiry = await state.run({
+      threadId: group,
+      policyKey: "kernel-policy-v1",
+      source: groupSource,
+      task: async (snapshot) => {
+        if (observationCalls !== 1) throw new Error("helper_observation_instant_invalid");
+        return snapshot.externalSheetMusicAllowed;
+      }
+    });
+    countObservation = false;
+    if (researchAfterIdleExpiry) throw new Error("helper_expired_research_exposed");
 
-  now = new Date("2026-09-04T00:00:02.000Z");
-  if ((await secondState.cleanupExpired()) !== 1) {
-    throw new Error("sdk_thread_metadata_not_deleted");
+    await state.reset(group);
+    const checkpoint = await pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [
+      group
+    ]);
+    if (checkpoint.rowCount) throw new Error("helper_checkpoint_not_deleted");
+
+    const failed = state.threadId({
+      profileName: PROFILE,
+      source: { type: "group", groupId: "kernel-failed-group", userId: "kernel-failed-user" }
+    });
+    if (!failed) throw new Error("helper_failed_run_metadata_retained");
+    const failedSource = {
+      type: "group",
+      groupId: "kernel-failed-group",
+      userId: "kernel-failed-user"
+    };
+    await invoke(failed, failedSource);
+    await state.allowExternalSheetMusic(failed, failedSource, new Date("2026-09-04T00:01:00.000Z"));
+    try {
+      await withinHelperStateTimeout(
+        state.run({
+          threadId: failed,
+          policyKey: "kernel-policy-v1",
+          source: failedSource,
+          task: async () => {
+            throw new ReviewCreationDenied();
+          }
+        })
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewCreationDenied)) {
+        throw error;
+      }
+    }
+    const [failedMetadata, failedCheckpoint] = await Promise.all([
+      pool.query("select 1 from agent_sdk_threads where thread_id = $1", [failed]),
+      pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [failed])
+    ]);
+    if (failedMetadata.rowCount || failedCheckpoint.rowCount) {
+      throw new Error("helper_failed_run_metadata_retained");
+    }
+  } finally {
+    await pool.end();
   }
-  const [checkpointRows, threadRows] = await Promise.all([
-    pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [threadId]),
-    pool.query("select 1 from agent_sdk_threads where thread_id = $1", [threadId])
-  ]);
-  if (checkpointRows.rowCount) throw new Error("sdk_checkpoint_not_deleted");
-  if (threadRows.rowCount) throw new Error("sdk_thread_metadata_not_deleted");
+}
+
+class ReviewCreationDenied extends Error {}
+
+async function withinHelperStateTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("helper_state_pool_deadlock")), 5_000);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function installCatalogOverlapTrigger(pool: KernelPgPool): Promise<void> {

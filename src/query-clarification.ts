@@ -1,4 +1,4 @@
-import { getFunctionDefinitions } from "./functions/definitions.js";
+import { getFunctionDefinitions } from "./capabilities/catalog.js";
 import type { BotProfileConfig, FunctionExecutionResult } from "./types.js";
 
 export function createQueryClarificationReply(

@@ -23,6 +23,30 @@ const FORBIDDEN_IMPORTS: Record<ModuleLayer, ModuleLayer[]> = {
   testing: []
 };
 
+const RETIRED_LINE_AGENT_MODULES = new Set([
+  "src/agent/sdk-runtime.ts",
+  "src/agent/sdk-state.ts",
+  "src/agent/sdk-tools.ts",
+  "src/agent/sdk-turn-runtime.ts",
+  "src/agent/turn-runtime.ts",
+  "src/agent/turn-state-machine.ts",
+  "src/agent/argument-authority.ts",
+  "src/agent/capability-resolution.ts",
+  "src/agent/profile-capability-hints.ts",
+  "src/agent/slot-clarification.ts",
+  "src/application/turn/completion-observer.ts",
+  "src/application/turn/result-guidance.ts",
+  "src/application/turn/runtime.ts",
+  "src/application/turn/stages/text-continuation-stage.ts",
+  "src/functions/definitions.ts",
+  "src/functions/generic-slot.ts",
+  "src/functions/pending-function.ts",
+  "src/functions/pending-resolution.ts",
+  "src/functions/query-refinement.ts",
+  "src/functions/modules.ts",
+  "src/functions/registry.ts"
+]);
+
 const IMPORT_PATTERN =
   /(?:import|export)\s+(?:type\s+)?(?:[^"'()]*?\s+from\s+)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/gu;
 
@@ -32,6 +56,7 @@ export function checkDependencyBoundaries(files: SourceFile[]): BoundaryViolatio
   for (const file of files) {
     const importer = normalizeSourcePath(file.path);
     const importerLayer = layerFor(importer);
+    const imports = importSpecifiers(file.source);
 
     if (
       /^\s*\/\/\s*architecture:compatibility-facade\s*$/mu.test(file.source) &&
@@ -44,11 +69,16 @@ export function checkDependencyBoundaries(files: SourceFile[]): BoundaryViolatio
       });
     }
 
-    if (!importerLayer) {
-      continue;
-    }
-
-    for (const { specifier, typeOnly } of importSpecifiers(file.source)) {
+    for (const { specifier, typeOnly } of imports) {
+      const imported = specifier.startsWith(".")
+        ? resolveSourceImport(importer, specifier)
+        : specifier;
+      const specialRule = explicitRuntimeRule(importer, imported);
+      if (specialRule) {
+        violations.push({ importer, imported, rule: specialRule });
+        continue;
+      }
+      if (!importerLayer) continue;
       if (effectiveCapabilityProjectionPackageImportIsForbidden(importer, specifier)) {
         violations.push({
           importer,
@@ -68,7 +98,6 @@ export function checkDependencyBoundaries(files: SourceFile[]): BoundaryViolatio
       if (!specifier.startsWith(".")) {
         continue;
       }
-      const imported = resolveSourceImport(importer, specifier);
       if (effectiveCapabilityProjectionImportIsForbidden(importer, imported)) {
         violations.push({
           importer,
@@ -105,6 +134,23 @@ export function checkDependencyBoundaries(files: SourceFile[]): BoundaryViolatio
       .join("\0")
       .localeCompare([right.importer, right.imported, right.rule].join("\0"))
   );
+}
+
+function explicitRuntimeRule(importer: string, imported: string): string | undefined {
+  if (importer === "src/runtime/main-runtime.ts" && imported.startsWith("src/helper-agent/")) {
+    return "main runtime must remain provider-free";
+  }
+  if (importer.startsWith("src/helper-agent/") && imported.startsWith("src/application/turn/")) {
+    return "helper-agent cannot import retired turn orchestration";
+  }
+  if (
+    importer.startsWith("src/") &&
+    !/^src\/(?:__tests__|testing)\//u.test(importer) &&
+    RETIRED_LINE_AGENT_MODULES.has(imported)
+  ) {
+    return "production cannot import retired LINE agent architecture";
+  }
+  return undefined;
 }
 
 function effectiveCapabilityProjectionImportIsForbidden(

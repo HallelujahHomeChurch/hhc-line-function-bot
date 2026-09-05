@@ -11,7 +11,8 @@ export const PRODUCT_EVENT_NAMES = [
   "retry_observed",
   "first_success",
   "account_link_started",
-  "account_link_finalized"
+  "account_link_finalized",
+  "helper_agent_turn"
 ] as const;
 
 export type ProductEventName = (typeof PRODUCT_EVENT_NAMES)[number];
@@ -28,6 +29,14 @@ export interface ProductEventInput {
   durationMs?: number;
   clarificationCount?: number;
   retry?: boolean;
+  modelCallCount?: number;
+  toolCallCount?: number;
+  estimatedInputTokens?: number;
+  estimatedOutputTokens?: number;
+  contextEdited?: boolean;
+  summarized?: boolean;
+  selectedToolNames?: string[];
+  finalStatus?: string;
 }
 
 export async function emitProductEvent(
@@ -59,7 +68,15 @@ export async function emitProductEvent(
     resultClass: input.resultClass,
     latencyBucket: latencyBucket(input.durationMs),
     clarificationCountBucket: clarificationCountBucket(input.clarificationCount),
-    retry: input.retry
+    retry: input.retry,
+    modelCallCount: input.modelCallCount,
+    toolCallCount: input.toolCallCount,
+    estimatedInputTokens: input.estimatedInputTokens,
+    estimatedOutputTokens: input.estimatedOutputTokens,
+    contextEdited: input.contextEdited,
+    summarized: input.summarized,
+    selectedToolNames: input.selectedToolNames,
+    finalStatus: input.finalStatus
   });
   try {
     await observer(event as never);

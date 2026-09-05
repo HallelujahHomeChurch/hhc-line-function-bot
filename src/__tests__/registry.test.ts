@@ -102,12 +102,10 @@ describe("function registry", () => {
     await cache.set("sheet-music-index:drive-id:sheet-folder", [{ id: "1", name: "A.pdf" }], 1000);
     await sessionStore.set({
       id: "pending-1",
-      type: "pending_function",
-      action: "find_ppt_slides",
+      type: "upload_intent",
       profileName: "helper",
       requesterUserId: "Uadmin",
       source: { type: "user", userId: "Uadmin" },
-      arguments: { query: "" },
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     });
 
@@ -151,7 +149,7 @@ describe("function registry", () => {
     expect(functionsResult.replyText).toContain("- query_schedule: configured");
     expect(functionsResult.replyText).toContain("- find_sheet_music: configured");
     expect(sessionsResult.replyText).toContain("total: 1");
-    expect(sessionsResult.replyText).toContain("- pending_function: 1");
+    expect(sessionsResult.replyText).toContain("- upload_intent: 1");
     expect(cacheResult.replyText).toBe("Cache\nentries: 1");
     expect(llmStatusResult.replyText).toContain("LLM status");
     expect(llmStatusResult.replyText).toContain("provider: deepseek");

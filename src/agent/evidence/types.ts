@@ -1,4 +1,4 @@
-import type { FunctionAllowedSource } from "../../functions/definitions.js";
+import type { FunctionAllowedSource } from "../../capabilities/catalog.js";
 
 export interface AgentEvidenceProbeInput {
   profileName: string;

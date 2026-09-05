@@ -1,11 +1,5 @@
-import type {
-  AgentResourceReference,
-  DriveItem,
-  FunctionName,
-  JsonRecord,
-  LineSource
-} from "../types.js";
-import { requesterMatchesForSource } from "./session-safety.js";
+import type { AgentResourceReference, DriveItem, JsonRecord, LineSource } from "../types.js";
+import { lineSourcesEqual, requesterMatchesForSource } from "./session-safety.js";
 
 export type SelectionItem = Pick<DriveItem, "id" | "name" | "driveId"> & {
   memoryResource?: AgentResourceReference;
@@ -34,14 +28,14 @@ export interface SelectionSession {
   expiresAt: string;
 }
 
-export interface PendingFunctionSession {
+export interface ProfileUpdateSession {
   id: string;
-  type: "pending_function";
-  action: FunctionName;
-  profileName: string;
-  requesterUserId?: string;
+  type: "profile_update";
+  profileName: "main";
+  requesterUserId: string;
   source: LineSource;
   arguments: JsonRecord;
+  reviewId?: string;
   expiresAt: string;
 }
 
@@ -89,30 +83,6 @@ export interface UploadIntentPromotion {
   replaced?: UploadIntentSession;
 }
 
-export interface PendingResolutionSession {
-  id: string;
-  type: "pending_resolution";
-  profileName: string;
-  requesterUserId: string;
-  source: LineSource;
-  capability: FunctionName;
-  groundedArguments: JsonRecord;
-  candidates: Array<{ id: string; domainKey: string; displayName: string }>;
-  expiresAt: string;
-}
-
-export interface PendingCapabilityResolutionSession {
-  id: string;
-  type: "pending_capability_resolution";
-  version: 1;
-  profileName: string;
-  requesterUserId: string;
-  source: LineSource;
-  originalText: string;
-  candidates: Array<{ capability: FunctionName; label: string }>;
-  expiresAt: string;
-}
-
 export interface ExternalSearchConsentSession {
   id: string;
   type: "external_search_consent";
@@ -140,16 +110,33 @@ export interface ExternalSheetMusicImportSession {
   expiresAt: string;
 }
 
+export type HelperWriteToolName =
+  "propose_save_schedule" | "propose_save_memory" | "propose_save_resource" | "update_own_profile";
+
+export interface ActionReviewSession {
+  id: string;
+  type: "action_review";
+  profileName: string;
+  requesterUserId: string;
+  source: LineSource;
+  threadId?: string;
+  interruptId?: string;
+  toolName: HelperWriteToolName;
+  argumentsHash: string;
+  policyKey: string;
+  resultJobId: string;
+  expiresAt: string;
+}
+
 export type ConversationSession =
   | PptSelectionSession
   | SelectionSession
-  | PendingFunctionSession
+  | ProfileUpdateSession
   | PendingAttachmentSession
   | UploadIntentSession
-  | PendingResolutionSession
-  | PendingCapabilityResolutionSession
   | ExternalSearchConsentSession
-  | ExternalSheetMusicImportSession;
+  | ExternalSheetMusicImportSession
+  | ActionReviewSession;
 export type ConversationSessionType = ConversationSession["type"];
 
 export interface SessionStoreSummary {
@@ -167,12 +154,15 @@ export interface SelectionLookup extends PptSelectionLookup {
   action: string;
 }
 
-export interface PendingFunctionLookup extends PptSelectionLookup {
-  action?: FunctionName;
-}
-
 export interface ExternalSearchConsentLookup extends PptSelectionLookup {
   action: string;
+}
+
+export interface ActionReviewLookup {
+  id: string;
+  profileName: string;
+  source: LineSource;
+  requesterUserId: string;
 }
 
 export interface SessionStore {
@@ -182,13 +172,9 @@ export interface SessionStore {
   delete(id: string): Promise<void>;
   findPptSelection(lookup: PptSelectionLookup): Promise<PptSelectionSession | undefined>;
   findSelection(lookup: SelectionLookup): Promise<SelectionSession | undefined>;
-  findPendingFunction(lookup: PendingFunctionLookup): Promise<PendingFunctionSession | undefined>;
+  findProfileUpdate(lookup: PptSelectionLookup): Promise<ProfileUpdateSession | undefined>;
   findPendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
   takePendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
-  findPendingResolution(lookup: PptSelectionLookup): Promise<PendingResolutionSession | undefined>;
-  findPendingCapabilityResolution(
-    lookup: PptSelectionLookup
-  ): Promise<PendingCapabilityResolutionSession | undefined>;
   takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined>;
   promoteUploadIntent(
     pending: PendingAttachmentSession
@@ -200,6 +186,8 @@ export interface SessionStore {
   findExternalSheetMusicImport(
     lookup: PptSelectionLookup
   ): Promise<ExternalSheetMusicImportSession | undefined>;
+  findActionReview(lookup: PptSelectionLookup): Promise<ActionReviewSession | undefined>;
+  takeActionReview(lookup: ActionReviewLookup): Promise<ActionReviewSession | undefined>;
   summary(): Promise<SessionStoreSummary>;
   clear(): Promise<number>;
 }
@@ -264,14 +252,10 @@ export class InMemorySessionStore implements SessionStore {
     )[0];
   }
 
-  async findPendingFunction(
-    lookup: PendingFunctionLookup
-  ): Promise<PendingFunctionSession | undefined> {
+  async findProfileUpdate(lookup: PptSelectionLookup): Promise<ProfileUpdateSession | undefined> {
     const liveSessions = Array.from(this.sessions.values())
       .map((session) => this.liveSession(session))
-      .filter((session): session is PendingFunctionSession => Boolean(session))
-      .filter((session) => session.type === "pending_function")
-      .filter((session) => !lookup.action || session.action === lookup.action)
+      .filter((session): session is ProfileUpdateSession => session?.type === "profile_update")
       .filter((session) => session.profileName === lookup.profileName)
       .filter((session) => sourceMatches(session.source, lookup.source))
       .filter((session) =>
@@ -322,44 +306,6 @@ export class InMemorySessionStore implements SessionStore {
     return session;
   }
 
-  async findPendingResolution(
-    lookup: PptSelectionLookup
-  ): Promise<PendingResolutionSession | undefined> {
-    return Array.from(this.sessions.values())
-      .map((candidate) => this.liveSession(candidate))
-      .filter(
-        (candidate): candidate is PendingResolutionSession =>
-          candidate?.type === "pending_resolution"
-      )
-      .filter((candidate) => candidate.profileName === lookup.profileName)
-      .filter((candidate) => sourceMatches(candidate.source, lookup.source))
-      .filter((candidate) =>
-        requesterMatchesForSource(lookup.source, candidate.requesterUserId, lookup.requesterUserId)
-      )
-      .sort(
-        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
-      )[0];
-  }
-
-  async findPendingCapabilityResolution(
-    lookup: PptSelectionLookup
-  ): Promise<PendingCapabilityResolutionSession | undefined> {
-    return Array.from(this.sessions.values())
-      .map((candidate) => this.liveSession(candidate))
-      .filter(
-        (candidate): candidate is PendingCapabilityResolutionSession =>
-          candidate?.type === "pending_capability_resolution"
-      )
-      .filter((candidate) => candidate.profileName === lookup.profileName)
-      .filter((candidate) => sourceMatches(candidate.source, lookup.source))
-      .filter((candidate) =>
-        requesterMatchesForSource(lookup.source, candidate.requesterUserId, lookup.requesterUserId)
-      )
-      .sort(
-        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
-      )[0];
-  }
-
   async takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined> {
     const session = Array.from(this.sessions.values())
       .map((candidate) => this.liveSession(candidate))
@@ -374,6 +320,32 @@ export class InMemorySessionStore implements SessionStore {
       )[0];
     if (session) this.sessions.delete(session.id);
     return session;
+  }
+
+  async takeActionReview(lookup: ActionReviewLookup): Promise<ActionReviewSession | undefined> {
+    const session = this.liveSession(this.sessions.get(lookup.id));
+    if (
+      session?.type !== "action_review" ||
+      session.profileName !== lookup.profileName ||
+      session.requesterUserId !== lookup.requesterUserId ||
+      !lineSourcesEqual(session.source, lookup.source)
+    ) {
+      return undefined;
+    }
+    this.sessions.delete(session.id);
+    return session;
+  }
+
+  async findActionReview(lookup: PptSelectionLookup): Promise<ActionReviewSession | undefined> {
+    return Array.from(this.sessions.values())
+      .map((session) => this.liveSession(session))
+      .filter((session): session is ActionReviewSession => session?.type === "action_review")
+      .filter((session) => session.profileName === lookup.profileName)
+      .filter((session) => lineSourcesEqual(session.source, lookup.source))
+      .filter((session) => session.requesterUserId === lookup.requesterUserId)
+      .sort(
+        (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
+      )[0];
   }
 
   async promoteUploadIntent(
@@ -525,13 +497,7 @@ export class InMemorySessionStore implements SessionStore {
 }
 
 function isInteractiveSession(session: ConversationSession): boolean {
-  return [
-    "pending_function",
-    "pending_resolution",
-    "pending_capability_resolution",
-    "pending_attachment",
-    "upload_intent"
-  ].includes(session.type);
+  return ["pending_attachment", "upload_intent", "action_review"].includes(session.type);
 }
 
 function sourceMatches(expected: LineSource, actual: LineSource): boolean {

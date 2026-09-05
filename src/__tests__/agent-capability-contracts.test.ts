@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { createSdkFunctionTools } from "../agent/sdk-tools.js";
-import { FUNCTION_DEFINITIONS } from "../functions/definitions.js";
+import { createHelperReadTools } from "../helper-agent/read-tools.js";
+import { CAPABILITY_CATALOG } from "../capabilities/catalog.js";
 import type { FunctionRegistry } from "../types.js";
 
-const readDefinitions = FUNCTION_DEFINITIONS.filter(
+const readDefinitions = CAPABILITY_CATALOG.filter(
   ({ sideEffectLevel }) => sideEffectLevel === "read"
 );
 
-describe("SDK agent function contracts", () => {
+describe("helper agent capability contracts", () => {
   it("gives every read function a strict schema and model-facing description", () => {
     expect(readDefinitions.length).toBeGreaterThan(0);
     for (const definition of readDefinitions) {
@@ -22,7 +22,7 @@ describe("SDK agent function contracts", () => {
     const functionRegistry = Object.fromEntries(
       enabledFunctions.map((name) => [name, async () => ({ ok: true, replyText: "ok" })])
     ) as FunctionRegistry;
-    const tools = createSdkFunctionTools({
+    const tools = createHelperReadTools({
       context: {
         profile: {
           name: "helper",
@@ -44,9 +44,9 @@ describe("SDK agent function contracts", () => {
           message: { type: "text", text: "查詢" }
         }
       },
-      functionRegistry
+      handlers: functionRegistry
     });
 
-    expect(tools.map(({ name }) => name)).toEqual(["query_schedule", "query_wikipedia"]);
+    expect(tools.map(({ name }) => name)).toEqual(["get_official_schedule", "query_wikipedia"]);
   });
 });

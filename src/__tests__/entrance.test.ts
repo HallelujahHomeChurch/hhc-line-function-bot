@@ -9,15 +9,26 @@ import {
   RedisRegistrationInviteCodeStore
 } from "../access/registration-invite-code-store.js";
 import { InMemoryConversationWindowStore } from "../agent/context-manager.js";
-import type { FunctionCompletionObserver } from "../application/turn/completion-observer.js";
-import { InMemoryAgentJobStore } from "../agent/jobs.js";
+import { createResourceMemoryObserver } from "../agent/resource-memory.js";
+import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
+import {
+  createFunctionCompletionObserver,
+  type FunctionCompletionObserver
+} from "../observability/function-completion.js";
+import { buildAgentJobScope, InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
+import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
 import { createFindPptSlidesHandler } from "../functions/find-ppt-slides.js";
-import { createPendingFunctionTextMessageHandler } from "../functions/pending-function.js";
+import { createQueryKnowledgeHandler } from "../functions/query-knowledge.js";
+import { InMemoryKnowledgeStore } from "../knowledge/store.js";
 import { signLineBody } from "../line-signature.js";
 import { runMediaSyncMigrations } from "../media-sync/migrations.js";
 import { PostgresMediaSyncStore } from "../media-sync/store.js";
+import { InMemoryFirstSuccessStore } from "../observability/first-success-store.js";
+import { createProfileRuntimeDispatcher } from "../runtime/profile-runtime.js";
+import { createMainRuntime } from "../runtime/main-runtime.js";
 import { createTestApp as createApp } from "../testing/create-test-app.js";
+import { createTestFunctionRegistries } from "../testing/create-test-function-registries.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   AppConfig,
@@ -256,6 +267,122 @@ function providerFreeMainConfig(): AppConfig {
 }
 
 describe("LINE entrance", () => {
+  it("lets the production-composed main runtime exclusively own Weekly Paper interruption", async () => {
+    const config = providerFreeMainConfig();
+    const main = config.profiles[0]!;
+    main.enabledFunctions = ["download_weekly_paper", "update_own_profile"];
+    main.permissionRequiredFunctions = ["update_own_profile"];
+    const sessions = new InMemorySessionStore();
+    const jobs = new InMemoryAgentJobStore();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      Response.json({
+        data: {
+          issueNumber: 1733,
+          locale: "zh-Hant",
+          issueDate: "2026-09-01",
+          title: "週報",
+          subtitle: "",
+          downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
+          downloadFileName: "1733-weekly.pdf",
+          publishedAt: "2026-09-01T00:00:00.000Z",
+          version: 1
+        },
+        error: null,
+        meta: {}
+      })
+    );
+    const registries = createTestFunctionRegistries(config, {
+      sessionStore: sessions,
+      agentJobStore: jobs,
+      fetchImpl
+    });
+    registries.functions.update_own_profile = vi.fn(async (args) => ({
+      ok: true,
+      replyText: args.confirm === true ? "updated" : "preview",
+      writePhase: args.confirm === true ? "commit" : "preview"
+    }));
+    const ids = ["owner-review", "other-review"];
+    const mainRuntime = createMainRuntime({
+      handlers: registries.functions,
+      sessions,
+      jobs,
+      idFactory: () => ids.shift() ?? "unexpected-review"
+    });
+    const owner = { type: "user" as const, userId: "Uadmin" };
+    const other = { type: "user" as const, userId: "Uother" };
+    const runtimeInput = (text: string, source: typeof owner) => ({
+      profile: main,
+      event: { type: "message" as const, source, message: { type: "text" as const, text } },
+      requestId: `setup-${source.userId}-${text}`,
+      configuredFunctions: [...main.enabledFunctions],
+      authorizeFunctions: async (names: typeof main.enabledFunctions) => names
+    });
+    for (const source of [owner, other]) {
+      await mainRuntime.handleTextTurn(runtimeInput("修改姓名", source));
+      await mainRuntime.handleTextTurn(runtimeInput("家睿", source));
+      await mainRuntime.handleTextTurn(runtimeInput("王", source));
+    }
+    const ownerReview = await sessions.findActionReview({
+      profileName: "main",
+      source: owner,
+      requesterUserId: owner.userId
+    });
+    const otherReview = await sessions.findActionReview({
+      profileName: "main",
+      source: other,
+      requesterUserId: other.userId
+    });
+    if (!ownerReview?.threadId || !otherReview?.threadId) throw new Error("missing review setup");
+    const ownerScope = buildAgentJobScope("main", owner);
+    const otherScope = buildAgentJobScope("main", other);
+    if (!ownerScope || !otherScope) throw new Error("missing job scope");
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      sessionStore: sessions,
+      agentJobStore: jobs,
+      textMessageHandlers: registries.textMessages,
+      profileRuntime: createProfileRuntimeDispatcher({ main: mainRuntime }),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-token",
+      source: owner,
+      message: { type: "text", text: "下載最新週報" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: main.webhookPath,
+      headers: signedHeaders(body, main.channelSecret),
+      payload: body
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    await expect(
+      sessions.findActionReview({
+        profileName: "main",
+        source: owner,
+        requesterUserId: owner.userId
+      })
+    ).resolves.toBeUndefined();
+    await expect(sessions.get(ownerReview.threadId)).resolves.toBeUndefined();
+    await expect(jobs.get(ownerReview.resultJobId, ownerScope)).resolves.toMatchObject({
+      status: "failed"
+    });
+    await expect(
+      sessions.findActionReview({
+        profileName: "main",
+        source: other,
+        requesterUserId: other.userId
+      })
+    ).resolves.toEqual(otherReview);
+    await expect(sessions.get(otherReview.threadId)).resolves.toBeDefined();
+    await expect(jobs.get(otherReview.resultJobId, otherScope)).resolves.toMatchObject({
+      status: "pending"
+    });
+  });
+
   it("acknowledges a signed empty event batch without creating a reply client or entering turn execution", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const completeText = vi.fn<TextGenerationProvider["completeText"]>();
@@ -397,9 +524,6 @@ describe("LINE entrance", () => {
       "Ray，要查哪一份投影片？請直接回覆名稱。",
       undefined
     );
-    await expect(sessionStore.get("pending-1")).resolves.toMatchObject({
-      requesterUserId: "U1"
-    });
   });
 
   it("does not execute a redelivered LINE webhook event twice", async () => {
@@ -445,76 +569,6 @@ describe("LINE entrance", () => {
       ok: true,
       ignored: "duplicate_webhook_event"
     });
-  });
-
-  it("does not let another group member answer someone else's pending clarification", async () => {
-    const sessionStore = new InMemorySessionStore();
-    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
-      type: "execute",
-      action: "find_ppt_slides",
-      arguments: { query: "" },
-      provider: "deepseek"
-    });
-    const graph: GraphDriveClient = {
-      listFolderChildren: vi.fn().mockResolvedValue([{ id: "1", name: "奇異恩典.pptx" }]),
-      createSharingLink: vi.fn().mockResolvedValue("https://download.invalid/1")
-    };
-    const handler = createFindPptSlidesHandler({
-      graph,
-      driveId: "drive-id",
-      folderItemId: "folder-id",
-      allowedExtensions: [".pptx"],
-      defaultIncludePdf: false,
-      sessionStore,
-      requestIdFactory: () => "pending-1"
-    });
-    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
-    const app = createTestApp(testConfig(), {
-      router: { route },
-      functionRegistry: { find_ppt_slides: handler },
-      textMessageHandlers: {
-        pending_function_answer: createPendingFunctionTextMessageHandler({
-          sessionStore,
-          functions: { find_ppt_slides: handler }
-        })
-      },
-      createLineReplyClient: () => ({ replyText })
-    });
-
-    const firstBody = lineBody({
-      type: "message",
-      replyToken: "reply-1",
-      source: { type: "group", groupId: "Cmain", userId: "U1" },
-      message: { type: "text", text: "小哈 查投影片" }
-    });
-    await app.inject({
-      method: "POST",
-      url: "/api/line/webhook/main",
-      headers: signedHeaders(firstBody, "main-secret"),
-      payload: firstBody
-    });
-
-    const secondBody = lineBody({
-      type: "message",
-      replyToken: "reply-2",
-      source: { type: "group", groupId: "Cmain", userId: "U2" },
-      message: { type: "text", text: "奇異恩典" }
-    });
-    const secondResponse = await app.inject({
-      method: "POST",
-      url: "/api/line/webhook/main",
-      headers: signedHeaders(secondBody, "main-secret"),
-      payload: secondBody
-    });
-
-    expect(secondResponse.statusCode).toBe(200);
-    expect(secondResponse.json()).toMatchObject({
-      ok: true,
-      ignored: true,
-      reason: "wake_word_missing"
-    });
-    expect(graph.listFolderChildren).not.toHaveBeenCalled();
-    expect(replyText).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a successful group reply when success-summary persistence fails", async () => {
@@ -650,7 +704,6 @@ describe("LINE entrance", () => {
       const accessStore = defaultAccessStore();
       const accessRead = vi.spyOn(accessStore, "hasActivePrincipal");
       const sessionStore = new InMemorySessionStore();
-      const sessionRead = vi.spyOn(sessionStore, "findPendingCapabilityResolution");
       const conversationWindowStore = new InMemoryConversationWindowStore();
       const conversationRead = vi.spyOn(conversationWindowStore, "isActive");
       const dedupe = vi.fn().mockResolvedValue(dedupeResult);
@@ -692,7 +745,6 @@ describe("LINE entrance", () => {
       expect(dedupe).toHaveBeenCalledOnce();
       expect(rateCheck).toHaveBeenCalledTimes(dedupeResult === "duplicate" ? 0 : 1);
       expect(accessRead).not.toHaveBeenCalled();
-      expect(sessionRead).not.toHaveBeenCalled();
       expect(conversationRead).not.toHaveBeenCalled();
       expect(authorizeAdministrator).not.toHaveBeenCalled();
     }
@@ -1055,6 +1107,66 @@ describe("LINE entrance", () => {
     expect(String(replyText.mock.calls.at(-1)?.[1])).not.toContain("/memories");
   });
 
+  it("refreshes protected function authorization for each runtime callback in one event", async () => {
+    const config = providerFreeMainConfig();
+    config.profiles[0]!.enabledFunctions = ["query_schedule"];
+    config.profiles[0]!.permissionRequiredFunctions = ["query_schedule"];
+    const authorizeFunctions = vi
+      .fn()
+      .mockResolvedValueOnce({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: ["query_schedule"]
+      })
+      .mockResolvedValueOnce({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: []
+      });
+    const callbackResults: Array<readonly string[]> = [];
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createApp(config, {
+      accountAdminClient: { authorizeFunctions },
+      profileRuntime: {
+        async handleTextTurn(input) {
+          callbackResults.push(await input.authorizeFunctions!(["query_schedule"]));
+          callbackResults.push(await input.authorizeFunctions!(["query_schedule"]));
+          return { ok: true, replyText: "done" };
+        }
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "reply-live-function-authorization",
+      source: { type: "user", userId: "Uallowed" },
+      message: { type: "text", text: "查詢測試" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/line/webhook/main",
+      headers: signedHeaders(body, "main-secret"),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(callbackResults).toEqual([["query_schedule"], []]);
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
+    expect(authorizeFunctions).toHaveBeenNthCalledWith(1, {
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: ["query_schedule"]
+    });
+    expect(authorizeFunctions).toHaveBeenNthCalledWith(2, {
+      lineUserId: "Uallowed",
+      profileName: "main",
+      functionNames: ["query_schedule"]
+    });
+  });
+
   it.each([
     {
       label: "denied",
@@ -1074,7 +1186,7 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
       accountAdminClient: { authorizeFunctions: authorize },
-      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      memoryCommands: { handleCommand },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -1092,7 +1204,7 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(authorize).toHaveBeenCalledOnce();
+    expect(authorize).toHaveBeenCalledTimes(2);
     expect(handleCommand).not.toHaveBeenCalled();
     expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("權限");
   });
@@ -1108,7 +1220,7 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
       accountAdminClient: { authorizeFunctions },
-      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      memoryCommands: { handleCommand },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -1149,7 +1261,7 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
       accountAdminClient: { authorizeFunctions },
-      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      memoryCommands: { handleCommand },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -1220,7 +1332,7 @@ describe("LINE entrance", () => {
       const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
       const app = createTestApp(config, {
         accountAdminClient: { authorizeFunctions },
-        agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+        memoryCommands: { handleCommand },
         createLineReplyClient: () => ({ replyText })
       });
       const body = lineBody({
@@ -1238,7 +1350,7 @@ describe("LINE entrance", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledTimes(2);
       expect(handleCommand).toHaveBeenCalledTimes(expectedCalls);
       expect(String(replyText.mock.calls.at(-1)?.[1])).toContain(expectedReply);
     }
@@ -1258,7 +1370,7 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(config, {
       accountAdminClient: { authorizeFunctions },
-      agentRuntime: { afterFunctionResult: vi.fn(), handleCommand },
+      memoryCommands: { handleCommand },
       createLineReplyClient: () => ({ replyText })
     });
     const body = lineBody({
@@ -1276,7 +1388,7 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
     expect(handleCommand).toHaveBeenCalledOnce();
     expect(String(replyText.mock.calls.at(-1)?.[1])).toContain("removed");
   });
@@ -4009,27 +4121,57 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("target=group:Cnew");
   });
 
-  it("allows public direct profiles without static allowlists and blocks their groups", async () => {
-    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
-      type: "deny",
-      reason: "not_matched",
-      provider: "deepseek"
-    });
-    const app = createTestApp(accessConfig(), {
-      router: { route },
-      accessStore: new InMemoryAccessStore(),
-      createLineReplyClient: () => ({ replyText: vi.fn().mockResolvedValue(undefined) })
+  it("keeps public main direct functions provider-free and blocks group events without replying", async () => {
+    const deepSeekGenerate = vi.fn<TextGenerationProvider["completeText"]>();
+    const embedding = vi.fn().mockResolvedValue([[0]]);
+    const replyText = vi.fn<LineReplyClient["replyText"]>();
+    const app = createTestApp(providerFreeMainConfig(), {
+      textGenerator: { completeText: deepSeekGenerate },
+      textFallbackGenerator: { completeText: deepSeekGenerate },
+      textMessageHandlers: {
+        main_weekly_paper: createDownloadWeeklyPaperTextMessageHandler(
+          vi.fn().mockResolvedValue(
+            Response.json({
+              data: {
+                issueNumber: 1733,
+                locale: "zh-Hant",
+                issueDate: "2026-09-01",
+                title: "週報",
+                subtitle: "",
+                downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
+                downloadFileName: "1733-weekly.pdf",
+                publishedAt: "2026-09-01T00:00:00.000Z",
+                version: 1
+              },
+              error: null,
+              meta: {}
+            })
+          )
+        )
+      },
+      functionRegistry: {
+        query_knowledge: createQueryKnowledgeHandler({
+          store: new InMemoryKnowledgeStore(),
+          embedding: {
+            provider: "azure_openai",
+            model: "text-embedding-3-small",
+            dimensions: 1,
+            embed: embedding
+          }
+        })
+      },
+      createLineReplyClient: () => ({ replyText })
     });
 
     const directBody = lineBody({
       type: "message",
       replyToken: "reply-token-1",
       source: { type: "user", userId: "Uany" },
-      message: { type: "text", text: "查服事表" }
+      message: { type: "text", text: "下載第 1733 期週報" }
     });
     const directRes = await app.inject({
       method: "POST",
-      url: "/api/line/webhook/main-public",
+      url: "/api/line/webhook/main",
       headers: signedHeaders(directBody, "main-secret"),
       payload: directBody
     });
@@ -4038,11 +4180,11 @@ describe("LINE entrance", () => {
       type: "message",
       replyToken: "reply-token-2",
       source: { type: "group", groupId: "Cblocked", userId: "Uany" },
-      message: { type: "text", text: "查服事表" }
+      message: { type: "text", text: "下載第 1733 期週報" }
     });
     const groupRes = await app.inject({
       method: "POST",
-      url: "/api/line/webhook/main-public",
+      url: "/api/line/webhook/main",
       headers: signedHeaders(groupBody, "main-secret"),
       payload: groupBody
     });
@@ -4050,7 +4192,15 @@ describe("LINE entrance", () => {
     expect(directRes.statusCode).toBe(200);
     expect(groupRes.statusCode).toBe(200);
     expect(groupRes.json()).toMatchObject({ ok: true, ignored: true, reason: "group_blocked" });
-    expect(route).toHaveBeenCalledOnce();
+    expect(replyText).toHaveBeenCalledOnce();
+    expect(replyText).toHaveBeenCalledWith(
+      "reply-token-1",
+      expect.stringContaining("第 1733 期週報"),
+      expect.anything()
+    );
+    expect(replyText.mock.calls.some(([token]) => token === "reply-token-2")).toBe(false);
+    expect(deepSeekGenerate).not.toHaveBeenCalled();
+    expect(embedding).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -5224,14 +5374,13 @@ describe("LINE entrance", () => {
     const app = createTestApp(config, {
       router,
       sessionStore,
-      textMessageHandlers: {
-        pending_attachment: {
-          turnStage: "attachment",
+      attachmentTextHandlers: [
+        {
           capability: "save_resource",
           matches: vi.fn().mockResolvedValue(true),
           handle: continuePendingAttachment
         }
-      },
+      ],
       accountAdminClient: { authorizeFunctions },
       createLineReplyClient: () => ({ replyText })
     });
@@ -5295,7 +5444,7 @@ describe("LINE entrance", () => {
       undefined
     );
     expect(continuePendingAttachment).toHaveBeenCalledOnce();
-    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
+    expect(authorizeFunctions).toHaveBeenCalledTimes(3);
     expect(authorizeFunctions.mock.calls[1]?.[0]).toMatchObject({
       functionNames: ["save_resource"]
     });
@@ -5319,7 +5468,6 @@ describe("LINE entrance", () => {
       accountAdminClient: { authorizeFunctions },
       textMessageHandlers: {
         role_probe: {
-          turnStage: "attachment",
           capability: "query_schedule",
           matches: vi.fn().mockResolvedValue(true),
           handle
@@ -5726,7 +5874,7 @@ describe("LINE entrance", () => {
       "authorized selection",
       undefined
     );
-    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
     expect(authorizeFunctions).toHaveBeenCalledWith({
       lineUserId: "Uallowed",
       profileName: "main",
@@ -5778,7 +5926,7 @@ describe("LINE entrance", () => {
       expect(response.statusCode).toBe(200);
       expect(handle).not.toHaveBeenCalled();
       expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
-      expect(authorize).toHaveBeenCalledOnce();
+      expect(authorize).toHaveBeenCalledTimes(2);
     }
   );
 
@@ -5844,7 +5992,7 @@ describe("LINE entrance", () => {
 
       expect(response.statusCode).toBe(200);
       expect(replyText.mock.calls.at(-1)?.[1]).toContain(expectedReply);
-      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledTimes(2);
       expect(authorizeFunctions).toHaveBeenCalledWith({
         lineUserId: "Uallowed",
         profileName: "main",
@@ -5893,7 +6041,7 @@ describe("LINE entrance", () => {
     expect(response.statusCode).toBe(200);
     expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
     expect(replyText.mock.calls.at(-1)?.[1]).not.toContain("unsafe stored result");
-    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
   });
 
   it("fails a legacy completed slow job without an owning capability closed after resolving role", async () => {
@@ -6015,7 +6163,7 @@ describe("LINE entrance", () => {
 
       expect(response.statusCode).toBe(200);
       expect(replyText.mock.calls.at(-1)?.[1]).toContain(expectedReply);
-      expect(authorize).toHaveBeenCalledOnce();
+      expect(authorize).toHaveBeenCalledTimes(2);
       expect(authorize).toHaveBeenCalledWith({
         lineUserId: "Uallowed",
         profileName: "main",
@@ -6059,7 +6207,7 @@ describe("LINE entrance", () => {
     expect(response.statusCode).toBe(200);
     expect(handle).not.toHaveBeenCalled();
     expect(replyText.mock.calls.at(-1)?.[1]).toContain("權限");
-    expect(authorizeFunctions).toHaveBeenCalledOnce();
+    expect(authorizeFunctions).toHaveBeenCalledTimes(2);
   });
 
   it("invokes the shared completion boundary exactly once for an executed postback", async () => {
@@ -6122,11 +6270,12 @@ describe("LINE entrance", () => {
       complete: vi.fn(async ({ result }) => result)
     };
     const agentTurnRuntime = {
+      observesCompletion: true,
       handleTextTurn: vi.fn().mockReturnValue(deferred.promise)
     };
     const app = createTestApp(config, {
       router: { route: vi.fn() },
-      agentTurnRuntime,
+      profileRuntime: agentTurnRuntime,
       agentJobStore: new InMemoryAgentJobStore(),
       completionObserver,
       createLineReplyClient: () => ({ replyText })
@@ -6256,6 +6405,7 @@ describe("LINE entrance", () => {
     });
     const textMessageHandlers: TextMessageHandlerRegistry = {
       ppt_numeric_selection: {
+        capability: "find_ppt_slides",
         matches: matchesNumericSelection,
         handle: handleNumericSelection
       }
@@ -6313,6 +6463,7 @@ describe("LINE entrance", () => {
     const handleNumericSelection = vi.fn().mockResolvedValue(undefined);
     const textMessageHandlers: TextMessageHandlerRegistry = {
       ppt_numeric_selection: {
+        capability: "find_ppt_slides",
         matches: matchesNumericSelection,
         handle: handleNumericSelection
       }
@@ -6340,6 +6491,528 @@ describe("LINE entrance", () => {
     expect(route).not.toHaveBeenCalled();
     expect(handleNumericSelection).toHaveBeenCalledOnce();
     expect(replyText).not.toHaveBeenCalled();
+  });
+
+  it("dispatches only the owning requester through a pending group review without a wake word", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    const source = { type: "group" as const, groupId: "Cmain", userId: "Uowner" };
+    const sessions = new InMemorySessionStore();
+    await sessions.set({
+      id: "review-1",
+      type: "action_review",
+      profileName: helper.name,
+      requesterUserId: "Uowner",
+      source,
+      threadId: "thread-1",
+      interruptId: "interrupt-1",
+      toolName: "propose_save_memory",
+      argumentsHash: "hash",
+      policyKey: "policy",
+      resultJobId: "job-1",
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const handleTextTurn = vi.fn(async () => ({ ok: true, replyText: "review resumed" }));
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      sessionStore: sessions,
+      profileRuntime: { handleTextTurn },
+      accessStore: new InMemoryAccessStore({
+        principals: [
+          {
+            id: "helper-review-group",
+            profileName: helper.name,
+            type: "group",
+            principalId: "Cmain",
+            createdAt: "2026-09-05T00:00:00.000Z",
+            createdBy: "test"
+          }
+        ]
+      }),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const ownerBody = lineBody({
+      type: "message",
+      replyToken: "owner-token",
+      source,
+      message: { type: "text", text: "確認" }
+    });
+    const otherBody = lineBody({
+      type: "message",
+      replyToken: "other-token",
+      source: { ...source, userId: "Uother" },
+      message: { type: "text", text: "確認" }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(ownerBody, helper.channelSecret),
+      payload: ownerBody
+    });
+    await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(otherBody, helper.channelSecret),
+      payload: otherBody
+    });
+
+    expect(handleTextTurn).toHaveBeenCalledOnce();
+    expect(handleTextTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: expect.objectContaining({ source }) })
+    );
+    expect(replyText).toHaveBeenCalledOnce();
+  });
+
+  it("routes consented research to helper while keeping other deterministic continuations outside it", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    helper.enabledFunctions = ["find_sheet_music", "find_ppt_slides", "save_resource"];
+    helper.permissionRequiredFunctions = [];
+    const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+    const handlers = {
+      sheet_music_numeric_selection: {
+        capability: "find_sheet_music" as const,
+        matches: ({ text }: { text: string }) => text === "上網找",
+        handle: vi.fn(async () => ({
+          ok: true,
+          replyText: "外部歌譜",
+          executedAction: "find_sheet_music" as const,
+          agentResource: {
+            resourceType: "sheet_music" as const,
+            title: "歌譜",
+            storage: { provider: "external_link" as const, url: "https://example.test/music.pdf" }
+          }
+        }))
+      },
+      ppt_numeric_selection: {
+        capability: "find_ppt_slides" as const,
+        matches: ({ text }: { text: string }) => text === "1",
+        handle: vi.fn(async () => ({
+          ok: true,
+          replyText: "投影片 1",
+          executedAction: "find_ppt_slides" as const
+        }))
+      },
+      pending_attachment_answer: {
+        capability: "save_resource" as const,
+        matches: vi.fn(({ text }: { text: string }) => text === "是"),
+        handle: vi.fn(async () => ({ ok: true, replyText: "請選用途" }))
+      }
+    };
+    const memoryStore = new InMemoryAgentMemoryStore();
+    const resourceMemory = createResourceMemoryObserver({ memoryStore });
+    const afterFunctionResult = vi.spyOn(resourceMemory, "afterFunctionResult");
+    const complete = vi.fn<FunctionCompletionObserver["complete"]>(async ({ result }) => result);
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      profileRuntime: createProfileRuntimeDispatcher({
+        helper: {
+          acceptSheetMusicResearch: async ({ event }) =>
+            event.message?.text === "上網找" ? { kind: "accepted" as const } : undefined,
+          handleTextTurn: profileTurn
+        }
+      }),
+      textMessageHandlers: {
+        sheet_music_numeric_selection: handlers.sheet_music_numeric_selection,
+        ppt_numeric_selection: handlers.ppt_numeric_selection
+      },
+      attachmentTextHandlers: [handlers.pending_attachment_answer],
+      resourceMemory,
+      completionObserver: { complete },
+      createLineReplyClient: () => ({ replyText })
+    });
+
+    for (const [index, text] of ["上網找", "1", "是"].entries()) {
+      const body = lineBody({
+        type: "message",
+        replyToken: `continuation-${index}`,
+        source: { type: "user", userId: "Uroot" },
+        message: { type: "text", text }
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: helper.webhookPath,
+        headers: signedHeaders(body, helper.channelSecret),
+        payload: body
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    expect(handlers.sheet_music_numeric_selection.handle).not.toHaveBeenCalled();
+    expect(handlers.ppt_numeric_selection.handle).toHaveBeenCalledOnce();
+    expect(handlers.pending_attachment_answer.handle).toHaveBeenCalledOnce();
+    expect(profileTurn).toHaveBeenCalledOnce();
+    expect(afterFunctionResult).not.toHaveBeenCalled();
+    await expect(memoryStore.summary()).resolves.toMatchObject({ resources: 0 });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(replyText.mock.calls.map(([, text]) => text)).toEqual(["model", "投影片 1", "請選用途"]);
+  });
+
+  it.each(["match", "completion"] as const)(
+    "returns a bounded support reply when attachment %s fails",
+    async (failurePoint) => {
+      const config = accessConfig();
+      const helper = config.profiles[0]!;
+      helper.enabledFunctions = ["save_resource"];
+      helper.permissionRequiredFunctions = [];
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+      const record = vi.fn(async () => undefined);
+      const completion = vi.fn<FunctionCompletionObserver["complete"]>(async ({ result }) => {
+        if (failurePoint === "completion") throw new Error("completion failed");
+        return result;
+      });
+      const app = createTestApp(config, {
+        profileRuntime: createProfileRuntimeDispatcher({
+          helper: { handleTextTurn: profileTurn }
+        }),
+        attachmentTextHandlers: [
+          {
+            capability: "save_resource",
+            matches: vi.fn(async () => {
+              if (failurePoint === "match") throw new Error("match failed");
+              return true;
+            }),
+            handle: vi.fn(async () => ({
+              ok: true,
+              replyText: "queued",
+              executedAction: "save_resource",
+              writePhase: "commit"
+            }))
+          }
+        ],
+        completionObserver: { complete: completion },
+        lastErrorStore: { record, list: vi.fn(async () => []), clear: vi.fn(async () => 0) },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "message",
+        replyToken: `attachment-${failurePoint}`,
+        source: { type: "user", userId: "Uroot" },
+        message: { type: "text", text: "保存" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: helper.webhookPath,
+        headers: signedHeaders(body, helper.channelSecret),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(replyText).toHaveBeenCalledOnce();
+      expect(replyText.mock.calls[0]?.[1]).toContain("支援碼");
+      expect(profileTurn).not.toHaveBeenCalled();
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: "function", action: "save_resource" })
+      );
+    }
+  );
+
+  it("returns a helper research cancellation without entering continuations or the model", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    helper.enabledFunctions = ["find_sheet_music"];
+    const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+    const continuation = vi.fn(async () => ({ ok: true, replyText: "legacy" }));
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      profileRuntime: createProfileRuntimeDispatcher({
+        helper: {
+          acceptSheetMusicResearch: async () => ({
+            kind: "handled" as const,
+            result: { ok: true, replyText: "好，我不做外部搜尋。" }
+          }),
+          handleTextTurn: profileTurn
+        }
+      }),
+      textMessageHandlers: {
+        sheet_music_numeric_selection: {
+          capability: "find_sheet_music",
+          matches: vi.fn(async () => true),
+          handle: continuation
+        }
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "research-cancel",
+      source: { type: "user", userId: "Uroot" },
+      message: { type: "text", text: "不用" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(body, helper.channelSecret),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(replyText).toHaveBeenCalledWith("research-cancel", "好，我不做外部搜尋。", undefined);
+    expect(continuation).not.toHaveBeenCalled();
+    expect(profileTurn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["allowed", true],
+    ["revoked", false]
+  ] as const)(
+    "rechecks a deterministic continuation capability against Account authorization: %s",
+    async (_label, allowed) => {
+      const config = accessConfig();
+      const helper = config.profiles[0]!;
+      helper.enabledFunctions = ["query_schedule"];
+      helper.permissionRequiredFunctions = ["query_schedule"];
+      helper.directAccessPolicy = "public";
+      helper.registration = { enabled: false };
+      const source = { type: "user" as const, userId: "Uresolution" };
+      const querySchedule = vi.fn(async () => ({ ok: true, replyText: "主日服事表" }));
+      const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+      const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+      const authorizeFunctions = vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: allowed ? ["query_schedule"] : []
+      });
+      const app = createTestApp(config, {
+        profileRuntime: createProfileRuntimeDispatcher({
+          helper: { handleTextTurn: profileTurn }
+        }),
+        textMessageHandlers: {
+          schedule_selection: {
+            capability: "query_schedule",
+            matches: vi.fn(async () => true),
+            handle: querySchedule
+          }
+        },
+        accountAdminClient: {
+          authorizeAdministrator: vi.fn(),
+          authorizeFunctions,
+          createBinding: vi.fn(),
+          finalizeBinding: vi.fn()
+        },
+        createLineReplyClient: () => ({ replyText })
+      });
+      const body = lineBody({
+        type: "message",
+        replyToken: `resolution-${_label}`,
+        source,
+        message: { type: "text", text: "主日服事" }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: helper.webhookPath,
+        headers: signedHeaders(body, helper.channelSecret),
+        payload: body
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(authorizeFunctions).toHaveBeenCalledOnce();
+      expect(authorizeFunctions).toHaveBeenCalledWith({
+        lineUserId: source.userId,
+        profileName: helper.name,
+        functionNames: ["query_schedule"]
+      });
+      expect(querySchedule).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(profileTurn).toHaveBeenCalledTimes(allowed ? 0 : 1);
+      expect(replyText).toHaveBeenCalledWith(
+        `resolution-${_label}`,
+        allowed ? "主日服事表" : "model",
+        undefined
+      );
+    }
+  );
+
+  it("lets a requester-scoped group intro preserve a pending attachment continuation", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    helper.enabledFunctions = ["save_resource"];
+    helper.permissionRequiredFunctions = [];
+    const source = { type: "group" as const, groupId: "Cmain", userId: "Uowner" };
+    const sessions = new InMemorySessionStore();
+    await sessions.set({
+      id: "pending-upload",
+      type: "pending_attachment",
+      action: "save_resource",
+      stage: "awaiting_opt_in",
+      profileName: helper.name,
+      requesterUserId: source.userId,
+      source,
+      attachment: { messageId: "file-1", messageType: "file" },
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const handle = vi.fn(async () => ({ ok: true, replyText: "continuation" }));
+    const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      administrator: true,
+      allowedFunctions: ["save_resource"]
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      sessionStore: sessions,
+      profileRuntime: createProfileRuntimeDispatcher({
+        helper: { handleTextTurn: profileTurn }
+      }),
+      attachmentTextHandlers: [
+        {
+          capability: "save_resource",
+          matches: vi.fn(async () => true),
+          handle
+        }
+      ],
+      accessStore: new InMemoryAccessStore({
+        principals: [
+          {
+            id: "helper-intro-group",
+            profileName: helper.name,
+            type: "group",
+            principalId: source.groupId,
+            createdAt: "2026-09-05T00:00:00.000Z",
+            createdBy: "test"
+          }
+        ]
+      }),
+      accountAdminClient: {
+        authorizeAdministrator: vi.fn(),
+        authorizeFunctions,
+        createBinding: vi.fn(),
+        finalizeBinding: vi.fn()
+      },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "message",
+      replyToken: "intro-token",
+      source,
+      message: { type: "text", text: "小哈" }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(body, helper.channelSecret),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(String(replyText.mock.calls[0]?.[1])).toContain("小哈");
+    expect(handle).not.toHaveBeenCalled();
+    expect(profileTurn).not.toHaveBeenCalled();
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+    await expect(sessions.get("pending-upload")).resolves.toBeDefined();
+  });
+
+  it("observes a freshly committed helper review once and skips completion on replay", async () => {
+    const config = accessConfig();
+    const helper = config.profiles[0]!;
+    const handleActionReview = vi
+      .fn()
+      .mockResolvedValueOnce({
+        result: {
+          ok: true,
+          replyText: "已保存",
+          executedAction: "save_memory",
+          writePhase: "commit"
+        },
+        freshExecution: true
+      })
+      .mockResolvedValueOnce({
+        result: {
+          ok: true,
+          replyText: "已保存",
+          executedAction: "save_memory",
+          writePhase: "commit"
+        },
+        freshExecution: false
+      });
+    const routeObserver = vi.fn();
+    const completion = createFunctionCompletionObserver({
+      routeObserver,
+      firstSuccessStore: new InMemoryFirstSuccessStore(),
+      observabilityHmacKey: "test-observability-key"
+    });
+    const complete = vi.fn<FunctionCompletionObserver["complete"]>((input) =>
+      completion.complete(input)
+    );
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      profileRuntime: { handleTextTurn: vi.fn(), handleActionReview },
+      completionObserver: { complete },
+      routeObserver,
+      accessStore: new InMemoryAccessStore({
+        principals: [
+          {
+            id: "helper-review-user",
+            profileName: helper.name,
+            type: "user",
+            principalId: "Uowner",
+            createdAt: "2026-09-05T00:00:00.000Z",
+            createdBy: "test"
+          }
+        ]
+      }),
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = lineBody({
+      type: "postback",
+      replyToken: "review-token",
+      source: { type: "user", userId: "Uowner" },
+      postback: {
+        data: "action=helper_action_review&reviewId=review-1&resultJobId=job-1&decision=approve"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(body, helper.channelSecret),
+      payload: body
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(handleActionReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewId: "review-1",
+        resultJobId: "job-1",
+        text: "確認"
+      })
+    );
+    expect(replyText).toHaveBeenCalledWith("review-token", "已保存", undefined);
+
+    const replayBody = lineBody({
+      type: "postback",
+      replyToken: "review-token-replay",
+      source: { type: "user", userId: "Uowner" },
+      postback: {
+        data: "action=helper_action_review&reviewId=review-1&resultJobId=job-1&decision=approve"
+      }
+    });
+    await app.inject({
+      method: "POST",
+      url: helper.webhookPath,
+      headers: signedHeaders(replayBody, helper.channelSecret),
+      payload: replayBody
+    });
+
+    expect(handleActionReview).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "save_memory", result: expect.any(Object) })
+    );
+    expect(
+      routeObserver.mock.calls.filter(([event]) => event.eventName === "write_committed")
+    ).toHaveLength(1);
+    expect(
+      routeObserver.mock.calls.filter(([event]) => event.eventName === "first_success")
+    ).toHaveLength(1);
+    expect(replyText).toHaveBeenLastCalledWith("review-token-replay", "已保存", undefined);
   });
 
   it("keeps healthz minimal", async () => {

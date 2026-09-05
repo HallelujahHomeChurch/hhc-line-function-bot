@@ -1,30 +1,44 @@
-import type { SdkAgentAcceptanceCase } from "./contracts.js";
-import { SDK_AGENT_ACCEPTANCE_CASES } from "./cases/sdk-journeys.js";
+import type { AgentEvalCase } from "./contracts.js";
 
-export { SDK_AGENT_ACCEPTANCE_CASES };
+export const REQUIRED_AGENT_EVAL_CASE_IDS = [
+  "conversation/greeting",
+  "schedule/latest-default",
+  "schedule/note-authority-separation",
+  "schedule/follow-up-next-period",
+  "retrieval/genuine-ambiguity",
+  "wikipedia/fixed-source",
+  "tool/authorization-recheck",
+  "review/approve-once",
+  "review/revision-invalidates-original",
+  "review/group-requester-isolation",
+  "context/clear-tool-results-before-summary",
+  "context/hard-budget-end",
+  "error/checkpoint-unavailable-no-provider",
+  "error/provider-failure-support-id",
+  "action/reply-failure-durable-result",
+  "web/prompt-injection-contained",
+  "main/provider-free"
+] as const;
 
-export function validateSdkAgentCorpus(
-  cases: readonly SdkAgentAcceptanceCase[] = SDK_AGENT_ACCEPTANCE_CASES
+export const AGENT_EVAL_CASES: readonly AgentEvalCase[] = REQUIRED_AGENT_EVAL_CASE_IDS.map(
+  (id) => ({
+    id
+  })
+);
+
+export function validateAgentEvalCorpus(
+  cases: readonly AgentEvalCase[] = AGENT_EVAL_CASES
 ): string[] {
   const errors: string[] = [];
   const seen = new Set<string>();
+  const required = new Set<string>(REQUIRED_AGENT_EVAL_CASE_IDS);
   for (const entry of cases) {
-    if (!/^sdk-v1\/[a-z_]+\/[a-z0-9-]+@1$/u.test(entry.id)) {
-      errors.push(`invalid_case_id:${entry.id}`);
-    }
     if (seen.has(entry.id)) errors.push(`duplicate_case_id:${entry.id}`);
     seen.add(entry.id);
-    if (entry.messages.length < 2) errors.push(`insufficient_turns:${entry.id}`);
-    if (entry.expected.writes === 1 && !entry.expected.approvalRequired) {
-      errors.push(`write_without_approval:${entry.id}`);
-    }
-    if (entry.profile === "main" && entry.expected.providerCalls !== 0) {
-      errors.push(`main_provider_call:${entry.id}`);
-    }
+    if (!required.has(entry.id)) errors.push(`unexpected_case_id:${entry.id}`);
   }
-  if (cases.length < 30) errors.push("insufficient_case_count");
-  if (cases.filter(({ category }) => category === "cross_source").length < 20) {
-    errors.push("insufficient_cross_source_cases");
+  for (const id of required) {
+    if (!seen.has(id)) errors.push(`missing_case_id:${id}`);
   }
   return errors.sort();
 }

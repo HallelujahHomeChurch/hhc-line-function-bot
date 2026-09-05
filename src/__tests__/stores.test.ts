@@ -112,6 +112,55 @@ class FakeRedisClient {
 }
 
 describe("store factories", () => {
+  it("keeps reviewed arguments behind the sole interactive review", async () => {
+    const stores = [
+      new InMemorySessionStore({ now: () => new Date("2026-07-15T10:00:00.000Z") }),
+      new RedisSessionStore({
+        client: new FakeRedisClient(),
+        keyPrefix: "test-reviewed-arguments",
+        now: () => new Date("2026-07-15T10:00:00.000Z")
+      })
+    ];
+    for (const store of stores) {
+      const source = { type: "user" as const, userId: "U1" };
+      await store.set({
+        id: "review-1",
+        type: "action_review",
+        profileName: "main",
+        requesterUserId: "U1",
+        source,
+        threadId: "review-1:arguments",
+        interruptId: "review-1",
+        toolName: "update_own_profile",
+        argumentsHash: "hash",
+        policyKey: "policy",
+        resultJobId: "job-1",
+        expiresAt: "2026-07-15T10:05:00.000Z"
+      });
+      await store.set({
+        id: "review-1:arguments",
+        type: "profile_update",
+        profileName: "main",
+        requesterUserId: "U1",
+        source,
+        arguments: { firstName: "Ray", lastName: "Self" },
+        reviewId: "review-1",
+        expiresAt: "2026-07-15T10:05:00.000Z"
+      });
+
+      await expect(
+        store.findActionReview({ profileName: "main", source, requesterUserId: "U1" })
+      ).resolves.toMatchObject({ id: "review-1" });
+      await expect(
+        store.findProfileUpdate({ profileName: "main", source, requesterUserId: "U1" })
+      ).resolves.toMatchObject({ id: "review-1:arguments" });
+      await expect(store.get("review-1:arguments")).resolves.toMatchObject({
+        reviewId: "review-1",
+        arguments: { firstName: "Ray", lastName: "Self" }
+      });
+    }
+  });
+
   it("atomically consumes a Redis selection once", async () => {
     const store = new RedisSessionStore({
       client: new FakeRedisClient(),
@@ -176,6 +225,38 @@ describe("store factories", () => {
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 
+  it("fails closed instead of racing an action review consume when Redis eval is unavailable", async () => {
+    const store = new RedisSessionStore({
+      client: new FakeRedisClient(),
+      keyPrefix: "test",
+      now: () => new Date("2026-07-15T10:00:00.000Z")
+    });
+    await store.set({
+      id: "review-1",
+      type: "action_review",
+      profileName: "helper",
+      requesterUserId: "U1",
+      source: { type: "group", groupId: "G1", userId: "U1" },
+      threadId: "thread-1",
+      interruptId: "interrupt-1",
+      toolName: "propose_save_memory",
+      argumentsHash: "hash",
+      policyKey: "policy",
+      resultJobId: "result-job",
+      expiresAt: "2026-07-15T10:05:00.000Z"
+    });
+
+    await expect(
+      store.takeActionReview({
+        id: "review-1",
+        profileName: "helper",
+        requesterUserId: "U1",
+        source: { type: "group", groupId: "G1", userId: "U1" }
+      })
+    ).resolves.toBeUndefined();
+    await expect(store.get("review-1")).resolves.toMatchObject({ id: "review-1" });
+  });
+
   it("uses memory stores when Redis is not configured", () => {
     expect(createSessionStore({ redis: undefined })).toBeInstanceOf(InMemorySessionStore);
     expect(createCacheStore({ redis: undefined })).toBeInstanceOf(MemoryCacheStore);
@@ -199,23 +280,23 @@ describe("store factories", () => {
     });
     await store.set({
       id: "pending-1",
-      type: "pending_function",
-      action: "find_ppt_slides",
+      type: "pending_attachment",
+      action: "save_resource",
       profileName: "helper",
       requesterUserId: "U1",
       source: { type: "group", groupId: "C1" },
-      arguments: { query: "" },
+      attachment: { messageId: "M1", messageType: "file" },
       expiresAt: "2026-07-04T10:10:00.000Z"
     });
 
     await expect(
-      store.findPendingFunction({
+      store.findPendingAttachment({
         profileName: "helper",
         source: { type: "group", groupId: "C1" }
       })
     ).resolves.toBeUndefined();
     await expect(
-      store.findPendingFunction({
+      store.findPendingAttachment({
         profileName: "helper",
         source: { type: "group", groupId: "C1", userId: "U1" },
         requesterUserId: "U1"
@@ -231,23 +312,23 @@ describe("store factories", () => {
     });
     await store.set({
       id: "pending-1",
-      type: "pending_function",
-      action: "find_ppt_slides",
+      type: "pending_attachment",
+      action: "save_resource",
       profileName: "helper",
       requesterUserId: "U1",
       source: { type: "group", groupId: "C1" },
-      arguments: { query: "" },
+      attachment: { messageId: "M1", messageType: "file" },
       expiresAt: "2026-07-04T10:10:00.000Z"
     });
 
     await expect(
-      store.findPendingFunction({
+      store.findPendingAttachment({
         profileName: "helper",
         source: { type: "group", groupId: "C1" }
       })
     ).resolves.toBeUndefined();
     await expect(
-      store.findPendingFunction({
+      store.findPendingAttachment({
         profileName: "helper",
         source: { type: "group", groupId: "C1", userId: "U1" },
         requesterUserId: "U1"

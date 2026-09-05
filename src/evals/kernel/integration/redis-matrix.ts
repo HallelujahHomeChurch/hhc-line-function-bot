@@ -72,6 +72,11 @@ export async function runRedisIntegrationMatrix(
       run: async () => actorSafeConfirmation(environment)
     },
     {
+      caseId: "redis/review/atomic-owner-consume",
+      boundary: "write_workflow",
+      run: async () => actionReviewAtomicConsume(environment)
+    },
+    {
       caseId: "redis/session/group-requester-isolation",
       boundary: "slot_ambiguity_resolution",
       run: async () => groupRequesterIsolation(environment)
@@ -277,13 +282,26 @@ async function jobScopeRestart(environment: KernelRedisEnvironment): Promise<voi
   });
   const record = await writer.createPending({ scope, label: "synthetic", ttlMs: 60_000 });
   await writer.complete(record.id, { ok: true, replyText: "complete" });
+  await writer.fail(record.id, "late_failure");
   const reader = new RedisAgentJobStore({
     client: environment.clients[1],
     keyPrefix: environment.keyPrefix,
     now: () => NOW
   });
-  assert((await reader.get(record.id, scope))?.status === "completed");
+  const completed = await reader.get(record.id, scope);
+  assert(completed?.status === "completed" && completed.result?.replyText === "complete");
   assert((await reader.get(record.id, { ...scope, requesterUserId: "U2" })) === undefined);
+  const failedStore = new RedisAgentJobStore({
+    client: environment.clients[0],
+    keyPrefix: environment.keyPrefix,
+    now: () => NOW,
+    idFactory: () => "failed-job"
+  });
+  const failed = await failedStore.createPending({ scope, label: "synthetic", ttlMs: 60_000 });
+  await failedStore.fail(failed.id, "x".repeat(300));
+  await failedStore.fail(failed.id, "late_replacement");
+  const terminalFailure = await reader.get(failed.id, scope);
+  assert(terminalFailure?.status === "failed" && terminalFailure.error === "x".repeat(160));
   const reconnected = await environment.reconnectReplica(0);
   writer = new RedisAgentJobStore({
     client: reconnected,
@@ -338,6 +356,85 @@ async function actorSafeConfirmation(environment: KernelRedisEnvironment): Promi
   assert((await b.consume("confirmation", "U1", "helper")) === null);
 }
 
+async function actionReviewAtomicConsume(environment: KernelRedisEnvironment): Promise<void> {
+  const stores = environment.clients.map(
+    (client) => new RedisSessionStore({ client, keyPrefix: environment.keyPrefix, now: () => NOW })
+  );
+  const source = { type: "group" as const, groupId: "G-review", userId: "U1" };
+  await stores[0]!.set({
+    id: "review",
+    type: "action_review",
+    profileName: "helper",
+    requesterUserId: "U1",
+    source,
+    threadId: "thread",
+    interruptId: "interrupt",
+    toolName: "propose_save_memory",
+    argumentsHash: "hash",
+    policyKey: "policy",
+    resultJobId: "result-job",
+    expiresAt: EXPIRES_AT
+  });
+  assert(
+    (await stores[1]!.findActionReview({
+      profileName: "helper",
+      source: { ...source, userId: "U2" },
+      requesterUserId: "U2"
+    })) === undefined
+  );
+  assert(
+    (
+      await stores[1]!.findActionReview({
+        profileName: "helper",
+        source,
+        requesterUserId: "U1"
+      })
+    )?.id === "review"
+  );
+  assert(
+    (await stores[1]!.takeActionReview({
+      id: "review",
+      profileName: "helper",
+      source: { ...source, userId: "U2" },
+      requesterUserId: "U2"
+    })) === undefined
+  );
+  const consumed = await Promise.all(
+    stores.map((store) =>
+      store.takeActionReview({
+        id: "review",
+        profileName: "helper",
+        source,
+        requesterUserId: "U1"
+      })
+    )
+  );
+  assert(consumed.filter(Boolean).length === 1);
+
+  await stores[0]!.set({
+    id: "expired-review",
+    type: "action_review",
+    profileName: "helper",
+    requesterUserId: "U1",
+    source,
+    threadId: "thread",
+    interruptId: "interrupt",
+    toolName: "propose_save_memory",
+    argumentsHash: "hash",
+    policyKey: "policy",
+    resultJobId: "expired-result-job",
+    expiresAt: NOW.toISOString()
+  });
+  assert(
+    (await stores[1]!.takeActionReview({
+      id: "expired-review",
+      profileName: "helper",
+      source,
+      requesterUserId: "U1"
+    })) === undefined
+  );
+}
+
 async function groupRequesterIsolation(environment: KernelRedisEnvironment): Promise<void> {
   const a = new RedisSessionStore({
     client: environment.clients[0],
@@ -351,18 +448,17 @@ async function groupRequesterIsolation(environment: KernelRedisEnvironment): Pro
   });
   const source = { type: "group" as const, groupId: "G1", userId: "U1" };
   await a.set({
-    id: "resolution",
-    type: "pending_resolution",
+    id: "attachment",
+    type: "pending_attachment",
+    action: "save_resource",
     profileName: "helper",
     requesterUserId: "U1",
     source,
-    capability: "query_schedule",
-    groundedArguments: {},
-    candidates: [{ id: "1", domainKey: "domain", displayName: "synthetic" }],
+    attachment: { messageId: "M1", messageType: "image" },
     expiresAt: EXPIRES_AT
   });
   assert(
-    (await b.findPendingResolution({
+    (await b.findPendingAttachment({
       profileName: "helper",
       source: { ...source, userId: "U2" },
       requesterUserId: "U2"
@@ -405,13 +501,12 @@ async function atomicInteractiveReplacement(environment: KernelRedisEnvironment)
     }),
     stores[1]!.set({
       id: "replace-b",
-      type: "pending_resolution",
+      type: "pending_attachment",
+      action: "save_resource",
       profileName: "helper",
       requesterUserId: "U1",
       source,
-      capability: "query_schedule",
-      groundedArguments: {},
-      candidates: [{ id: "1", domainKey: "domain", displayName: "synthetic" }],
+      attachment: { messageId: "M2", messageType: "image" },
       expiresAt: EXPIRES_AT
     })
   ]);
@@ -419,11 +514,9 @@ async function atomicInteractiveReplacement(environment: KernelRedisEnvironment)
   assert(keys.length === 1);
   const lookup = { profileName: "helper", source, requesterUserId: "U1" };
   const found =
-    (await stores[0]!.findPendingResolution(lookup)) ?? (await stores[0]!.takeUploadIntent(lookup));
+    (await stores[0]!.findPendingAttachment(lookup)) ?? (await stores[0]!.takeUploadIntent(lookup));
   assert(Boolean(found));
-  if (found?.type === "pending_resolution") {
-    await stores[0]!.delete(found.id);
-  }
+  if (found?.type === "pending_attachment") await stores[0]!.delete(found.id);
   const remainingKeys = await environment.clients[0].keys(
     `${environment.keyPrefix}:session:replace-*`
   );

@@ -1,7 +1,6 @@
-import type { FunctionModule } from "../application/contracts/function-module.js";
 import type { FunctionExecutionResult, JsonRecord, TextMessageHandler } from "../types.js";
 import { downloadWeeklyPaperArgumentsSchema } from "../function-arguments.js";
-import type { FunctionDefinition } from "../functions/definitions.js";
+import type { FunctionDefinition } from "./catalog.js";
 
 const DAPR_BASE_URL = "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method";
 const PUBLIC_ORIGIN = "https://www.alive.org.tw";
@@ -64,24 +63,10 @@ export async function downloadWeeklyPaper(
   }
 }
 
-export const downloadWeeklyPaperModule: FunctionModule = {
-  name: "download_weekly_paper",
-  definition: downloadWeeklyPaperDefinition,
-  register: ({ clients }) => ({
-    functions: {
-      download_weekly_paper: (args) => downloadWeeklyPaper(args, clients.fetchImpl ?? fetch)
-    },
-    textMessages: {
-      main_weekly_paper: createDownloadWeeklyPaperTextMessageHandler(clients.fetchImpl ?? fetch)
-    }
-  })
-};
-
 export function createDownloadWeeklyPaperTextMessageHandler(
   fetchImpl: typeof fetch
 ): TextMessageHandler {
   return {
-    turnStage: "pre_route_recall",
     capability: "download_weekly_paper",
     matches: ({ text }, { profile, event }) =>
       profile.name === "main" &&

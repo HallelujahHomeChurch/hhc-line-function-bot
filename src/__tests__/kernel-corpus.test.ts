@@ -1,34 +1,44 @@
 import { describe, expect, it } from "vitest";
 
-import { SDK_AGENT_ACCEPTANCE_CASES, validateSdkAgentCorpus } from "../evals/kernel/corpus.js";
+import { AGENT_EVAL_CASES, validateAgentEvalCorpus } from "../evals/kernel/corpus.js";
 
 describe("SDK agent acceptance corpus", () => {
-  it("keeps the approved multi-turn, cross-source, write-safety, and main isolation coverage", () => {
-    expect(validateSdkAgentCorpus()).toEqual([]);
-    expect(SDK_AGENT_ACCEPTANCE_CASES).toHaveLength(31);
-    expect(
-      SDK_AGENT_ACCEPTANCE_CASES.filter(({ category }) => category === "cross_source")
-    ).toHaveLength(21);
-    expect(
-      SDK_AGENT_ACCEPTANCE_CASES.filter(({ expected }) => expected.writes === 1).every(
-        ({ expected }) => expected.approvalRequired
-      )
-    ).toBe(true);
-    expect(
-      SDK_AGENT_ACCEPTANCE_CASES.find(({ id }) => id === "sdk-v1/main/provider-free@1")?.expected
-        .providerCalls
-    ).toBe(0);
+  it("keeps every final helper runtime boundary in the offline corpus", () => {
+    const requiredCases = [
+      "conversation/greeting",
+      "schedule/latest-default",
+      "schedule/note-authority-separation",
+      "schedule/follow-up-next-period",
+      "retrieval/genuine-ambiguity",
+      "wikipedia/fixed-source",
+      "tool/authorization-recheck",
+      "review/approve-once",
+      "review/revision-invalidates-original",
+      "review/group-requester-isolation",
+      "context/clear-tool-results-before-summary",
+      "context/hard-budget-end",
+      "error/checkpoint-unavailable-no-provider",
+      "error/provider-failure-support-id",
+      "action/reply-failure-durable-result",
+      "web/prompt-injection-contained",
+      "main/provider-free"
+    ];
+
+    expect(validateAgentEvalCorpus()).toEqual([]);
+    expect(AGENT_EVAL_CASES.map(({ id }) => id)).toEqual(requiredCases);
   });
 
-  it("rejects unsafe writes and duplicate IDs", () => {
-    const base = SDK_AGENT_ACCEPTANCE_CASES[0]!;
+  it("rejects missing, duplicate, and unexpected boundary IDs", () => {
+    const missing = AGENT_EVAL_CASES[0]!;
+    const duplicate = AGENT_EVAL_CASES[1]!;
     expect(
-      validateSdkAgentCorpus([
-        ...SDK_AGENT_ACCEPTANCE_CASES,
-        { ...base, expected: { ...base.expected, writes: 1, approvalRequired: false } }
-      ])
+      validateAgentEvalCorpus([...AGENT_EVAL_CASES.slice(1), duplicate, { id: "extra/case" }])
     ).toEqual(
-      expect.arrayContaining([`duplicate_case_id:${base.id}`, `write_without_approval:${base.id}`])
+      expect.arrayContaining([
+        `missing_case_id:${missing.id}`,
+        `duplicate_case_id:${duplicate.id}`,
+        "unexpected_case_id:extra/case"
+      ])
     );
   });
 });

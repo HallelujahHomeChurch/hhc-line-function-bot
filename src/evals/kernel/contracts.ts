@@ -8,30 +8,6 @@ export type KernelBoundary =
   | "external_dependency"
   | "deployment_configuration";
 
-export type SecurityViolation =
-  | "unauthorized_read"
-  | "unauthorized_write"
-  | "scope_leak"
-  | "confirmation_bypass"
-  | "unsafe_binary_publication"
-  | "scan_bypass";
-
-export type SdkAgentCaseCategory =
-  "conversation" | "cross_source" | "isolation" | "sheet_music" | "write";
-
-export interface SdkAgentAcceptanceCase {
-  id: `sdk-v1/${string}@1`;
-  profile: "helper" | "main";
-  category: SdkAgentCaseCategory;
-  now: string;
-  messages: readonly [string, string, ...string[]];
-  expected: {
-    writes: 0 | 1;
-    providerCalls: 0 | "bounded";
-    securityViolations: readonly SecurityViolation[];
-    evidenceSource?: "formal_schedule" | "visible_note" | "knowledge" | "none";
-    distinguishFromFormalSchedule?: boolean;
-    requiredTools?: readonly string[];
-    approvalRequired?: boolean;
-  };
+export interface AgentEvalCase {
+  id: string;
 }

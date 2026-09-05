@@ -1,6 +1,7 @@
+import type { CapabilityName } from "../../capabilities/names.js";
 import type { AccessStore } from "../../access/types.js";
-import { getFunctionDefinition } from "../../functions/definitions.js";
-import type { BotProfileConfig, FunctionName, LineEvent } from "../../types.js";
+import { getFunctionDefinition } from "../../capabilities/catalog.js";
+import type { BotProfileConfig, LineEvent } from "../../types.js";
 
 export interface EffectiveAccessContext {
   profile: BotProfileConfig;
@@ -30,7 +31,7 @@ export async function resolveEffectiveAccessContext(input: {
   };
 }
 
-export function isDefaultUserFunctionAvailable(functionName: FunctionName): boolean {
+export function isDefaultUserFunctionAvailable(functionName: CapabilityName): boolean {
   return getFunctionDefinition(functionName)?.sideEffectLevel === "read";
 }
 
@@ -71,7 +72,7 @@ async function sourceIsAuthorized(input: {
 function resolveEffectiveFunctions(input: {
   profile: BotProfileConfig;
   requesterIsAdmin: boolean;
-}): FunctionName[] {
+}): CapabilityName[] {
   return input.requesterIsAdmin
     ? input.profile.enabledFunctions
     : input.profile.enabledFunctions.filter(

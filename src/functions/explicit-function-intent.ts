@@ -1,10 +1,10 @@
-import { getFunctionDefinition } from "./definitions.js";
-import type { FunctionName } from "../types.js";
+import type { CapabilityName } from "../capabilities/names.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
 
 export function isExplicitFunctionSwitch(
   text: string,
-  current: FunctionName,
-  enabledFunctions: readonly FunctionName[]
+  current: CapabilityName,
+  enabledFunctions: readonly CapabilityName[]
 ): boolean {
   const normalized = text.normalize("NFKC").toLowerCase();
   if (/(?:不要|不用|取消|先不要)/u.test(normalized)) return false;

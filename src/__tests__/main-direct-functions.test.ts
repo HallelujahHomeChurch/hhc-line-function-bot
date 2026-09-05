@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
-import { createUpdateOwnProfileTextMessageHandler } from "../capabilities/update-own-profile/module.js";
-import { InMemorySessionStore } from "../state/session-store.js";
+import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import type { BotProfileConfig, LineEvent } from "../types.js";
 
 const userId = `U${"a".repeat(32)}`;
@@ -52,36 +51,29 @@ describe("main provider-free direct functions", () => {
     const handler = createDownloadWeeklyPaperTextMessageHandler(fetchImpl);
 
     expect(await handler.matches({ text: "下載第 1733 期週報" }, { profile, event })).toBe(true);
-    const result = await handler.handle(
+    const weeklyPaperReply = await handler.handle(
       { text: "下載第 1733 期週報" },
       { profile, event, requestId: "weekly" }
     );
 
     expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({
+    expect(weeklyPaperReply.ok).toBe(true);
+    expect(weeklyPaperReply).toMatchObject({
       executedAction: "download_weekly_paper",
       quickReplies: [expect.objectContaining({ label: "下載週報" })]
     });
   });
 
-  it("starts the existing preview flow for an exact own-profile request", async () => {
-    const sessionStore = new InMemorySessionStore();
-    const handler = createUpdateOwnProfileTextMessageHandler({ sessionStore });
+  it("keeps own-profile updates in preview until the caller confirms", async () => {
+    const handler = createUpdateOwnProfileHandler({
+      accountClient: { updateOwnProfile: vi.fn() } as never
+    });
 
-    expect(await handler.matches({ text: "修改姓名" }, { profile, event })).toBe(true);
-    expect(await handler.matches({ text: "不要修改姓名" }, { profile, event })).toBe(false);
-    const result = await handler.handle(
-      { text: "修改姓名" },
-      { profile, event, requestId: "profile" }
+    const profilePreview = await handler(
+      { firstName: "家睿", lastName: "王" },
+      { profile, event, requestId: "profile-preview" }
     );
 
-    expect(result?.replyText).toContain("名字");
-    await expect(
-      sessionStore.findPendingFunction({
-        profileName: "main",
-        source: event.source,
-        requesterUserId: userId
-      })
-    ).resolves.toMatchObject({ action: "update_own_profile", arguments: {} });
+    expect(profilePreview.writePhase).toBe("preview");
   });
 });

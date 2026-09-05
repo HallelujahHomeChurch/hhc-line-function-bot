@@ -11,6 +11,40 @@ const scope = {
 };
 
 describe("agent long-running jobs", () => {
+  it("keeps an in-memory completed result immutable when fail arrives later", async () => {
+    const store = new InMemoryAgentJobStore();
+    const job = await store.createPending({ scope, label: "immutable", ttlMs: 600_000 });
+    await store.complete(job.id, { ok: true, replyText: "completed result" }, "query_schedule");
+
+    await store.fail(job.id, "late failure");
+
+    await expect(store.get(job.id, scope)).resolves.toMatchObject({
+      status: "completed",
+      result: { replyText: "completed result" }
+    });
+
+    const failed = await store.createPending({ scope, label: "failed", ttlMs: 600_000 });
+    await store.fail(failed.id, "first failure");
+    await store.fail(failed.id, "late replacement");
+    await expect(store.get(failed.id, scope)).resolves.toMatchObject({
+      status: "failed",
+      error: "first failure"
+    });
+  });
+
+  it("fails closed when Redis eval is unavailable instead of racing a job transition", async () => {
+    const store = new RedisAgentJobStore({
+      client: new FakeRedisJobClient(),
+      keyPrefix: "test",
+      idFactory: () => "job-no-eval"
+    });
+    const job = await store.createPending({ scope, label: "pending", ttlMs: 600_000 });
+
+    await store.fail(job.id, "failure");
+
+    await expect(store.get(job.id, scope)).resolves.toMatchObject({ status: "pending" });
+  });
+
   it("keeps job results scoped to the requester and source", async () => {
     const store = new InMemoryAgentJobStore({
       now: () => new Date("2026-07-08T10:00:00.000Z")
@@ -90,8 +124,7 @@ describe("agent long-running jobs", () => {
         source: { type: "user", userId: "u1" },
         message: { type: "text", text: "slow" }
       },
-      requestId: "slow-ownerless",
-      allowRouting: true
+      requestId: "slow-ownerless"
     });
     const action = pendingReply?.quickReplies?.[0]?.action;
     const data = action?.type === "postback" ? action.data : "";

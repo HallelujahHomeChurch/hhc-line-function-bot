@@ -1,14 +1,14 @@
+import type { CapabilityName } from "../../capabilities/names.js";
 import type { EffectiveAccessContext } from "../access/effective-access.js";
 import type { QuickReplyItem } from "../contracts/function-execution.js";
 import {
-  FUNCTION_DEFINITIONS,
+  CAPABILITY_CATALOG,
   getFunctionDefinitions,
   type FunctionDefinition
-} from "../../functions/definitions.js";
-import type { FunctionName } from "../../types.js";
+} from "../../capabilities/catalog.js";
 
 export interface CapabilityPresentation {
-  functionName: FunctionName;
+  functionName: CapabilityName;
   displayName: string;
   shortDescription: string;
   example: string;
@@ -22,7 +22,7 @@ export interface EffectiveCapabilityProjection {
   accountLoginAvailable: boolean;
 }
 
-const preferredOnboardingReads: FunctionName[] = [
+const preferredOnboardingReads: CapabilityName[] = [
   "query_schedule",
   "find_sheet_music",
   "find_ppt_slides"
@@ -43,7 +43,7 @@ export function projectEffectiveCapabilities(input: {
       (definition) => definition.name
     )
   );
-  const definitions = input.definitions ?? FUNCTION_DEFINITIONS;
+  const definitions = input.definitions ?? CAPABILITY_CATALOG;
   const effectiveDefinitions = definitions.filter(
     (definition) =>
       effectiveNames.has(definition.name) &&

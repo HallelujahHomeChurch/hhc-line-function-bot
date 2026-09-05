@@ -1,5 +1,5 @@
 import { updateOwnProfileArgumentsSchema } from "../../function-arguments.js";
-import type { FunctionDefinition } from "../../functions/definitions.js";
+import type { FunctionDefinition } from "../catalog.js";
 
 export const updateOwnProfileDefinition: FunctionDefinition = {
   name: "update_own_profile",

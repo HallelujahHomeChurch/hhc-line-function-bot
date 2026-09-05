@@ -1,9 +1,6 @@
 import { retrieveMemoryArgumentsSchema, saveMemoryArgumentsSchema } from "../function-arguments.js";
 import type { AgentMemoryStore, AgentTextMemoryRecord } from "../agent/memory-store.js";
 import type { FunctionHandler } from "../types.js";
-import type { SessionStore } from "../state/session-store.js";
-import { storePendingFunctionQuery } from "./pending-function.js";
-import { randomUUID } from "node:crypto";
 import type { EmbeddingClient } from "../clients/embedding.js";
 import type { TextGenerationProvider } from "../types.js";
 
@@ -11,16 +8,13 @@ const TEXT_MEMORY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface AgentMemoryFunctionOptions {
   memoryStore: AgentMemoryStore;
-  sessionStore?: SessionStore;
   now?: () => Date;
-  requestIdFactory?: () => string;
   embedding?: EmbeddingClient;
   textGenerator?: TextGenerationProvider;
 }
 
 export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): FunctionHandler {
   const now = options.now ?? (() => new Date());
-  const requestIdFactory = options.requestIdFactory ?? randomUUID;
   return async (rawArgs, context) => {
     const args = saveMemoryArgumentsSchema.parse(rawArgs);
     const content = (args.content || args.query || "").trim();
@@ -34,18 +28,9 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
     const visibility =
       context.event.source.type === "group" && args.visibility === "group" ? "group" : "private";
     if (!args.confirm) {
-      if (options.sessionStore) {
-        await storePendingFunctionQuery({
-          sessionStore: options.sessionStore,
-          requestId: requestIdFactory(),
-          action: "save_memory",
-          arguments: { title, content, query: args.query, visibility, confirm: true },
-          context,
-          now: now()
-        });
-      }
       return {
         ok: true,
+        writePhase: "preview",
         replyText: [
           "請確認要記住這段資訊：",
           `名稱：${title}`,
@@ -122,28 +107,21 @@ export function createRetrieveMemoryHandler(options: AgentMemoryFunctionOptions)
     return {
       ok: true,
       replyText: answer,
-      responseData: context.agentTool
-        ? {
-            kind: "memory_evidence",
-            fields: {},
-            records: memories.map((memory) => ({
-              sourceKind: "visible_note",
-              excerpt: memory.content,
-              updatedAt: memory.createdAt,
-              expiresAt: memory.expiresAt
-            }))
-          }
+      ...(context.agentTool
+        ? {}
         : {
-            kind: "memory",
-            fields: {
-              answer,
-              ...(memories.length === 1 ? { title: memories[0].title ?? "已保存資訊" } : {})
-            },
-            records: memories.map((memory) => ({
-              title: memory.title ?? "已保存資訊",
-              answer: memory.content
-            }))
-          },
+            responseData: {
+              kind: "memory",
+              fields: {
+                answer,
+                ...(memories.length === 1 ? { title: memories[0].title ?? "已保存資訊" } : {})
+              },
+              records: memories.map((memory) => ({
+                title: memory.title ?? "已保存資訊",
+                answer: memory.content
+              }))
+            }
+          }),
       agentResult: {
         status: "success",
         replyText: "記憶查詢完成。",
@@ -152,7 +130,21 @@ export function createRetrieveMemoryHandler(options: AgentMemoryFunctionOptions)
           kind: "saved_memory",
           reference: { memoryId: id }
         })),
-        supportedOperations: ["continue", "refine", "view_full"]
+        supportedOperations: ["continue", "refine", "view_full"],
+        ...(context.agentTool
+          ? {
+              replyData: {
+                kind: "memory_evidence",
+                fields: {},
+                records: memories.map((memory) => ({
+                  sourceKind: "visible_note",
+                  excerpt: memory.content,
+                  updatedAt: memory.createdAt,
+                  expiresAt: memory.expiresAt
+                }))
+              }
+            }
+          : {})
       }
     };
   };

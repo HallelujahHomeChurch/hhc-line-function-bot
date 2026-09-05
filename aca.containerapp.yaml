@@ -185,4 +185,5 @@ properties:
     volumes: []
     scale:
       minReplicas: 1
-      maxReplicas: 10
+      # Two PostgreSQL pools use at most two connections each; recalculate the shared DB budget before raising this.
+      maxReplicas: 3

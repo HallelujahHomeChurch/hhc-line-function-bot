@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
-import { matchTextContinuation } from "../application/turn/stages/text-continuation-stage.js";
+import { matchTextContinuation } from "../transport/line/webhook-routes.js";
 import { InMemoryAttachmentScanQueue } from "../attachments/scan-queue.js";
 import { InMemoryAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
@@ -90,6 +90,70 @@ async function currentItemById(_driveId: string, itemId: string) {
 }
 
 describe("find_sheet_music", () => {
+  it("offers requester-scoped external research consent only when research is configured", async () => {
+    const now = new Date("2026-09-05T10:00:00.000Z");
+    const sessions = new InMemorySessionStore({ now: () => now });
+    const handler = createFindPopSheetMusicHandler({
+      graph: { listFolderChildren: vi.fn().mockResolvedValue([]), createSharingLink: vi.fn() },
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pdf"],
+      externalResearchEnabled: true,
+      sessionStore: sessions,
+      now: () => now,
+      requestIdFactory: () => "consent-1"
+    });
+
+    const result = await handler({ query: "missing song", fileType: "pdf" }, handlerContext());
+
+    expect(result.replyText).toContain("要不要上網找公開搜尋結果");
+    expect(result.quickReplies?.map(({ label }) => label)).toEqual(["上網找", "不用"]);
+    await expect(sessions.get("consent-1")).resolves.toMatchObject({
+      type: "external_search_consent",
+      action: "sheet_music_external_search",
+      requesterUserId: "U1",
+      query: "missing song",
+      arguments: { query: "missing song", fileType: "pdf" },
+      expiresAt: "2026-09-05T10:10:00.000Z"
+    });
+  });
+
+  it("keeps plain not-found when external research or requester identity is unavailable", async () => {
+    const sessions = new InMemorySessionStore();
+    const graph = { listFolderChildren: vi.fn().mockResolvedValue([]), createSharingLink: vi.fn() };
+    const disabled = createFindPopSheetMusicHandler({
+      graph,
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pdf"],
+      sessionStore: sessions
+    });
+    const requesterMissing = createFindPopSheetMusicHandler({
+      graph,
+      driveId: "drive-id",
+      folderItemId: "folder-id",
+      allowedExtensions: [".pdf"],
+      externalResearchEnabled: true,
+      sessionStore: sessions
+    });
+
+    const plain = await disabled({ query: "missing song" }, handlerContext());
+    const noRequester = await requesterMissing(
+      { query: "missing song" },
+      {
+        ...handlerContext(),
+        event: {
+          ...handlerContext().event,
+          source: { type: "group", groupId: "Cgroup" }
+        }
+      }
+    );
+
+    expect(plain.replyText).not.toContain("上網找");
+    expect(noRequester.replyText).not.toContain("上網找");
+    await expect(sessions.summary()).resolves.toMatchObject({ total: 0 });
+  });
+
   it("reports provider failures as unavailable instead of not found", async () => {
     const handler = createFindPopSheetMusicHandler({
       graph: {
@@ -518,113 +582,6 @@ describe("find_sheet_music", () => {
       }
     ]);
     expect(graph.createSharingLink).not.toHaveBeenCalled();
-  });
-
-  it("asks for consent before running external sheet music web search", async () => {
-    const graph: GraphDriveClient = {
-      listFolderChildren: vi.fn(),
-      listFolderFilesRecursive: vi.fn().mockResolvedValue([]),
-      createSharingLink: vi.fn()
-    };
-    const webSearch = { search: vi.fn().mockResolvedValue([]) };
-    const summarize = vi.fn().mockResolvedValue("unused");
-    const now = new Date("2026-07-04T10:00:00.000Z");
-    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
-    const handler = createFindPopSheetMusicHandler({
-      graph,
-      driveId: "drive-id",
-      folderItemId: "sheet-folder-id",
-      allowedExtensions: [".pdf"],
-      sessionStore,
-      externalSearch: { webSearch, summarize },
-      now: () => now,
-      requestIdFactory: () => "external-search-1"
-    });
-
-    const result = await handler({ query: "No Such Song" }, handlerContext());
-
-    expect(result.replyText).toContain("本地歌譜資料庫找不到");
-    expect(result.replyText).toContain("要不要上網找公開搜尋結果");
-    expect(webSearch.search).not.toHaveBeenCalled();
-    await expect(
-      sessionStore.findExternalSearchConsent({
-        action: "sheet_music_external_search",
-        profileName: "main",
-        source: handlerContext().event.source,
-        requesterUserId: "U1"
-      })
-    ).resolves.toMatchObject({
-      query: "No Such Song",
-      action: "sheet_music_external_search"
-    });
-  });
-
-  it("runs external sheet music web search only after requester consent", async () => {
-    const graph: GraphDriveClient = {
-      listFolderChildren: vi.fn(),
-      listFolderFilesRecursive: vi.fn().mockResolvedValue([]),
-      createSharingLink: vi.fn()
-    };
-    const webSearch = {
-      search: vi.fn().mockResolvedValue([
-        {
-          title: "No Such Song sheet music",
-          snippet: "Public search snippet",
-          url: "https://example.org/no-such-song"
-        }
-      ])
-    };
-    const summarize = vi
-      .fn()
-      .mockResolvedValue("我在公開搜尋結果找到一個可能相關的結果：No Such Song sheet music。");
-    const now = new Date("2026-07-04T10:00:00.000Z");
-    const sessionStore = new InMemorySessionStore({ now: () => now, ttlMs: 10 * 60 * 1000 });
-    const handler = createFindPopSheetMusicHandler({
-      graph,
-      driveId: "drive-id",
-      folderItemId: "sheet-folder-id",
-      allowedExtensions: [".pdf"],
-      sessionStore,
-      externalSearch: { webSearch, summarize },
-      now: () => now,
-      requestIdFactory: () => "external-search-1"
-    });
-    const textHandler = createFindPopSheetMusicTextMessageHandler({
-      graph,
-      sessionStore,
-      externalSearch: { webSearch, summarize },
-      now: () => now
-    });
-    await handler({ query: "No Such Song" }, handlerContext());
-
-    const result = await textHandler.handle({ text: "好，上網找" }, handlerContext());
-
-    expect(webSearch.search).toHaveBeenCalledWith({
-      query: "No Such Song 歌譜",
-      limit: 5,
-      language: "zh-TW"
-    });
-    expect(summarize).toHaveBeenCalledWith({
-      profileName: "main",
-      query: "No Such Song",
-      results: [
-        {
-          title: "No Such Song sheet music",
-          snippet: "Public search snippet",
-          url: "https://example.org/no-such-song"
-        }
-      ]
-    });
-    expect(result?.replyText).toContain("公開搜尋結果");
-    expect(result?.replyText).toContain("No Such Song sheet music");
-    await expect(
-      sessionStore.findExternalSearchConsent({
-        action: "sheet_music_external_search",
-        profileName: "main",
-        source: handlerContext().event.source,
-        requesterUserId: "U1"
-      })
-    ).resolves.toBeUndefined();
   });
 
   it("queues an authorized selected direct result for worker-side download and publication", async () => {

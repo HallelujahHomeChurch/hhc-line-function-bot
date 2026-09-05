@@ -47,9 +47,6 @@
       "enabled": true,
       "conversationWindowSeconds": 60
     },
-    "agentRuntime": {
-      "taskFrameSeconds": 600
-    },
     "schedulePolicy": {
       "meetingWindows": [
         {
@@ -154,9 +151,6 @@
     "generalAgent": {
       "enabled": false,
       "conversationWindowSeconds": 60
-    },
-    "agentRuntime": {
-      "taskFrameSeconds": 600
     },
     "allowedProviders": [],
     "providerPolicy": {},

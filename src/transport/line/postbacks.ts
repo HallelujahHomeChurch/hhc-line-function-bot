@@ -1,11 +1,11 @@
-import type { AgentTurnRuntime } from "../../agent/turn-runtime.js";
+import type { CapabilityName } from "../../capabilities/names.js";
+import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
 import type { AgentJobScope, AgentJobStore } from "../../agent/jobs.js";
-import { getFunctionDefinition } from "../../functions/definitions.js";
+import { getFunctionDefinition } from "../../capabilities/catalog.js";
 import { buildPostbackQuickReply } from "../../line-reply.js";
 import { messages } from "../../messages.js";
 import type {
   BotProfileConfig,
-  FunctionName,
   FunctionExecutionResult,
   LineEvent,
   PostbackHandlerRegistry,
@@ -15,8 +15,20 @@ import type {
 export interface HandledPostbackEvent {
   result: FunctionExecutionResult;
   completionEligible: boolean;
-  capability?: FunctionName;
+  capability?: CapabilityName;
   profile?: BotProfileConfig;
+}
+
+export interface HelperReviewPostbackHandler {
+  (input: {
+    reviewId: string;
+    resultJobId: string;
+    text: "確認" | "取消";
+    profile: BotProfileConfig;
+    event: LineEvent;
+    requestId: string;
+    requesterDisplayName?: string;
+  }): Promise<FunctionExecutionResult>;
 }
 
 export async function handlePostbackEvent(
@@ -26,8 +38,11 @@ export async function handlePostbackEvent(
   requestId: string,
   requesterDisplayName: string | undefined,
   agentJobStore: AgentJobStore,
-  configuredFunctions: readonly FunctionName[] = profile.enabledFunctions,
-  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>
+  configuredFunctions: readonly CapabilityName[] = profile.enabledFunctions,
+  authorizeFunctions?: (
+    functionNames: readonly CapabilityName[]
+  ) => Promise<readonly CapabilityName[]>,
+  helperReviewHandler?: HelperReviewPostbackHandler
 ): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
@@ -46,6 +61,34 @@ export async function handlePostbackEvent(
         configuredFunctions,
         authorizeFunctions
       ),
+      completionEligible: false
+    };
+  }
+  if (request.action === "helper_action_review") {
+    const reviewId = request.params.reviewId;
+    const resultJobId = request.params.resultJobId;
+    const decision = request.params.decision;
+    if (
+      !reviewId ||
+      !resultJobId ||
+      (decision !== "approve" && decision !== "reject") ||
+      !helperReviewHandler
+    ) {
+      return {
+        result: { ok: true, replyText: messages.postbackUnsupported },
+        completionEligible: false
+      };
+    }
+    return {
+      result: await helperReviewHandler({
+        reviewId,
+        resultJobId,
+        text: decision === "approve" ? "確認" : "取消",
+        profile,
+        event,
+        requestId,
+        requesterDisplayName
+      }),
       completionEligible: false
     };
   }
@@ -89,31 +132,32 @@ export async function handlePostbackEvent(
 }
 
 export async function handleAgentTextTurnWithLongJob(input: {
-  runtime: AgentTurnRuntime;
+  runtime: ProfileRuntime;
   jobStore: AgentJobStore;
   profile: BotProfileConfig;
   event: LineEvent;
   requestId: string;
   requesterDisplayName?: string;
   requesterIsAdmin?: boolean;
-  configuredFunctions?: readonly FunctionName[];
-  engagement?: string;
-  allowRouting: boolean;
-  authorizeFunctions?(functionNames: readonly FunctionName[]): Promise<readonly FunctionName[]>;
+  configuredFunctions?: readonly CapabilityName[];
+  authorizeFunctions?(functionNames: readonly CapabilityName[]): Promise<readonly CapabilityName[]>;
   accountAdministrator?(): boolean;
+  completeResult?(result: FunctionExecutionResult): Promise<FunctionExecutionResult>;
 }): Promise<FunctionExecutionResult | undefined> {
-  const turnPromise = input.runtime.handleTextTurn({
-    profile: input.profile,
-    configuredFunctions: input.configuredFunctions,
-    event: input.event,
-    requestId: input.requestId,
-    requesterDisplayName: input.requesterDisplayName,
-    requesterIsAdmin: input.requesterIsAdmin,
-    engagement: input.engagement,
-    allowRouting: input.allowRouting,
-    authorizeFunctions: input.authorizeFunctions,
-    accountAdministrator: input.accountAdministrator
-  });
+  const turnPromise = input.runtime
+    .handleTextTurn({
+      profile: input.profile,
+      configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
+      event: input.event,
+      requestId: input.requestId,
+      requesterDisplayName: input.requesterDisplayName,
+      requesterIsAdmin: input.requesterIsAdmin,
+      authorizeFunctions: input.authorizeFunctions
+        ? async (names) => [...(await input.authorizeFunctions!(names))]
+        : undefined,
+      accountAdministrator: input.accountAdministrator
+    })
+    .then((result) => (result && input.completeResult ? input.completeResult(result) : result));
   const config = input.profile.longRunningJobs;
   if (!config?.enabled || config.inlineReplyTimeoutMs <= 0) {
     return turnPromise;
@@ -178,8 +222,10 @@ async function handleAgentJobResultPostback(
   profile: BotProfileConfig,
   event: LineEvent,
   jobStore: AgentJobStore,
-  configuredFunctions: readonly FunctionName[],
-  authorizeFunctions?: (functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>
+  configuredFunctions: readonly CapabilityName[],
+  authorizeFunctions?: (
+    functionNames: readonly CapabilityName[]
+  ) => Promise<readonly CapabilityName[]>
 ): Promise<FunctionExecutionResult> {
   const jobId = request.params.jobId;
   const scope = buildAgentJobScope(profile, event);
@@ -219,10 +265,10 @@ async function handleAgentJobResultPostback(
 
 async function postbackCapabilityAllowed(
   profile: BotProfileConfig,
-  configuredFunctions: readonly FunctionName[],
-  capability: FunctionName,
+  configuredFunctions: readonly CapabilityName[],
+  capability: CapabilityName,
   authorizeFunctions:
-    ((functionNames: readonly FunctionName[]) => Promise<readonly FunctionName[]>) | undefined
+    ((functionNames: readonly CapabilityName[]) => Promise<readonly CapabilityName[]>) | undefined
 ): Promise<boolean> {
   if (!configuredFunctions.includes(capability)) return false;
   const needsAccount =

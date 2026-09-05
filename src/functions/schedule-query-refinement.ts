@@ -1,6 +1,5 @@
 import type { QueryScheduleArguments } from "../function-arguments.js";
 import type { JsonRecord } from "../types.js";
-import { buildResidualQuery, type QueryRefinement } from "./query-refinement.js";
 import { extractKnownScheduleRole } from "./query-service-schedule.js";
 
 export type QueryScheduleStructuredArguments = JsonRecord & {
@@ -15,6 +14,13 @@ export type QueryScheduleStructuredArguments = JsonRecord & {
   scheduleType?: QueryScheduleArguments["scheduleType"];
   limit?: number;
 };
+
+interface QueryRefinement<TArguments extends JsonRecord> {
+  originalQuery: string;
+  structuredArguments: TArguments;
+  consumedTerms: string[];
+  residualQuery: string;
+}
 
 const GENERIC_SCHEDULE_TERMS = [
   "小哈",
@@ -186,6 +192,30 @@ function normalizeRoleFocus(value: string): string {
     .normalize("NFKC")
     .replace(/[\s：:，,。.!！?？]+/gu, "")
     .toLowerCase();
+}
+
+function buildResidualQuery(input: {
+  query: string;
+  consumedTerms: string[];
+  genericTerms: string[];
+}): string {
+  const terms = [...input.consumedTerms, ...input.genericTerms]
+    .map((term) => term.normalize("NFKC").trim())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  let residual = input.query.normalize("NFKC");
+  for (const term of terms) {
+    residual = residual.replace(
+      new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu"),
+      " "
+    );
+  }
+  return residual
+    .replace(/[\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^的+|的+$/gu, "")
+    .trim();
 }
 
 function inferSpecificDate(

@@ -1,12 +1,7 @@
+import type { CapabilityName } from "../../capabilities/names.js";
 import type { AgentReplyData, AgentResultEnvelope } from "../../agent/result-envelope.js";
 import type { RetrievalDiagnostics } from "../../observability/retrieval-diagnostics.js";
-import type {
-  BotProfileConfig,
-  FunctionName,
-  JsonRecord,
-  LineEvent,
-  ModelProviderName
-} from "../../types.js";
+import type { BotProfileConfig, JsonRecord, LineEvent, ModelProviderName } from "../../types.js";
 
 export type AgentResourceType = "ppt_slide" | "sheet_music" | "general_resource";
 
@@ -35,9 +30,10 @@ export interface AgentResourceReference {
 export interface FunctionExecutionResult {
   ok: boolean;
   replyText: string;
-  executedAction?: FunctionName;
+  executedAction?: CapabilityName;
   writePhase?: "preview" | "commit";
   quickReplies?: QuickReplyItem[];
+  /** The sole server-owned source for bounded helper-tool projection. */
   agentResult?: AgentResultEnvelope;
   /** Ephemeral response-only data. Never persist in task frames or traces. */
   responseData?: AgentReplyData;
@@ -67,7 +63,7 @@ export type FunctionHandler = (
   context: FunctionHandlerContext
 ) => Promise<FunctionExecutionResult>;
 
-export type FunctionRegistry = Partial<Record<FunctionName, FunctionHandler>>;
+export type FunctionRegistry = Partial<Record<CapabilityName, FunctionHandler>>;
 
 export interface QuickReplyItem {
   label: string;
@@ -112,7 +108,7 @@ export type PostbackHandler = (
 ) => Promise<FunctionExecutionResult>;
 
 export interface PostbackHandlerRegistration {
-  capability: FunctionName;
+  capability: CapabilityName;
   handle: PostbackHandler;
 }
 
@@ -130,12 +126,8 @@ export interface TextMessageContext {
   requesterIsAdmin?: boolean;
 }
 
-export type TextContinuationStage =
-  "pending_function" | "resolution" | "attachment" | "pre_route_recall";
-
 export interface TextMessageHandler {
-  turnStage: TextContinuationStage;
-  capability?: FunctionName;
+  capability?: CapabilityName;
   matches(request: TextMessageRequest, context: TextMessageContext): Promise<boolean> | boolean;
   handle(
     request: TextMessageRequest,
