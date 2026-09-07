@@ -1,8 +1,11 @@
+import { DEFAULT_SCHEDULE_DOMAINS } from "../schedules/domain-registry.js";
 import type { CapabilityName } from "../capabilities/names.js";
 import { tool } from "langchain";
 import type { z } from "zod";
 
 import {
+  scheduleDomainToolFields,
+  scheduleDomainToolDescription,
   findPopSheetMusicAgentArgumentsSchema,
   findPptSlidesAgentArgumentsSchema,
   findResourceAgentArgumentsSchema,
@@ -21,7 +24,17 @@ const readToolDefinitions = [
     name: "get_official_schedule",
     capability: "query_schedule",
     sourceType: "official",
-    schema: queryScheduleAgentArgumentsSchema
+    schema: queryScheduleAgentArgumentsSchema,
+    profileSchema: (options: HelperToolGatewayOptions) =>
+      queryScheduleAgentArgumentsSchema.safeExtend(
+        scheduleDomainToolFields(
+          options.context.profile.schedulePolicy?.domains ?? DEFAULT_SCHEDULE_DOMAINS
+        )
+      ),
+    profileDescription: (options: HelperToolGatewayOptions) =>
+      scheduleDomainToolDescription(
+        options.context.profile.schedulePolicy?.domains ?? DEFAULT_SCHEDULE_DOMAINS
+      )
   },
   {
     name: "find_presentation",
@@ -64,6 +77,8 @@ const readToolDefinitions = [
   capability: CapabilityName;
   sourceType: HelperToolSourceType;
   schema: z.ZodObject;
+  profileSchema?: (options: HelperToolGatewayOptions) => z.ZodObject;
+  profileDescription?: (options: HelperToolGatewayOptions) => string;
 }[];
 
 export function createHelperReadTools(options: HelperToolGatewayOptions) {
@@ -96,8 +111,9 @@ export function createHelperReadTools(options: HelperToolGatewayOptions) {
         {
           name: candidate.name,
           description:
-            definition.agentCapability?.semanticDescription ?? definition.shortDescription,
-          schema: candidate.schema
+            (definition.agentCapability?.semanticDescription ?? definition.shortDescription) +
+            ("profileDescription" in candidate ? " " + candidate.profileDescription(options) : ""),
+          schema: "profileSchema" in candidate ? candidate.profileSchema(options) : candidate.schema
         }
       )
     ];

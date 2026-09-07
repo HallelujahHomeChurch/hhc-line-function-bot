@@ -227,15 +227,9 @@ async function runIntegrationContractTests(): Promise<void> {
   const config = fileURLToPath(
     new URL("../../vitest.kernel-integration.config.ts", import.meta.url)
   );
-  const redisTest = fileURLToPath(
-    new URL("../__tests__/kernel-redis-integration.test.ts", import.meta.url)
-  );
-  const postgresTest = fileURLToPath(
-    new URL("../__tests__/kernel-postgres-integration.test.ts", import.meta.url)
-  );
   await runCommand(
     process.execPath,
-    [vitestEntry, "run", redisTest, postgresTest, "--config", config],
+    [vitestEntry, "run", "--config", config],
     process.env,
     "inherit"
   );

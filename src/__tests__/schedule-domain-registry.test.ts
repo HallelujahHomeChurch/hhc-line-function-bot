@@ -114,3 +114,16 @@ describe("schedule domain registry", () => {
     ).resolves.toEqual([expect.objectContaining({ assignee: "原同工" })]);
   });
 });
+
+it("uses an explicit domain selection despite incidental participant routing hints", () => {
+  expect(
+    resolveScheduleDomain({
+      domains: DEFAULT_SCHEDULE_DOMAINS,
+      text: "週日下午為耶穌舉牌服事\n9/13 合成家園",
+      requestedDomainKey: "street_sign_service"
+    })
+  ).toMatchObject({ status: "selected", candidate: { domainKey: "street_sign_service" } });
+  expect(
+    resolveScheduleDomain({ domains: DEFAULT_SCHEDULE_DOMAINS, text: "晨更與為耶穌舉牌服事" })
+  ).toMatchObject({ status: "ambiguous" });
+});

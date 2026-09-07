@@ -65,6 +65,25 @@ export function createSaveScheduleMemoryHandler(
   return async (rawArgs, context) => {
     const args = saveScheduleMemoryArgumentsSchema.parse(rawArgs);
     const content = scheduleMemoryContent(args);
+    const domains = context.profile.schedulePolicy?.domains ?? DEFAULT_SCHEDULE_DOMAINS;
+    if (
+      (args.domainKey && !domains.some((domain) => domain.key === args.domainKey)) ||
+      (args.scheduleType &&
+        !domains.some(
+          (domain) =>
+            domain.binding.kind === "saved_schedule" &&
+            domain.binding.scheduleType === args.scheduleType
+        ))
+    ) {
+      return {
+        ok: true,
+        writePreparation: "needs_input",
+        replyText: `請使用已設定的服事類型：${domains
+          .filter((domain) => domain.binding.kind === "saved_schedule")
+          .map((domain) => domain.displayName)
+          .join("、")}。`
+      };
+    }
 
     if (args.cancel || isCancelText(args.query)) {
       return { ok: true, replyText: "好，我先不保存。" };
@@ -83,6 +102,12 @@ export function createSaveScheduleMemoryHandler(
         }))
       };
     }
+    if (domainResolution.status === "not_found")
+      return {
+        ok: true,
+        writePreparation: "needs_input",
+        replyText: "請指定目前已設定的服事類型；沒有符合的可保存類型。"
+      };
     const domain = domainResolution.domain;
     if (domain && domain.writePolicy.mode === "read_only") {
       return {
@@ -129,12 +154,18 @@ export function createSaveScheduleMemoryHandler(
       };
     }
 
-    const parsed = parseScheduleMemoryContent({
-      content,
-      now: now(),
-      scheduleType: effectiveArgs.scheduleType,
-      title: effectiveArgs.title
-    });
+    const parsed: ParsedScheduleMemory = args.entries
+      ? {
+          scheduleType: effectiveArgs.scheduleType ?? "custom_service_schedule",
+          title: effectiveArgs.title?.trim() || domain?.displayName || "服事表",
+          entries: args.entries
+        }
+      : parseScheduleMemoryContent({
+          content,
+          now: now(),
+          scheduleType: effectiveArgs.scheduleType,
+          title: effectiveArgs.title
+        });
 
     if (parsed.entries.length === 0) {
       return {
@@ -161,33 +192,24 @@ export function createSaveScheduleMemoryHandler(
         };
     }
 
-    if (
-      context.agentTool &&
-      new Set(parsed.entries.map((entry) => entry.serviceDate.slice(0, 7))).size > 1
-    ) {
-      return {
-        ok: true,
-        writePreparation: "ambiguous",
-        replyText: "內容包含多個月份，請逐月保存；先確認要處理哪個月，其餘內容保留待辦。"
-      };
-    }
-
     const completePreview = formatSchedulePreview(parsed, undefined, content);
     if (!fitsCompleteWritePreview(completePreview)) return previewTooLarge();
     if (!effectiveArgs.confirm && (context.agentTool || !isConfirmText(effectiveArgs.query))) {
-      const periodKey = parsed.entries[0]?.serviceDate.slice(0, 7);
-      const existing = periodKey
-        ? (
-            await options.memoryStore.listScheduleMemories({
-              profileName: context.profile.name,
-              limit: 20
-            })
-          ).find(
-            (schedule) =>
-              schedule.scheduleType === parsed.scheduleType && schedule.periodKey === periodKey
-          )
-        : undefined;
-      const preview = formatSchedulePreview(parsed, existing?.title, content);
+      const periods = new Set(parsed.entries.map((entry) => entry.serviceDate.slice(0, 7)));
+      const existing = (
+        await options.memoryStore.listScheduleMemories({
+          profileName: context.profile.name,
+          limit: 100
+        })
+      ).filter(
+        (schedule) =>
+          schedule.scheduleType === parsed.scheduleType && periods.has(schedule.periodKey)
+      );
+      const preview = formatSchedulePreview(
+        parsed,
+        existing.map((schedule) => schedule.title).join("、") || undefined,
+        content
+      );
       if (!fitsCompleteWritePreview(preview)) return previewTooLarge();
       return {
         ok: true,
@@ -201,18 +223,21 @@ export function createSaveScheduleMemoryHandler(
     }
 
     const expiresAt = new Date(now().getTime() + SCHEDULE_MEMORY_TTL_MS).toISOString();
-    const saved = await options.memoryStore.saveScheduleMemory({
-      profileName: context.profile.name,
-      source: context.event.source,
-      createdBy: context.event.source.userId,
-      visibility: "profile",
-      scheduleType: parsed.scheduleType,
-      periodKey: parsed.entries[0]?.serviceDate.slice(0, 7),
-      title: parsed.title,
-      originalText: content,
-      entries: parsed.entries,
-      expiresAt
-    });
+    const periods = [...new Set(parsed.entries.map((entry) => entry.serviceDate.slice(0, 7)))];
+    const saved = await options.memoryStore.saveScheduleMemories(
+      periods.map((periodKey) => ({
+        profileName: context.profile.name,
+        source: context.event.source,
+        createdBy: context.event.source.userId,
+        visibility: "profile",
+        scheduleType: parsed.scheduleType,
+        periodKey,
+        title: parsed.title,
+        originalText: content,
+        entries: parsed.entries.filter((entry) => entry.serviceDate.startsWith(`${periodKey}-`)),
+        expiresAt
+      }))
+    );
 
     return {
       ok: true,
@@ -221,12 +246,15 @@ export function createSaveScheduleMemoryHandler(
       agentResult: {
         status: "success",
         replyText: "服事表已保存。",
-        anchors: { scheduleType: saved.scheduleType, memoryId: saved.id },
+        anchors: {
+          scheduleType: parsed.scheduleType,
+          ...(saved.length === 1 ? { memoryId: saved[0].id } : {})
+        },
         entities: [
           {
             type: "scheduleType",
-            key: saved.scheduleType,
-            label: scheduleTypeLabel(saved.scheduleType)
+            key: parsed.scheduleType,
+            label: scheduleTypeLabel(parsed.scheduleType)
           }
         ]
       }

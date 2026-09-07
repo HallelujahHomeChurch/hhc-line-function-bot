@@ -33,7 +33,10 @@ export function createHelperAttachmentTools(options: {
           const result = await options.updateDraft!(args, options.context);
           options.onResult?.(result);
           return {
-            status: result.ok ? "success" : "unavailable",
+            status:
+              result.writePreparation ??
+              result.writePhase ??
+              (result.ok ? "success" : "unavailable"),
             summary: result.replyText
               .split("\n")
               .filter((line) => !/^(檔名|大小|來源)：/u.test(line))

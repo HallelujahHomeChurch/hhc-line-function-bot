@@ -1,6 +1,7 @@
 import type { CapabilityName } from "./capabilities/names.js";
 import { z } from "zod";
 
+import type { ScheduleDomainConfig } from "./types.js";
 import type { JsonRecord } from "./types.js";
 
 const numericLimitSchema = z.preprocess((value) => {
@@ -236,11 +237,36 @@ export const queryWikipediaArgumentsSchema = z
   .strip();
 export const queryWikipediaAgentArgumentsSchema = queryWikipediaArgumentsSchema.strict();
 
+export const scheduleEntryArgumentsSchema = z
+  .object({
+    serviceDate: dateKeySchema,
+    weekday: z.enum(["日", "一", "二", "三", "四", "五", "六"]).optional(),
+    meetingName: z.string().trim().min(1).max(200),
+    role: z.string().trim().min(1).max(200).optional(),
+    assignee: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .describe("服事人員或家族名稱；括號中的角色、提醒等補充說明放 notes，勿併入姓名。"),
+    familyName: z.string().trim().min(1).max(500).optional(),
+    notes: z
+      .string()
+      .trim()
+      .max(2000)
+      .optional()
+      .describe("保留這筆安排相關的括號補充與全表服事提醒；與服事無關的公告不列入。")
+  })
+  .strict();
+
 export const saveScheduleMemoryArgumentsSchema = z
   .object({
     operation: z
       .enum(["replace", "add_entry", "update_entry", "delete_entry", "delete_schedule"])
-      .optional(),
+      .optional()
+      .describe(
+        "貼上服事表使用 replace（預設），以 content + entries 預覽包含月份的完整替換；只有明確新增到既有月份才用 add_entry 並提供 entry。修改用 update_entry + targetQuery + changes；刪除須明確要求。"
+      ),
     scheduleType: scheduleTypeSchema.optional(),
     domainKey: z
       .string()
@@ -253,6 +279,7 @@ export const saveScheduleMemoryArgumentsSchema = z
     content: z.string().optional().default(""),
     query: z.string().optional(),
     targetQuery: z.string().optional(),
+    entries: z.array(scheduleEntryArgumentsSchema).min(1).max(100).optional(),
     entry: z
       .object({
         serviceDate: dateKeySchema,
@@ -292,7 +319,7 @@ export const saveScheduleAgentArgumentsSchema = saveScheduleMemoryArgumentsSchem
       .optional()
       .default("")
       .describe(
-        "使用者提供的服事安排原文，支持單筆或多筆。已有內容時先提交原文，由伺服器檢查缺項與套用領域預設；不自行補問可選欄位、更多日期或角色。服事表固定為此 profile 共用，不詢問私人或群組可見範圍。"
+        "保留使用者提供的原文作核對，並將安排整理到 entries；略過表情符號和無關公告，保留相關備註，不捏造人員或日期。若年份未提供，依現在時間判定並在預覽顯示；真正有衝突才詢問。可一次包含多個月份；固定共用，不詢問可見範圍。"
       ),
     query: z.string().trim().optional(),
     targetQuery: z.string().trim().optional(),
@@ -370,3 +397,26 @@ export const attachmentDraftArgumentsSchema = z
     title: z.string().trim().min(1).max(120).optional()
   })
   .strict();
+
+/** Registry data is the sole source of model-facing schedule identifiers. */
+export function scheduleDomainToolFields(domains: ScheduleDomainConfig[]) {
+  return {
+    domainKey: z
+      .enum(domains.map((domain) => domain.key))
+      .optional()
+      .describe("選擇已設定的服事類型；不確定才省略，不能自行發明 key。"),
+    scheduleType: z
+      .enum(
+        domains.flatMap((domain) =>
+          domain.binding.kind === "saved_schedule" ? [domain.binding.scheduleType] : []
+        )
+      )
+      .optional()
+  };
+}
+
+export function scheduleDomainToolDescription(domains: ScheduleDomainConfig[]): string {
+  return (
+    "可用 domainKey：" + domains.map((domain) => `${domain.key}=${domain.displayName}`).join("；")
+  );
+}

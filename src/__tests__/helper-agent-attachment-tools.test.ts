@@ -49,3 +49,13 @@ describe("helper attachment draft tool", () => {
     }
   });
 });
+
+it("returns incomplete preparation and preview states without claiming a completed action", async () => {
+  const updateDraft = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: true, writePreparation: "needs_input", replyText: "請提供名稱" })
+    .mockResolvedValueOnce({ ok: true, writePhase: "preview", replyText: "請確認" });
+  const [tool] = createHelperAttachmentTools({ context, authorize: async () => true, updateDraft });
+  expect(await tool!.invoke({})).toMatchObject({ status: "needs_input" });
+  expect(await tool!.invoke({ title: "合成名稱" })).toMatchObject({ status: "preview" });
+});

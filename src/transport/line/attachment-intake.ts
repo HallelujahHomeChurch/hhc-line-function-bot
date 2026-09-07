@@ -468,11 +468,15 @@ export function createPendingAttachmentDraftHandler(
     });
     if (!pending) return { ok: false, replyText: "沒有待保存的附件，請先上傳檔案。" };
     if (pending.stage === "awaiting_opt_in")
-      return { ok: true, ...pendingAttachmentPrompt({ type: pending.attachment.messageType }) };
+      return {
+        ok: true,
+        writePreparation: "needs_input",
+        ...pendingAttachmentPrompt({ type: pending.attachment.messageType })
+      };
     const destination = parsed.data.purpose
       ? parseAttachmentDestination(parsed.data.purpose)
       : (pending.destination ?? pending.target);
-    if (!destination) return purposePrompt();
+    if (!destination) return { ...purposePrompt(), writePreparation: "needs_input" };
     if (!isAttachmentTargetKind(destination.itemKind))
       return { ok: false, replyText: "保存流程已失效，請重新上傳檔案。" };
     const validatedDestination: AttachmentDestination = {
@@ -510,7 +514,7 @@ export function createPendingAttachmentDraftHandler(
           writePhase: "preview",
           executedAction: "save_resource"
         }
-      : { ok: true, replyText: "請輸入這份檔案的名稱。" };
+      : { ok: true, writePreparation: "needs_input", replyText: "請輸入這份檔案的名稱。" };
   };
 }
 

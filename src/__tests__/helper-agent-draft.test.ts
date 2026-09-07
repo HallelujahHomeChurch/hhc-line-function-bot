@@ -67,7 +67,7 @@ it("agent schedule preview cannot commit through a confirm query", async () => {
   );
 });
 
-it("clarifies a multi-month schedule without saving a partial first-month record", async () => {
+it("previews all months without saving a partial first-month record", async () => {
   const memoryStore = new InMemoryAgentMemoryStore();
   const handler = createSaveScheduleMemoryHandler({
     memoryStore,
@@ -82,8 +82,7 @@ it("clarifies a multi-month schedule without saving a partial first-month record
     { content: "9/13 甲組\n10/11 乙組", domainKey: "custom_service_schedule" },
     context
   );
-  expect(result.writePreparation).toBe("ambiguous");
-  expect(result.writePhase).toBeUndefined();
+  expect(result.writePhase).toBe("preview");
   expect(await memoryStore.listScheduleMemories({ profileName: "helper", limit: 10 })).toHaveLength(
     0
   );
@@ -146,4 +145,30 @@ it("proposal tools reject model-supplied approval fields before invoking the ser
   });
   await expect(tools[0].invoke({ content: "draft", confirm: true })).rejects.toThrow();
   expect(propose).not.toHaveBeenCalled();
+});
+
+it("advertises registry-derived writable identifiers and rejects invented keys before proposing", async () => {
+  const propose = vi.fn();
+  const tools = createHelperWriteTools({
+    context: {
+      profile: {
+        name: "helper",
+        enabledFunctions: ["save_schedule"],
+        schedulePolicy: { domains: DEFAULT_SCHEDULE_DOMAINS }
+      },
+      event: { source: { type: "user", userId: "synthetic-owner" } }
+    } as FunctionHandlerContext,
+    propose
+  });
+  const save = tools.find((value) => value.name === "propose_save_schedule")!;
+  expect(save.description).toContain("street_sign_service");
+  expect(save.schema.safeParse({ domainKey: "jesus_banner", content: "9/13 合成組" }).success).toBe(
+    false
+  );
+  expect(
+    save.schema.safeParse({ domainKey: "media_team_service", content: "9/13 合成組" }).success
+  ).toBe(false);
+  expect(
+    save.schema.safeParse({ domainKey: "street_sign_service", content: "9/13 合成組" }).success
+  ).toBe(true);
 });

@@ -557,8 +557,14 @@ describe("production profile configuration deployment contract", () => {
     expect(vitestConfig).toContain("kernel-redis-integration.test.ts");
     expect(vitestConfig).toContain("kernel-postgres-integration.test.ts");
     expect(integrationVitestConfig).toContain("testTimeout: 60_000");
-    expect(integrationCli).toContain("kernel-redis-integration.test.ts");
-    expect(integrationCli).toContain("kernel-postgres-integration.test.ts");
+    expect(integrationVitestConfig).toContain("kernel-redis-integration.test.ts");
+    expect(integrationVitestConfig).toContain("kernel-postgres-integration.test.ts");
+    expect(integrationVitestConfig).toContain("schedule-memory-store.test.ts");
+    expect(vitestConfig).toContain("schedule-memory-store.test.ts");
+    expect(integrationCli).toContain(
+      'new URL("../../vitest.kernel-integration.config.ts", import.meta.url)'
+    );
+    expect(integrationCli).toContain('[vitestEntry, "run", "--config", config]');
   });
 
   it("defines a scheduled ACA catalog sync job that reuses the app image", () => {

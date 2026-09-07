@@ -108,7 +108,7 @@ it("exposes the canonical single-or-multiple-row draft contract separately from 
     propose: async () => ({ status: "preview" })
   });
   const description = tools.find(({ name }) => name === "propose_save_schedule")?.description;
-  expect(description).toBe(
+  expect(description).toContain(
     getFunctionDefinition("save_schedule")?.agentCapability?.semanticDescription
   );
   expect(description).toContain("單筆或多筆");

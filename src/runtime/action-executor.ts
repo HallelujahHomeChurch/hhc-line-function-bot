@@ -200,6 +200,16 @@ function prepareScheduleArguments(
   context: FunctionHandlerContext
 ): JsonRecord {
   const domains = context.profile.schedulePolicy?.domains ?? DEFAULT_SCHEDULE_DOMAINS;
+  if (
+    (schedule.domainKey && !domains.some((domain) => domain.key === schedule.domainKey)) ||
+    (schedule.scheduleType &&
+      !domains.some(
+        (domain) =>
+          domain.binding.kind === "saved_schedule" &&
+          domain.binding.scheduleType === schedule.scheduleType
+      ))
+  )
+    return schedule as JsonRecord;
   const requestedDomainKey =
     schedule.domainKey ??
     (schedule.scheduleType

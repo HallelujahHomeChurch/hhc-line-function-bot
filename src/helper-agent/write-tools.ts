@@ -1,3 +1,4 @@
+import { DEFAULT_SCHEDULE_DOMAINS } from "../schedules/domain-registry.js";
 import type { AgentJobStore } from "../agent/jobs.js";
 import { z } from "zod";
 import type { CapabilityName } from "../capabilities/names.js";
@@ -7,6 +8,8 @@ import { getFunctionDefinition } from "../capabilities/catalog.js";
 import { takeToolCall } from "./budget.js";
 
 import {
+  scheduleDomainToolFields,
+  scheduleDomainToolDescription,
   saveMemoryAgentArgumentsSchema,
   saveResourceAgentArgumentsSchema,
   saveScheduleAgentArgumentsSchema
@@ -20,6 +23,7 @@ export interface HelperWriteToolsOptions {
   hasCurrentDraft?: boolean;
   currentPolicyKey?: () => Promise<string>;
   beforeCancel?: () => boolean;
+  beforeRevise?: () => Promise<boolean>;
   authorize?: (capability: CapabilityName) => Promise<boolean>;
   now?: () => Date;
   propose(
@@ -37,13 +41,21 @@ export function createHelperWriteTools(options: HelperWriteToolsOptions) {
     return [];
   }
 
+  const domains = (
+    options.context.profile.schedulePolicy?.domains ?? DEFAULT_SCHEDULE_DOMAINS
+  ).filter(
+    (domain) => domain.binding.kind === "saved_schedule" && domain.writePolicy.mode !== "read_only"
+  );
   const candidates = [
     {
       capability: "save_schedule" as const,
       value: tool((args) => execute(options, "propose_save_schedule", args as JsonRecord), {
         name: "propose_save_schedule",
-        description: getFunctionDefinition("save_schedule")!.agentCapability!.semanticDescription,
-        schema: saveScheduleAgentArgumentsSchema
+        description:
+          getFunctionDefinition("save_schedule")!.agentCapability!.semanticDescription +
+          " " +
+          scheduleDomainToolDescription(domains),
+        schema: saveScheduleAgentArgumentsSchema.safeExtend(scheduleDomainToolFields(domains))
       })
     },
     {
@@ -175,7 +187,7 @@ function createCurrentDraftTools(options: HelperWriteToolsOptions) {
         ]
       : []),
     tool(
-      async () => {
+      async ({ entryDate }) => {
         takeToolCall();
         try {
           const draft = await currentDraft();
@@ -187,9 +199,32 @@ function createCurrentDraftTools(options: HelperWriteToolsOptions) {
             title: safeWriteClarification(String(draft.args.title ?? "")).slice(0, 120),
             content: content.slice(0, 1600),
             totalCharacters: draft.content.length,
-            truncated: content.length > 1600 || draft.content.length > 2000
+            truncated: content.length > 1600 || draft.content.length > 2000,
+            ...(Array.isArray(draft.args.entries)
+              ? {
+                  entries: draft.args.entries
+                    .filter(
+                      (entry) => !entryDate || (entry as JsonRecord).serviceDate === entryDate
+                    )
+                    .slice(0, 10)
+                    .map((entry) =>
+                      Object.fromEntries(
+                        Object.entries(entry as JsonRecord).map(([key, value]) => [
+                          key,
+                          typeof value === "string"
+                            ? safeWriteClarification(value).slice(0, 500)
+                            : value
+                        ])
+                      )
+                    ),
+                  totalEntries: draft.args.entries.length
+                }
+              : {})
           };
+          if (projection.entries && projection.totalEntries! > projection.entries.length)
+            projection.truncated = true;
           while (JSON.stringify(projection).length > 2000) {
+            if (!projection.content.length && projection.entries?.length) projection.entries.pop();
             projection.content = projection.content.slice(
               0,
               Math.max(0, projection.content.length - 100)
@@ -204,16 +239,43 @@ function createCurrentDraftTools(options: HelperWriteToolsOptions) {
       {
         name: "get_current_draft",
         description:
-          "讀取目前尚未提交的文字記憶或服事表草稿；回傳有界片段，truncated 表示不是全文。摘要遺失原文時先使用本工具；草稿不是已保存內容。",
-        schema: z.object({}).strict()
+          "讀取目前尚未提交的文字記憶或服事表草稿；回傳有界片段，truncated 表示不是全文。摘要遺失原文時先使用本工具；草稿不是已保存內容。可用 entryDate 篩選指定 ISO 日期的結構化安排以進行精確修改。",
+        schema: z
+          .object({
+            entryDate: z
+              .string()
+              .regex(/^\d{4}-\d{2}-\d{2}$/)
+              .optional()
+          })
+          .strict()
       }
     ),
     tool(
-      async ({ oldText, newText }) => {
+      async ({ oldText, newText, entryDate, field }) => {
         takeToolCall();
         try {
           const draft = await currentDraft();
           if (!draft) return { status: "denied" };
+          if (options.beforeRevise && !(await options.beforeRevise())) return { status: "denied" };
+          if (entryDate || field) {
+            if (!entryDate || !field || !Array.isArray(draft.args.entries))
+              return { status: "needs_input", clarification: "請指定原服事日期與要修改的欄位。" };
+            const entries = draft.args.entries as JsonRecord[];
+            const matches = entries.filter(
+              (entry) => entry.serviceDate === entryDate && entry[field] === oldText
+            );
+            if (matches.length !== 1)
+              return {
+                status: "ambiguous",
+                clarification: "找不到唯一符合日期與欄位原值的安排，請先讀取草稿確認。"
+              };
+            return options.propose(draft.toolName, {
+              ...draft.args,
+              entries: entries.map((entry) =>
+                entry === matches[0] ? { ...entry, [field]: newText } : entry
+              )
+            });
+          }
           const index = draft.content.indexOf(oldText);
           if (index < 0)
             return { status: "not_found", clarification: "草稿沒有這段原文，請指定要修改的原句。" };
@@ -222,8 +284,27 @@ function createCurrentDraftTools(options: HelperWriteToolsOptions) {
               status: "ambiguous",
               clarification: "原文出現多次，請提供包含相鄰文字的唯一片段。"
             };
+          let entries = draft.args.entries;
+          if (Array.isArray(entries)) {
+            const replaced = entries.map((entry) =>
+              Object.fromEntries(
+                Object.entries(entry as JsonRecord).map(([key, value]) => [
+                  key,
+                  typeof value === "string" ? value.replaceAll(oldText, newText) : value
+                ])
+              )
+            );
+            if (JSON.stringify(replaced) === JSON.stringify(entries))
+              return {
+                status: "needs_input",
+                clarification:
+                  "這段原文沒有對應的結構化欄位。請依原有 entries 提出完整修改草稿，保留其餘日期與人員；不要只修改原文。"
+              };
+            entries = replaced;
+          }
           return options.propose(draft.toolName, {
             ...draft.args,
+            ...(entries ? { entries } : {}),
             content:
               draft.content.slice(0, index) + newText + draft.content.slice(index + oldText.length)
           });
@@ -234,9 +315,27 @@ function createCurrentDraftTools(options: HelperWriteToolsOptions) {
       {
         name: "revise_current_draft",
         description:
-          "依使用者明確要求，將伺服器目前草稿的一段唯一原文替換成新文字。保留其餘完整內容與設定，重新產生預覽；不能確認或提交。oldText 必須逐字相同且只出現一次。",
+          "依使用者明確要求，將伺服器目前草稿的一段唯一原文替換成新文字。保留其餘完整內容與設定，重新產生預覽；不能確認或提交。oldText 必須逐字相同且只出現一次。結構化服事表可用 entryDate 加 field 指定一筆欄位，以 oldText 核對原值後改為 newText，其餘安排保留；改日期請用 ISO 日期，必要時一併重新提案修正星期。",
         schema: z
-          .object({ oldText: z.string().min(1).max(2000), newText: z.string().max(2000) })
+          .object({
+            oldText: z.string().min(1).max(2000),
+            newText: z.string().max(2000),
+            entryDate: z
+              .string()
+              .regex(/^\d{4}-\d{2}-\d{2}$/)
+              .optional(),
+            field: z
+              .enum([
+                "serviceDate",
+                "weekday",
+                "meetingName",
+                "role",
+                "assignee",
+                "familyName",
+                "notes"
+              ])
+              .optional()
+          })
           .strict()
       }
     )
