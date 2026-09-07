@@ -1,3 +1,4 @@
+import { buildLineTextMessages } from "../line-reply.js";
 import type { Readable } from "node:stream";
 
 import {
@@ -44,22 +45,7 @@ export function createLineSdkReplyClient(profile: BotProfileConfig): LineReplyCl
     async replyText(replyToken: string, text: string, options?: LineReplyOptions): Promise<void> {
       await client.replyMessage({
         replyToken,
-        messages: [
-          {
-            type: "text",
-            text,
-            ...(options?.quickReplies?.length
-              ? {
-                  quickReply: {
-                    items: options.quickReplies.map((item) => ({
-                      type: "action",
-                      action: item.action
-                    }))
-                  }
-                }
-              : {})
-          }
-        ]
+        messages: buildLineTextMessages(text, options?.quickReplies)
       });
     }
   };

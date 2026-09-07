@@ -29,6 +29,7 @@ export type ProfileSheetMusicResearchOutcome =
 
 export interface ProfileRuntime {
   readonly observesCompletion?: boolean;
+  recordExternalResult?(input: ProfileTurnInput, result: FunctionExecutionResult): Promise<void>;
   acceptSheetMusicResearch?(
     input: ProfileTurnInput
   ): Promise<ProfileSheetMusicResearchOutcome | undefined>;
@@ -42,6 +43,11 @@ export function createProfileRuntimeDispatcher(
   runtimes: Partial<Record<string, ProfileRuntime>>
 ): ProfileRuntime {
   return {
+    recordExternalResult(input, result) {
+      return (
+        runtimes[input.profile.name]?.recordExternalResult?.(input, result) ?? Promise.resolve()
+      );
+    },
     acceptSheetMusicResearch(input) {
       return (
         runtimes[input.profile.name]?.acceptSheetMusicResearch?.(input) ??

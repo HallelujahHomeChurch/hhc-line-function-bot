@@ -195,13 +195,13 @@ Helper read tools have separate authority and source types:
 
 `src/helper-agent/policy-gateway.ts` validates strict arguments, source policy, current capability enablement, and live Account authorization on every call. Typed model evidence is capped at 2,000 characters or 10 records and excludes internal identifiers, URLs, prompts, provider payloads, and temporary links. The transport renders authoritative domain reply data separately.
 
-Helper side effects are proposal tools. LangGraph pauses before execution, LINE shows the server-rendered preview, and opaque requester/source-scoped review state permits approve, reject, or natural revision. Approval is one-shot and `src/runtime/action-executor.ts` rechecks authorization, policy, argument hash, domain revision, idempotency, and durable job state before commit. A committed result is persisted before LINE reply and can be recovered without re-execution if delivery fails.
+Helper side effects are proposal tools. The SDK agent prepares a validated scoped draft and continues normal conversation; LINE shows the server-rendered preview. Opaque requester/source-scoped approval state permits one-shot confirmation, cancellation or a newly validated revision. Questions do not consume the draft. A current draft can be read, revised by an exact unique text replacement, previewed again, or cancelled through scoped tools; these tools are omitted from ordinary turns without a draft. They recheck current authorization and policy, and retain exact server content across model summaries. Approval is one-shot and `src/runtime/action-executor.ts` rechecks authorization, policy, argument hash, domain revision, idempotency, and durable job state before commit. A committed result is persisted before LINE reply and can be recovered without re-execution if delivery fails.
 
 Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same DeepSeek provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
 
-A local sheet-music miss may create requester-scoped consent. Only after atomic consent does the helper receive `search_sheet_music_web` and `read_sheet_music_page`; it receives no unrelated write tools. Search returns opaque invocation-local refs, the reader treats bounded public page text as untrusted, and only detected direct PDF/JPEG/PNG candidates can enter the existing import review. The agent and bot process never download the binary. `src/transport/line/attachment-intake.ts`, the durable outbox, finite worker, Asset scan, clean-only publication, and catalog upsert remain the sole attachment path.
+A local sheet-music miss may create requester-scoped consent. Only after atomic consent does the helper receive `search_sheet_music_web` and `read_sheet_music_page`; a per-turn gate separates external research from draft mutation, and research-derived messages are removed before later turns. Search returns opaque invocation-local refs, the reader treats bounded public page text as untrusted, and only detected direct PDF/JPEG/PNG candidates can enter the existing import review. The agent and bot process never download the binary. `src/transport/line/attachment-intake.ts`, the durable outbox, finite worker, Asset scan, clean-only publication, and catalog upsert remain the sole attachment path.
 
-`pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` run the same 17-case deterministic fake-model evaluator. `pnpm eval:sdk-agent --live` is the manual nine-case bounded DeepSeek suite and prints only aggregate case/call/token/latency fields. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies checkpoint restart, expiry, and cleanup.
+`pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` run the same 17-case deterministic fake-model evaluator. `pnpm eval:sdk-agent --live` is the manual ten-case bounded DeepSeek suite and prints only aggregate case/call/token/latency fields. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies checkpoint restart, expiry, and cleanup.
 
 ## Time Zone
 
@@ -360,7 +360,7 @@ When Redis is configured, rate limits use atomic Redis counters. Recent routes a
 Use the signed webhook smoke tool for local or deployed webhook checks:
 
 ```powershell
-pnpm smoke:webhook -- --url http://localhost:3000/api/line/webhook/helper --secret PLACEHOLDER_LINE_CHANNEL_SECRET --text "小哈"
+pnpm smoke:webhook --url http://localhost:3000/api/line/webhook/helper --secret PLACEHOLDER_LINE_CHANNEL_SECRET --text "小哈"
 ```
 
 Operational details are in `docs/runbooks/production-operations.md`.
@@ -426,3 +426,5 @@ Optional live helper agent check:
 ```powershell
 pnpm eval:sdk-agent --live
 ```
+
+Helper slow text and confirmation operations use a four-second inline budget, then return “查看結果” while the operation continues. Result retention is thirty minutes; retrieval rechecks requester scope and every recorded capability dependency. This budget starts at the agent operation, not webhook receipt, and in-process work is not restartable after a container restart.

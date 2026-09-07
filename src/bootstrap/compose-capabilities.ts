@@ -42,6 +42,7 @@ import type { ScheduleStore } from "../schedules/store.js";
 import type { SessionStore } from "../state/session-store.js";
 import {
   createPendingAttachmentTextMessageHandler,
+  createPendingAttachmentPostbackHandler,
   createUploadIntentTextMessageHandler
 } from "../transport/line/attachment-intake.js";
 import type {
@@ -243,6 +244,18 @@ export function composeCapabilities(
 
   const attachmentTextHandlers: TextMessageHandler[] = [];
   if (clients.agentJobStore && clients.attachmentScanQueue && clients.attachmentScanWorkStore) {
+    postbacks.confirm_attachment = {
+      capability: "save_resource",
+      handle: createPendingAttachmentPostbackHandler({
+        sessionStore: clients.sessionStore,
+        catalog: clients.catalog,
+        agentJobStore: clients.agentJobStore,
+        scanQueue: clients.attachmentScanQueue,
+        scanWorkStore: clients.attachmentScanWorkStore,
+        mediaSyncStore: clients.mediaSyncStore,
+        now: clients.now
+      })
+    };
     attachmentTextHandlers.push(
       createUploadIntentTextMessageHandler({
         sessionStore: clients.sessionStore,

@@ -16,6 +16,7 @@ import {
 import { createAgentMemoryStore } from "../agent/create-agent-memory-store.js";
 import { backfillAgentTextMemoryEmbeddings } from "../agent/text-memory-embedding-backfill.js";
 import { createResourceMemoryObserver } from "../agent/resource-memory.js";
+import { createPendingAttachmentDraftHandler } from "../transport/line/attachment-intake.js";
 import { createMemoryCommandHandler } from "../transport/line/memory-commands.js";
 import { createHelperModels, createHelperRuntime } from "../helper-agent/runtime.js";
 import { createHelperAgentState, createPostgresHelperAgentState } from "../helper-agent/state.js";
@@ -355,6 +356,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       ...helperModels,
       state: helperState,
       handlers: registries.functions,
+      attachmentDraftHandler: createPendingAttachmentDraftHandler({ sessionStore, catalog }),
       sessions: sessionStore,
       jobs: agentJobStore,
       webSearch,

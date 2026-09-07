@@ -283,10 +283,17 @@ export const saveScheduleMemoryArgumentsSchema = z
 
 export const saveScheduleArgumentsSchema = saveScheduleMemoryArgumentsSchema;
 export const saveScheduleAgentArgumentsSchema = saveScheduleMemoryArgumentsSchema
-  .omit({ confirm: true, cancel: true })
+  .omit({ confirm: true, cancel: true, visibility: true })
   .safeExtend({
     title: z.string().trim().optional(),
-    content: z.string().trim().optional().default(""),
+    content: z
+      .string()
+      .trim()
+      .optional()
+      .default("")
+      .describe(
+        "使用者提供的服事安排原文，支持單筆或多筆。已有內容時先提交原文，由伺服器檢查缺項與套用領域預設；不自行補問可選欄位、更多日期或角色。服事表固定為此 profile 共用，不詢問私人或群組可見範圍。"
+      ),
     query: z.string().trim().optional(),
     targetQuery: z.string().trim().optional(),
     domainRevision: z.string().trim().min(1).max(80).optional()
@@ -356,3 +363,10 @@ export function parseFunctionArguments(
   const parsed = schema.safeParse(rawArguments ?? {});
   return parsed.success ? (parsed.data as JsonRecord) : undefined;
 }
+
+export const attachmentDraftArgumentsSchema = z
+  .object({
+    purpose: z.enum(["投影片", "流行歌譜", "詩歌歌譜", "小哈資料庫"]).optional(),
+    title: z.string().trim().min(1).max(120).optional()
+  })
+  .strict();

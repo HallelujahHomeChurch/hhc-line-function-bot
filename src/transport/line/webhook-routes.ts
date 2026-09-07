@@ -91,6 +91,7 @@ import type { MediaSyncManagementService } from "../../media-sync/service.js";
 import { runAdminCommand } from "./admin-commands.js";
 import {
   handleAgentTextTurnWithLongJob,
+  handleAgentOperationWithLongJob,
   handlePostbackEvent,
   parsePostbackData,
   sourceKey
@@ -910,45 +911,52 @@ async function handleWebhook(
         profile.enabledFunctions,
         turnAccountAuthorization.allowedFunctions,
         profileRuntime.handleActionReview
-          ? async (review) => {
-              const reviewOutcome = await profileRuntime.handleActionReview!({
+          ? async (review) =>
+              (await handleAgentOperationWithLongJob({
+                jobStore: agentJobStore,
                 profile: review.profile,
                 event: review.event,
-                requestId: review.requestId,
                 requesterDisplayName: review.requesterDisplayName,
-                requesterIsAdmin,
-                configuredFunctions: [...profile.enabledFunctions],
-                authorizeFunctions: async (names) => [
-                  ...(await turnAccountAuthorization.allowedFunctions(names))
-                ],
-                accountAdministrator: turnAccountAuthorization.administrator,
-                reviewId: review.reviewId,
-                resultJobId: review.resultJobId,
-                text: review.text
-              });
-              if (!reviewOutcome) return { ok: true, replyText: messages.postbackUnsupported };
-              const reviewResult = reviewOutcome.result;
-              if (
-                reviewOutcome.freshExecution &&
-                reviewResult.writePhase === "commit" &&
-                reviewResult.executedAction
-              ) {
-                return completionObserver.complete({
-                  context: {
+                operation: async () => {
+                  const reviewOutcome = await profileRuntime.handleActionReview!({
                     profile: review.profile,
                     event: review.event,
                     requestId: review.requestId,
                     requesterDisplayName: review.requesterDisplayName,
-                    requesterIsAdmin
-                  },
-                  action: reviewResult.executedAction,
-                  result: reviewResult,
-                  durationMs: elapsedMs(startedAt),
-                  clarificationCount: 0
-                });
-              }
-              return reviewResult;
-            }
+                    requesterIsAdmin,
+                    configuredFunctions: [...profile.enabledFunctions],
+                    authorizeFunctions: async (names) => [
+                      ...(await turnAccountAuthorization.allowedFunctions(names))
+                    ],
+                    accountAdministrator: turnAccountAuthorization.administrator,
+                    reviewId: review.reviewId,
+                    resultJobId: review.resultJobId,
+                    text: review.text
+                  });
+                  if (!reviewOutcome) return { ok: true, replyText: messages.postbackUnsupported };
+                  const reviewResult = reviewOutcome.result;
+                  if (
+                    reviewOutcome.freshExecution &&
+                    reviewResult.writePhase === "commit" &&
+                    reviewResult.executedAction
+                  ) {
+                    return completionObserver.complete({
+                      context: {
+                        profile: review.profile,
+                        event: review.event,
+                        requestId: review.requestId,
+                        requesterDisplayName: review.requesterDisplayName,
+                        requesterIsAdmin
+                      },
+                      action: reviewResult.executedAction,
+                      result: reviewResult,
+                      durationMs: elapsedMs(startedAt),
+                      clarificationCount: 0
+                    });
+                  }
+                  return reviewResult;
+                }
+              })) ?? { ok: true, replyText: messages.postbackUnsupported }
           : undefined
       );
       const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
@@ -977,6 +985,24 @@ async function handleWebhook(
             clarificationCount: 0
           })
         : result;
+      if (
+        postbackCapabilityName &&
+        getFunctionDefinition(postbackCapabilityName)?.sideEffectLevel === "read"
+      ) {
+        await profileRuntime.recordExternalResult?.(
+          {
+            profile: postbackProfile,
+            event,
+            requestId,
+            requesterDisplayName,
+            configuredFunctions: [...profile.enabledFunctions],
+            authorizeFunctions: async (names) => [
+              ...(await turnAccountAuthorization.allowedFunctions(names))
+            ]
+          },
+          completedResult
+        );
+      }
       await emitRouteEvent(routeObserver, {
         kind: "postback",
         profileName: profile.name,
@@ -1504,6 +1530,7 @@ async function handleWebhook(
         });
     if (continuation.matched) {
       if (continuation.result) {
+        await profileRuntime.recordExternalResult?.(profileTurnInput, continuation.result);
         await line.replyText(
           event.replyToken,
           continuation.result.replyText,
@@ -2171,7 +2198,18 @@ async function recordConversationReply(
   event: LineEvent,
   result: FunctionExecutionResult
 ): Promise<void> {
-  const ttlMs = conversationWindowTtlMs(profile);
+  const normalTtlMs = conversationWindowTtlMs(profile);
+  const awaitingClarification =
+    result.agentResult?.status === "ambiguous" ||
+    result.writePreparation === "needs_input" ||
+    result.writePreparation === "ambiguous";
+  const ttlMs =
+    normalTtlMs &&
+    profile.name === "helper" &&
+    event.source.type === "group" &&
+    awaitingClarification
+      ? 120_000
+      : normalTtlMs;
   const scope = buildConversationWindowScope(profile, event);
   const userText = event.message?.text;
   if (!ttlMs || !scope || !userText || !result.replyText) {

@@ -217,12 +217,23 @@ describe("agent memory", () => {
     const handler = createSaveMemoryHandler({ memoryStore: store });
 
     const preview = await handler(
-      { content: "集合時間是下午兩點半", visibility: "group" },
+      { title: "集合資訊", content: "集合時間是下午兩點半", visibility: "group" },
       context()
     );
 
     expect(preview.replyText).toContain("群組共用");
     expect(preview.replyText).toContain("30 天");
+    expect(preview.replyText).toContain("集合時間是下午兩點半");
+    await expect(store.summary()).resolves.toMatchObject({ textMemories: 0 });
+  });
+
+  it("rejects memory too large to show in a complete preview", async () => {
+    const store = new InMemoryAgentMemoryStore();
+    const save = createSaveMemoryHandler({ memoryStore: store });
+    const result = await save({ title: "過長筆記", content: "內容".repeat(13_000) }, context());
+    expect(result.writePhase).toBeUndefined();
+    expect(result.writePreparation).toBe("needs_input");
+    expect(result.quickReplies).toBeUndefined();
     await expect(store.summary()).resolves.toMatchObject({ textMemories: 0 });
   });
 

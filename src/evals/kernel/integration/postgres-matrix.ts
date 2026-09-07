@@ -105,7 +105,10 @@ const MATRIX_FAILURE_CODES = new Set([
   "helper_group_ttl_invalid",
   "helper_checkpoint_not_deleted",
   "helper_expired_research_exposed",
-  "helper_failed_run_metadata_retained",
+  "helper_failed_run_state_lost",
+  "helper_failed_run_ttl_invalid",
+  "helper_failed_run_did_not_throw",
+  "helper_failed_run_cleanup_failed",
   "helper_observation_instant_invalid",
   "helper_state_pool_deadlock",
   "helper_data_pool_not_saturated"
@@ -222,7 +225,7 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
       profileName: PROFILE,
       source: { type: "group", groupId: "kernel-failed-group", userId: "kernel-failed-user" }
     });
-    if (!failed) throw new Error("helper_failed_run_metadata_retained");
+    if (!failed) throw new Error("helper_failed_run_state_lost");
     const failedSource = {
       type: "group",
       groupId: "kernel-failed-group",
@@ -230,6 +233,8 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
     };
     await invoke(failed, failedSource);
     await state.allowExternalSheetMusic(failed, failedSource, new Date("2026-09-04T00:01:00.000Z"));
+    let failureObserved = false;
+    const failedAt = now.getTime();
     try {
       await withinHelperStateTimeout(
         state.run({
@@ -237,28 +242,48 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
           policyKey: "kernel-policy-v1",
           source: failedSource,
           task: async () => {
-            throw new ReviewCreationDenied();
+            throw new SyntheticProviderTimeout();
           }
         })
       );
     } catch (error) {
-      if (!(error instanceof ReviewCreationDenied)) {
-        throw error;
-      }
+      if (!(error instanceof SyntheticProviderTimeout)) throw error;
+      failureObserved = true;
     }
+    if (!failureObserved) throw new Error("helper_failed_run_did_not_throw");
     const [failedMetadata, failedCheckpoint] = await Promise.all([
+      pool.query<{ expires_at: Date }>(
+        "select expires_at from agent_sdk_threads where thread_id = $1",
+        [failed]
+      ),
+      pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [failed])
+    ]);
+    if (!failedMetadata.rowCount || !failedCheckpoint.rowCount) {
+      throw new Error("helper_failed_run_state_lost");
+    }
+    if (failedMetadata.rows[0]?.expires_at.getTime() !== failedAt + 15 * 60_000) {
+      throw new Error("helper_failed_run_ttl_invalid");
+    }
+    // A retry can resume the same durable SDK conversation after the dependency recovers.
+    const resumed = await invoke(failed, failedSource);
+    if (resumed.messages.filter((message) => message.type === "human").length !== 2) {
+      throw new Error("helper_failed_run_state_lost");
+    }
+    now = new Date(failedAt + 15 * 60_000 + 1);
+    await state.cleanupExpired();
+    const [expiredMetadata, expiredCheckpoint] = await Promise.all([
       pool.query("select 1 from agent_sdk_threads where thread_id = $1", [failed]),
       pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [failed])
     ]);
-    if (failedMetadata.rowCount || failedCheckpoint.rowCount) {
-      throw new Error("helper_failed_run_metadata_retained");
+    if (expiredMetadata.rowCount || expiredCheckpoint.rowCount) {
+      throw new Error("helper_failed_run_cleanup_failed");
     }
   } finally {
     await pool.end();
   }
 }
 
-class ReviewCreationDenied extends Error {}
+class SyntheticProviderTimeout extends Error {}
 
 async function withinHelperStateTimeout<T>(promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

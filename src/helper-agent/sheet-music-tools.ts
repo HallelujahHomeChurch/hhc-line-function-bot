@@ -16,6 +16,8 @@ const MAX_CANDIDATE_URL_LENGTH = 2_048;
 
 export interface SheetMusicResearchToolsOptions {
   consented: boolean;
+  consentQuery?: string;
+  beforeResearch?: () => Promise<boolean>;
   context: FunctionHandlerContext;
   pageReader: PublicPageReader;
   webSearch: WebSearchClient;
@@ -26,6 +28,7 @@ export interface SheetMusicResearchToolsOptions {
 export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOptions) {
   if (
     !options.consented ||
+    !options.consentQuery?.trim() ||
     options.context.profile.name !== "helper" ||
     !options.context.event.source.userId ||
     !options.context.profile.enabledFunctions.includes("find_sheet_music") ||
@@ -52,8 +55,11 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
 
   return [
     tool(
-      async ({ query }) => {
+      async ({ format }) => {
         takeToolCall();
+        if (options.beforeResearch && !(await options.beforeResearch())) {
+          return fitResearchResult({ status: "denied", reason: "write_preparation_in_progress" });
+        }
         if (!(await authorized(options))) {
           return fitResearchResult({ status: "denied", reason: "authorization_changed" });
         }
@@ -73,7 +79,11 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
         // This assignment must precede I/O so parallel model calls cannot bypass inspection.
         searchResultNeedsInspection = true;
         try {
-          const results = await options.webSearch.search({ query, language: "zh-TW", limit: 5 });
+          const results = await options.webSearch.search({
+            query: [options.consentQuery!.slice(0, 300), format].filter(Boolean).join(" "),
+            language: "zh-TW",
+            limit: 5
+          });
           searchResultNeedsInspection = results.length > 0;
           return fitResearchResult({
             status: results.length ? "success" : "not_found",
@@ -97,13 +107,22 @@ export function createSheetMusicResearchTools(options: SheetMusicResearchToolsOp
       },
       {
         name: "search_sheet_music_web",
-        description: "在已取得本次同意後搜尋公開歌譜候選。可依曲名、作者、編制與檔案格式反覆換詞。",
-        schema: z.object({ query: z.string().trim().min(1).max(300) }).strict()
+        description:
+          "在已取得本次同意後搜尋公開歌譜候選。伺服器固定使用已同意的原曲名查詢，只能指定 PDF 或圖片格式。換曲目必須重新取得同意。",
+        schema: z
+          .object({
+            query: z.string().trim().min(1).max(300).optional(),
+            format: z.enum(["PDF", "image"]).optional()
+          })
+          .strict()
       }
     ),
     tool(
       async ({ ref }) => {
         takeToolCall();
+        if (options.beforeResearch && !(await options.beforeResearch())) {
+          return fitResearchResult({ status: "denied", reason: "write_preparation_in_progress" });
+        }
         if (!(await authorized(options))) {
           return fitResearchResult({ status: "denied", reason: "authorization_changed" });
         }

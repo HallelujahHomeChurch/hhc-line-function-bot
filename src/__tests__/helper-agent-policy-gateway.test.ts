@@ -262,6 +262,29 @@ describe("helper tool policy gateway", () => {
     expect(JSON.stringify(projected).length).toBeLessThanOrEqual(2_000);
   });
 
+  it("exposes safe freshness and marks evidence cropped by the record and text budgets", () => {
+    const result = successfulScheduleResult();
+    result.diagnostics = {
+      executionMode: "catalog_snapshot_read",
+      freshnessStatus: "stale_allowed",
+      dataAsOf: "2026-09-01T00:00:00Z",
+      sourceRevision: "present"
+    };
+    result.agentResult!.replyData!.records = Array.from({ length: 12 }, () => ({
+      notes: "字".repeat(400)
+    }));
+    const projected = projectToolResult(result, "official");
+    expect(projected).toMatchObject({
+      freshness: "stale",
+      asOf: "2026-09-01T00:00:00.000Z",
+      truncated: true
+    });
+    expect(JSON.stringify(projected).length).toBeLessThanOrEqual(2000);
+    expect(JSON.stringify(projected)).not.toContain("sourceRevision");
+    const full = projectToolResult(successfulScheduleResult(), "official");
+    expect(full.truncated).toBeUndefined();
+  });
+
   it("drops URL-like reply-data kinds", () => {
     const projected = projectToolResult(
       {

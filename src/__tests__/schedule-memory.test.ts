@@ -137,6 +137,8 @@ describe("schedule memory", () => {
 
     expect(result.replyText).toContain("我整理到 9 筆晨更家族服事");
     expect(result.replyText).toContain("要保存嗎");
+    expect(result.replyText).toContain("2026年7月31日");
+    expect(result.replyText).toContain(morningPrayerText);
     expect(result.quickReplies).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "保存" }),
@@ -146,6 +148,47 @@ describe("schedule memory", () => {
     await expect(
       store.searchScheduleEntries({ profileName: "helper", source: context().event.source })
     ).resolves.toEqual([]);
+  });
+
+  it("shows every persisted entry field in a mutation preview", async () => {
+    const save = createSaveScheduleMemoryHandler({ memoryStore: new InMemoryAgentMemoryStore() });
+    const preview = await save(
+      {
+        operation: "add_entry",
+        scheduleType: "morning_prayer_family",
+        entry: {
+          serviceDate: "2026-07-17",
+          weekday: "五",
+          meetingName: "晨更",
+          role: "帶領",
+          assignee: "合成同工",
+          familyName: "合成家族",
+          notes: "完整備註"
+        }
+      },
+      context()
+    );
+    expect(preview.writePhase).toBe("preview");
+    for (const field of [
+      "2026年7月17日",
+      "（五）",
+      "晨更",
+      "帶領",
+      "合成同工",
+      "合成家族",
+      "完整備註"
+    ])
+      expect(preview.replyText).toContain(field);
+  });
+
+  it("rejects schedules too large to preview completely", async () => {
+    const store = new InMemoryAgentMemoryStore();
+    const save = createSaveScheduleMemoryHandler({ memoryStore: store });
+    const content = morningPrayerText + "\n" + "備註".repeat(13_000);
+    const result = await save({ content }, context());
+    expect(result.writePhase).toBeUndefined();
+    expect(result.writePreparation).toBe("needs_input");
+    expect(result.quickReplies).toBeUndefined();
   });
 
   it("rejects a preview after its schedule domain revision changes", async () => {

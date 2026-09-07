@@ -16,7 +16,8 @@ export const queryScheduleDefinition: FunctionDefinition = {
   sideEffectLevel: "read",
   agentCapability: {
     intents: ["查服事", "查服事表", "找服事", "下一場服事", "本週服事", "主日服事"],
-    semanticDescription: "查詢正式服事安排；日期或期間省略時，伺服器會依目前時間取得最新有效資料。",
+    semanticDescription:
+      "只查詢已存在的正式服事安排，不會保存或準備寫入預覽。使用者提供新內容並要求保存時，應使用寫入提案工具。日期或期間省略時，伺服器會依目前時間取得最新有效資料。",
     retrievalEvidence: {
       provider: "schedule",
       queryStopWords: ["服事表", "服事安排"]

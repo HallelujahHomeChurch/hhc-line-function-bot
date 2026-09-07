@@ -1,5 +1,8 @@
+import { buildPostbackQuickReply } from "../../line-reply.js";
+import { attachmentDraftArgumentsSchema } from "../../function-arguments.js";
+import type { AttachmentDraftHandler } from "../../helper-agent/attachment-tools.js";
 import type { CapabilityName } from "../../capabilities/names.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   buildAgentJobQuickReply,
@@ -25,7 +28,8 @@ import type {
   LineMessage,
   LineSource,
   QuickReplyItem,
-  TextMessageHandler
+  TextMessageHandler,
+  PostbackHandler
 } from "../../types.js";
 
 const ATTACHMENT_SESSION_TTL_MS = 10 * 60 * 1000;
@@ -320,14 +324,20 @@ export function createPendingAttachmentTextMessageHandler(
 
   return {
     capability: "save_resource",
-    matches: async (_request, context) =>
-      Boolean(
-        await options.sessionStore.findPendingAttachment({
-          profileName: context.profile.name,
-          source: context.event.source,
-          requesterUserId: context.event.source.userId
-        })
-      ),
+    matches: async (request, context) => {
+      const lookup = {
+        profileName: context.profile.name,
+        source: context.event.source,
+        requesterUserId: context.event.source.userId
+      };
+      const pending = await options.sessionStore.findPendingAttachment(lookup);
+      if (!pending) return false;
+      if (context.profile.name !== "helper") return true;
+      if (await options.sessionStore.findActionReview(lookup)) return false;
+      return (
+        isCancel(request.text) || (pending.stage === "awaiting_opt_in" && isOptIn(request.text))
+      );
+    },
 
     handle: async (request, context) => {
       const pending = await options.sessionStore.findPendingAttachment({
@@ -367,7 +377,7 @@ export function createPendingAttachmentTextMessageHandler(
           return {
             ok: true,
             replyText: "請回覆「保存」確認，或回覆「取消」。",
-            quickReplies: confirmationQuickReplies()
+            quickReplies: confirmationQuickReplies(context.profile.name === "helper")
           };
         }
         const claimed = await options.sessionStore.takePendingAttachment({
@@ -434,6 +444,107 @@ export function createPendingAttachmentTextMessageHandler(
       await options.sessionStore.set(updated);
       return { ok: true, replyText: "請輸入這份檔案的名稱。" };
     }
+  };
+}
+
+/** Draft-only adapter. Confirmation remains in the one-shot transport handler. */
+export function createPendingAttachmentDraftHandler(
+  options: Pick<PendingAttachmentTextMessageOptions, "sessionStore" | "catalog" | "now">
+): AttachmentDraftHandler {
+  return async (args, context) => {
+    const parsed = attachmentDraftArgumentsSchema.safeParse(args);
+    if (
+      !parsed.success ||
+      !context.profile.enabledFunctions.includes("save_resource") ||
+      !context.event.source.userId ||
+      !["user", "group"].includes(context.event.source.type)
+    ) {
+      return { ok: false, replyText: "目前無法編輯這個附件草稿。" };
+    }
+    const pending = await options.sessionStore.findPendingAttachment({
+      profileName: context.profile.name,
+      source: context.event.source,
+      requesterUserId: context.event.source.userId
+    });
+    if (!pending) return { ok: false, replyText: "沒有待保存的附件，請先上傳檔案。" };
+    if (pending.stage === "awaiting_opt_in")
+      return { ok: true, ...pendingAttachmentPrompt({ type: pending.attachment.messageType }) };
+    const destination = parsed.data.purpose
+      ? parseAttachmentDestination(parsed.data.purpose)
+      : (pending.destination ?? pending.target);
+    if (!destination) return purposePrompt();
+    if (!isAttachmentTargetKind(destination.itemKind))
+      return { ok: false, replyText: "保存流程已失效，請重新上傳檔案。" };
+    const validatedDestination: AttachmentDestination = {
+      ...destination,
+      itemKind: destination.itemKind
+    };
+    const sourceGate = await findWritableSource(
+      options.catalog,
+      pending.profileName,
+      validatedDestination
+    );
+    if (!sourceGate.ok) return { ok: false, replyText: sourceGate.replyText };
+    const title = parsed.data.title ?? pending.target?.title;
+    const now = options.now?.() ?? new Date();
+    const updated: PendingAttachmentSession = {
+      ...refreshPending(pending, title ? "awaiting_confirmation" : "awaiting_title", now),
+      destination,
+      target: title
+        ? { ...destination, title, declaredFileName: pending.attachment.fileName }
+        : undefined
+    };
+    if (parsed.data.purpose || parsed.data.title) {
+      if (!(await options.sessionStore.updatePendingAttachment(pending, updated)))
+        return { ok: false, replyText: "附件草稿已變更或已在處理，請重新查看目前草稿。" };
+    } else if (pending.target && isAttachmentTargetKind(pending.target.itemKind)) {
+      return {
+        ...confirmationPreview(pending, { ...pending.target, itemKind: pending.target.itemKind }),
+        writePhase: "preview",
+        executedAction: "save_resource"
+      };
+    }
+    return title
+      ? {
+          ...confirmationPreview(updated, { ...validatedDestination, title }),
+          writePhase: "preview",
+          executedAction: "save_resource"
+        }
+      : { ok: true, replyText: "請輸入這份檔案的名稱。" };
+  };
+}
+
+function attachmentRevision(pending: PendingAttachmentSession): string {
+  return createHash("sha256").update(JSON.stringify(pending)).digest("hex");
+}
+
+export function createPendingAttachmentPostbackHandler(
+  options: PendingAttachmentTextMessageOptions
+): PostbackHandler {
+  return async (request, context) => {
+    const lookup = {
+      profileName: context.profile.name,
+      source: context.event.source,
+      requesterUserId: context.event.source.userId
+    };
+    const pending = await options.sessionStore.findPendingAttachment(lookup);
+    if (
+      !context.profile.enabledFunctions.includes("save_resource") ||
+      !context.event.source.userId ||
+      !pending ||
+      pending.stage !== "awaiting_confirmation" ||
+      request.params.revision !== attachmentRevision(pending)
+    ) {
+      return { ok: true, replyText: "這份附件預覽已失效，請重新查看目前草稿。" };
+    }
+    const claimed = await options.sessionStore.takePendingAttachment(lookup, pending);
+    if (!claimed)
+      return { ok: true, replyText: "這份附件預覽已變更或已在處理，請重新查看目前草稿。" };
+    return enqueueAttachmentScan({
+      options,
+      pending: claimed,
+      resultTtlMs: (context.profile.longRunningJobs?.resultTtlMinutes ?? 30) * 60_000
+    });
   };
 }
 
@@ -662,7 +773,7 @@ function isAttachmentTargetKind(value: string): value is AttachmentTargetKind {
 }
 
 function isConfirm(text: string): boolean {
-  return /^(保存|確認|好|yes|y)$/iu.test(text.trim());
+  return /^(保存附件|保存|確認|好|yes|y)$/iu.test(text.trim());
 }
 
 function isCancel(text: string): boolean {
@@ -733,7 +844,19 @@ function confirmationPreview(pending: PendingAttachmentSession, target: Attachme
       `類型：${labelForItemKind(target.itemKind)}`,
       "確認後會下載、驗證並掃毒，通過後才會保存並發布。"
     ].join("\n"),
-    quickReplies: confirmationQuickReplies()
+    quickReplies:
+      pending.profileName === "helper"
+        ? [
+            buildPostbackQuickReply(
+              "保存附件",
+              new URLSearchParams({
+                action: "confirm_attachment",
+                revision: attachmentRevision(pending)
+              }).toString()
+            ),
+            { label: "取消", action: { type: "message" as const, label: "取消", text: "取消" } }
+          ]
+        : confirmationQuickReplies()
   };
 }
 
@@ -743,9 +866,10 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function confirmationQuickReplies() {
+function confirmationQuickReplies(helper = false) {
+  const label = helper ? "保存附件" : "保存";
   return [
-    { label: "保存", action: { type: "message" as const, label: "保存", text: "保存" } },
+    { label, action: { type: "message" as const, label, text: label } },
     { label: "取消", action: { type: "message" as const, label: "取消", text: "取消" } }
   ];
 }

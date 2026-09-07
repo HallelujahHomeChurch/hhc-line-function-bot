@@ -31,8 +31,8 @@ export interface RetrievalDiagnostics {
   queryFingerprint?: string;
   referenceFingerprint?: string;
   /**
-   * Reply-presentation metadata only. Sanitizers must exclude this from
-   * telemetry, traces, planner input, task frames, and result envelopes.
+   * Snapshot observation time. Helper projection may expose only a validated ISO timestamp;
+   * telemetry and traces must exclude the original value.
    */
   dataAsOf?: string;
 }
