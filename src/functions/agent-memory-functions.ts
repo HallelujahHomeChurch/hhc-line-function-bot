@@ -1,3 +1,4 @@
+import { fitsCompleteWritePreview } from "../line-reply.js";
 import { retrieveMemoryArgumentsSchema, saveMemoryArgumentsSchema } from "../function-arguments.js";
 import type { AgentMemoryStore, AgentTextMemoryRecord } from "../agent/memory-store.js";
 import type { FunctionHandler } from "../types.js";
@@ -22,22 +23,34 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
       return { ok: true, replyText: "好，我先不保存。" };
     }
     if (!content) {
-      return { ok: true, replyText: "請直接告訴我要記住的內容。" };
+      return {
+        ok: true,
+        ...(context.agentTool ? { writePreparation: "needs_input" as const } : {}),
+        replyText: "請直接告訴我要記住的內容。"
+      };
     }
     const title = args.title?.trim() || inferTitle(content);
     const visibility =
       context.event.source.type === "group" && args.visibility === "group" ? "group" : "private";
+    const preview = [
+      "請確認要記住這段資訊：",
+      `名稱：${title}`,
+      `內容：\n${content}`,
+      `可見範圍：${visibility === "group" ? "群組共用" : "僅你可查"}`,
+      "保存期限：30 天",
+      "要保存嗎？"
+    ].join("\n");
+    if (!fitsCompleteWritePreview(preview))
+      return {
+        ok: true,
+        writePreparation: "needs_input",
+        replyText: "內容超過完整預覽上限，請分成較短的筆記再保存。"
+      };
     if (!args.confirm) {
       return {
         ok: true,
         writePhase: "preview",
-        replyText: [
-          "請確認要記住這段資訊：",
-          `名稱：${title}`,
-          `可見範圍：${visibility === "group" ? "群組共用" : "僅你可查"}`,
-          "保存期限：30 天",
-          "要保存嗎？"
-        ].join("\n"),
+        replyText: preview,
         quickReplies: [
           { label: "保存", action: { type: "message", label: "保存", text: "保存" } },
           { label: "取消", action: { type: "message", label: "取消", text: "取消" } }

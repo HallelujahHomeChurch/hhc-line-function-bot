@@ -288,3 +288,52 @@ describe("helper agent state", () => {
     expect(deleteThread).toHaveBeenCalledWith("helper-thread-a");
   });
 });
+
+it("preserves failed-turn checkpoints but still expires their scope metadata", async () => {
+  let observed = new Date("2026-09-07T00:00:00Z");
+  const checkpointer = new MemorySaver();
+  const remove = vi.spyOn(checkpointer, "deleteThread");
+  const state = createHelperAgentState(testStateOptions(checkpointer, () => observed));
+  const run = {
+    threadId: "recoverable",
+    policyKey: "policy",
+    source: { type: "user" as const, userId: "u" }
+  };
+  await expect(
+    state.run({
+      ...run,
+      task: async () => {
+        throw new Error("provider timeout");
+      }
+    })
+  ).rejects.toThrow("provider timeout");
+  expect(remove).not.toHaveBeenCalled();
+  observed = new Date("2026-09-07T00:31:00Z");
+  await state.run({ ...run, task: async () => undefined });
+  expect(remove).toHaveBeenCalledWith("recoverable");
+});
+
+it("discards a checkpoint marked by interrupted external research on the next turn", async () => {
+  const checkpointer = new MemorySaver();
+  const deleted = vi.spyOn(checkpointer, "deleteThread");
+  const state = createHelperAgentState({ checkpointer, hmacKey: "research-failure" });
+  const source = { type: "user" as const, userId: "synthetic" };
+  await expect(
+    state.run({
+      threadId: "research-failure",
+      policyKey: "v4",
+      source,
+      task: async (snapshot) => {
+        await snapshot.markExternalResearch!();
+        throw new Error("process_interrupted");
+      }
+    })
+  ).rejects.toThrow("process_interrupted");
+  await state.run({
+    threadId: "research-failure",
+    policyKey: "v4",
+    source,
+    task: async () => undefined
+  });
+  expect(deleted).toHaveBeenCalledWith("research-failure");
+});

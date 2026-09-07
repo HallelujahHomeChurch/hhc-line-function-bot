@@ -38,8 +38,17 @@ redis.call('PSETEX', KEYS[1], ARGV[1], ARGV[3])
 return previousId
 `;
 
+const UPDATE_ATTACHMENT_SCRIPT = `
+if redis.call('GET', KEYS[1]) ~= ARGV[1] or redis.call('GET', KEYS[2]) ~= ARGV[2] then return 0 end
+redis.call('PSETEX', KEYS[2], ARGV[3], ARGV[4])
+redis.call('PSETEX', KEYS[1], ARGV[3], ARGV[1])
+return 1
+`;
+
 const CONSUME_INDEXED_SESSION_SCRIPT = `
-local value = redis.call('GETDEL', KEYS[2])
+local value = redis.call('GET', KEYS[2])
+if ARGV[2] and value ~= ARGV[2] then return nil end
+redis.call('DEL', KEYS[2])
 local current = redis.call('GET', KEYS[1])
 if current == ARGV[1] then
   redis.call('DEL', KEYS[1])
@@ -151,6 +160,31 @@ export class RedisSessionStore implements SessionStore {
         : await this.options.client.getDel(sessionKey);
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as ConversationSession);
+  }
+
+  async updatePendingAttachment(
+    expected: PendingAttachmentSession,
+    updated: PendingAttachmentSession
+  ): Promise<boolean> {
+    const indexKey = this.interactiveIndexKey({
+      profileName: expected.profileName,
+      source: expected.source,
+      requesterUserId: expected.requesterUserId
+    });
+    const ttlMs = new Date(updated.expiresAt).getTime() - this.now().getTime();
+    if (!indexKey || !this.options.client.eval || updated.id !== expected.id || ttlMs <= 0)
+      return false;
+    return (
+      (await this.options.client.eval(UPDATE_ATTACHMENT_SCRIPT, {
+        keys: [indexKey, this.key(expected.id)],
+        arguments: [
+          expected.id,
+          JSON.stringify(expected),
+          String(Math.ceil(ttlMs)),
+          JSON.stringify(updated)
+        ]
+      })) === 1
+    );
   }
 
   async set(session: ConversationSession): Promise<void> {
@@ -265,11 +299,13 @@ export class RedisSessionStore implements SessionStore {
   }
 
   async takePendingAttachment(
-    lookup: PptSelectionLookup
+    lookup: PptSelectionLookup,
+    expected?: PendingAttachmentSession
   ): Promise<PendingAttachmentSession | undefined> {
     const selected = await this.findPendingAttachment(lookup);
     if (!selected) return undefined;
-    const raw = await this.consumeIndexedSession(selected, lookup);
+    if (expected && JSON.stringify(selected) !== JSON.stringify(expected)) return undefined;
+    const raw = await this.consumeIndexedSession(selected, lookup, expected);
     if (!raw) return undefined;
     return this.liveSession(JSON.parse(raw) as PendingAttachmentSession) as
       PendingAttachmentSession | undefined;
@@ -504,16 +540,18 @@ export class RedisSessionStore implements SessionStore {
 
   private async consumeIndexedSession(
     session: ConversationSession,
-    lookup: PptSelectionLookup
+    lookup: PptSelectionLookup,
+    expected?: PendingAttachmentSession
   ): Promise<string | null> {
     if (!this.options.client.eval) {
+      if (expected) return null;
       return this.options.client.getDel(this.key(session.id));
     }
     const indexKey = this.interactiveIndexKey(lookup);
     if (!indexKey) return null;
     const raw = await this.options.client.eval(CONSUME_INDEXED_SESSION_SCRIPT, {
       keys: [indexKey, this.key(session.id)],
-      arguments: [session.id]
+      arguments: expected ? [session.id, JSON.stringify(expected)] : [session.id]
     });
     return typeof raw === "string" ? raw : null;
   }

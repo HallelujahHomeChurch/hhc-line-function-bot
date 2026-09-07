@@ -38,7 +38,7 @@ A malformed group/direct event without `source.userId` does not receive a helper
 
 ## Helper Agent And Context
 
-`src/helper-agent/agent.ts` is the sole LangChain `createAgent` composition. DeepSeek is the only remote chat provider. It uses official context editing, summarization, HITL, model-call, and tool-call middleware plus exact duplicate-tool-call rejection.
+`src/helper-agent/agent.ts` is the sole LangChain `createAgent` composition. DeepSeek is the only remote chat provider. It uses official context editing, summarization, model-call, and tool-call middleware plus exact duplicate-tool-call rejection.
 
 `src/helper-agent/state.ts` owns HMAC-derived thread identity, checkpoint access, same-thread serialization, idle metadata, explicit reset, cleanup, and consented sheet-music mode.
 
@@ -87,11 +87,11 @@ Model evidence excludes internal source/document/item IDs, URLs, prompts, provid
 
 ## Human Review And Actions
 
-`src/helper-agent/write-tools.ts` exposes proposal tools only. The model never receives confirmation fields and cannot commit a write.
+`src/helper-agent/write-tools.ts` exposes proposal and scoped draft-management tools. The model never receives confirmation fields and cannot commit a write.
 
 ```text
 complete proposal arguments
-  -> LangGraph HITL interrupt
+  -> validated scoped draft (no suspended conversation)
   -> server-rendered LINE preview
   -> approve, reject, or natural revision
   -> atomic requester/source review consume
@@ -101,17 +101,17 @@ complete proposal arguments
   -> LINE reply
 ```
 
-`src/helper-agent/review.ts` stores only an opaque nonce, scope, interrupt/tool identity, argument hash, policy key, expiry, and durable result pointer. It stores no arguments in postback data or review state. Reviews expire after five minutes and execute once. A natural revision rejects and consumes the original proposal, fails its pending result, and creates a new preview identity when the agent proposes revised arguments.
+`src/helper-agent/review.ts` stores an opaque nonce, requester/source scope, operation/tool identity, exact draft arguments, argument hash, policy key and durable result pointer in the short-lived session. Arguments never enter postback data or traces. Approval expires after five minutes; drafts remain for the direct/group checkpoint idle lifetime. Questions and detours use the same SDK conversation. A modification invalidates the prior approval before preparing a new version; invalid revisions retain the original draft for correction. Explicit confirmation takes the scoped review once and executes the server-owned action without a model approval call. Existing memory/schedule drafts expose bounded read, exact unique text replacement, full repreview, and cancellation tools. They are absent when no draft exists, recheck current Account capabilities and the complete current policy key on every use, and share the same per-turn mutation limit. Exact source content stays in the server session even after model history is summarized; structured entry changes still use a new ordinary proposal.
 
 `src/runtime/action-executor.ts` owns schema validation, live authorization, policy/domain revision checks, idempotency, handler commit, and result persistence. A committed result is durable before LINE reply; if reply delivery or checkpoint persistence fails, the same requester/source can retrieve it without re-execution. `main` reuses this executor from its deterministic profile-update preview.
 
 ## Attachments And Public Research
 
-`src/transport/line/attachment-intake.ts` is the sole executable attachment intake. Direct users must opt in; groups require a requester-scoped two-minute one-shot activation. Purpose, title, preview, and confirmation remain deterministic. Confirmation enqueues only an opaque work ID through the durable outbox.
+`src/transport/line/attachment-intake.ts` is the sole executable attachment intake. Direct users must opt in; groups require a requester-scoped two-minute one-shot activation. The helper agent collects and edits purpose/title through a strict draft tool after explicit opt-in. The server renders a version-bound confirmation postback; Redis compare-and-set prevents stale approval and draft resurrection. Other profiles retain deterministic collection. Confirmation enqueues only an opaque work ID through the durable outbox.
 
 The finite attachment worker uses its dedicated managed identity to download accepted LINE or external content, validates size/MIME/hash, and publishes only durable `clean` assets. Asset API is the sole owner of malware scanning and signature freshness. The bot process never downloads or scans the binary. Publishing claims and queue acknowledgement keep their existing idempotent fail-closed rules.
 
-SearXNG is only a sheet-music fallback after a proven internal miss and atomic requester consent. In research mode the helper receives `search_sheet_music_web` and `read_sheet_music_page` and no unrelated write tools. Search results become invocation-local `web-N` references. The reader accepts only those refs, revalidates public HTTPS DNS/redirects, caps content, strips active markup, and marks page text untrusted. Page instructions cannot change tools, permission, or approval. Only a detected direct PDF/JPEG/PNG candidate can enter the existing import review and Asset-scanned attachment path.
+SearXNG is only a sheet-music fallback after a proven internal miss and atomic requester consent. After consent the helper can choose research or ordinary tools. A per-turn gate acquired before I/O excludes writes after research begins and research after draft mutation begins. External research messages and generated summaries are discarded before the next turn, restoring the pre-research conversation plus a bounded status; a durable dirty-policy marker forces cleanup after interrupted execution. Search results become invocation-local `web-N` references. The reader accepts only those refs, revalidates public HTTPS DNS/redirects, caps content, strips active markup, and marks page text untrusted. Page instructions cannot change tools, permission, or approval. Only a detected direct PDF/JPEG/PNG candidate can enter the existing import review and Asset-scanned attachment path.
 
 ## Persistence And Observability
 
@@ -152,12 +152,18 @@ pnpm eval:retrieval-product
 pnpm eval:kernel:integration
 ```
 
-`pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` invoke one deterministic provider-free evaluator containing the 17 final runtime boundary IDs. Diagnose failures by boundary ID.
+`pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` invoke one deterministic provider-free evaluator containing the runtime boundary IDs. Diagnose failures by boundary ID.
 
-Run `pnpm eval:sdk-agent --live` manually only with an intentionally available `DEEPSEEK_API_KEY`. It runs nine bounded, deidentified synthetic cases and prints only `caseId`, `passed`, model/tool call counts, input/output/cache token counts, and latency. It never prints prompts, arguments, names, URLs, provider payloads, or secrets. CI never runs live provider checks.
+Run `pnpm eval:sdk-agent --live` manually only with an intentionally available `DEEPSEEK_API_KEY`. It runs ten bounded, deidentified synthetic cases (including real schedule preview, revision, confirmation and readback) and prints only `caseId`, `passed`, model/tool call counts, input/output/cache token counts, and latency. It never prints prompts, arguments, names, URLs, provider payloads, or secrets. CI never runs live provider checks.
 
 Production release and real LINE delivery are separate gates. Offline evals and signed empty webhook probes do not establish real 1:1/group message-to-reply behavior.
 
 ## Release Evidence Boundary
 
 R5.0 describes the prior controlled-agent release. The helper SDK redesign requires a new PR, release, and production acceptance before it can inherit those claims. No SaaS or local-model follow-up is implied.
+
+## Slow replies and continuation
+
+Helper explicitly enables a four-second agent-operation inline budget and thirty-minute result TTL. Text and review operations share the waiting reply plus requester-scoped “查看結果” postback. Stored generated answers carry server-owned capability provenance; retrieval rechecks every dependency. Empty-tool conversation results use explicit public provenance. Expired approval previews cannot be replayed as current. Pending jobs expire; in-process execution is not restartable merely because results use Redis. The four seconds excludes preauthorization, prior webhook batch events, and LINE network delivery.
+
+Structured helper group clarification extends addressed requester continuation to two minutes; ordinary conversation retains its configured sixty-second wake window. A longer checkpoint TTL is not permission to ingest unaddressed whole-group chat. Read/selection completion can append bounded source-typed context without another model call; failure to synchronize must not suppress a completed result.

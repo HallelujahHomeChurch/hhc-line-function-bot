@@ -43,6 +43,11 @@
       "mode": "llm",
       "maxChars": 80
     },
+    "longRunningJobs": {
+      "enabled": true,
+      "inlineReplyTimeoutMs": 4000,
+      "resultTtlMinutes": 30
+    },
     "generalAgent": {
       "enabled": true,
       "conversationWindowSeconds": 60

@@ -16,7 +16,7 @@ Read these first when starting work:
 2. `docs/architecture-context.md` for request flow, boundaries, and debug entry points.
 3. `src/transport/line/webhook-routes.ts` for signed ingress, access checks, commands, and exceptional workflows.
 4. `src/runtime/profile-runtime.ts`, `src/runtime/main-runtime.ts`, and `src/helper-agent/runtime.ts` for profile dispatch.
-5. `src/helper-agent/agent.ts`, `state.ts`, `policy-gateway.ts`, `read-tools.ts`, `write-tools.ts`, and `review.ts` for model, context, authority, tools, and HITL.
+5. `src/helper-agent/agent.ts`, `state.ts`, `policy-gateway.ts`, `read-tools.ts`, `write-tools.ts`, and `review.ts` for model, context, authority, tools, and server approval.
 6. `src/runtime/action-executor.ts` and `src/capabilities/catalog.ts` for side effects and capability metadata.
 7. `src/transport/line/attachment-intake.ts`, `src/state/*`, `src/cache/*`, and `src/redis.ts` for deterministic workflow state.
 8. `src/__tests__/*` before changing behavior; tests are the executable map.
@@ -92,7 +92,7 @@ When adding or changing an admin action:
 - `src/helper-agent/state.ts`: HMAC thread scope, 30-minute direct and 15-minute group idle TTL, reset, cleanup, research consent, and same-thread serialization.
 - `src/helper-agent/policy-gateway.ts`: strict arguments, source policy, per-call authorization, bounded typed projection, and tool budget.
 - `src/helper-agent/read-tools.ts` and `sheet-music-tools.ts`: separate authority-specific read tools and consented public research.
-- `src/helper-agent/write-tools.ts` and `review.ts`: proposal tools and opaque one-shot HITL review state.
+- `src/helper-agent/write-tools.ts` and `review.ts`: ordinary SDK draft tools and opaque one-shot server approval state.
 - `src/runtime/action-executor.ts`: live authorization, policy/revision checks, idempotent execution, and durable result persistence.
 - `src/capabilities/catalog.ts`: canonical capability metadata and definitions.
 - `src/transport/line/attachment-intake.ts`: the only executable LINE attachment intake path.
@@ -135,7 +135,8 @@ The retired SDK compatibility wrapper, turn-state engine, generic pending/slot/r
 - The server owns latest/default resolution. The model omits unknown date/version values; the domain selects the latest valid schedule or catalog revision.
 - A model proposal never grants authority. Tool construction projects the effective set, and `src/helper-agent/policy-gateway.ts` rechecks source, Account authorization, schema, and side-effect policy for every call.
 - Read handlers return typed success, not-found, ambiguity, and unavailable results. Model evidence is capped at 2,000 characters or 10 records and excludes internal IDs, URLs, prompts, payloads, and temporary sharing links.
-- Side effects use proposal tools, HITL review, and `src/runtime/action-executor.ts`; model output cannot confirm or commit.
+- Side effects use ordinary SDK proposal tools, scoped immutable draft arguments, one-shot server review, and `src/runtime/action-executor.ts`; model output cannot confirm or commit. Conversation must not be suspended merely to discuss a preview. Approval expires after five minutes; drafts retain the scoped checkpoint TTL. An invalid edit revokes prior approval while retaining original arguments for correction. Provider/domain errors preserve recoverable checkpoint state; expired/changed policy still invalidates stale evidence.
+- Draft recovery tools are visible only for a scoped current draft and require fresh capability plus full policy-key checks. Exact text edits preserve server-owned arguments; model summaries cannot reconstruct authoritative draft content. Reset clears all same-requester short-lived drafts/consent under the thread lock. Previews must fit complete LINE delivery before approval is issued.
 - Keep `pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` deterministic and offline. They use the same evaluator. Use `pnpm eval:sdk-agent --live` only for the manual bounded DeepSeek suite.
 - Keep `pnpm eval:retrieval-product` deterministic and offline.
 
@@ -221,3 +222,10 @@ Testing map:
 - The consent-only sheet-music SearXNG fallback runs in the separate `hhc-searxng` ACA app. Keep its ingress internal, its pinned image/configuration mount in `aca.searxng.containerapp.yaml`, and let `scripts/deploy-aca.sh` resolve its internal FQDN before updating the bot; never restore an office-network or public SearXNG route.
 - Production deployment uses one LINE runtime image and must keep every LINE workload free of retired model/scanner endpoint families, office-network addresses, scanner ports, ClamAV packages, and signature mounts. The attachment worker must use its minimal loader and secret set; do not give it storage keys, queue connection strings, channel secrets, admin IDs, LLM/Notion credentials, or observability keys.
 - Keep the bot's own ingress internal. After any Dapr or ingress change, POST an unsigned JSON body through the public API Gateway webhook path and verify the response comes from the bot as `400 {"ok":false,"error":"missing_line_signature"}`.
+
+## Helper experience continuation
+
+- Preserve the four-second slow-operation handoff and “查看結果” button for text and review operations. Results require server-owned public or complete capability provenance and requester/source checks on replay; never infer public status from a missing executedAction.
+- Helper attachment purpose/title collection uses a strict draft tool after explicit opt-in; confirmation uses a version-bound opaque postback and atomic compare-and-set. No second upload or worker path.
+- Consented research and draft mutation are mutually exclusive within a turn. Before future writable turns, remove external research tool/model/summary content; persist a dirty-policy marker before research I/O so crashes cannot retain usable tainted checkpoints.
+- Structured group clarification may extend requester-specific continuation to two minutes. Plain model question punctuation must never expand the wake window.

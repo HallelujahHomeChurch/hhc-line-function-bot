@@ -123,6 +123,9 @@ export interface ActionReviewSession {
   interruptId?: string;
   toolName: HelperWriteToolName;
   argumentsHash: string;
+  /** Exact short-lived draft; never include in telemetry or LINE payloads. */
+  draftArguments?: JsonRecord;
+  approvalExpiresAt?: string;
   policyKey: string;
   resultJobId: string;
   expiresAt: string;
@@ -169,12 +172,19 @@ export interface SessionStore {
   get(id: string): Promise<ConversationSession | undefined>;
   take(id: string): Promise<ConversationSession | undefined>;
   set(session: ConversationSession): Promise<void>;
+  updatePendingAttachment(
+    expected: PendingAttachmentSession,
+    updated: PendingAttachmentSession
+  ): Promise<boolean>;
   delete(id: string): Promise<void>;
   findPptSelection(lookup: PptSelectionLookup): Promise<PptSelectionSession | undefined>;
   findSelection(lookup: SelectionLookup): Promise<SelectionSession | undefined>;
   findProfileUpdate(lookup: PptSelectionLookup): Promise<ProfileUpdateSession | undefined>;
   findPendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
-  takePendingAttachment(lookup: PptSelectionLookup): Promise<PendingAttachmentSession | undefined>;
+  takePendingAttachment(
+    lookup: PptSelectionLookup,
+    expected?: PendingAttachmentSession
+  ): Promise<PendingAttachmentSession | undefined>;
   takeUploadIntent(lookup: PptSelectionLookup): Promise<UploadIntentSession | undefined>;
   promoteUploadIntent(
     pending: PendingAttachmentSession
@@ -286,7 +296,8 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async takePendingAttachment(
-    lookup: PptSelectionLookup
+    lookup: PptSelectionLookup,
+    expected?: PendingAttachmentSession
   ): Promise<PendingAttachmentSession | undefined> {
     const session = Array.from(this.sessions.values())
       .map((candidate) => this.liveSession(candidate))
@@ -302,6 +313,7 @@ export class InMemorySessionStore implements SessionStore {
       .sort(
         (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
       )[0];
+    if (expected && JSON.stringify(session) !== JSON.stringify(expected)) return undefined;
     if (session) this.sessions.delete(session.id);
     return session;
   }
@@ -443,6 +455,17 @@ export class InMemorySessionStore implements SessionStore {
       return undefined;
     }
     return session;
+  }
+
+  async updatePendingAttachment(
+    expected: PendingAttachmentSession,
+    updated: PendingAttachmentSession
+  ): Promise<boolean> {
+    const current = this.liveSession(this.sessions.get(expected.id));
+    if (updated.id !== expected.id || JSON.stringify(current) !== JSON.stringify(expected))
+      return false;
+    this.sessions.set(updated.id, updated);
+    return true;
   }
 
   async set(session: ConversationSession): Promise<void> {

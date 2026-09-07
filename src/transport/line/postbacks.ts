@@ -158,6 +158,23 @@ export async function handleAgentTextTurnWithLongJob(input: {
       accountAdministrator: input.accountAdministrator
     })
     .then((result) => (result && input.completeResult ? input.completeResult(result) : result));
+  return handleAgentOperationWithLongJob({
+    jobStore: input.jobStore,
+    profile: input.profile,
+    event: input.event,
+    requesterDisplayName: input.requesterDisplayName,
+    operation: () => turnPromise
+  });
+}
+
+export async function handleAgentOperationWithLongJob(input: {
+  jobStore: AgentJobStore;
+  profile: BotProfileConfig;
+  event: LineEvent;
+  requesterDisplayName?: string;
+  operation(): Promise<FunctionExecutionResult | undefined>;
+}): Promise<FunctionExecutionResult | undefined> {
+  const turnPromise = input.operation();
   const config = input.profile.longRunningJobs;
   if (!config?.enabled || config.inlineReplyTimeoutMs <= 0) {
     return turnPromise;
@@ -166,25 +183,32 @@ export async function handleAgentTextTurnWithLongJob(input: {
   if (!scope) {
     return turnPromise;
   }
-  const timeout = sleep(config.inlineReplyTimeoutMs).then(() => timeoutSymbol);
-  const first = await Promise.race([turnPromise, timeout]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof timeoutSymbol>((resolve) => {
+    timer = setTimeout(() => resolve(timeoutSymbol), config.inlineReplyTimeoutMs);
+  });
+  const first = await Promise.race([turnPromise, timeout]).finally(() => clearTimeout(timer));
   if (first === timeoutSymbol) {
     const job = await input.jobStore.createPending({
       scope,
-      label: input.event.message?.text?.slice(0, 40) || "agent-turn",
+      label: "agent-turn",
       ttlMs: config.resultTtlMinutes * 60_000
     });
     turnPromise
       .then(async (result) => {
-        if (!result?.executedAction) {
+        if (!result || (!result.resultAuthority && !result.executedAction)) {
           await input.jobStore.fail(job.id, "missing_capability_owner");
           return;
         }
         await input.jobStore.complete(job.id, result, result.executedAction);
       })
-      .catch((error: unknown) =>
-        input.jobStore.fail(job.id, error instanceof Error ? error.message : String(error))
-      );
+      .catch(async () => {
+        try {
+          await input.jobStore.fail(job.id, "agent_turn_failed");
+        } catch {
+          // Store outages leave the pending result bounded by its original expiry.
+        }
+      });
 
     return {
       ok: true,
@@ -246,19 +270,31 @@ async function handleAgentJobResultPostback(
   if (job.status === "failed") {
     return { ok: true, replyText: "剛剛處理時遇到問題，請再問一次。" };
   }
-  if (!job.capability) {
+  const authority = job.result?.resultAuthority;
+  const capabilities = new Set([
+    ...(authority?.kind === "capabilities" ? authority.capabilities : []),
+    ...(job.capability ? [job.capability] : [])
+  ]);
+  if (!authority && capabilities.size === 0) {
     return { ok: true, replyText: messages.permissionDenied };
   }
-  if (
-    job.capability &&
-    !(await postbackCapabilityAllowed(
-      profile,
-      configuredFunctions,
-      job.capability,
-      authorizeFunctions
-    ))
-  ) {
+  if (authority?.kind === "capabilities" && authority.capabilities.length === 0) {
     return { ok: true, replyText: messages.permissionDenied };
+  }
+  for (const capability of capabilities) {
+    if (
+      !(await postbackCapabilityAllowed(
+        profile,
+        configuredFunctions,
+        capability,
+        authorizeFunctions
+      ))
+    ) {
+      return { ok: true, replyText: messages.permissionDenied };
+    }
+  }
+  if (authority?.expiresAt && !(Date.parse(authority.expiresAt) > Date.now())) {
+    return { ok: true, replyText: "這份預覽已經過期，請重新提出需求，讓我建立新的預覽。" };
   }
   return job.result ?? { ok: true, replyText: "這筆任務沒有可顯示的結果。" };
 }
@@ -315,9 +351,3 @@ function waitingForAgentJobReply(displayName: string | undefined): string {
 }
 
 const timeoutSymbol = Symbol("agent_turn_timeout");
-
-function sleep(ms: number): Promise<typeof timeoutSymbol> {
-  return new Promise((resolve) => {
-    setTimeout(() => resolve(timeoutSymbol), ms);
-  });
-}

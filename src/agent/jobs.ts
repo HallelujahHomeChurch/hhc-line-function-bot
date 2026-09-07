@@ -86,7 +86,7 @@ export class InMemoryAgentJobStore implements AgentJobStore {
     capability?: CapabilityName
   ): Promise<void> {
     const job = this.jobs.get(id);
-    if (!job) {
+    if (!job || Date.parse(job.expiresAt) <= this.now().getTime()) {
       return;
     }
     this.jobs.set(id, {
@@ -155,7 +155,7 @@ export class RedisAgentJobStore implements AgentJobStore {
     capability?: CapabilityName
   ): Promise<void> {
     const record = await this.readById(id);
-    if (!record) {
+    if (!record || Date.parse(record.expiresAt) <= this.now().getTime()) {
       return;
     }
     await this.write({

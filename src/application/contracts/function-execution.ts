@@ -31,7 +31,12 @@ export interface FunctionExecutionResult {
   ok: boolean;
   replyText: string;
   executedAction?: CapabilityName;
+  /** Server-owned provenance for replay; absent provenance fails closed. */
+  resultAuthority?: (
+    { kind: "public" } | { kind: "capabilities"; capabilities: CapabilityName[] }
+  ) & { expiresAt?: string };
   writePhase?: "preview" | "commit";
+  writePreparation?: "needs_input" | "ambiguous" | "denied" | "revision_conflict" | "unavailable";
   quickReplies?: QuickReplyItem[];
   /** The sole server-owned source for bounded helper-tool projection. */
   agentResult?: AgentResultEnvelope;

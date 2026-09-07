@@ -41,8 +41,33 @@ describe("helper sheet-music research tools", () => {
       createSheetMusicResearchTools({ ...options, consented: false }).map(({ name }) => name)
     ).toEqual([]);
     expect(
-      createSheetMusicResearchTools({ ...options, consented: true }).map(({ name }) => name)
+      createSheetMusicResearchTools({
+        ...options,
+        consented: true,
+        consentQuery: "song score"
+      }).map(({ name }) => name)
     ).toEqual(["search_sheet_music_web", "read_sheet_music_page"]);
+  });
+
+  it("pins the consented topic even when the model attempts a different query", async () => {
+    const search = vi.fn(async () => []);
+    const [searchTool] = createSheetMusicResearchTools({
+      consented: true,
+      consentQuery: "原曲名",
+      context: context(),
+      webSearch: { search },
+      pageReader: { read: vi.fn() }
+    });
+    await searchTool!.invoke({ query: "偷查另一個主題", format: "PDF" });
+    expect(search).toHaveBeenCalledWith({ query: "原曲名 PDF", language: "zh-TW", limit: 5 });
+    expect(
+      createSheetMusicResearchTools({
+        consented: true,
+        context: context(),
+        webSearch: { search },
+        pageReader: { read: vi.fn() }
+      })
+    ).toEqual([]);
   });
 
   it("fails closed when sheet-music lookup requires Account authorization", () => {
@@ -52,6 +77,7 @@ describe("helper sheet-music research tools", () => {
     expect(
       createSheetMusicResearchTools({
         consented: true,
+        consentQuery: "song score",
         context: restricted,
         pageReader: { read: vi.fn() },
         webSearch: { search: vi.fn() }
@@ -66,6 +92,7 @@ describe("helper sheet-music research tools", () => {
     const read = vi.fn(async () => ({ kind: "html" as const, text: "Lyrics", links: [] }));
     const tools = createSheetMusicResearchTools({
       consented: true,
+      consentQuery: "song score",
       context: context(),
       pageReader: { read },
       webSearch: { search }
@@ -94,6 +121,7 @@ describe("helper sheet-music research tools", () => {
     });
     const [searchTool] = createSheetMusicResearchTools({
       consented: true,
+      consentQuery: "song score",
       context: context(),
       pageReader: { read: vi.fn() },
       webSearch: { search }
@@ -122,6 +150,7 @@ describe("helper sheet-music research tools", () => {
     ]);
     const tools = createSheetMusicResearchTools({
       consented: true,
+      consentQuery: "song score",
       context: context(),
       pageReader: { read },
       webSearch: { search }
@@ -160,6 +189,7 @@ describe("helper sheet-music research tools", () => {
     ]);
     const tools = createSheetMusicResearchTools({
       consented: true,
+      consentQuery: "song score",
       context: context(),
       pageReader: { read },
       webSearch: { search }
@@ -183,6 +213,7 @@ describe("helper sheet-music research tools", () => {
     const candidates = vi.fn();
     const tools = createSheetMusicResearchTools({
       consented: true,
+      consentQuery: "song score",
       context: context(),
       onDirectFileCandidates: candidates,
       pageReader: {
@@ -236,6 +267,7 @@ describe("helper sheet-music research tools", () => {
     const storeCandidates = vi.fn();
     const tools = createSheetMusicResearchTools({
       consented: true,
+      consentQuery: "song score",
       context: context(),
       onDirectFileCandidates: storeCandidates,
       pageReader: {

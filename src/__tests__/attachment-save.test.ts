@@ -7,7 +7,11 @@ import {
   type AttachmentScanWorkStore
 } from "../attachments/scan-work-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
-import { createPendingAttachmentTextMessageHandler } from "../transport/line/attachment-intake.js";
+import {
+  createPendingAttachmentDraftHandler,
+  createPendingAttachmentPostbackHandler,
+  createPendingAttachmentTextMessageHandler
+} from "../transport/line/attachment-intake.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import { handleAttachmentIntake } from "../transport/line/attachment-intake.js";
 import type {
@@ -325,7 +329,7 @@ describe("attachment save pipeline", () => {
       context("七月主日流程", "req-title")
     );
     expect(preview?.replyText).toContain("名稱：七月主日流程");
-    expect(preview?.quickReplies?.map((item) => item.label)).toEqual(["保存", "取消"]);
+    expect(preview?.quickReplies?.map((item) => item.label)).toEqual(["保存附件", "取消"]);
     expect(lineContent.getMessageContent).not.toHaveBeenCalled();
     expect(graph.uploadFile).not.toHaveBeenCalled();
   });
@@ -664,3 +668,85 @@ class RecordingAgentJobStore extends InMemoryAgentJobStore {
     return this.lastCreated;
   }
 }
+
+describe("helper attachment conversation", () => {
+  it("keeps unrelated text out of the title and edits only explicit draft arguments", async () => {
+    const fixture = await setup();
+    await seedPendingAttachment(fixture.sessionStore);
+    const draft = createPendingAttachmentDraftHandler({
+      ...fixture,
+      now: () => new Date("2026-07-11T10:00:00Z")
+    });
+    await expect(
+      fixture.handler.matches({ text: "先查服事表" }, context("先查服事表"))
+    ).resolves.toBe(false);
+    await expect(draft({ purpose: "投影片" }, context("用途是投影片"))).resolves.toMatchObject({
+      replyText: "請輸入這份檔案的名稱。"
+    });
+    await expect(draft({ title: "主日簡報" }, context("名稱是主日簡報"))).resolves.toMatchObject({
+      replyText: expect.stringContaining("名稱：主日簡報")
+    });
+    await expect(draft({ title: "修正版" }, context("改名"))).resolves.toMatchObject({
+      replyText: expect.stringContaining("名稱：修正版")
+    });
+    await expect(fixture.handler.matches({ text: "確認" }, context("確認"))).resolves.toBe(false);
+    await expect(fixture.handler.matches({ text: "保存附件" }, context("保存附件"))).resolves.toBe(
+      false
+    );
+    expect(fixture.lineContent.getMessageContent).not.toHaveBeenCalled();
+    expect(fixture.graph.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects stale preview buttons and atomically consumes only the reviewed snapshot", async () => {
+    const fixture = await setup();
+    await seedPendingAttachment(fixture.sessionStore);
+    const draft = createPendingAttachmentDraftHandler({
+      ...fixture,
+      now: () => new Date("2026-07-11T10:00:00Z")
+    });
+    const approve = createPendingAttachmentPostbackHandler(fixture);
+    const old = await draft({ purpose: "投影片", title: "原名稱" }, context("name"));
+    const updated = await draft({ title: "新名稱" }, context("edit"));
+    const request = (result: typeof old) => {
+      const action = result.quickReplies![0]!.action;
+      if (action.type !== "postback") throw new Error("expected_postback");
+      return {
+        action: "confirm_attachment",
+        params: Object.fromEntries(new URLSearchParams(action.data))
+      };
+    };
+    await expect(approve(request(old), context("approve"))).resolves.toMatchObject({
+      replyText: expect.stringContaining("已失效")
+    });
+    const lookup = {
+      profileName: "helper",
+      source: context("").event.source,
+      requesterUserId: "U1"
+    };
+    const snapshot = (await fixture.sessionStore.findPendingAttachment(lookup))!;
+    await expect(
+      fixture.sessionStore.takePendingAttachment(lookup, { ...snapshot, expiresAt: "wrong" })
+    ).resolves.toBeUndefined();
+    await expect(approve(request(updated), context("approve"))).resolves.toMatchObject({
+      writePhase: "commit"
+    });
+    await expect(approve(request(updated), context("again"))).resolves.toMatchObject({
+      replyText: expect.stringContaining("已失效")
+    });
+  });
+
+  it("requires opt-in, rejects unknown fields and isolates requesters", async () => {
+    const fixture = await setup();
+    await seedPendingAttachment(fixture.sessionStore, { stage: "awaiting_opt_in" });
+    const draft = createPendingAttachmentDraftHandler(fixture);
+    await expect(draft({ title: "Test" }, context("name"))).resolves.toMatchObject({
+      replyText: expect.stringContaining("要我幫忙保存")
+    });
+    await expect(draft({ purpose: "任意路徑" } as never, context("bad"))).resolves.toMatchObject({
+      ok: false
+    });
+    const other = context("read");
+    other.event.source.userId = "U2";
+    await expect(draft({}, other)).resolves.toMatchObject({ ok: false });
+  });
+});

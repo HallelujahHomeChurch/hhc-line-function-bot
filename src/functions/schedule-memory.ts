@@ -1,3 +1,4 @@
+import { fitsCompleteWritePreview } from "../line-reply.js";
 import type { ReadMeetingOccurrences, MeetingOccurrence } from "../clients/meeting-occurrences.js";
 import {
   queryScheduleMemoryArgumentsSchema,
@@ -74,6 +75,7 @@ export function createSaveScheduleMemoryHandler(
       const choices = domainResolution.domains.map(({ displayName }) => displayName);
       return {
         ok: true,
+        ...(context.agentTool ? { writePreparation: "ambiguous" as const } : {}),
         replyText: `這份內容要保存到哪一類服事：${choices.join("、")}？`,
         quickReplies: choices.map((choice) => ({
           label: choice,
@@ -83,10 +85,18 @@ export function createSaveScheduleMemoryHandler(
     }
     const domain = domainResolution.domain;
     if (domain && domain.writePolicy.mode === "read_only") {
-      return { ok: true, replyText: `「${domain.displayName}」目前只能查詢，不能從 LINE 覆寫。` };
+      return {
+        ok: true,
+        ...(context.agentTool ? { writePreparation: "denied" as const } : {}),
+        replyText: `「${domain.displayName}」目前只能查詢，不能從 LINE 覆寫。`
+      };
     }
     if (args.domainRevision && domain?.revision !== args.domainRevision) {
-      return { ok: true, replyText: "服事類型設定已更新，請重新送出內容並確認。" };
+      return {
+        ok: true,
+        ...(context.agentTool ? { writePreparation: "revision_conflict" as const } : {}),
+        replyText: "服事類型設定已更新，請重新送出內容並確認。"
+      };
     }
     const effectiveArgs = saveScheduleMemoryArgumentsSchema.parse({
       ...args,
@@ -112,7 +122,11 @@ export function createSaveScheduleMemoryHandler(
     }
 
     if (!content) {
-      return { ok: true, replyText: "請貼上要記住的服事表文字內容。" };
+      return {
+        ok: true,
+        ...(context.agentTool ? { writePreparation: "needs_input" as const } : {}),
+        replyText: "請貼上要記住的服事表文字內容。"
+      };
     }
 
     const parsed = parseScheduleMemoryContent({
@@ -125,11 +139,42 @@ export function createSaveScheduleMemoryHandler(
     if (parsed.entries.length === 0) {
       return {
         ok: true,
+        ...(context.agentTool ? { writePreparation: "needs_input" as const } : {}),
         replyText: "我還整理不出日期和服事內容，請貼文字版服事表，先不要傳圖片。"
       };
     }
 
-    if (!effectiveArgs.confirm && !isConfirmText(effectiveArgs.query)) {
+    if (context.agentTool) {
+      const invalid = parsed.entries.find((entry) => {
+        const date = new Date(`${entry.serviceDate}T00:00:00Z`);
+        return (
+          Number.isNaN(date.getTime()) ||
+          date.toISOString().slice(0, 10) !== entry.serviceDate ||
+          (entry.weekday !== undefined && "日一二三四五六"[date.getUTCDay()] !== entry.weekday)
+        );
+      });
+      if (invalid)
+        return {
+          ok: true,
+          writePreparation: "needs_input",
+          replyText: `日期 ${invalid.serviceDate} 不存在或與標示的星期不一致，請確認日期與星期後重新預覽。`
+        };
+    }
+
+    if (
+      context.agentTool &&
+      new Set(parsed.entries.map((entry) => entry.serviceDate.slice(0, 7))).size > 1
+    ) {
+      return {
+        ok: true,
+        writePreparation: "ambiguous",
+        replyText: "內容包含多個月份，請逐月保存；先確認要處理哪個月，其餘內容保留待辦。"
+      };
+    }
+
+    const completePreview = formatSchedulePreview(parsed, undefined, content);
+    if (!fitsCompleteWritePreview(completePreview)) return previewTooLarge();
+    if (!effectiveArgs.confirm && (context.agentTool || !isConfirmText(effectiveArgs.query))) {
       const periodKey = parsed.entries[0]?.serviceDate.slice(0, 7);
       const existing = periodKey
         ? (
@@ -142,10 +187,12 @@ export function createSaveScheduleMemoryHandler(
               schedule.scheduleType === parsed.scheduleType && schedule.periodKey === periodKey
           )
         : undefined;
+      const preview = formatSchedulePreview(parsed, existing?.title, content);
+      if (!fitsCompleteWritePreview(preview)) return previewTooLarge();
       return {
         ok: true,
         writePhase: "preview",
-        replyText: formatSchedulePreview(parsed, existing?.title),
+        replyText: preview,
         quickReplies: [
           { label: "保存", action: { type: "message", label: "保存", text: "保存" } },
           { label: "取消", action: { type: "message", label: "取消", text: "取消" } }
@@ -365,6 +412,7 @@ async function handleScheduleMutation(input: {
 }
 
 function mutationPreview(lines: string[], confirmLabel: string): FunctionExecutionResult {
+  if (!fitsCompleteWritePreview(lines.join("\n"))) return previewTooLarge();
   return {
     ok: true,
     writePhase: "preview",
@@ -380,7 +428,14 @@ function mutationPreview(lines: string[], confirmLabel: string): FunctionExecuti
 }
 
 function formatEntryInput(entry: AgentScheduleEntryInput): string {
-  return `${formatMonthDay(entry.serviceDate)} ${entry.meetingName}：${entry.assignee}${entry.notes ? `（${entry.notes}）` : ""}`;
+  return [
+    `${entry.serviceDate.slice(0, 4)}年${formatMonthDay(entry.serviceDate)}${entry.weekday ? `（${entry.weekday}）` : ""} ${entry.meetingName}：${entry.assignee}`,
+    entry.role ? `角色：${entry.role}` : undefined,
+    entry.familyName ? `家族：${entry.familyName}` : undefined,
+    entry.notes ? `備註：${entry.notes}` : undefined
+  ]
+    .filter(Boolean)
+    .join("；");
 }
 
 export function createSaveScheduleHandler(options: ScheduleMemoryFunctionOptions): FunctionHandler {
@@ -499,20 +554,24 @@ function parseScheduleLine(
 ): AgentScheduleEntryInput | undefined {
   const normalized = line.normalize("NFKC").trim();
   const match = normalized.match(
-    /(?<month>\d{1,2}|[一二三四五六七八九十兩]{1,3})\s*[/／]\s*(?<day>\d{1,2})\s*(?<weekday>[一二三四五六日天])?\s*(?<rest>.+)$/u
+    /(?<!\d)(?:(?<year>\d{4})\s*[/／]\s*)?(?<month>\d{1,2}|[一二三四五六七八九十兩]{1,3})\s*[/／]\s*(?<day>\d{1,2})\s*(?:[(]?\s*(?:星期|週|周)?\s*(?<weekday>[一二三四五六日天])\s*[)]?)?\s*(?<rest>.+)$/u
   );
   if (!match?.groups) {
     return undefined;
   }
 
-  const month = parseMonth(match.groups.month);
+  const month = /^\d+$/u.test(match.groups.month)
+    ? Number(match.groups.month)
+    : parseMonth(match.groups.month);
   const day = Number(match.groups.day);
   const rest = cleanupScheduleAssignee(match.groups.rest);
-  if (!month || !day || !rest) {
+  if (month === undefined || !rest) {
     return undefined;
   }
 
-  const serviceDate = buildDateKey(now, month, day);
+  const serviceDate = match.groups.year
+    ? `${match.groups.year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+    : buildDateKey(now, month, day);
   const weekday = normalizeWeekday(match.groups.weekday);
 
   if (scheduleType === "street_sign_service") {
@@ -620,15 +679,25 @@ function scheduleMemoryContent(args: SaveScheduleMemoryArguments): string {
   return (args.content || args.query || "").trim();
 }
 
-function formatSchedulePreview(parsed: ParsedScheduleMemory, replacingTitle?: string): string {
-  const sample = parsed.entries
-    .slice(0, 3)
-    .map(
-      (entry) => `- ${formatMonthDay(entry.serviceDate)} ${entry.meetingName}：${entry.assignee}`
-    );
+function previewTooLarge(): FunctionExecutionResult {
+  return {
+    ok: true,
+    writePreparation: "needs_input",
+    replyText: "內容超過完整預覽上限，請縮小這次服事表的保存範圍後再試。"
+  };
+}
+
+function formatSchedulePreview(
+  parsed: ParsedScheduleMemory,
+  replacingTitle?: string,
+  originalText?: string
+): string {
   return [
     `我整理到 ${parsed.entries.length} 筆${scheduleTypeLabel(parsed.scheduleType)}。`,
-    ...sample,
+    `名稱：${parsed.title}`,
+    "可見範圍：此助理的使用者與群組；保存期限：一年",
+    ...parsed.entries.map((entry) => `- ${formatEntryInput(entry)}`),
+    originalText ? `保留的原文：\n${originalText}` : undefined,
     replacingTitle ? `這將取代現有的「${replacingTitle}」。` : undefined,
     "要保存嗎？"
   ]

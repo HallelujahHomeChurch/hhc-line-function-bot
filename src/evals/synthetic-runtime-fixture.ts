@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import { loadConfigFromEnv } from "../config.js";
 import { FakeToolCallingModel, AIMessage, type BaseMessage } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
 
@@ -101,6 +103,7 @@ export function instrumentedFakeModel(
 }
 
 interface FixtureOptions {
+  useCheckedInPolicy?: boolean;
   model: HelperRuntimeOptions["summaryModel"];
   probe: ReturnType<typeof createEvalProbe>;
   enabledFunctions: BotProfileConfig["enabledFunctions"];
@@ -133,6 +136,21 @@ export function createSyntheticRuntimeFixture(options: FixtureOptions) {
     ])
   ) as FunctionRegistry;
   const profile = { ...helperProfile(options.enabledFunctions), ...options.profile };
+  if (options.useCheckedInPolicy) {
+    profile.agent = loadConfigFromEnv({
+      PROFILE_CONFIG_PATH: fileURLToPath(new URL("../../config/profiles.json", import.meta.url)),
+      LINE_HELPER_CHANNEL_SECRET: "synthetic-secret",
+      LINE_HELPER_CHANNEL_ACCESS_TOKEN: "synthetic-token",
+      LINE_MAIN_CHANNEL_SECRET: "synthetic-secret",
+      LINE_MAIN_CHANNEL_ACCESS_TOKEN: "synthetic-token",
+      LINE_HELPER_ACCOUNT_ID: "@synthetic-helper",
+      LINE_MAIN_ACCOUNT_ID: "@synthetic-main",
+      LINE_ACCOUNT_PROVIDER_ID: "synthetic-provider",
+      DATABASE_URL: "postgres://synthetic:synthetic@127.0.0.1/synthetic",
+      REDIS_URL: "redis://127.0.0.1:6379"
+    }).profiles.find(({ name }) => name === "helper")?.agent;
+    if (!profile.agent) throw new Error("checked_in_helper_policy_missing");
+  }
   const runtime = createHelperRuntime({
     model: options.model,
     summaryModel: options.model,
@@ -163,7 +181,7 @@ export function createSyntheticRuntimeFixture(options: FixtureOptions) {
 }
 
 export async function createSyntheticScheduleRuntimeFixture(
-  options: Pick<FixtureOptions, "model" | "probe">
+  options: Pick<FixtureOptions, "model" | "probe" | "useCheckedInPolicy">
 ) {
   const now = () => new Date("2026-09-04T00:00:00.000Z");
   const scheduleStore = new InMemoryScheduleStore();

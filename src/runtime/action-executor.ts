@@ -46,6 +46,7 @@ const actions = {
 
 export interface ActionExecutorOptions {
   handlers: FunctionRegistry;
+  now?: () => Date;
   jobs: AgentJobStore;
   authorize(name: CapabilityName, context: FunctionHandlerContext): Promise<boolean>;
   currentPolicyKey(context: FunctionHandlerContext): Promise<string> | string;
@@ -91,13 +92,16 @@ export function createActionExecutor(options: ActionExecutorOptions) {
         ...context,
         agentTool: true
       });
-      return result?.writePhase === "preview" ? result : undefined;
+      return result;
     },
 
     async execute(input: ExecuteActionInput): Promise<ActionExecution> {
       const action = actionFor(input.review.toolName);
       if (
         !action ||
+        (input.review.approvalExpiresAt !== undefined &&
+          new Date(input.review.approvalExpiresAt).getTime() <=
+            (options.now?.() ?? new Date()).getTime()) ||
         !actionAllowed(action.capability, input.context) ||
         input.review.profileName !== input.context.profile.name ||
         !lineSourcesEqual(input.review.source, input.context.event.source) ||

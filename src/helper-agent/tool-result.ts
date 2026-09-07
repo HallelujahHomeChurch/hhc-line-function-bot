@@ -8,7 +8,7 @@ export interface HelperToolResult<T = unknown> {
   status: HelperToolStatus;
   sourceType: HelperToolSourceType;
   asOf?: string;
-  revision?: string;
+  truncated?: true;
   freshness?: "fresh" | "stale";
   data?: T;
   clarification?: string;
@@ -30,42 +30,59 @@ export function projectToolResult(
     status: agentResult?.status ?? (result.ok ? "success" : "unavailable"),
     sourceType
   };
+  const freshness = result.diagnostics?.freshnessStatus;
+  if (freshness === "fresh" || freshness === "stale_allowed") {
+    projected.freshness = freshness === "fresh" ? "fresh" : "stale";
+    const timestamp = result.diagnostics?.dataAsOf;
+    if (timestamp && Number.isFinite(Date.parse(timestamp))) {
+      projected.asOf = new Date(timestamp).toISOString();
+    }
+  }
+  const coverage = { truncated: false };
   const clarification = safeString(agentResult?.clarification?.prompt);
   if (clarification) projected.clarification = clarification;
-  const data = projectReplyData(agentResult?.replyData);
+  const data = projectReplyData(agentResult?.replyData, coverage);
   if (data) projected.data = data;
+  if (coverage.truncated) projected.truncated = true;
   return fit(projected);
 }
 
-function projectReplyData(replyData: AgentReplyData | undefined): AgentReplyData | undefined {
+function projectReplyData(
+  replyData: AgentReplyData | undefined,
+  coverage: { truncated: boolean }
+): AgentReplyData | undefined {
   if (!replyData) return undefined;
   const kind = safeString(replyData.kind);
   if (!kind) return undefined;
-  const fields = safeRecord(replyData.fields);
+  if ((replyData.records?.length ?? 0) > MAX_RECORDS) coverage.truncated = true;
+  const fields = safeRecord(replyData.fields, 0, coverage);
   const records = replyData.records
     ?.slice(0, MAX_RECORDS)
-    .map(safeRecord)
+    .map((record) => safeRecord(record, 0, coverage))
     .filter((record) => Object.keys(record).length > 0);
   if (!Object.keys(fields).length && !records?.length) return undefined;
   return { kind: kind.slice(0, 80), fields, ...(records?.length ? { records } : {}) };
 }
 
-function safeRecord(value: JsonRecord): JsonRecord {
+function safeRecord(value: JsonRecord, depth = 0, coverage = { truncated: false }): JsonRecord {
   return Object.fromEntries(
     Object.entries(value)
       .filter(([key]) => !blockedField.test(key))
       .flatMap(([key, entry]) => {
-        const safe = safeValue(entry);
+        const safe = safeValue(entry, depth, coverage);
         return safe === undefined ? [] : [[key, safe]];
       })
   );
 }
 
-function safeValue(value: unknown, depth = 0): unknown {
-  if (typeof value === "string") return safeString(value);
+function safeValue(value: unknown, depth: number, coverage: { truncated: boolean }): unknown {
+  if (typeof value === "string") {
+    if (!url.test(value) && value.length > MAX_STRING_CHARS) coverage.truncated = true;
+    return safeString(value);
+  }
   if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
   if (depth >= 2 || Array.isArray(value) || !value || typeof value !== "object") return undefined;
-  return safeRecord(value as JsonRecord);
+  return safeRecord(value as JsonRecord, depth + 1, coverage);
 }
 
 function safeString(value: string | undefined): string | undefined {
@@ -74,6 +91,7 @@ function safeString(value: string | undefined): string | undefined {
 }
 
 function fit(result: HelperToolResult<AgentReplyData>): HelperToolResult<AgentReplyData> {
+  if (JSON.stringify(result).length > MAX_CHARS) result.truncated = true;
   while (JSON.stringify(result).length > MAX_CHARS && result.data?.records?.length) {
     result.data.records.pop();
   }

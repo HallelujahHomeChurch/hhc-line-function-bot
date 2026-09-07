@@ -5,7 +5,6 @@ import {
   countTokensApproximately,
   createAgent,
   createMiddleware,
-  humanInTheLoopMiddleware,
   modelCallLimitMiddleware,
   summarizationMiddleware,
   ToolMessage,
@@ -34,8 +33,6 @@ export interface HelperAgentOptions {
   systemPrompt?: CreateAgentParams["systemPrompt"];
   tools?: CreateAgentParams["tools"];
   runMode?: AgentRunMode;
-  writeReview?: boolean;
-  prepareWriteArguments?: (name: string, args: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export function createHelperAgent({
@@ -44,9 +41,7 @@ export function createHelperAgent({
   runMode = "normal",
   summaryModel,
   systemPrompt,
-  tools = [],
-  writeReview = false,
-  prepareWriteArguments
+  tools = []
 }: HelperAgentOptions) {
   const runLimit = limits[runMode];
   return createAgent({
@@ -68,18 +63,6 @@ export function createHelperAgent({
       }),
       hardContextLimitMiddleware(24_000),
       exactToolCallDeduplicationMiddleware(),
-      ...(writeReview
-        ? [
-            humanInTheLoopMiddleware({
-              interruptOn: {
-                propose_save_schedule: { allowedDecisions: ["approve", "reject"] },
-                propose_save_memory: { allowedDecisions: ["approve", "reject"] },
-                propose_save_resource: { allowedDecisions: ["approve", "reject"] }
-              }
-            }),
-            bindWriteReviewArgumentsMiddleware(prepareWriteArguments)
-          ]
-        : []),
       modelCallLimitMiddleware({ runLimit, exitBehavior: "end" }),
       toolCallLimitMiddleware({ runLimit, exitBehavior: "continue" })
     ]
@@ -112,24 +95,6 @@ function exactToolCallDeduplicationMiddleware() {
         executedToolCalls.delete(key);
         throw error;
       }
-    }
-  });
-}
-
-function bindWriteReviewArgumentsMiddleware(
-  prepare: ((name: string, args: Record<string, unknown>) => Record<string, unknown>) | undefined
-) {
-  return createMiddleware({
-    name: "BindWriteReviewArguments",
-    afterModel: async (state) => {
-      if (!prepare) return;
-      const message = [...state.messages].reverse().find(AIMessage.isInstance);
-      if (!message?.tool_calls?.length) return;
-      message.tool_calls = message.tool_calls.map((call) => ({
-        ...call,
-        args: prepare(call.name, call.args)
-      }));
-      return { messages: [message] };
     }
   });
 }

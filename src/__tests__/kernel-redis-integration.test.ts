@@ -68,6 +68,46 @@ describe("kernel Redis integration environment", () => {
     );
   });
 
+  it("fences attachment draft edits and confirmation across real Redis clients", async () => {
+    environment ??= await createKernelRedisEnvironment();
+    const [first, second] = environment.clients.map(
+      (client) => new RedisSessionStore({ client, keyPrefix: environment!.keyPrefix })
+    );
+    const pending = {
+      id: "attachment-draft-cas",
+      type: "pending_attachment" as const,
+      action: "save_resource" as const,
+      stage: "awaiting_confirmation" as const,
+      profileName: "helper",
+      requesterUserId: "synthetic-requester",
+      source: { type: "user" as const, userId: "synthetic-requester" },
+      attachment: { messageId: "synthetic-file", messageType: "file" as const },
+      target: {
+        sourceKey: "ppt_slides",
+        itemKind: "ppt_slide",
+        domain: "presentation",
+        title: "Original"
+      },
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    };
+    const lookup = {
+      profileName: pending.profileName,
+      source: pending.source,
+      requesterUserId: pending.requesterUserId
+    };
+    await first!.set(pending);
+    const updated = { ...pending, target: { ...pending.target, title: "Updated" } };
+    await expect(second!.updatePendingAttachment(pending, updated)).resolves.toBe(true);
+    await expect(first!.takePendingAttachment(lookup, pending)).resolves.toBeUndefined();
+    const results = await Promise.all([
+      first!.takePendingAttachment(lookup, updated),
+      second!.takePendingAttachment(lookup, updated)
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    await expect(second!.updatePendingAttachment(updated, pending)).resolves.toBe(false);
+    await expect(first!.findPendingAttachment(lookup)).resolves.toBeUndefined();
+  });
+
   it("atomically marks first success across two real Redis clients", async () => {
     environment ??= await createKernelRedisEnvironment();
     const stores = environment.clients.map(
