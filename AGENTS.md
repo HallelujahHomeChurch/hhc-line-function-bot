@@ -229,3 +229,10 @@ Testing map:
 - Helper attachment purpose/title collection uses a strict draft tool after explicit opt-in; confirmation uses a version-bound opaque postback and atomic compare-and-set. No second upload or worker path.
 - Consented research and draft mutation are mutually exclusive within a turn. Before future writable turns, remove external research tool/model/summary content; persist a dirty-policy marker before research I/O so crashes cannot retain usable tainted checkpoints.
 - Structured group clarification may extend requester-specific continuation to two minutes. Plain model question punctuation must never expand the wake window.
+
+## Structured draft contract
+
+- Helper schedule proposals accept bounded structured `entries` alongside preserved source `content`. The agent organizes copied text; server validators own schema, calendar validity, domain membership and full previews. Never make participant names the authority for domain selection.
+- Project lawful schedule identifiers from the profile domain registry into the owning read/write tool schemas. Unknown or unavailable domains cannot silently become a custom schedule.
+- A multi-month replacement uses one complete approval and `saveScheduleMemories` to atomically replace only included canonical months. PostgreSQL conflicts reject the whole batch; never partially publish or silently retry an uncertain commit.
+- Recoverable preparation releases an unsuccessful turn reservation; successful previews remain limited to one. Invalid edits revoke approval through the same guarded write lane while preserving original arguments. Structured draft field edits must preserve untouched server-owned entries.

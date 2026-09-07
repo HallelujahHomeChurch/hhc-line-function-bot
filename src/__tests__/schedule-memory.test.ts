@@ -502,3 +502,83 @@ describe("schedule memory", () => {
     ]);
   });
 });
+
+describe("agent structured schedule drafts", () => {
+  const entries = [
+    {
+      serviceDate: "2026-09-13",
+      meetingName: "為耶穌舉牌",
+      assignee: "合成甲家園",
+      notes: "需要更改請自行交換"
+    },
+    { serviceDate: "2026-10-04", meetingName: "為耶穌舉牌", assignee: "合成乙組" }
+  ];
+  const content =
+    "轉貼公告：週日下午為耶穌舉牌。9月13日合成甲家園、10月4日合成乙組。PS.需要更改請自行交換；另請記得帶水。";
+  it("previews organized entries from noisy source and atomically saves all months only after confirmation", async () => {
+    const memoryStore = new InMemoryAgentMemoryStore();
+    const handler = createSaveScheduleMemoryHandler({ memoryStore });
+    const ctx = { ...context(), agentTool: true };
+    const args = { domainKey: "street_sign_service", content, entries };
+    const preview = await handler(args, ctx);
+    expect(preview.writePhase).toBe("preview");
+    expect(preview.replyText).toContain("合成甲家園");
+    expect(preview.replyText).toContain("2026年10月4日");
+    expect(preview.replyText).toContain(content);
+    expect(await memoryStore.listScheduleMemories({ profileName: "helper" })).toHaveLength(0);
+    expect((await handler({ ...args, confirm: true }, ctx)).writePhase).toBe("commit");
+    const saved = await memoryStore.listScheduleMemories({ profileName: "helper" });
+    expect(saved.map((row) => row.periodKey).sort()).toEqual(["2026-09", "2026-10"]);
+    expect(
+      saved
+        .flatMap((row) => row.entries)
+        .map((row) => row.assignee)
+        .sort()
+    ).toEqual(["合成乙組", "合成甲家園"].sort());
+  });
+  it("returns actionable validation without dropping structured data into the raw parser", async () => {
+    const handler = createSaveScheduleMemoryHandler({
+      memoryStore: new InMemoryAgentMemoryStore()
+    });
+    const result = await handler(
+      {
+        domainKey: "street_sign_service",
+        content,
+        entries: [{ ...entries[0], serviceDate: "2026-02-30" }]
+      },
+      { ...context(), agentTool: true }
+    );
+    expect(result.writePreparation).toBe("needs_input");
+    expect(result.replyText).toContain("2026-02-30");
+  });
+  it("rejects unknown domain identifiers instead of silently saving a custom schedule", async () => {
+    const handler = createSaveScheduleMemoryHandler({
+      memoryStore: new InMemoryAgentMemoryStore()
+    });
+    const result = await handler(
+      { domainKey: "invented_domain", content: "9/13 合成甲組" },
+      { ...context(), agentTool: true }
+    );
+    expect(result.writePreparation).toBe("needs_input");
+    expect(result.writePhase).toBeUndefined();
+  });
+});
+
+it("cannot preview an unregistered fallback type when the configured registry has no custom domain", async () => {
+  const handler = createSaveScheduleMemoryHandler({ memoryStore: new InMemoryAgentMemoryStore() });
+  for (const key of ["street_sign_service", "media_team_service"]) {
+    const ctx = context();
+    ctx.profile.schedulePolicy = {
+      domains: DEFAULT_SCHEDULE_DOMAINS.filter((domain) => domain.key === key)
+    } as NonNullable<BotProfileConfig["schedulePolicy"]>;
+    const result = await handler(
+      {
+        content: "9/13 合成甲組",
+        entries: [{ serviceDate: "2026-09-13", meetingName: "其他活動", assignee: "合成甲組" }]
+      },
+      { ...ctx, agentTool: true }
+    );
+    expect(result.writePhase).toBeUndefined();
+    expect(result.writePreparation).toBe("needs_input");
+  }
+});

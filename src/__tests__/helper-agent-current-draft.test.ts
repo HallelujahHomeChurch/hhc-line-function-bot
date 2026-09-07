@@ -187,3 +187,67 @@ describe("server-owned current draft", () => {
     expect(fail).not.toHaveBeenCalled();
   });
 });
+
+it("updates structured assignee fields together with original text without discarding untouched entries", async () => {
+  const { sessions, options, propose } = await fixture("9/13 合成甲組\n10/4 合成乙組");
+  const draft = await sessions.get("draft");
+  if (!draft || draft.type !== "action_review") throw new Error("missing draft");
+  const entries = [
+    {
+      serviceDate: "2026-09-13",
+      meetingName: "服事",
+      assignee: "合成甲組",
+      familyName: "合成甲組"
+    },
+    { serviceDate: "2026-10-04", meetingName: "服事", assignee: "合成乙組" }
+  ];
+  await sessions.set({
+    ...draft,
+    toolName: "propose_save_schedule",
+    draftArguments: { content: "9/13 合成甲組\n10/4 合成乙組", entries }
+  });
+  const tools = createHelperWriteTools({
+    ...options,
+    context: { ...context, profile: { ...context.profile, enabledFunctions: ["save_schedule"] } }
+  });
+  await tools
+    .find((tool) => tool.name === "revise_current_draft")!
+    .invoke({ oldText: "合成甲組", newText: "合成丙組" });
+  expect(propose).toHaveBeenCalledWith(
+    "propose_save_schedule",
+    expect.objectContaining({
+      entries: [{ ...entries[0], assignee: "合成丙組", familyName: "合成丙組" }, entries[1]]
+    })
+  );
+});
+
+it("edits a normalized date without reconstructing other structured entries", async () => {
+  const { sessions, options, propose } = await fixture("9/13 合成甲組");
+  const draft = await sessions.get("draft");
+  if (!draft || draft.type !== "action_review") throw new Error("missing draft");
+  const entries = [{ serviceDate: "2026-09-13", meetingName: "服事", assignee: "合成甲組" }];
+  await sessions.set({
+    ...draft,
+    toolName: "propose_save_schedule",
+    draftArguments: { content: "9/13 合成甲組", entries }
+  });
+  const beforeRevise = vi.fn(async () => true);
+  const tools = createHelperWriteTools({
+    ...options,
+    beforeRevise,
+    context: { ...context, profile: { ...context.profile, enabledFunctions: ["save_schedule"] } }
+  });
+  await tools
+    .find((tool) => tool.name === "revise_current_draft")!
+    .invoke({
+      entryDate: "2026-09-13",
+      field: "serviceDate",
+      oldText: "2026-09-13",
+      newText: "2026-09-20"
+    });
+  expect(beforeRevise).toHaveBeenCalledOnce();
+  expect(propose).toHaveBeenCalledWith("propose_save_schedule", {
+    content: "9/13 合成甲組",
+    entries: [{ ...entries[0], serviceDate: "2026-09-20" }]
+  });
+});

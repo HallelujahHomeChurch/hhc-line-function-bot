@@ -133,6 +133,40 @@ export interface SaveAgentScheduleMemoryInput {
   expiresAt?: string;
 }
 
+// Validate the entire replacement before either backend changes the canonical records.
+export function validateScheduleMemoryBatch(inputs: SaveAgentScheduleMemoryInput[]): void {
+  const keys = new Set<string>();
+  for (const input of inputs) {
+    const period = input.periodKey ?? input.entries[0]?.serviceDate.slice(0, 7);
+    const key = JSON.stringify([input.profileName, input.scheduleType, period]);
+    if (
+      !period ||
+      !/^\d{4}-(0[1-9]|1[0-2])$/.test(period) ||
+      keys.has(key) ||
+      !input.entries.length
+    ) {
+      throw new Error("invalid_schedule_batch");
+    }
+    keys.add(key);
+    if (input.expiresAt && !Number.isFinite(Date.parse(input.expiresAt))) {
+      throw new Error("invalid_schedule_expiry");
+    }
+    for (const entry of input.entries) {
+      const parsed = new Date(`${entry.serviceDate}T00:00:00.000Z`);
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(entry.serviceDate) ||
+        !Number.isFinite(parsed.getTime()) ||
+        parsed.toISOString().slice(0, 10) !== entry.serviceDate ||
+        !entry.serviceDate.startsWith(`${period}-`) ||
+        !entry.meetingName.trim() ||
+        !entry.assignee.trim()
+      ) {
+        throw new Error("invalid_schedule_entry");
+      }
+    }
+  }
+}
+
 export interface AddAgentScheduleEntryInput {
   profileName: string;
   scheduleType: AgentScheduleType;
@@ -231,6 +265,9 @@ export interface AgentMemoryStore {
   listTextMemoriesMissingEmbedding(limit: number): Promise<AgentTextMemoryEmbeddingCandidate[]>;
   updateTextMemoryEmbedding(id: string, embedding: number[]): Promise<boolean>;
   saveScheduleMemory(input: SaveAgentScheduleMemoryInput): Promise<AgentScheduleMemoryRecord>;
+  saveScheduleMemories(
+    inputs: SaveAgentScheduleMemoryInput[]
+  ): Promise<AgentScheduleMemoryRecord[]>;
   listScheduleMemories(input: ListAgentScheduleMemoriesInput): Promise<AgentScheduleMemoryRecord[]>;
   searchScheduleEntries(
     input: SearchAgentScheduleEntriesInput
@@ -446,6 +483,18 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
   async saveScheduleMemory(
     input: SaveAgentScheduleMemoryInput
   ): Promise<AgentScheduleMemoryRecord> {
+    return (await this.saveScheduleMemories([input]))[0]!;
+  }
+
+  async saveScheduleMemories(
+    inputs: SaveAgentScheduleMemoryInput[]
+  ): Promise<AgentScheduleMemoryRecord[]> {
+    validateScheduleMemoryBatch(inputs);
+    // No awaits between validation and publication: a batch is one in-process mutation.
+    return inputs.map((input) => this.replaceScheduleMemory(input));
+  }
+
+  private replaceScheduleMemory(input: SaveAgentScheduleMemoryInput): AgentScheduleMemoryRecord {
     const scope = profileScope(input.profileName);
     const createdAt = this.now().toISOString();
     const expiresAt = input.expiresAt ?? this.defaultExpiresAt();

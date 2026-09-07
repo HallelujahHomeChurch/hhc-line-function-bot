@@ -956,16 +956,16 @@ function liveScheduleWriteJourneyCase(apiKey: string, id: string) {
         },
         profile: {
           permissionRequiredFunctions: ["save_schedule"],
-          schedulePolicy: schedulePolicy(
-            DEFAULT_SCHEDULE_DOMAINS.filter(({ key }) => key === "morning_prayer_family")
-          )
+          schedulePolicy: schedulePolicy(DEFAULT_SCHEDULE_DOMAINS)
         },
         source: { type: "group", groupId: "synthetic-draft-group", userId: "synthetic-owner" },
         now
       });
       const stored = () => memoryStore.listScheduleMemories({ profileName: "helper" });
       const preview = await fixture.runtime.handleTextTurn(
-        fixture.turn("請保存這份2026年9月晨更家族服事表：\n9/13 合成甲組")
+        fixture.turn(
+          "存這個服事表\n轉貼：👉2026年週日下午為耶穌舉牌服事如下👇\n✅9/13 合成甲家園\n10/4 合成乙組(音樂人)\nPS.需要更改服事日期請自行交換，謝謝。另有晨更公告稍後發布。"
+        )
       );
       if (preview?.writePhase !== "preview") {
         if (diagnosticOutput)
@@ -975,6 +975,7 @@ function liveScheduleWriteJourneyCase(apiKey: string, id: string) {
               {
                 caseId: id,
                 boundary: "schedule_initial_preview",
+                calls: fixture.calls.get("save_schedule"),
                 replyText: preview?.replyText,
                 modelAnswer: fixture.probe.outputs
                   .filter(AIMessage.isInstance)
@@ -1024,7 +1025,9 @@ function liveScheduleWriteJourneyCase(apiKey: string, id: string) {
         "schedule_question_preserves_review"
       );
       const revised = await fixture.runtime.handleTextTurn(
-        fixture.turn("把這份預覽9/13的合成甲組改成合成乙組，請重新預覽，先不要保存。")
+        fixture.turn(
+          "把這份預覽9/13的合成甲家園改成合成丙組，保留10月的安排，請重新預覽，先不要保存。"
+        )
       );
       assert(revised?.writePhase === "preview", "schedule_revised_preview");
       const replacement = await currentReview(fixture, fixture.source);
@@ -1037,14 +1040,20 @@ function liveScheduleWriteJourneyCase(apiKey: string, id: string) {
         "schedule_confirm_without_model"
       );
       const rows = (await stored()).flatMap(({ entries }) => entries);
+      if (diagnosticOutput)
+        writeFileSync(
+          diagnosticOutput,
+          JSON.stringify({ rows, calls: fixture.calls.get("save_schedule") }, null, 2),
+          { mode: 0o600 }
+        );
       assert(
-        rows.length === 1 &&
-          rows[0]?.serviceDate === "2026-09-13" &&
-          rows[0]?.assignee === "合成乙組",
+        rows.length === 2 &&
+          rows.some((row) => row.serviceDate === "2026-09-13" && row.assignee === "合成丙組") &&
+          rows.some((row) => row.serviceDate === "2026-10-04" && row.assignee === "合成乙組"),
         "schedule_exact_revision_persisted"
       );
       const readback = await fixture.runtime.handleTextTurn(
-        fixture.turn("請查2026年9月13日的晨更家族服事安排。", {
+        fixture.turn("請查2026年9月13日的為耶穌舉牌服事安排。", {
           type: "group",
           groupId: "synthetic-readback-group",
           userId: "synthetic-reader"
@@ -1053,10 +1062,10 @@ function liveScheduleWriteJourneyCase(apiKey: string, id: string) {
       const reads = fixture.calls.get("query_schedule") ?? [];
       assert(readback);
       assert(
-        reads.length > 0 && readback.replyText.includes("合成乙組"),
+        reads.length > 0 && readback.replyText.includes("合成丙組"),
         "schedule_grounded_cross_group_readback"
       );
-      assert(!readback.replyText.includes("合成甲組"));
+      assert(!readback.replyText.includes("合成甲家園"));
       const commits = (fixture.calls.get("save_schedule") ?? []).filter(
         ({ args }) => args.confirm === true
       );

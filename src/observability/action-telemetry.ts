@@ -220,6 +220,14 @@ const PRODUCT_EVENT_NAMES = new Set([
   "helper_agent_turn"
 ]);
 const HELPER_TOOL_NAMES = new Set([
+  "propose_save_schedule",
+  "propose_save_memory",
+  "propose_save_resource",
+  "update_attachment_draft",
+  "preview_current_draft",
+  "cancel_current_draft",
+  "get_current_draft",
+  "revise_current_draft",
   "get_official_schedule",
   "find_presentation",
   "find_sheet_music",

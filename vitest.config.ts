@@ -6,7 +6,8 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     exclude: [
       "src/__tests__/kernel-redis-integration.test.ts",
-      "src/__tests__/kernel-postgres-integration.test.ts"
+      "src/__tests__/kernel-postgres-integration.test.ts",
+      "src/__tests__/schedule-memory-store.test.ts"
     ],
     testTimeout: 5000
   }

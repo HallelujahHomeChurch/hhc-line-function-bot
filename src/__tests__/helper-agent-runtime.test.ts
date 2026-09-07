@@ -12,7 +12,7 @@ import { countTokensApproximately } from "langchain";
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAgentTraceStore } from "../agent/trace-store.js";
-import { InMemoryAgentJobStore } from "../agent/jobs.js";
+import { buildAgentJobScope, InMemoryAgentJobStore } from "../agent/jobs.js";
 import type { ResourceMemoryObserver } from "../agent/resource-memory.js";
 import { createFindPopSheetMusicHandler } from "../functions/find-pop-sheet-music.js";
 import { createHelperReadTools } from "../helper-agent/read-tools.js";
@@ -23,6 +23,7 @@ import {
   helperSystemPrompt
 } from "../helper-agent/runtime.js";
 import { createHelperAgentState, type HelperAgentState } from "../helper-agent/state.js";
+import { DEFAULT_SCHEDULE_DOMAINS } from "../schedules/domain-registry.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type {
   BotProfileConfig,
@@ -101,6 +102,122 @@ function state(overrides: Partial<HelperAgentState> = {}): HelperAgentState {
 }
 
 describe("helper profile runtime", () => {
+  it.each(["needs_input", "ambiguous"] as const)(
+    "allows a corrected proposal after %s while retaining only the successful preview",
+    async (status) => {
+      const probe = createEvalProbe();
+      const app = createSyntheticRuntimeFixture({
+        probe,
+        model: instrumentedFakeModel(
+          [
+            [{ name: "propose_save_memory", args: { content: "incomplete" }, id: "first" }],
+            [{ name: "propose_save_memory", args: { content: "corrected" }, id: "corrected" }],
+            [{ name: "propose_save_memory", args: { content: "extra" }, id: "extra" }],
+            []
+          ],
+          probe
+        ),
+        enabledFunctions: ["save_memory"],
+        handlers: {
+          save_memory: async (args) =>
+            args.content === "incomplete"
+              ? { ok: true, replyText: "請補充內容", writePreparation: status }
+              : { ok: true, replyText: String(args.content), writePhase: "preview" }
+        }
+      });
+      const result = await app.runtime.handleTextTurn(app.turn("保存內容"));
+      expect(result).toMatchObject({
+        writePhase: "preview",
+        replyText: expect.stringContaining("corrected")
+      });
+      expect(result?.writePreparation).toBeUndefined();
+      const draft = await app.sessions.findActionReview({
+        profileName: "helper",
+        source: app.source,
+        requesterUserId: app.source.userId
+      });
+      expect(draft?.draftArguments.content).toBe("corrected");
+      expect(app.calls.get("save_memory")?.map(({ args }) => args.content)).toEqual([
+        "incomplete",
+        "corrected"
+      ]);
+    }
+  );
+
+  it("reserves a pending proposal against concurrent calls until its preparation completes", async () => {
+    const probe = createEvalProbe();
+    const app = createSyntheticRuntimeFixture({
+      probe,
+      model: instrumentedFakeModel(
+        [
+          [
+            { name: "propose_save_memory", args: { content: "first" }, id: "first" },
+            { name: "propose_save_memory", args: { content: "concurrent" }, id: "concurrent" }
+          ],
+          [{ name: "propose_save_memory", args: { content: "corrected" }, id: "corrected" }],
+          []
+        ],
+        probe
+      ),
+      enabledFunctions: ["save_memory"],
+      handlers: {
+        save_memory: async (args) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          return args.content === "first"
+            ? { ok: true, replyText: "請補充內容", writePreparation: "needs_input" }
+            : { ok: true, replyText: String(args.content), writePhase: "preview" };
+        }
+      }
+    });
+    const result = await app.runtime.handleTextTurn(app.turn("保存內容"));
+    expect(result?.writePhase).toBe("preview");
+    expect(app.calls.get("save_memory")?.map(({ args }) => args.content)).toEqual([
+      "first",
+      "corrected"
+    ]);
+  });
+
+  it.each(["needs_input", "ambiguous"] as const)(
+    "reports pending %s as clarification with the proposal tool name",
+    async (status) => {
+      const model = new FakeToolCallingModel({
+        toolCalls: [
+          [{ name: "propose_save_memory", args: { content: "incomplete" }, id: "proposal" }],
+          []
+        ]
+      });
+      vi.spyOn(model, "bindTools").mockReturnValue(model);
+      const traceStore = new InMemoryAgentTraceStore();
+      const routeObserver = vi.fn();
+      const writeProfile = { ...profile(), enabledFunctions: ["save_memory" as const] };
+      const runtime = createHelperRuntime({
+        model,
+        summaryModel: model,
+        state: state(),
+        traceStore,
+        routeObserver,
+        handlers: {
+          save_memory: async () => ({ ok: true, replyText: "請補充內容", writePreparation: status })
+        },
+        sessions: new InMemorySessionStore(),
+        jobs: new InMemoryAgentJobStore()
+      });
+      await runtime.handleTextTurn({
+        ...input("保存內容"),
+        profile: writeProfile,
+        configuredFunctions: writeProfile.enabledFunctions,
+        authorizeFunctions: async (names) => names
+      });
+      expect((await traceStore.list())[0]?.steps[0]).toMatchObject({
+        selectedToolNames: ["propose_save_memory"],
+        finalStatus: "ambiguous"
+      });
+      expect(routeObserver).toHaveBeenCalledWith(
+        expect.objectContaining({ eventName: "helper_agent_turn", resultClass: "ambiguous" })
+      );
+    }
+  );
+
   it("returns requested read results alongside the authoritative write preview", async () => {
     const probe = createEvalProbe();
     const app = createSyntheticRuntimeFixture({
@@ -398,8 +515,17 @@ describe("helper profile runtime", () => {
       handlers: { query_schedule: querySchedule }
     });
 
-    await runtime.handleTextTurn(input("查服事表"));
-    await runtime.handleTextTurn(input("主日服事"));
+    const scheduleProfile = {
+      ...profile(),
+      schedulePolicy: {
+        meetingReferences: [],
+        domains: [
+          { ...DEFAULT_SCHEDULE_DOMAINS[0]!, key: "sunday_service", displayName: "主日服事" }
+        ]
+      }
+    };
+    await runtime.handleTextTurn({ ...input("查服事表"), profile: scheduleProfile });
+    await runtime.handleTextTurn({ ...input("主日服事"), profile: scheduleProfile });
 
     expect(querySchedule).toHaveBeenNthCalledWith(
       2,
@@ -702,49 +828,92 @@ describe("helper profile runtime", () => {
     }
   );
 
-  it("admits only one draft mutation across attachment and normal proposals", async () => {
+  it("allows an attachment correction after missing input and records its tool", async () => {
     const model = new FakeToolCallingModel({
       toolCalls: [
-        [
-          { name: "update_attachment_draft", args: { title: "附件草稿" }, id: "attachment-write" },
-          { name: "propose_save_memory", args: { content: "文字草稿" }, id: "memory-write" }
-        ],
+        [{ name: "update_attachment_draft", args: { purpose: "投影片" }, id: "purpose" }],
+        [{ name: "update_attachment_draft", args: { title: "附件名稱" }, id: "title" }],
         []
       ]
     });
     vi.spyOn(model, "bindTools").mockReturnValue(model);
-    const attachment = vi.fn(async () => ({
-      ok: true,
-      writePhase: "preview" as const,
-      replyText: "附件預覽"
-    }));
-    const save = vi.fn(async () => ({
-      ok: true,
-      replyText: "需要內容",
-      writePreparation: "needs_input" as const
-    }));
-    const writeProfile = {
-      ...profile(),
-      enabledFunctions: [...readFunctions, "save_resource" as const, "save_memory" as const],
-      permissionRequiredFunctions: ["save_resource" as const, "save_memory" as const]
-    };
+    const traceStore = new InMemoryAgentTraceStore();
+    const attachment = vi.fn(async (args: { title?: string }) =>
+      args.title
+        ? { ok: true, replyText: "附件預覽", writePhase: "preview" as const }
+        : { ok: true, replyText: "請提供名稱", writePreparation: "needs_input" as const }
+    );
+    const writeProfile = { ...profile(), enabledFunctions: ["save_resource" as const] };
     const runtime = createHelperRuntime({
       model,
       summaryModel: model,
       state: state(),
-      handlers: { ...handlers(), save_memory: save },
+      handlers: {},
+      traceStore,
       sessions: new InMemorySessionStore(),
       jobs: new InMemoryAgentJobStore(),
       attachmentDraftHandler: attachment
     });
-    await runtime.handleTextTurn({
-      ...input("兩個保存要求"),
+    const result = await runtime.handleTextTurn({
+      ...input("保存附件"),
       profile: writeProfile,
       configuredFunctions: writeProfile.enabledFunctions,
       authorizeFunctions: async (names) => names
     });
-    expect(attachment.mock.calls.length + save.mock.calls.length).toBe(1);
+    expect(result).toMatchObject({ writePhase: "preview", replyText: "附件預覽" });
+    expect(attachment).toHaveBeenCalledTimes(2);
+    expect((await traceStore.list())[0]?.steps[0]).toMatchObject({
+      selectedToolNames: ["update_attachment_draft"],
+      finalStatus: "success"
+    });
   });
+
+  it.each([{ title: "附件草稿" }, {}])(
+    "admits only one preview across attachment %j and normal proposals",
+    async (args) => {
+      const model = new FakeToolCallingModel({
+        toolCalls: [
+          [
+            { name: "update_attachment_draft", args, id: "attachment-write" },
+            { name: "propose_save_memory", args: { content: "文字草稿" }, id: "memory-write" }
+          ],
+          []
+        ]
+      });
+      vi.spyOn(model, "bindTools").mockReturnValue(model);
+      const attachment = vi.fn(async () => ({
+        ok: true,
+        writePhase: "preview" as const,
+        replyText: "附件預覽"
+      }));
+      const save = vi.fn(async () => ({
+        ok: true,
+        replyText: "需要內容",
+        writePreparation: "needs_input" as const
+      }));
+      const writeProfile = {
+        ...profile(),
+        enabledFunctions: [...readFunctions, "save_resource" as const, "save_memory" as const],
+        permissionRequiredFunctions: ["save_resource" as const, "save_memory" as const]
+      };
+      const runtime = createHelperRuntime({
+        model,
+        summaryModel: model,
+        state: state(),
+        handlers: { ...handlers(), save_memory: save },
+        sessions: new InMemorySessionStore(),
+        jobs: new InMemoryAgentJobStore(),
+        attachmentDraftHandler: attachment
+      });
+      await runtime.handleTextTurn({
+        ...input("兩個保存要求"),
+        profile: writeProfile,
+        configuredFunctions: writeProfile.enabledFunctions,
+        authorizeFunctions: async (names) => names
+      });
+      expect(attachment.mock.calls.length + save.mock.calls.length).toBe(1);
+    }
+  );
 
   it("constructs no research tools when the locked state snapshot has lost consent", async () => {
     const model = new FakeToolCallingModel({ toolCalls: [[]] });
@@ -988,6 +1157,85 @@ describe("helper profile runtime", () => {
     expect(stale?.freshExecution).toBe(false);
     expect(save).toHaveBeenCalledTimes(2);
   });
+
+  it.each([false, true])(
+    "invalid exact edits preserve arguments and respect research lane=%s",
+    async (research) => {
+      const observed = new Date("2026-09-07T00:00:00Z");
+      const model = new FakeToolCallingModel({
+        toolCalls: [
+          [{ name: "propose_save_memory", args: { content: "original" }, id: "original" }],
+          [],
+          ...(research
+            ? [
+                [
+                  {
+                    name: "search_sheet_music_web",
+                    args: { query: "synthetic song" },
+                    id: "research"
+                  }
+                ]
+              ]
+            : []),
+          [
+            {
+              name: "revise_current_draft",
+              args: { oldText: "missing", newText: "edited" },
+              id: "invalid"
+            }
+          ],
+          []
+        ]
+      });
+      vi.spyOn(model, "bindTools").mockReturnValue(model);
+      const sessions = new InMemorySessionStore({ now: () => observed });
+      const jobs = new InMemoryAgentJobStore({ now: () => observed });
+      const writeProfile = {
+        ...profile(),
+        enabledFunctions: ["save_memory" as const, "find_sheet_music" as const]
+      };
+      const runtime = createHelperRuntime({
+        model,
+        summaryModel: model,
+        now: () => observed,
+        sessions,
+        jobs,
+        state: state({
+          run: async ({ task }) =>
+            task({ externalSheetMusicAllowed: research, externalSheetMusicQuery: "synthetic song" })
+        }),
+        handlers: {
+          save_memory: async () => ({ ok: true, replyText: "預覽", writePhase: "preview" })
+        },
+        webSearch: { search: async () => [] },
+        pageReader: { read: vi.fn() }
+      });
+      const turn = {
+        ...input("保存原文"),
+        profile: writeProfile,
+        configuredFunctions: writeProfile.enabledFunctions,
+        authorizeFunctions: async (names: readonly CapabilityName[]) => names
+      };
+      await runtime.handleTextTurn(turn);
+      const lookup = {
+        profileName: "helper",
+        source: turn.event.source,
+        requesterUserId: turn.event.source.userId
+      };
+      const original = (await sessions.findActionReview(lookup))!;
+      await runtime.handleTextTurn({ ...turn, event: input("修改不存在的文字").event });
+      const retained = (await sessions.findActionReview(lookup))!;
+      expect(retained.draftArguments).toEqual(original.draftArguments);
+      expect(retained.id).toBe(original.id);
+      expect(retained.approvalExpiresAt).toBe(
+        research ? original.approvalExpiresAt : observed.toISOString()
+      );
+      expect(
+        (await jobs.get(original.resultJobId, buildAgentJobScope("helper", turn.event.source)!))
+          ?.status
+      ).toBe(research ? "pending" : "failed");
+    }
+  );
 
   it("expires approval before the draft and never commits an expired confirmation", async () => {
     let observed = new Date("2026-09-07T00:00:00Z");

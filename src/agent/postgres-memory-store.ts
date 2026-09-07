@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentResourceReference, AgentResourceType } from "../types.js";
 import {
   normalizeLookupText,
+  validateScheduleMemoryBatch,
   profileScope,
   scopeFromSource,
   type AgentMemoryScope,
@@ -344,63 +345,78 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
   async saveScheduleMemory(
     input: SaveAgentScheduleMemoryInput
   ): Promise<AgentScheduleMemoryRecord> {
-    const scope = profileScope(input.profileName);
-    const memoryId = randomUUID();
-    const expiresAt = input.expiresAt ?? this.defaultExpiresAt();
-    const periodKey = input.periodKey ?? input.entries[0]?.serviceDate.slice(0, 7) ?? "unknown";
-    await this.db.query(
-      `update agent_schedule_memories
-       set deleted_at = now()
-       where profile_name = $1 and schedule_type = $2 and period_key = $3 and deleted_at is null`,
-      [input.profileName, input.scheduleType, periodKey]
-    );
-    const memoryResult = await this.db.query(
-      `
-      insert into agent_schedule_memories
-        (id, profile_name, scope_type, scope_id, schedule_type, period_key, title, original_text, created_by, visibility, expires_at)
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      returning *
-      `,
-      [
-        memoryId,
-        input.profileName,
-        scope.type,
-        scope.id,
-        input.scheduleType,
-        periodKey,
-        input.title,
-        input.originalText,
-        input.createdBy ?? null,
-        "profile",
-        expiresAt
-      ]
-    );
+    return (await this.saveScheduleMemories([input]))[0]!;
+  }
 
-    const entries: AgentScheduleEntryRecord[] = [];
-    for (const entry of input.entries) {
-      const entryResult = await this.db.query(
-        `
+  async saveScheduleMemories(
+    inputs: SaveAgentScheduleMemoryInput[]
+  ): Promise<AgentScheduleMemoryRecord[]> {
+    validateScheduleMemoryBatch(inputs);
+    if (!inputs.length) return [];
+    const memories = inputs.map((input) => ({
+      id: randomUUID(),
+      profile_name: input.profileName,
+      scope_id: profileScope(input.profileName).id,
+      schedule_type: input.scheduleType,
+      period_key: input.periodKey ?? input.entries[0]!.serviceDate.slice(0, 7),
+      title: input.title,
+      original_text: input.originalText,
+      created_by: input.createdBy ?? null,
+      expires_at: input.expiresAt ?? this.defaultExpiresAt(),
+      entries: input.entries.map((entry) => ({
+        id: randomUUID(),
+        service_date: entry.serviceDate,
+        weekday: entry.weekday ?? null,
+        meeting_name: entry.meetingName,
+        role: entry.role ?? null,
+        assignee: entry.assignee,
+        family_name: entry.familyName ?? null,
+        notes: entry.notes ?? null
+      }))
+    }));
+    // One statement commits all months and entries together. The existing unique active-period
+    // index rejects overlapping concurrent replacements without publishing a partial batch.
+    const result = await this.db.query(
+      `with incoming as materialized (
+        select * from jsonb_to_recordset($1::jsonb) as x(
+          id uuid, profile_name text, scope_id text, schedule_type text, period_key text,
+          title text, original_text text, created_by text, expires_at timestamptz, entries jsonb)
+      ), retired as (
+        update agent_schedule_memories m set deleted_at = now()
+        from incoming i
+        where m.profile_name = i.profile_name and m.schedule_type = i.schedule_type
+          and m.period_key = i.period_key and m.deleted_at is null
+        returning m.id
+      ), saved as (
+        insert into agent_schedule_memories
+          (id, profile_name, scope_type, scope_id, schedule_type, period_key, title,
+           original_text, created_by, visibility, expires_at)
+        select i.id, i.profile_name, 'profile', i.scope_id, i.schedule_type, i.period_key,
+          i.title, i.original_text, i.created_by, 'profile', i.expires_at
+        from incoming i cross join (select count(*) from retired) completed
+        returning *
+      ), saved_entries as (
         insert into agent_schedule_entries
           (id, schedule_memory_id, service_date, weekday, meeting_name, role, assignee, family_name, notes)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        select e.id, m.id, e.service_date, e.weekday, e.meeting_name, e.role, e.assignee, e.family_name, e.notes
+        from saved m join incoming i on i.id = m.id
+        cross join lateral jsonb_to_recordset(i.entries) as e(
+          id uuid, service_date date, weekday text, meeting_name text, role text,
+          assignee text, family_name text, notes text)
         returning *
-        `,
-        [
-          randomUUID(),
-          memoryId,
-          entry.serviceDate,
-          entry.weekday ?? null,
-          entry.meetingName,
-          entry.role ?? null,
-          entry.assignee,
-          entry.familyName ?? null,
-          entry.notes ?? null
-        ]
+      )
+      select m.*, coalesce((select jsonb_agg(to_jsonb(e)) from saved_entries e
+        where e.schedule_memory_id = m.id), '[]'::jsonb) as entries from saved m`,
+      [JSON.stringify(memories)]
+    );
+    const byId = new Map(result.rows.map((row) => [String(row.id), row]));
+    return memories.map((memory) => {
+      const row = byId.get(memory.id)!;
+      const entries = (row.entries as Record<string, unknown>[]).map((entry) =>
+        mapScheduleEntry({ ...row, ...entry })
       );
-      entries.push(mapScheduleEntry({ ...entryResult.rows[0], ...memoryResult.rows[0] }));
-    }
-
-    return mapScheduleMemory(memoryResult.rows[0], entries);
+      return mapScheduleMemory(row, entries);
+    });
   }
 
   async listScheduleMemories(
@@ -904,7 +920,8 @@ function toIso(value: unknown): string {
 
 function toDateKey(value: unknown): string {
   if (value instanceof Date) {
-    return value.toISOString().slice(0, 10);
+    // pg parses SQL DATE at local midnight; UTC conversion can change the calendar day.
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
   }
   return String(value).slice(0, 10);
 }
