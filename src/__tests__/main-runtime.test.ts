@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildAgentJobScope, InMemoryAgentJobStore } from "../agent/jobs.js";
+import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
 import { createMainRuntime } from "../runtime/main-runtime.js";
 import { InMemorySessionStore } from "../state/session-store.js";
 import type { BotProfileConfig, FunctionHandler, LineEvent } from "../types.js";
@@ -41,6 +42,31 @@ function input(text: string, eventSource = source) {
 }
 
 describe("main runtime", () => {
+  it.each([
+    ["下載最新週報", "/api/bulletins/latest?locale=zh-Hant"],
+    ["下載第 1733 期週報", "/api/bulletins/by-number/1733?locale=zh-Hant"]
+  ])("honors disabled public access for %s", async (text, expectedPath) => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(Response.json({ error: { code: "bulletin_disabled" } }, { status: 404 }));
+    const runtime = createMainRuntime({
+      handlers: {
+        download_weekly_paper: (args) => downloadWeeklyPaper(args, fetchImpl)
+      },
+      sessions: new InMemorySessionStore(),
+      jobs: new InMemoryAgentJobStore()
+    });
+
+    const result = await runtime.handleTextTurn(input(text));
+    expect(result).toMatchObject({
+      replyText: "週報下載目前暫停開放。",
+      agentResult: { status: "unavailable" }
+    });
+    expect(result?.quickReplies).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls[0]?.[0]).toEqual(expect.stringContaining(expectedPath));
+  });
+
   it("serves only its two provider-free capabilities", async () => {
     const weekly = vi.fn<FunctionHandler>(async () => ({
       ok: true,
