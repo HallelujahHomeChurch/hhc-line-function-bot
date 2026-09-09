@@ -289,7 +289,7 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
-  it("requires media-sync:manage on all management routes", async () => {
+  it("requires Presenter LINE management on all management routes", async () => {
     const accountClient = account(false);
     const { instance } = await app({ account: accountClient });
     for (const request of routeRequests) {
@@ -585,7 +585,7 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
-  it("requires a canonical user and an Account media-sync:manage decision", async () => {
+  it("requires a canonical user and an Account Presenter LINE decision", async () => {
     const denied = account(false);
     const { instance } = await app({ account: denied });
     const missing = await instance.inject({

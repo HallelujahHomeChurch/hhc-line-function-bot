@@ -145,7 +145,7 @@ export function createAccountAdminClient(options: {
     async verifyPermission(input) {
       const payload = await post(
         "/priv/account/v1/permissions/verify",
-        { userId: input.userId, permission: "media-sync:manage" },
+        { userId: input.userId, permission: "presenter:line:manage" },
         { "x-hhc-request-id": input.requestId }
       );
       if (!isExactRecord(payload, ["allowed"]) || typeof payload.allowed !== "boolean") {

@@ -32,7 +32,7 @@ const aclSubjectSearchInput = {
 };
 
 describe("account admin client", () => {
-  it("verifies only media-sync:manage with the propagated request ID", async () => {
+  it("verifies only presenter:line:manage with the propagated request ID", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ allowed: true }));
     const client = createAccountAdminClient({
       baseUrl: "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
@@ -56,7 +56,7 @@ describe("account admin client", () => {
         },
         body: JSON.stringify({
           userId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
-          permission: "media-sync:manage"
+          permission: "presenter:line:manage"
         }),
         redirect: "manual"
       })
