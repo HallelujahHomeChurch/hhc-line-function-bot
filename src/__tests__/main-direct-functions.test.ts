@@ -30,6 +30,22 @@ const profile: BotProfileConfig = {
 };
 
 describe("main provider-free direct functions", () => {
+  it.each(["下載最新週報", "下載第 1733 期週報"])(
+    "blocks %s when public access is disabled",
+    async (text) => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ error: { code: "bulletin_disabled" } }, { status: 404 })
+        );
+      const handler = createDownloadWeeklyPaperTextMessageHandler(fetchImpl);
+      const result = await handler.handle({ text }, { profile, event, requestId: "disabled" });
+      expect(result.replyText).toBe("週報下載目前暫停開放。");
+      expect(result.quickReplies).toBeUndefined();
+      expect(result.agentResult).toMatchObject({ status: "unavailable" });
+    }
+  );
+
   it("handles Weekly Paper without the semantic agent router", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       Response.json({
