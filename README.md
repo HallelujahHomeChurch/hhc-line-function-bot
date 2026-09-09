@@ -430,3 +430,5 @@ pnpm eval:sdk-agent --live
 ```
 
 Helper slow text and confirmation operations use a four-second inline budget, then return “查看結果” while the operation continues. Result retention is thirty minutes; retrieval rechecks requester scope and every recorded capability dependency. This budget starts at the agent operation, not webhook receipt, and in-process work is not restartable after a container restart.
+
+Weekly Paper downloads in the main profile honor the Website API public-access switch. When the API returns `bulletin_disabled`, the bot replies that downloads are paused and supplies no download button. Previously delivered PDF links are denied by Asset API after grant revocation completes; downloaded or cached copies cannot be recalled.

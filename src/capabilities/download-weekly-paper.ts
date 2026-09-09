@@ -50,7 +50,19 @@ export async function downloadWeeklyPaper(
       redirect: "error",
       signal: controller.signal
     });
-    if (response.status === 404) return notFoundResult();
+    if (response.status === 404) {
+      const value: unknown = await response.json().catch(() => undefined);
+      if (isRecord(value) && isRecord(value.error) && value.error.code === "bulletin_disabled") {
+        const replyText = "週報下載目前暫停開放。";
+        return {
+          ok: true,
+          replyText,
+          executedAction: "download_weekly_paper",
+          agentResult: { status: "unavailable", replyText }
+        };
+      }
+      return notFoundResult();
+    }
     if (!response.ok) return unavailableResult();
     const value = await response.json().catch(() => undefined);
     const bulletin = parsePublicBulletin(value, issueNumber);
