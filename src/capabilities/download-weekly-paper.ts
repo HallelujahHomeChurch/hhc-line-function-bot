@@ -62,7 +62,7 @@ export async function downloadWeeklyPaper(
     if (response.status === 404) {
       const value: unknown = await response.json().catch(() => undefined);
       if (isRecord(value) && isRecord(value.error) && value.error.code === "bulletin_disabled") {
-        if (memberAccess && (await canOpenMemberEntry(memberAccess))) return memberEntryResult();
+        if (memberAccess) return resolveMemberEntry(memberAccess);
         const replyText = "週報下載目前暫停開放。";
         return {
           ok: true,
@@ -85,27 +85,52 @@ export async function downloadWeeklyPaper(
   }
 }
 
-async function canOpenMemberEntry(access: MemberAccess) {
+async function resolveMemberEntry(access: MemberAccess): Promise<FunctionExecutionResult> {
   try {
     const decision = await access.authorizeFunctions({
       lineUserId: access.lineUserId,
       profileName: access.profileName,
       functionNames: ["download_weekly_paper"]
     });
-    return decision.bound && decision.active && decision.allowedFunctions.includes("download_weekly_paper");
+    if (
+      decision.bound &&
+      decision.active &&
+      decision.allowedFunctions.includes("download_weekly_paper")
+    )
+      return memberEntryResult();
+    const replyText = decision.bound
+      ? "此帳號目前沒有會員週報存取權。"
+      : "請先輸入「登入」連結 HHC 帳號，再查看會員週報。";
+    return {
+      ok: true,
+      replyText,
+      executedAction: "download_weekly_paper",
+      agentResult: { status: "unavailable", replyText }
+    };
   } catch {
-    return false;
+    return unavailableResult();
   }
 }
 
 function memberEntryResult(): FunctionExecutionResult {
-  const replyText = "會員週報已開放，請登入網站後查看。";
+  const replyText = "請登入網站查看會員週報。";
   return {
     ok: true,
     replyText,
     executedAction: "download_weekly_paper",
-    quickReplies: [{label: "查看會員週報", action: {type: "uri", label: "查看會員週報", uri: MEMBER_ENTRY_URI}}],
-    agentResult: {status: "success", anchors: {}, entities: [], supportedOperations: [], replyText}
+    quickReplies: [
+      {
+        label: "查看會員週報",
+        action: { type: "uri", label: "查看會員週報", uri: MEMBER_ENTRY_URI }
+      }
+    ],
+    agentResult: {
+      status: "success",
+      anchors: {},
+      entities: [],
+      supportedOperations: [],
+      replyText
+    }
   };
 }
 
