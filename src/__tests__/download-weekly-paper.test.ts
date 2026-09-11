@@ -118,6 +118,85 @@ describe("download_weekly_paper", () => {
     expect(serverErrorResult).not.toHaveProperty("quickReplies");
   });
 
+  it("returns the fixed member entry only for a currently authorized linked LINE user", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(response({ error: { code: "bulletin_disabled" } }, 404));
+    const authorizeFunctions = vi.fn().mockResolvedValue({
+      bound: true,
+      active: true,
+      allowedFunctions: ["download_weekly_paper"]
+    });
+
+    const result = await downloadWeeklyPaper({}, fetchImpl, {
+      lineUserId: "U0123456789abcdef0123456789abcdef",
+      profileName: "main",
+      authorizeFunctions
+    });
+
+    expect(authorizeFunctions).toHaveBeenCalledWith({
+      lineUserId: "U0123456789abcdef0123456789abcdef",
+      profileName: "main",
+      functionNames: ["download_weekly_paper"]
+    });
+    expect(result).toMatchObject({
+      quickReplies: [
+        { action: { type: "uri", uri: "https://www.alive.org.tw/zh-Hant/literature-ministry" } }
+      ]
+    });
+  });
+
+  it.each([
+    { bound: false, active: false, allowedFunctions: [] },
+    { bound: true, active: false, allowedFunctions: ["download_weekly_paper"] },
+    { bound: true, active: true, allowedFunctions: [] }
+  ])(
+    "does not expose the member entry when current LINE authorization is denied",
+    async (decision) => {
+      const authorizeFunctions = vi.fn().mockResolvedValue(decision);
+      const result = await downloadWeeklyPaper(
+        {},
+        vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(response({ error: { code: "bulletin_disabled" } }, 404)),
+        { lineUserId: "U0123456789abcdef0123456789abcdef", profileName: "main", authorizeFunctions }
+      );
+
+      expect(result).not.toHaveProperty("quickReplies");
+      expect(result.replyText).toBe(
+        decision.bound
+          ? "此帳號目前沒有會員週報存取權。"
+          : "請先輸入「登入」連結 HHC 帳號，再查看會員週報。"
+      );
+    }
+  );
+
+  it("fails closed when member authorization is unavailable", async () => {
+    const result = await downloadWeeklyPaper(
+      {},
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(response({ error: { code: "bulletin_disabled" } }, 404)),
+      {
+        lineUserId: "U0123456789abcdef0123456789abcdef",
+        profileName: "main",
+        authorizeFunctions: vi.fn().mockRejectedValue(new Error("unavailable"))
+      }
+    );
+    expect(result.quickReplies).toBeUndefined();
+    expect(result.agentResult).toMatchObject({ status: "unavailable" });
+  });
+
+  it("does not query member authorization while public bulletins are available", async () => {
+    const authorizeFunctions = vi.fn();
+    await downloadWeeklyPaper({}, vi.fn<typeof fetch>().mockResolvedValue(response(envelope())), {
+      lineUserId: "U0123456789abcdef0123456789abcdef",
+      profileName: "main",
+      authorizeFunctions
+    });
+    expect(authorizeFunctions).not.toHaveBeenCalled();
+  });
+
   it("rejects Dapr redirects without following Location", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(null, {
