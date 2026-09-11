@@ -1,6 +1,7 @@
 import type { FunctionExecutionResult, JsonRecord, TextMessageHandler } from "../types.js";
 import { downloadWeeklyPaperArgumentsSchema } from "../function-arguments.js";
 import type { FunctionDefinition } from "./catalog.js";
+import type { AccountAdminClient } from "../account/account-admin-client.js";
 
 const DAPR_BASE_URL = "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method";
 const PUBLIC_ORIGIN = "https://www.alive.org.tw";
@@ -8,6 +9,13 @@ const REQUEST_TIMEOUT_MS = 3_000;
 const LINE_URI_MAX_LENGTH = 1_000;
 const MAX_ISSUE_NUMBER = 2_147_483_647;
 const ASSET_PATH_PATTERN = /^\/assets\/[a-f0-9]{32}$/u;
+const MEMBER_ENTRY_URI = `${PUBLIC_ORIGIN}/zh-Hant/literature-ministry`;
+
+type MemberAccess = {
+  lineUserId: string;
+  profileName: string;
+  authorizeFunctions: AccountAdminClient["authorizeFunctions"];
+};
 
 export const downloadWeeklyPaperDefinition: FunctionDefinition = {
   name: "download_weekly_paper",
@@ -36,7 +44,8 @@ export const downloadWeeklyPaperDefinition: FunctionDefinition = {
 
 export async function downloadWeeklyPaper(
   args: JsonRecord,
-  fetchImpl: typeof fetch
+  fetchImpl: typeof fetch,
+  memberAccess?: MemberAccess
 ): Promise<FunctionExecutionResult> {
   const parsedArguments = downloadWeeklyPaperArgumentsSchema.safeParse(args);
   if (!parsedArguments.success) return unavailableResult();
@@ -53,6 +62,7 @@ export async function downloadWeeklyPaper(
     if (response.status === 404) {
       const value: unknown = await response.json().catch(() => undefined);
       if (isRecord(value) && isRecord(value.error) && value.error.code === "bulletin_disabled") {
+        if (memberAccess && (await canOpenMemberEntry(memberAccess))) return memberEntryResult();
         const replyText = "週報下載目前暫停開放。";
         return {
           ok: true,
@@ -73,6 +83,30 @@ export async function downloadWeeklyPaper(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function canOpenMemberEntry(access: MemberAccess) {
+  try {
+    const decision = await access.authorizeFunctions({
+      lineUserId: access.lineUserId,
+      profileName: access.profileName,
+      functionNames: ["download_weekly_paper"]
+    });
+    return decision.bound && decision.active && decision.allowedFunctions.includes("download_weekly_paper");
+  } catch {
+    return false;
+  }
+}
+
+function memberEntryResult(): FunctionExecutionResult {
+  const replyText = "會員週報已開放，請登入網站後查看。";
+  return {
+    ok: true,
+    replyText,
+    executedAction: "download_weekly_paper",
+    quickReplies: [{label: "查看會員週報", action: {type: "uri", label: "查看會員週報", uri: MEMBER_ENTRY_URI}}],
+    agentResult: {status: "success", anchors: {}, entities: [], supportedOperations: [], replyText}
+  };
 }
 
 export function createDownloadWeeklyPaperTextMessageHandler(

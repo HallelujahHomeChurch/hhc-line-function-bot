@@ -98,7 +98,12 @@ export function composeCapabilities(
   clients: CapabilityCompositionDependencies
 ): CapabilityComposition {
   const functions: FunctionRegistry = {
-    download_weekly_paper: (args) => downloadWeeklyPaper(args, clients.fetchImpl ?? fetch),
+    download_weekly_paper: (args, context) => downloadWeeklyPaper(args, clients.fetchImpl ?? fetch,
+      context.event.source.userId ? {
+        lineUserId: context.event.source.userId,
+        profileName: context.profile.name,
+        authorizeFunctions: (clients.accountAdminClient ?? missingAccountClient()).authorizeFunctions
+      } : undefined),
     update_own_profile: createUpdateOwnProfileHandler({
       accountClient: clients.accountAdminClient ?? missingAccountClient()
     }),
