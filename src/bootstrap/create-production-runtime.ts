@@ -25,6 +25,8 @@ import { createProfileRuntimeDispatcher, type ProfileRuntime } from "../runtime/
 import { createWikipediaSummarizer } from "../wikipedia/summarizer.js";
 import { InMemoryAgentJobStore, RedisAgentJobStore } from "../agent/jobs.js";
 import { createAzureAttachmentScanQueue } from "../attachments/scan-queue.js";
+import { createAuditClient } from "../audit/client.js";
+import { startAuditOutboxDispatcher } from "../audit/dispatcher.js";
 import {
   InMemoryAttachmentScanWorkStore,
   RedisAttachmentScanWorkStore
@@ -247,6 +249,17 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
           queue: attachmentScanQueue
         })
       : undefined;
+  const stopAuditOutbox =
+    config.audit?.dispatchEnabled && postgres?.mediaSyncStore && config.audit.token
+      ? startAuditOutboxDispatcher({
+          store: postgres.mediaSyncStore,
+          client: createAuditClient({
+            appId: config.audit.appId,
+            token: config.audit.token,
+            daprHttpPort: config.audit.daprHttpPort
+          })
+        })
+      : undefined;
   const conversationWindowStore = redis
     ? new RedisConversationWindowStore({ client: redis.client, keyPrefix: redis.keyPrefix })
     : new InMemoryConversationWindowStore();
@@ -414,6 +427,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       stopSdkStateCleanup?.();
       stopAttachmentScanOutbox?.();
       stopMediaSyncOutbox?.();
+      stopAuditOutbox?.();
       await app.close();
       await redis?.close();
       await helperStateLockPool?.end();

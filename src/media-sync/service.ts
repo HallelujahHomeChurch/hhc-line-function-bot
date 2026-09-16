@@ -174,7 +174,12 @@ export class MediaSyncManagementService {
       `media-sync-delete-collection:${createHash("sha256").update(collectionId).digest("hex")}`,
       { requestId, actorUserId }
     );
-    await this.store.completeCollectionDeletion({ profileName: "helper", collectionId });
+    await this.store.completeCollectionDeletion({
+      profileName: "helper",
+      collectionId,
+      actor: { type: "user", id: actorUserId },
+      requestId
+    });
     return result;
   }
 
@@ -225,7 +230,8 @@ export class MediaSyncManagementService {
       profileName: "helper",
       collectionId,
       createdByHhcUserId: userId,
-      idempotencyKey
+      idempotencyKey,
+      requestId
     });
     if (issued.status === "already_issued") {
       throw new MediaSyncManagementError("binding_code_already_issued");

@@ -715,7 +715,8 @@ describe("media sync management HTTP", () => {
       profileName: "helper",
       collectionId: "collection-1",
       createdByHhcUserId: userId,
-      idempotencyKey: "binding-1"
+      idempotencyKey: "binding-1",
+      requestId: "request-1"
     });
     await instance.close();
   });
@@ -843,7 +844,9 @@ describe("media sync management HTTP", () => {
     );
     expect(mediaStore.completeCollectionDeletion).toHaveBeenCalledWith({
       profileName: "helper",
-      collectionId: "collection-1"
+      collectionId: "collection-1",
+      actor: { type: "user", id: userId },
+      requestId: "request-1"
     });
     expect(mediaStore.beginCollectionDeletion.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(assets.deleteCollection).mock.invocationCallOrder[0]!

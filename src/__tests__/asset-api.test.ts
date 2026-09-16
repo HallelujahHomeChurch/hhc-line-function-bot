@@ -327,13 +327,15 @@ describe("asset api client", () => {
       actorUserId
     );
     expect(new Headers(fetcher.mock.calls[5]?.[1]?.headers).get("x-hhc-request-id")).toBe("req-6");
-    expect(new Headers(fetcher.mock.calls[5]?.[1]?.headers).get("x-hhc-actor-user-id")).toBe(
-      "018f0c1f-18d0-7e81-9f6f-69c456db7003"
+    expect(new Headers(fetcher.mock.calls[5]?.[1]?.headers).get("x-hhc-actor-id")).toBe(
+      actorUserId
     );
+    expect(new Headers(fetcher.mock.calls[5]?.[1]?.headers).get("x-hhc-actor-user-id")).toBeNull();
     expect(new Headers(fetcher.mock.calls[6]?.[1]?.headers).get("x-hhc-request-id")).toBe("req-7");
-    expect(new Headers(fetcher.mock.calls[6]?.[1]?.headers).get("x-hhc-actor-user-id")).toBe(
-      "018f0c1f-18d0-7e81-9f6f-69c456db7003"
+    expect(new Headers(fetcher.mock.calls[6]?.[1]?.headers).get("x-hhc-actor-id")).toBe(
+      actorUserId
     );
+    expect(new Headers(fetcher.mock.calls[6]?.[1]?.headers).get("x-hhc-actor-user-id")).toBeNull();
     expect(new Headers(fetcher.mock.calls[2]?.[1]?.headers).get("idempotency-key")).toBe(
       "create-1"
     );

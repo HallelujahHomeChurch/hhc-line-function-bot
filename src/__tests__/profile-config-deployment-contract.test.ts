@@ -450,6 +450,14 @@ describe("production profile configuration deployment contract", () => {
     );
   });
 
+  it("keeps central audit dispatch dark in the production manifest", () => {
+    const bot = readProjectFile("aca.containerapp.yaml");
+
+    expect(bot).not.toContain("AUDIT_DISPATCH_ENABLED");
+    expect(bot).not.toContain("AUDIT_APP_ID");
+    expect(bot).not.toContain("AUDIT_TOKEN");
+  });
+
   it("keeps the normalized permission policy required in the runtime profile type", () => {
     const types = readProjectFile("src/types.ts");
     const runtimeProfile = types.slice(

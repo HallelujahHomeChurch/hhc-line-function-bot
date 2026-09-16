@@ -28,6 +28,8 @@ describe("media sync migrations", () => {
     expect(sql).toContain("dispatched_at");
     expect(sql).toContain("primary key (source_key, publication_type)");
     expect(sql).toContain("primary key (source_key, operation)");
+    expect(sql).toContain("create table if not exists audit_outboxes");
+    expect(sql).toContain("audit_outboxes_dispatch_idx");
   });
 });
 
@@ -63,7 +65,7 @@ describe("media sync binding-code issuance", () => {
       store.createBindingCode({
         profileName: "helper",
         collectionId: "collection-1",
-        createdByHhcUserId: "manager",
+        createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
         idempotencyKey: "   "
       })
     ).rejects.toThrow("media_sync_binding_code_idempotency_invalid");
@@ -101,6 +103,97 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await owner?.end();
   });
 
+  it("commits binding mutations and their central audit outbox atomically", async () => {
+    const actorId = "018f47d2-e5d1-4f3f-8f18-6c8e32621f71";
+    const store = new PostgresMediaSyncStore(left, { codeFactory: () => "AUDIT-CODE" });
+    const issued = await store.createBindingCode({
+      profileName: "helper",
+      collectionId: "audit-collection",
+      createdByHhcUserId: actorId,
+      idempotencyKey: "audit-code-create",
+      requestId: "audit-code-request"
+    });
+    await expect(
+      store.createBindingCode({
+        profileName: "helper",
+        collectionId: "audit-collection",
+        createdByHhcUserId: actorId,
+        idempotencyKey: "audit-code-create",
+        requestId: "audit-code-request-replay"
+      })
+    ).resolves.toMatchObject({ status: "already_issued" });
+    await expect(
+      left.query<{ count: string }>("select count(*)::text count from audit_outboxes")
+    ).resolves.toMatchObject({ rows: [{ count: "1" }] });
+    const bound = await store.bindWithCode({
+      profileName: "helper",
+      code: issuedCode(issued),
+      groupId: "audit-group",
+      groupDisplayName: "Audit Group",
+      boundByLineUserId: "line-user",
+      requestId: "audit-binding-request"
+    });
+    if (bound.status !== "bound") throw new Error("expected audit binding");
+    await store.createIngest({
+      sourceKey: "line:helper:audit-message",
+      profileName: "helper",
+      messageId: "audit-message",
+      groupId: "audit-group",
+      collectionId: "audit-collection",
+      displayName: "audit.jpg",
+      mediaKind: "image",
+      expectedMime: "image/jpeg"
+    });
+    await expect(
+      left.query<{ count: string }>("select count(*)::text count from audit_outboxes")
+    ).resolves.toMatchObject({ rows: [{ count: "2" }] });
+    await store.beginCollectionDeletion({
+      profileName: "helper",
+      collectionId: "audit-collection"
+    });
+    await store.completeCollectionDeletion({
+      profileName: "helper",
+      collectionId: "audit-collection",
+      actor: { type: "user", id: actorId },
+      requestId: "audit-delete-request"
+    });
+
+    const rows = await left.query<{ payload: Record<string, unknown> }>(
+      "select payload::jsonb payload from audit_outboxes order by created_at, event_id"
+    );
+    expect(rows.rows.map(({ payload }) => payload.action)).toEqual([
+      "media_sync.binding_code.create",
+      "media_sync.binding.create",
+      "media_sync.binding.delete"
+    ]);
+    expect(rows.rows[1]?.payload).toMatchObject({
+      actorId,
+      requestId: "audit-binding-request",
+      resourceId: bound.binding.id,
+      metadata: {}
+    });
+    expect(rows.rows[2]?.payload).toMatchObject({
+      actorId,
+      requestId: "audit-delete-request",
+      resourceId: bound.binding.id
+    });
+    const claimed = await store.claimAuditOutbox({ limit: 3, leaseMs: 30_000 });
+    expect(claimed).toHaveLength(3);
+    await expect(
+      store.markAuditDelivered({ ...claimed[0]!, attempts: claimed[0]!.attempts + 1 })
+    ).resolves.toBe(false);
+    await expect(store.markAuditDelivered(claimed[0]!)).resolves.toBe(true);
+    await expect(store.markAuditRetry(claimed[1]!, 30_000, "http_503")).resolves.toBe(true);
+    await expect(store.markAuditTerminal(claimed[2]!, "http_400")).resolves.toBe(true);
+    await expect(store.auditOutboxStats()).resolves.toMatchObject({
+      pendingCount: 1,
+      deadLetterCount: 1
+    });
+    await left.query(
+      "truncate audit_outboxes, media_sync_binding_codes, media_sync_bindings, media_sync_collection_deletions, media_sync_ingests cascade"
+    );
+  });
+
   it("stores only a hash and fixes code expiry at 60 minutes", async () => {
     const store = new PostgresMediaSyncStore(left, {
       codeFactory: () => "PLAIN-CODE-123",
@@ -110,7 +203,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const issued = await store.createBindingCode({
       profileName: "helper",
       collectionId: "collection-code",
-      createdByHhcUserId: "hhc-user",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f74",
       idempotencyKey: "request-secret-key"
     });
     const row = (
@@ -139,7 +232,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const firstInput = {
       profileName: "helper",
       collectionId: "collection-idempotent",
-      createdByHhcUserId: "manager-a",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f72",
       idempotencyKey: "same-client-key",
       now: new Date("2099-01-01T00:00:00.000Z")
     };
@@ -160,7 +253,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await expect(
       store.createBindingCode({
         ...firstInput,
-        createdByHhcUserId: "manager-b",
+        createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f73",
         now: new Date("2099-01-01T02:00:00.000Z")
       })
     ).resolves.toMatchObject({ status: "issued", code: "IDEMPOTENT-CODE-3" });
@@ -194,7 +287,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const input = {
       profileName: "helper",
       collectionId: "collection-concurrent-code",
-      createdByHhcUserId: "hhc-user",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f74",
       idempotencyKey: "concurrent-key"
     };
 
@@ -238,7 +331,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const base = {
       profileName: "helper",
       collectionId: "collection-rotate",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       now: new Date("2099-01-01T00:00:00.000Z")
     };
 
@@ -274,7 +367,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await issuer.createBindingCode({
       profileName: "helper",
       collectionId: "collection-bind-rotate-race",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "race-old",
       now
     });
@@ -283,7 +376,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       rotator.createBindingCode({
         profileName: "helper",
         collectionId: "collection-bind-rotate-race",
-        createdByHhcUserId: "manager",
+        createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
         idempotencyKey: "race-new",
         now
       }),
@@ -311,14 +404,14 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await target.createBindingCode({
       profileName: "helper",
       collectionId: "collection-rotation-rollback",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "rollback-old",
       now
     });
     await duplicate.createBindingCode({
       profileName: "helper",
       collectionId: "collection-duplicate-code",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "duplicate-code",
       now
     });
@@ -327,7 +420,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       rotating.createBindingCode({
         profileName: "helper",
         collectionId: "collection-rotation-rollback",
-        createdByHhcUserId: "manager",
+        createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
         idempotencyKey: "rollback-new",
         now
       })
@@ -351,7 +444,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const input = {
       profileName: "helper",
       collectionId: "collection-pending",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "pending-code"
     };
 
@@ -385,7 +478,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const issued = await store.createBindingCode({
       profileName: "helper",
       collectionId: "collection-bind",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "bind-code-request"
     });
     const code = issuedCode(issued);
@@ -428,7 +521,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const issued = await store.createBindingCode({
       profileName: "helper",
       collectionId: "collection-expired",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "expired-code-request",
       now: new Date("2020-01-01T00:00:00.000Z")
     });
@@ -462,7 +555,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const sameGroupCode = await store.createBindingCode({
       profileName: "helper",
       collectionId: "collection-unique-b",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "same-group-request"
     });
     const sameGroupCodeValue = issuedCode(sameGroupCode);
@@ -480,7 +573,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       store.createBindingCode({
         profileName: "main",
         collectionId: "collection-unique-a",
-        createdByHhcUserId: "manager",
+        createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
         idempotencyKey: "same-collection-request"
       })
     ).resolves.toEqual({ status: "collection_bound" });
@@ -540,7 +633,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const replacementCode = await store.createBindingCode({
       profileName: "helper",
       collectionId: "collection-delete-replacement",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "replacement-request",
       now
     });
@@ -590,7 +683,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       store.createBindingCode({
         profileName: "helper",
         collectionId: "collection-delete-lifecycle",
-        createdByHhcUserId: "manager",
+        createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
         idempotencyKey: "deleted-collection-request",
         now: completedAt
       })
@@ -672,7 +765,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       store.createBindingCode({
         profileName: "helper",
         collectionId,
-        createdByHhcUserId: "manager",
+        createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
         idempotencyKey: "after-delete"
       })
     ).rejects.toThrow("media_sync_collection_deleted");
@@ -874,7 +967,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const issued = await store.createBindingCode({
       profileName: "helper",
       collectionId: "collection-rollback",
-      createdByHhcUserId: "manager",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
       idempotencyKey: "rollback-code-request"
     });
     const code = issuedCode(issued);
@@ -2000,7 +2093,7 @@ async function bind(store: PostgresMediaSyncStore, collectionId: string, groupId
   const issued = await store.createBindingCode({
     profileName: "helper",
     collectionId,
-    createdByHhcUserId: "manager",
+    createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
     idempotencyKey: `bind-${collectionId}`
   });
   return store.bindWithCode({

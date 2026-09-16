@@ -190,6 +190,31 @@ describe("config", () => {
     });
   });
 
+  it("keeps central audit dispatch dark unless its exact token is configured", () => {
+    expect(loadConfigFromEnv(baseEnv()).audit).toEqual({
+      dispatchEnabled: false,
+      appId: "audit-log",
+      daprHttpPort: 3500
+    });
+    expect(
+      loadConfigFromEnv({
+        ...baseEnv(),
+        AUDIT_DISPATCH_ENABLED: "true",
+        AUDIT_APP_ID: "audit-log-test",
+        AUDIT_TOKEN: "audit-token",
+        DAPR_HTTP_PORT: "3501"
+      }).audit
+    ).toEqual({
+      dispatchEnabled: true,
+      appId: "audit-log-test",
+      token: "audit-token",
+      daprHttpPort: 3501
+    });
+    expect(() => loadConfigFromEnv({ ...baseEnv(), AUDIT_DISPATCH_ENABLED: "true" })).toThrow(
+      "AUDIT_TOKEN is required when audit dispatch is enabled"
+    );
+  });
+
   it("rejects invalid media-sync Dapr app IDs", () => {
     expect(() => loadConfigFromEnv({ ...baseEnv(), ASSET_API_APP_ID: "asset/api" })).toThrow(
       "ASSET_API_APP_ID is invalid"

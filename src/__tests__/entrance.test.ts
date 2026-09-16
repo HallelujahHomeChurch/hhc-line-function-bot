@@ -3024,7 +3024,8 @@ describe("LINE entrance", () => {
       code: "BIND-CODE",
       groupId: "Cmedia",
       groupDisplayName: "影音同工群",
-      boundByLineUserId: undefined
+      boundByLineUserId: undefined,
+      requestId: expect.any(String)
     });
     expect(replyText).toHaveBeenCalledWith(
       "reply-media",
@@ -7277,7 +7278,7 @@ describe.runIf(
           mediaSyncStore.createBindingCode({
             profileName: "helper",
             collectionId,
-            createdByHhcUserId: "manager",
+            createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
             idempotencyKey
           })
         ).resolves.toMatchObject({ status: "issued" });
