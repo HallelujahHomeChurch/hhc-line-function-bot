@@ -106,8 +106,9 @@ export function composeCapabilities(
           ? {
               lineUserId: context.event.source.userId,
               profileName: context.profile.name,
-              authorizeFunctions: (clients.accountAdminClient ?? missingAccountClient())
-                .authorizeFunctions
+              requestId: context.requestId,
+              resolveLineSubject: (clients.accountAdminClient ?? missingAccountClient())
+                .resolveLineSubject
             }
           : undefined
       ),
@@ -343,6 +344,9 @@ function missingAccountClient(): AccountAdminClient {
     },
     async authorizeFunctions() {
       return { bound: false, active: false, administrator: false, allowedFunctions: [] };
+    },
+    async resolveLineSubject() {
+      return { bound: false, active: false };
     },
     async verifyFunctionPermissions() {
       return [];

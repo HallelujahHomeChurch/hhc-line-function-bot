@@ -17,6 +17,16 @@ export interface AuthorizeLineFunctionsInput {
   functionNames: CapabilityName[];
 }
 
+export interface ResolveLineSubjectInput {
+  lineUserId: string;
+  profileName: string;
+}
+
+export type ResolvedLineSubject =
+  | { bound: false; active: false }
+  | { bound: true; active: false }
+  | { bound: true; active: true; subjectId: string };
+
 export interface VerifyLineFunctionPermissionsInput {
   profileName: string;
   functionNames: CapabilityName[];
@@ -85,6 +95,7 @@ export interface AccountAdminClient {
   ): Promise<MediaSyncAclSubjectSearchResult>;
   authorizeAdministrator(lineUserId: string): Promise<{ bound: boolean; allowed: boolean }>;
   authorizeFunctions(input: AuthorizeLineFunctionsInput): Promise<LineFunctionAuthorization>;
+  resolveLineSubject(input: ResolveLineSubjectInput): Promise<ResolvedLineSubject>;
   verifyFunctionPermissions(input: VerifyLineFunctionPermissionsInput): Promise<CapabilityName[]>;
   updateOwnProfile(input: UpdateOwnProfileInput): Promise<{ firstName: string; lastName: string }>;
   createBinding(input: CreateLineBindingInput): Promise<{ bindingUrl: string; expiresAt: string }>;
@@ -191,6 +202,15 @@ export function createAccountAdminClient(options: {
         throw new AccountApiError("account_api_invalid_function_authorization", false);
       }
       return authorization;
+    },
+    async resolveLineSubject(input) {
+      const payload = await post("/priv/account/v1/line/subject", {
+        line_user_id: input.lineUserId,
+        profile_name: input.profileName
+      });
+      const subject = parseResolvedLineSubject(payload);
+      if (!subject) throw new AccountApiError("account_api_invalid_line_subject", false);
+      return subject;
     },
     async verifyFunctionPermissions(input) {
       const payload = await post("/priv/account/v1/line/permissions/verify", {
@@ -367,6 +387,25 @@ function parseFunctionAuthorization(
   const parsedAccount = parseAccountSummary(account);
   if (!parsedAccount) return undefined;
   return { bound, active, administrator, allowedFunctions, account: parsedAccount };
+}
+
+function parseResolvedLineSubject(value: unknown): ResolvedLineSubject | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (
+    !keys.every((key) => ["bound", "active", "subject_id"].includes(key)) ||
+    typeof record.bound !== "boolean" ||
+    typeof record.active !== "boolean"
+  ) {
+    return undefined;
+  }
+  if (!record.active) {
+    if (record.subject_id !== undefined) return undefined;
+    return record.bound ? { bound: true, active: false } : { bound: false, active: false };
+  }
+  if (!record.bound || !validAclSubjectId(record.subject_id)) return undefined;
+  return { bound: true, active: true, subjectId: record.subject_id };
 }
 
 function isCanonicalAllowedFunctions(

@@ -22,7 +22,7 @@ Ingress never selects a semantic function. It validates the event and completes 
 
 ## Profile Runtimes
 
-`src/runtime/main-runtime.ts` owns public Weekly Paper download and Account-bound own-profile updates. It uses direct parsing and the shared action executor. `main` has an empty provider allowlist and must produce zero model and embedding requests.
+`src/runtime/main-runtime.ts` owns protected member Weekly Paper access and Account-bound own-profile updates. Weekly Paper access resolves the bound Account subject before HHC evaluates membership and locale entitlement. It uses direct parsing and the shared action executor. `main` has an empty provider allowlist and must produce zero model and embedding requests.
 
 `src/helper-agent/runtime.ts` owns addressed helper text and reviewed-action resume. For each turn it:
 

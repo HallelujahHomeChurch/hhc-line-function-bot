@@ -2,221 +2,143 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
 
-const ASSET_ID = "0123456789abcdef0123456789abcdef";
+const lineUserId = `U${"a".repeat(32)}`;
+const subjectId = "018f0c1f-18d0-7e81-9f6f-69c456db7003";
 
-function envelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    data: {
-      issueNumber: 1733,
-      issueDate: "2026-08-09",
-      locale: "zh-Hant",
-      title: "第 1733 期週報",
-      subtitle: "HHC Weekly Paper",
-      downloadUrl: `/assets/${ASSET_ID}?filename=1733-%E9%80%B1%E5%A0%B1.pdf`,
-      downloadFileName: "1733-週報.pdf",
-      publishedAt: "2026-08-09T02:00:00.000Z",
-      version: 3,
-      ...overrides
-    },
-    meta: {},
-    error: null
-  };
+function response(data: unknown, status = 200): Response {
+  return Response.json(status === 200 ? { data, meta: {}, error: null } : data, { status });
 }
 
-function response(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" }
-  });
+function access(
+  resolveLineSubject = vi.fn().mockResolvedValue({ bound: true, active: true, subjectId })
+) {
+  return { lineUserId, profileName: "main", requestId: "request-1", resolveLineSubject };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 describe("download_weekly_paper", () => {
-  it("returns the latest public Weekly Paper as a response-only LINE URI action", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response(envelope()));
+  it("resolves the linked subject and checks the protected latest bulletin", async () => {
+    const resolveLineSubject = vi.fn().mockResolvedValue({ bound: true, active: true, subjectId });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(response({ issueNumber: 1733, locale: "zh-Hant" }));
 
-    const result = await downloadWeeklyPaper({}, fetchImpl);
+    const result = await downloadWeeklyPaper({}, fetchImpl, access(resolveLineSubject));
 
+    expect(resolveLineSubject).toHaveBeenCalledWith({ lineUserId, profileName: "main" });
     expect(fetchImpl).toHaveBeenCalledWith(
-      "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method/api/bulletins/latest?locale=zh-Hant",
-      expect.objectContaining({ method: "GET", signal: expect.any(AbortSignal) })
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      executedAction: "download_weekly_paper",
-      agentResult: {
-        status: "success",
-        anchors: {},
-        entities: [],
-        supportedOperations: []
-      },
-      quickReplies: [
-        {
-          action: {
-            type: "uri",
-            uri: `https://www.alive.org.tw/assets/${ASSET_ID}?filename=1733-%E9%80%B1%E5%A0%B1.pdf`
-          }
+      "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method/api/member/bulletins/latest?series=general&locale=zh-Hant",
+      expect.objectContaining({
+        method: "GET",
+        redirect: "error",
+        headers: {
+          "X-HHC-User-ID": subjectId,
+          "X-HHC-Auth-Provider": "account-api",
+          "X-HHC-Request-ID": "request-1"
         }
-      ]
-    });
-    expect(result.replyText).not.toContain("http");
-    const persistableFields = { ...result };
-    delete persistableFields.quickReplies;
-    expect(JSON.stringify(persistableFields)).not.toContain("alive.org.tw");
-  });
-
-  it("accepts the exact-origin absolute URL returned by hhc-web-api", async () => {
-    const downloadUrl =
-      `https://www.alive.org.tw/assets/${ASSET_ID}` + "?filename=1733-%E9%80%B1%E5%A0%B1.pdf";
-    const result = await downloadWeeklyPaper(
-      {},
-      vi.fn<typeof fetch>().mockResolvedValue(response(envelope({ downloadUrl })))
+      })
     );
-
     expect(result).toMatchObject({
       ok: true,
-      agentResult: { status: "success" },
-      quickReplies: [{ action: { type: "uri", uri: downloadUrl } }]
-    });
-  });
-
-  it("uses the exact by-number route and rejects a mismatched issue", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(response(envelope()))
-      .mockResolvedValueOnce(response(envelope({ issueNumber: 1732 })));
-
-    await expect(downloadWeeklyPaper({ issueNumber: 1733 }, fetchImpl)).resolves.toMatchObject({
-      ok: true,
-      agentResult: { status: "success" }
-    });
-    expect(fetchImpl).toHaveBeenNthCalledWith(
-      1,
-      "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method/api/bulletins/by-number/1733?locale=zh-Hant",
-      expect.objectContaining({ method: "GET" })
-    );
-    const mismatch = await downloadWeeklyPaper({ issueNumber: 1733 }, fetchImpl);
-    expect(mismatch).toMatchObject({ ok: true, agentResult: { status: "unavailable" } });
-    expect(mismatch).not.toHaveProperty("quickReplies");
-  });
-
-  it("maps a 404 to not_found and other dependency failures to unavailable", async () => {
-    const notFound = vi.fn<typeof fetch>().mockResolvedValue(response({ error: {} }, 404));
-    const serverError = vi.fn<typeof fetch>().mockResolvedValue(response({ error: {} }, 503));
-
-    const notFoundResult = await downloadWeeklyPaper({}, notFound);
-    const serverErrorResult = await downloadWeeklyPaper({}, serverError);
-    expect(notFoundResult).toMatchObject({ ok: true, agentResult: { status: "not_found" } });
-    expect(serverErrorResult).toMatchObject({
-      ok: true,
-      agentResult: { status: "unavailable" }
-    });
-    expect(notFoundResult).not.toHaveProperty("quickReplies");
-    expect(serverErrorResult).not.toHaveProperty("quickReplies");
-  });
-
-  it("returns the fixed member entry only for a currently authorized linked LINE user", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(response({ error: { code: "bulletin_disabled" } }, 404));
-    const authorizeFunctions = vi.fn().mockResolvedValue({
-      bound: true,
-      active: true,
-      allowedFunctions: ["download_weekly_paper"]
-    });
-
-    const result = await downloadWeeklyPaper({}, fetchImpl, {
-      lineUserId: "U0123456789abcdef0123456789abcdef",
-      profileName: "main",
-      authorizeFunctions
-    });
-
-    expect(authorizeFunctions).toHaveBeenCalledWith({
-      lineUserId: "U0123456789abcdef0123456789abcdef",
-      profileName: "main",
-      functionNames: ["download_weekly_paper"]
-    });
-    expect(result).toMatchObject({
+      replyText: "第 1733 期週報可在會員頁面查看或下載。",
       quickReplies: [
         { action: { type: "uri", uri: "https://www.alive.org.tw/zh-Hant/literature-ministry" } }
-      ]
+      ],
+      agentResult: { status: "success" }
     });
+  });
+
+  it("queries an exact issue only through the protected member list", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(response({ items: [{ issueNumber: 1733, locale: "zh-Hant" }] }));
+
+    await expect(
+      downloadWeeklyPaper({ issueNumber: 1733 }, fetchImpl, access())
+    ).resolves.toMatchObject({
+      agentResult: { status: "success" }
+    });
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method/api/member/bulletins?series=general&locale=zh-Hant&issueNumber=1733&page=1&pageSize=1"
+    );
   });
 
   it.each([
-    { bound: false, active: false, allowedFunctions: [] },
-    { bound: true, active: false, allowedFunctions: ["download_weekly_paper"] },
-    { bound: true, active: true, allowedFunctions: [] }
+    [{ bound: false, active: false }, "請先輸入「登入」連結 HHC 帳號，再查看會員週報。"],
+    [{ bound: true, active: false }, "此帳號目前沒有會員週報存取權。"]
   ])(
-    "does not expose the member entry when current LINE authorization is denied",
-    async (decision) => {
-      const authorizeFunctions = vi.fn().mockResolvedValue(decision);
+    "denies unavailable linked-account states before HHC data access",
+    async (decision, replyText) => {
+      const fetchImpl = vi.fn<typeof fetch>();
       const result = await downloadWeeklyPaper(
         {},
-        vi
-          .fn<typeof fetch>()
-          .mockResolvedValue(response({ error: { code: "bulletin_disabled" } }, 404)),
-        { lineUserId: "U0123456789abcdef0123456789abcdef", profileName: "main", authorizeFunctions }
+        fetchImpl,
+        access(vi.fn().mockResolvedValue(decision))
       );
 
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ replyText, agentResult: { status: "unavailable" } });
       expect(result).not.toHaveProperty("quickReplies");
-      expect(result.replyText).toBe(
-        decision.bound
-          ? "此帳號目前沒有會員週報存取權。"
-          : "請先輸入「登入」連結 HHC 帳號，再查看會員週報。"
-      );
     }
   );
 
-  it("fails closed when member authorization is unavailable", async () => {
+  it("fails closed when Account subject resolution is unavailable", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
     const result = await downloadWeeklyPaper(
       {},
-      vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(response({ error: { code: "bulletin_disabled" } }, 404)),
-      {
-        lineUserId: "U0123456789abcdef0123456789abcdef",
-        profileName: "main",
-        authorizeFunctions: vi.fn().mockRejectedValue(new Error("unavailable"))
-      }
+      fetchImpl,
+      access(vi.fn().mockRejectedValue(new Error("offline")))
     );
-    expect(result.quickReplies).toBeUndefined();
-    expect(result.agentResult).toMatchObject({ status: "unavailable" });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ agentResult: { status: "unavailable" } });
   });
 
-  it("does not query member authorization while public bulletins are available", async () => {
-    const authorizeFunctions = vi.fn();
-    await downloadWeeklyPaper({}, vi.fn<typeof fetch>().mockResolvedValue(response(envelope())), {
-      lineUserId: "U0123456789abcdef0123456789abcdef",
-      profileName: "main",
-      authorizeFunctions
+  it("maps entitlement denial or a missing issue to a non-disclosing result", async () => {
+    const result = await downloadWeeklyPaper(
+      { issueNumber: 1733 },
+      vi.fn<typeof fetch>().mockResolvedValue(response({ error: {} }, 404)),
+      access()
+    );
+
+    expect(result).toMatchObject({
+      replyText: "目前找不到或無法存取這一期週報。",
+      agentResult: { status: "not_found" }
     });
-    expect(authorizeFunctions).not.toHaveBeenCalled();
-  });
-
-  it("rejects Dapr redirects without following Location", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(null, {
-        status: 302,
-        headers: { location: "https://private.example.test/weekly-paper" }
-      })
-    );
-
-    const result = await downloadWeeklyPaper({}, fetchImpl);
-
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(fetchImpl).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ method: "GET", redirect: "error" })
-    );
-    expect(result).toMatchObject({ ok: true, agentResult: { status: "unavailable" } });
     expect(result).not.toHaveProperty("quickReplies");
   });
 
-  it("enforces a hard request timeout", async () => {
+  it.each([
+    ["dependency failure", response({ error: {} }, 503)],
+    ["invalid JSON", new Response("not-json")],
+    ["wrong locale", response({ issueNumber: 1733, locale: "en" })],
+    ["mismatched issue", response({ items: [{ issueNumber: 1732, locale: "zh-Hant" }] })]
+  ])("fails closed for %s", async (_name, upstream) => {
+    const args = _name === "mismatched issue" ? { issueNumber: 1733 } : {};
+    const result = await downloadWeeklyPaper(
+      args,
+      vi.fn<typeof fetch>().mockResolvedValue(upstream),
+      access()
+    );
+    expect(result).toMatchObject({ agentResult: { status: "unavailable" } });
+    expect(result).not.toHaveProperty("quickReplies");
+  });
+
+  it("rejects invalid input before calling dependencies", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const resolveLineSubject = vi.fn();
+    const result = await downloadWeeklyPaper(
+      { issueNumber: 0 },
+      fetchImpl,
+      access(resolveLineSubject)
+    );
+    expect(resolveLineSubject).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ agentResult: { status: "unavailable" } });
+  });
+
+  it("enforces a hard HHC request timeout", async () => {
     vi.useFakeTimers();
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
       (_input, init) =>
@@ -226,82 +148,8 @@ describe("download_weekly_paper", () => {
           });
         })
     );
-
-    const resultPromise = downloadWeeklyPaper({}, fetchImpl);
+    const resultPromise = downloadWeeklyPaper({}, fetchImpl, access());
     await vi.advanceTimersByTimeAsync(3_001);
-
-    await expect(resultPromise).resolves.toMatchObject({
-      ok: true,
-      agentResult: { status: "unavailable" }
-    });
-  });
-
-  it.each([
-    ["invalid JSON", new Response("not-json", { status: 200 })],
-    ["missing envelope", response({ data: null, meta: {}, error: null })],
-    ["non-null envelope error", response({ ...envelope(), error: { code: "failed" } })],
-    ["wrong locale", response(envelope({ locale: "en" }))],
-    ["missing metadata", response(envelope({ publishedAt: "not-a-date" }))]
-  ])("maps malformed public responses to unavailable: %s", async (_name, upstream) => {
-    const result = await downloadWeeklyPaper({}, vi.fn<typeof fetch>().mockResolvedValue(upstream));
-    expect(result).toMatchObject({ ok: true, agentResult: { status: "unavailable" } });
-    expect(result).not.toHaveProperty("quickReplies");
-  });
-
-  it.each([
-    ["zero", 0],
-    ["non-integer", 1733.5],
-    ["above int32", 2_147_483_648]
-  ])("rejects a latest response with an invalid issue number: %s", async (_name, issueNumber) => {
-    const result = await downloadWeeklyPaper(
-      {},
-      vi.fn<typeof fetch>().mockResolvedValue(response(envelope({ issueNumber })))
-    );
-
-    expect(result).toMatchObject({ ok: true, agentResult: { status: "unavailable" } });
-    expect(result).not.toHaveProperty("quickReplies");
-  });
-
-  it("rejects a canonical URL that exceeds LINE's URI action limit", async () => {
-    const downloadUrl = `/assets/${ASSET_ID}?filename=${"a".repeat(1_000)}`;
-
-    const result = await downloadWeeklyPaper(
-      {},
-      vi.fn<typeof fetch>().mockResolvedValue(response(envelope({ downloadUrl })))
-    );
-
-    expect(result).toMatchObject({ ok: true, agentResult: { status: "unavailable" } });
-    expect(result).not.toHaveProperty("quickReplies");
-  });
-
-  it.each([
-    ["external", `https://evil.example/assets/${ASSET_ID}`],
-    ["wrong port", `https://www.alive.org.tw:444/assets/${ASSET_ID}`],
-    ["wrong protocol", `http://www.alive.org.tw/assets/${ASSET_ID}`],
-    ["userinfo", `https://user@www.alive.org.tw/assets/${ASSET_ID}`],
-    ["absolute traversal", `https://www.alive.org.tw/junk/../assets/${ASSET_ID}`],
-    ["absolute encoded traversal", `https://www.alive.org.tw/junk/%2e%2e/assets/${ASSET_ID}`],
-    ["scheme relative", `//evil.example/assets/${ASSET_ID}`],
-    ["legacy", `/api/assets/public/${ASSET_ID}`],
-    ["encoded path", `/assets/%30${ASSET_ID.slice(1)}`],
-    ["traversal", `/assets/${ASSET_ID}/../evil`],
-    ["extra segment", `/assets/${ASSET_ID}/large`],
-    ["uppercase id", `/assets/${ASSET_ID.toUpperCase()}`],
-    ["fragment", `/assets/${ASSET_ID}#private`],
-    ["blank filename", `/assets/${ASSET_ID}?filename=`],
-    ["duplicate filename", `/assets/${ASSET_ID}?filename=a&filename=b`],
-    ["extra query", `/assets/${ASSET_ID}?filename=a&token=secret`]
-  ])("rejects a non-canonical Weekly Paper URL: %s", async (_name, downloadUrl) => {
-    const result = await downloadWeeklyPaper(
-      {},
-      vi.fn<typeof fetch>().mockResolvedValue(response(envelope({ downloadUrl })))
-    );
-
-    expect(result).toMatchObject({
-      ok: true,
-      agentResult: { status: "unavailable" }
-    });
-    expect(result).not.toHaveProperty("quickReplies");
-    expect(JSON.stringify(result)).not.toContain(downloadUrl);
+    await expect(resultPromise).resolves.toMatchObject({ agentResult: { status: "unavailable" } });
   });
 });

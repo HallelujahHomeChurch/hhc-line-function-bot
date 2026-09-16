@@ -68,6 +68,16 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
         allowedFunctions: administrator ? functionNames : []
       };
     },
+    async resolveLineSubject({ lineUserId }) {
+      const active = config.profiles.some((profile) => profile.adminUserId === lineUserId);
+      return active
+        ? {
+            bound: true as const,
+            active: true as const,
+            subjectId: "00000000-0000-4000-8000-000000000000"
+          }
+        : { bound: false as const, active: false as const };
+    },
     async verifyFunctionPermissions({ functionNames }) {
       return functionNames;
     },

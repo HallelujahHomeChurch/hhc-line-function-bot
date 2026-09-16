@@ -31,7 +31,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Destructive admin-action confirmation infrastructure through `/confirm <code>`.
 - Function handlers:
   - `find_ppt_slides`: searches a configured presentation folder, fuzzy-matches `.pptx`, `.ppt`, `.key`, and `.odp` names, and returns 24 hour sharing links.
-  - `download_weekly_paper`: returns a LINE download action for the latest or an explicitly numbered public Weekly Paper through the fixed HHC web API boundary.
+  - `download_weekly_paper`: resolves the bound Account subject, checks the protected HHC member endpoint, and returns the member Weekly Paper entry.
   - `update_own_profile`: collects first and last name in direct chat, previews them, and updates only the linked caller's HHC Account after explicit confirmation.
   - `query_schedule`: one user-facing service-schedule query that selects configured sources without exposing them.
   - `query_knowledge`: searches admin-registered, profile-shared Notion knowledge with grounded hybrid retrieval.

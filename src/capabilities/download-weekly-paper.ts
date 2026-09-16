@@ -6,28 +6,27 @@ import type { AccountAdminClient } from "../account/account-admin-client.js";
 const DAPR_BASE_URL = "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method";
 const PUBLIC_ORIGIN = "https://www.alive.org.tw";
 const REQUEST_TIMEOUT_MS = 3_000;
-const LINE_URI_MAX_LENGTH = 1_000;
 const MAX_ISSUE_NUMBER = 2_147_483_647;
-const ASSET_PATH_PATTERN = /^\/assets\/[a-f0-9]{32}$/u;
 const MEMBER_ENTRY_URI = `${PUBLIC_ORIGIN}/zh-Hant/literature-ministry`;
 
 type MemberAccess = {
   lineUserId: string;
   profileName: string;
-  authorizeFunctions: AccountAdminClient["authorizeFunctions"];
+  requestId?: string;
+  resolveLineSubject: AccountAdminClient["resolveLineSubject"];
 };
 
 export const downloadWeeklyPaperDefinition: FunctionDefinition = {
   name: "download_weekly_paper",
   displayName: "下載週報",
-  shortDescription: "取得最新一期或指定期數的公開週報。",
+  shortDescription: "取得最新一期或指定期數的會員週報。",
   examples: ["下載最新週報", "下載第 1733 期週報"],
   requires: ["hhc_web_api"],
   scope: "profile",
   sideEffectLevel: "read",
   agentCapability: {
     intents: ["下載週報", "最新週報", "週報下載", "期週報", "週報第", "download weekly paper"],
-    semanticDescription: "取得最新一期或指定期數的公開週報下載入口。",
+    semanticDescription: "取得最新一期或指定期數的會員週報入口。",
     operations: []
   },
   allowedSources: ["user"],
@@ -36,7 +35,7 @@ export const downloadWeeklyPaperDefinition: FunctionDefinition = {
   memoryPolicy: { kind: "none" },
   clarificationPrompt: "請輸入「下載最新週報」或指定期數。",
   description:
-    '- download_weekly_paper: get the latest or an explicitly numbered public Weekly Paper. Arguments: {"issueNumber":positive integer optional}.',
+    '- download_weekly_paper: get the latest or an explicitly numbered member Weekly Paper. Arguments: {"issueNumber":positive integer optional}.',
   argumentSchema: downloadWeeklyPaperArgumentsSchema,
   quickReply: { label: "下載週報", command: "下載最新週報" },
   helpText: "下載最新一期週報，或指定期數，例如「下載第 1733 期週報」。"
@@ -49,35 +48,40 @@ export async function downloadWeeklyPaper(
 ): Promise<FunctionExecutionResult> {
   const parsedArguments = downloadWeeklyPaperArgumentsSchema.safeParse(args);
   if (!parsedArguments.success) return unavailableResult();
+  if (!memberAccess) return unavailableResult();
   const issueNumber = parsedArguments.data.issueNumber;
-  const path = issueNumber ? `/api/bulletins/by-number/${issueNumber}` : "/api/bulletins/latest";
+  let subject;
+  try {
+    subject = await memberAccess.resolveLineSubject({
+      lineUserId: memberAccess.lineUserId,
+      profileName: memberAccess.profileName
+    });
+  } catch {
+    return unavailableResult();
+  }
+  if (!subject.bound) return unboundResult();
+  if (!subject.active) return deniedResult();
+  const path = issueNumber
+    ? `/api/member/bulletins?series=general&locale=zh-Hant&issueNumber=${issueNumber}&page=1&pageSize=1`
+    : "/api/member/bulletins/latest?series=general&locale=zh-Hant";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(`${DAPR_BASE_URL}${path}?locale=zh-Hant`, {
+    const response = await fetchImpl(`${DAPR_BASE_URL}${path}`, {
       method: "GET",
+      headers: {
+        "X-HHC-User-ID": subject.subjectId,
+        "X-HHC-Auth-Provider": "account-api",
+        ...(memberAccess.requestId ? { "X-HHC-Request-ID": memberAccess.requestId } : {})
+      },
       redirect: "error",
       signal: controller.signal
     });
-    if (response.status === 404) {
-      const value: unknown = await response.json().catch(() => undefined);
-      if (isRecord(value) && isRecord(value.error) && value.error.code === "bulletin_disabled") {
-        if (memberAccess) return resolveMemberEntry(memberAccess);
-        const replyText = "週報下載目前暫停開放。";
-        return {
-          ok: true,
-          replyText,
-          executedAction: "download_weekly_paper",
-          agentResult: { status: "unavailable", replyText }
-        };
-      }
-      return notFoundResult();
-    }
+    if (response.status === 404) return notFoundResult();
     if (!response.ok) return unavailableResult();
     const value = await response.json().catch(() => undefined);
-    const bulletin = parsePublicBulletin(value, issueNumber);
-    if (!bulletin) return unavailableResult();
-    return successResult(bulletin.issueNumber, bulletin.downloadUri);
+    const authorizedIssue = parseAuthorizedIssueNumber(value, issueNumber);
+    return authorizedIssue ? memberEntryResult(authorizedIssue) : unavailableResult();
   } catch {
     return unavailableResult();
   } finally {
@@ -85,35 +89,8 @@ export async function downloadWeeklyPaper(
   }
 }
 
-async function resolveMemberEntry(access: MemberAccess): Promise<FunctionExecutionResult> {
-  try {
-    const decision = await access.authorizeFunctions({
-      lineUserId: access.lineUserId,
-      profileName: access.profileName,
-      functionNames: ["download_weekly_paper"]
-    });
-    if (
-      decision.bound &&
-      decision.active &&
-      decision.allowedFunctions.includes("download_weekly_paper")
-    )
-      return memberEntryResult();
-    const replyText = decision.bound
-      ? "此帳號目前沒有會員週報存取權。"
-      : "請先輸入「登入」連結 HHC 帳號，再查看會員週報。";
-    return {
-      ok: true,
-      replyText,
-      executedAction: "download_weekly_paper",
-      agentResult: { status: "unavailable", replyText }
-    };
-  } catch {
-    return unavailableResult();
-  }
-}
-
-function memberEntryResult(): FunctionExecutionResult {
-  const replyText = "請登入網站查看會員週報。";
+function memberEntryResult(issueNumber: number): FunctionExecutionResult {
+  const replyText = `第 ${issueNumber} 期週報可在會員頁面查看或下載。`;
   return {
     ok: true,
     replyText,
@@ -135,7 +112,8 @@ function memberEntryResult(): FunctionExecutionResult {
 }
 
 export function createDownloadWeeklyPaperTextMessageHandler(
-  fetchImpl: typeof fetch
+  fetchImpl: typeof fetch,
+  accountClient?: Pick<AccountAdminClient, "resolveLineSubject">
 ): TextMessageHandler {
   return {
     capability: "download_weekly_paper",
@@ -147,8 +125,19 @@ export function createDownloadWeeklyPaperTextMessageHandler(
       /(?:下載|最新|第\s*\d+\s*期).*週報|週報.*(?:下載|最新|第\s*\d+\s*期)/u.test(
         text.normalize("NFKC")
       ),
-    handle: ({ text }) =>
-      downloadWeeklyPaper(weeklyPaperArguments(text), fetchImpl).then((result) => ({
+    handle: ({ text }, { profile, event, requestId }) =>
+      downloadWeeklyPaper(
+        weeklyPaperArguments(text),
+        fetchImpl,
+        accountClient && event.source.userId
+          ? {
+              lineUserId: event.source.userId,
+              profileName: profile.name,
+              requestId,
+              resolveLineSubject: accountClient.resolveLineSubject
+            }
+          : undefined
+      ).then((result) => ({
         ...result,
         executedAction: "download_weekly_paper"
       }))
@@ -174,7 +163,7 @@ function unavailableResult(): FunctionExecutionResult {
 }
 
 function notFoundResult(): FunctionExecutionResult {
-  const replyText = "目前找不到這一期週報。";
+  const replyText = "目前找不到或無法存取這一期週報。";
   return {
     ok: true,
     replyText,
@@ -183,105 +172,49 @@ function notFoundResult(): FunctionExecutionResult {
   };
 }
 
-function successResult(issueNumber: number, downloadUri: string): FunctionExecutionResult {
-  const replyText = `第 ${issueNumber} 期週報已準備好，請點下方按鈕下載。`;
+function unboundResult(): FunctionExecutionResult {
+  const replyText = "請先輸入「登入」連結 HHC 帳號，再查看會員週報。";
   return {
     ok: true,
     replyText,
     executedAction: "download_weekly_paper",
-    quickReplies: [
-      {
-        label: "下載週報",
-        action: { type: "uri", label: "下載週報", uri: downloadUri }
-      }
-    ],
-    agentResult: {
-      status: "success",
-      anchors: {},
-      entities: [],
-      supportedOperations: [],
-      replyText
-    }
+    agentResult: { status: "unavailable", replyText }
   };
 }
 
-function parsePublicBulletin(
+function deniedResult(): FunctionExecutionResult {
+  const replyText = "此帳號目前沒有會員週報存取權。";
+  return {
+    ok: true,
+    replyText,
+    executedAction: "download_weekly_paper",
+    agentResult: { status: "unavailable", replyText }
+  };
+}
+
+function parseAuthorizedIssueNumber(
   value: unknown,
   requestedIssueNumber: number | undefined
-): { issueNumber: number; downloadUri: string } | undefined {
+): number | undefined {
   if (!isRecord(value) || !isRecord(value.meta) || value.error !== null || !isRecord(value.data)) {
     return undefined;
   }
-  const data = value.data;
-  if (
-    !positiveInt(data.issueNumber) ||
-    (requestedIssueNumber !== undefined && data.issueNumber !== requestedIssueNumber) ||
-    data.locale !== "zh-Hant" ||
-    !validDate(data.issueDate) ||
-    !nonBlank(data.title) ||
-    typeof data.subtitle !== "string" ||
-    !nonBlank(data.downloadFileName) ||
-    !validDateTime(data.publishedAt) ||
-    !positiveInt(data.version)
-  ) {
-    return undefined;
+  if (requestedIssueNumber === undefined) {
+    return positiveInt(value.data.issueNumber) && value.data.locale === "zh-Hant"
+      ? value.data.issueNumber
+      : undefined;
   }
-  const downloadUri = canonicalDownloadUri(data.downloadUrl);
-  return downloadUri ? { issueNumber: data.issueNumber, downloadUri } : undefined;
-}
-
-function canonicalDownloadUri(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.includes("#")) return undefined;
-  const rootRelative = value.startsWith("/") && !value.startsWith("//");
-  const exactOriginAbsolute = value.startsWith(`${PUBLIC_ORIGIN}/`);
-  if (!rootRelative && !exactOriginAbsolute) return undefined;
-  const rawPathAndQuery = rootRelative ? value : value.slice(PUBLIC_ORIGIN.length);
-  const question = rawPathAndQuery.indexOf("?");
-  if (question !== -1 && question !== rawPathAndQuery.lastIndexOf("?")) return undefined;
-  const rawPathname = question === -1 ? rawPathAndQuery : rawPathAndQuery.slice(0, question);
-  if (!ASSET_PATH_PATTERN.test(rawPathname)) return undefined;
-  try {
-    const url = new URL(value, PUBLIC_ORIGIN);
-    if (
-      url.origin !== PUBLIC_ORIGIN ||
-      url.protocol !== "https:" ||
-      url.username ||
-      url.password ||
-      url.hash ||
-      url.pathname !== rawPathname
-    ) {
-      return undefined;
-    }
-    const entries = [...url.searchParams.entries()];
-    if (
-      entries.length > 0 &&
-      (entries.length !== 1 || entries[0]?.[0] !== "filename" || !entries[0][1].trim())
-    ) {
-      return undefined;
-    }
-    const uri = url.toString();
-    return uri.length <= LINE_URI_MAX_LENGTH ? uri : undefined;
-  } catch {
-    return undefined;
-  }
+  const items = value.data.items;
+  if (!Array.isArray(items) || items.length !== 1 || !isRecord(items[0])) return undefined;
+  return items[0].issueNumber === requestedIssueNumber && items[0].locale === "zh-Hant"
+    ? requestedIssueNumber
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function nonBlank(value: unknown): value is string {
-  return typeof value === "string" && Boolean(value.trim());
-}
-
 function positiveInt(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= MAX_ISSUE_NUMBER;
-}
-
-function validDate(value: unknown): boolean {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value);
-}
-
-function validDateTime(value: unknown): boolean {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
