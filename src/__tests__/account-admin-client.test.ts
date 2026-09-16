@@ -544,7 +544,12 @@ describe("account admin client", () => {
     { bound: false, active: true },
     { bound: true, active: true },
     { bound: true, active: true, subject_id: "not-a-uuid" },
-    { bound: true, active: false, permission: "bulletin:read" }
+    {
+      bound: true,
+      active: true,
+      subject_id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+      permission: "cms:bulletins:read"
+    }
   ])("rejects a noncanonical LINE subject response", async (payload) => {
     const client = createAccountAdminClient({
       baseUrl: "http://account-api",
