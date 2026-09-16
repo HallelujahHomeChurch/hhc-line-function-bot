@@ -253,6 +253,7 @@ export interface AssetApiClient {
 export interface AssetApiRequestOptions {
   signal?: AbortSignal;
   requestId?: string;
+  actorUserId?: string;
 }
 
 export interface CollectionAclRequestOptions extends AssetApiRequestOptions {
@@ -348,7 +349,8 @@ export function createAssetApiClient(options: {
         headers: {
           ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
           ...toHeaders(init.headers),
-          ...(requestOptions?.requestId ? { "x-hhc-request-id": requestOptions.requestId } : {})
+          ...(requestOptions?.requestId ? { "x-hhc-request-id": requestOptions.requestId } : {}),
+          ...(requestOptions?.actorUserId ? { "x-hhc-actor-id": requestOptions.actorUserId } : {})
         }
       });
     } catch {
@@ -536,7 +538,7 @@ export function createAssetApiClient(options: {
       return requireCollection(await readJson(response));
     },
     async addCollectionAcl(collectionId, input, idempotencyKey, requestOptions) {
-      const { actorUserId, ...options } = requestOptions;
+      const { actorUserId } = requestOptions;
       const response = await request(
         "add_collection_acl",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl`,
@@ -549,12 +551,12 @@ export function createAssetApiClient(options: {
           },
           body: JSON.stringify({ ...input, permission: "read" })
         },
-        options
+        requestOptions
       );
       return requireCollectionAclMutation(await readJson(response));
     },
     async revokeCollectionAcl(collectionId, aclId, idempotencyKey, requestOptions) {
-      const { actorUserId, ...options } = requestOptions;
+      const { actorUserId } = requestOptions;
       const response = await request(
         "revoke_collection_acl",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl/${encodeURIComponent(aclId)}`,
@@ -562,7 +564,7 @@ export function createAssetApiClient(options: {
           method: "DELETE",
           headers: { "idempotency-key": idempotencyKey, "x-hhc-actor-user-id": actorUserId }
         },
-        options
+        requestOptions
       );
       return requireCollectionAclMutation(await readJson(response));
     },
