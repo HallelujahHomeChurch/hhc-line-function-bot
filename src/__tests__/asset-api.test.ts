@@ -288,22 +288,27 @@ describe("asset api client", () => {
       fetcher
     });
 
-    await client.listManagedCollections({ cursor: "cursor-1", limit: 25 }, { requestId: "req-1" });
-    await client.getManagedCollection("collection-1", { requestId: "req-2" });
-    await client.createCollection("Media", "create-1", { requestId: "req-3" });
+    const actorUserId = "018f0c1f-18d0-7e81-9f6f-69c456db7003";
+    await client.listManagedCollections(
+      { cursor: "cursor-1", limit: 25 },
+      { requestId: "req-1", actorUserId }
+    );
+    await client.getManagedCollection("collection-1", { requestId: "req-2", actorUserId });
+    await client.createCollection("Media", "create-1", { requestId: "req-3", actorUserId });
     await client.renameCollection("collection-1", "Renamed", "rename-1", {
-      requestId: "req-4"
+      requestId: "req-4",
+      actorUserId
     });
-    await client.deleteCollection("collection-1", "delete-1", { requestId: "req-5" });
+    await client.deleteCollection("collection-1", "delete-1", { requestId: "req-5", actorUserId });
     await client.addCollectionAcl(
       "collection-1",
       { subjectType: "user", subjectId: acl.subjectId },
       "acl-add-1",
-      { requestId: "req-6", actorUserId: "018f0c1f-18d0-7e81-9f6f-69c456db7003" }
+      { requestId: "req-6", actorUserId }
     );
     await client.revokeCollectionAcl("collection-1", "acl-1", "acl-delete-1", {
       requestId: "req-7",
-      actorUserId: "018f0c1f-18d0-7e81-9f6f-69c456db7003"
+      actorUserId
     });
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
@@ -318,7 +323,9 @@ describe("asset api client", () => {
     expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers)).toEqual(expect.objectContaining({}));
     expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")).toBeNull();
     expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("x-hhc-request-id")).toBe("req-1");
-    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("x-hhc-actor-user-id")).toBeNull();
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("x-hhc-actor-id")).toBe(
+      actorUserId
+    );
     expect(new Headers(fetcher.mock.calls[5]?.[1]?.headers).get("x-hhc-request-id")).toBe("req-6");
     expect(new Headers(fetcher.mock.calls[5]?.[1]?.headers).get("x-hhc-actor-user-id")).toBe(
       "018f0c1f-18d0-7e81-9f6f-69c456db7003"

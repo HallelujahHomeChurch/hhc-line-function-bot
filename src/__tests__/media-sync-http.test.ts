@@ -416,7 +416,8 @@ describe("media sync management HTTP", () => {
 
     expect(response.statusCode).toBe(201);
     expect(assets.issueManagedContentTickets).toHaveBeenCalledWith("collection-1", [itemId], {
-      requestId: "request-1"
+      requestId: "request-1",
+      actorUserId: userId
     });
     await instance.close();
   });
@@ -687,7 +688,8 @@ describe("media sync management HTTP", () => {
     }
 
     expect(assets.createCollection).toHaveBeenCalledWith("Media", "create-1", {
-      requestId: "request-1"
+      requestId: "request-1",
+      actorUserId: userId
     });
     expect(assets.addCollectionAcl).toHaveBeenCalledWith(
       "collection-1",
@@ -837,7 +839,7 @@ describe("media sync management HTTP", () => {
     expect(assets.deleteCollection).toHaveBeenCalledWith(
       "collection-1",
       "media-sync-delete-collection:42b643ca77341fa608146921da51aac2223c49edf3ad34a72a7ff01a3330bef6",
-      { requestId: "request-1" }
+      { requestId: "request-1", actorUserId: userId }
     );
     expect(mediaStore.completeCollectionDeletion).toHaveBeenCalledWith({
       profileName: "helper",
@@ -1024,7 +1026,7 @@ describe("media sync management HTTP", () => {
     expect(response.body).not.toContain("manager-secret");
     expect(assets.listManagedCollections).toHaveBeenCalledWith(
       { cursor: "next", limit: 25 },
-      { requestId: "request-1" }
+      { requestId: "request-1", actorUserId: userId }
     );
     await instance.close();
   });

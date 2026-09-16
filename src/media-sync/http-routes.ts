@@ -55,7 +55,7 @@ export function registerMediaSyncRoutes(
     const auth = requireAuth(request);
     const query = parseListQuery(request.query);
     if (!query || !hasNoBody(request.body)) return sendError(reply, 400, "invalid_request");
-    return run(reply, () => deps.service.listCollections(query, auth.requestId));
+    return run(reply, () => deps.service.listCollections(query, auth.requestId, auth.userId));
   });
 
   app.get(
@@ -93,7 +93,11 @@ export function registerMediaSyncRoutes(
       const body = strictObject(request.body, ["name"]);
       const name = body && validName(body.name) ? body.name.trim() : undefined;
       if (!key || !name) return sendError(reply, 400, "invalid_request");
-      return run(reply, () => deps.service.createCollection(name, key, auth.requestId), 201);
+      return run(
+        reply,
+        () => deps.service.createCollection(name, key, auth.requestId, auth.userId),
+        201
+      );
     }
   );
 
@@ -109,7 +113,13 @@ export function registerMediaSyncRoutes(
         return sendError(reply, 400, "invalid_request");
       }
       return run(reply, () =>
-        deps.service.renameCollection(request.params.collectionId, name, key, auth.requestId)
+        deps.service.renameCollection(
+          request.params.collectionId,
+          name,
+          key,
+          auth.requestId,
+          auth.userId
+        )
       );
     }
   );
@@ -124,7 +134,7 @@ export function registerMediaSyncRoutes(
         return sendError(reply, 400, "invalid_request");
       }
       return run(reply, () =>
-        deps.service.deleteCollection(request.params.collectionId, key, auth.requestId)
+        deps.service.deleteCollection(request.params.collectionId, key, auth.requestId, auth.userId)
       );
     }
   );
@@ -139,7 +149,12 @@ export function registerMediaSyncRoutes(
         return sendError(reply, 400, "invalid_request");
       }
       return run(reply, () =>
-        deps.service.listCollectionItems(request.params.collectionId, query, auth.requestId)
+        deps.service.listCollectionItems(
+          request.params.collectionId,
+          query,
+          auth.requestId,
+          auth.userId
+        )
       );
     }
   );
@@ -164,7 +179,8 @@ export function registerMediaSyncRoutes(
           request.params.collectionId,
           retentionDays,
           key,
-          auth.requestId
+          auth.requestId,
+          auth.userId
         )
       );
     }
@@ -193,7 +209,8 @@ export function registerMediaSyncRoutes(
           request.params.itemId,
           displayName,
           key,
-          auth.requestId
+          auth.requestId,
+          auth.userId
         )
       );
     }
@@ -221,7 +238,8 @@ export function registerMediaSyncRoutes(
           request.params.collectionId,
           { itemIds, retentionExempt },
           key,
-          auth.requestId
+          auth.requestId,
+          auth.userId
         )
       );
     }
@@ -243,7 +261,8 @@ export function registerMediaSyncRoutes(
           request.params.collectionId,
           itemIds,
           key,
-          auth.requestId
+          auth.requestId,
+          auth.userId
         )
       );
     }
@@ -267,7 +286,8 @@ export function registerMediaSyncRoutes(
           deps.service.issueCollectionItemTickets(
             request.params.collectionId,
             itemIds,
-            auth.requestId
+            auth.requestId,
+            auth.userId
           ),
         201
       );
@@ -375,7 +395,8 @@ export function registerMediaSyncRoutes(
             request.params.collectionId,
             auth.userId,
             key,
-            auth.requestId
+            auth.requestId,
+            auth.userId
           ),
         201
       );

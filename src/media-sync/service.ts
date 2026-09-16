@@ -23,7 +23,8 @@ export class MediaSyncManagementService {
 
   async listCollections(
     input: { cursor?: string; limit?: number },
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ): Promise<{
     collections: Array<
       ManagedCollection & {
@@ -34,7 +35,7 @@ export class MediaSyncManagementService {
     cursor?: string;
     hasMore: boolean;
   }> {
-    const page = await this.assets.listManagedCollections(input, { requestId });
+    const page = await this.assets.listManagedCollections(input, { requestId, actorUserId });
     const collections = await Promise.all(
       page.collections.map(async (managed) => {
         const binding = await this.store.findActiveBindingByCollection(managed.collection.id);
@@ -64,26 +65,32 @@ export class MediaSyncManagementService {
     };
   }
 
-  createCollection(name: string, idempotencyKey: string, requestId: string) {
-    return this.assets.createCollection(name, idempotencyKey, { requestId });
+  createCollection(name: string, idempotencyKey: string, requestId: string, actorUserId: string) {
+    return this.assets.createCollection(name, idempotencyKey, { requestId, actorUserId });
   }
 
   listCollectionItems(
     collectionId: string,
     input: { query?: string; cursor?: string; limit?: number },
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ) {
-    return this.assets.listManagedCollectionItems(collectionId, input, { requestId });
+    return this.assets.listManagedCollectionItems(collectionId, input, {
+      requestId,
+      actorUserId
+    });
   }
 
   updateCollectionRetention(
     collectionId: string,
     retentionDays: number,
     idempotencyKey: string,
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ) {
     return this.assets.updateCollectionRetention(collectionId, retentionDays, idempotencyKey, {
-      requestId
+      requestId,
+      actorUserId
     });
   }
 
@@ -92,14 +99,15 @@ export class MediaSyncManagementService {
     itemId: string,
     displayName: string,
     idempotencyKey: string,
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ) {
     return this.assets.renameManagedCollectionItem(
       collectionId,
       itemId,
       displayName,
       idempotencyKey,
-      { requestId }
+      { requestId, actorUserId }
     );
   }
 
@@ -107,10 +115,12 @@ export class MediaSyncManagementService {
     collectionId: string,
     input: { itemIds: string[]; retentionExempt: boolean },
     idempotencyKey: string,
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ) {
     return this.assets.setManagedCollectionItemsRetention(collectionId, input, idempotencyKey, {
-      requestId
+      requestId,
+      actorUserId
     });
   }
 
@@ -118,27 +128,51 @@ export class MediaSyncManagementService {
     collectionId: string,
     itemIds: string[],
     idempotencyKey: string,
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ) {
     return this.assets.deleteManagedCollectionItems(collectionId, itemIds, idempotencyKey, {
-      requestId
+      requestId,
+      actorUserId
     });
   }
 
-  issueCollectionItemTickets(collectionId: string, itemIds: string[], requestId: string) {
-    return this.assets.issueManagedContentTickets(collectionId, itemIds, { requestId });
+  issueCollectionItemTickets(
+    collectionId: string,
+    itemIds: string[],
+    requestId: string,
+    actorUserId: string
+  ) {
+    return this.assets.issueManagedContentTickets(collectionId, itemIds, {
+      requestId,
+      actorUserId
+    });
   }
 
-  renameCollection(collectionId: string, name: string, idempotencyKey: string, requestId: string) {
-    return this.assets.renameCollection(collectionId, name, idempotencyKey, { requestId });
+  renameCollection(
+    collectionId: string,
+    name: string,
+    idempotencyKey: string,
+    requestId: string,
+    actorUserId: string
+  ) {
+    return this.assets.renameCollection(collectionId, name, idempotencyKey, {
+      requestId,
+      actorUserId
+    });
   }
 
-  async deleteCollection(collectionId: string, _idempotencyKey: string, requestId: string) {
+  async deleteCollection(
+    collectionId: string,
+    _idempotencyKey: string,
+    requestId: string,
+    actorUserId: string
+  ) {
     await this.store.beginCollectionDeletion({ profileName: "helper", collectionId });
     const result = await this.assets.deleteCollection(
       collectionId,
       `media-sync-delete-collection:${createHash("sha256").update(collectionId).digest("hex")}`,
-      { requestId }
+      { requestId, actorUserId }
     );
     await this.store.completeCollectionDeletion({ profileName: "helper", collectionId });
     return result;
@@ -174,9 +208,13 @@ export class MediaSyncManagementService {
     collectionId: string,
     userId: string,
     idempotencyKey: string,
-    requestId: string
+    requestId: string,
+    actorUserId: string
   ) {
-    const managed = await this.assets.getManagedCollection(collectionId, { requestId });
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
     if (managed.collection.deletedAt) {
       throw new MediaSyncManagementError("collection_deleted");
     }
