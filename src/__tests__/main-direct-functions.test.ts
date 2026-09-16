@@ -31,18 +31,17 @@ const profile: BotProfileConfig = {
 
 describe("main provider-free direct functions", () => {
   it.each(["下載最新週報", "下載第 1733 期週報"])(
-    "blocks %s when public access is disabled",
+    "blocks %s for an unbound LINE user",
     async (text) => {
-      const fetchImpl = vi
-        .fn()
-        .mockResolvedValue(
-          Response.json({ error: { code: "bulletin_disabled" } }, { status: 404 })
-        );
-      const handler = createDownloadWeeklyPaperTextMessageHandler(fetchImpl);
+      const fetchImpl = vi.fn();
+      const handler = createDownloadWeeklyPaperTextMessageHandler(fetchImpl, {
+        resolveLineSubject: vi.fn().mockResolvedValue({ bound: false, active: false })
+      });
       const result = await handler.handle({ text }, { profile, event, requestId: "disabled" });
-      expect(result.replyText).toBe("週報下載目前暫停開放。");
+      expect(result.replyText).toBe("請先輸入「登入」連結 HHC 帳號，再查看會員週報。");
       expect(result.quickReplies).toBeUndefined();
       expect(result.agentResult).toMatchObject({ status: "unavailable" });
+      expect(fetchImpl).not.toHaveBeenCalled();
     }
   );
 
@@ -50,21 +49,19 @@ describe("main provider-free direct functions", () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       Response.json({
         data: {
-          issueNumber: 1733,
-          locale: "zh-Hant",
-          issueDate: "2026-09-01",
-          title: "週報",
-          subtitle: "",
-          downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
-          downloadFileName: "1733-weekly.pdf",
-          publishedAt: "2026-09-01T00:00:00.000Z",
-          version: 1
+          items: [{ issueNumber: 1733, locale: "zh-Hant" }]
         },
         error: null,
         meta: {}
       })
     );
-    const handler = createDownloadWeeklyPaperTextMessageHandler(fetchImpl);
+    const handler = createDownloadWeeklyPaperTextMessageHandler(fetchImpl, {
+      resolveLineSubject: vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        subjectId: "018f0c1f-18d0-7e81-9f6f-69c456db7003"
+      })
+    });
 
     expect(await handler.matches({ text: "下載第 1733 期週報" }, { profile, event })).toBe(true);
     const weeklyPaperReply = await handler.handle(
@@ -76,7 +73,7 @@ describe("main provider-free direct functions", () => {
     expect(weeklyPaperReply.ok).toBe(true);
     expect(weeklyPaperReply).toMatchObject({
       executedAction: "download_weekly_paper",
-      quickReplies: [expect.objectContaining({ label: "下載週報" })]
+      quickReplies: [expect.objectContaining({ label: "查看會員週報" })]
     });
   });
 

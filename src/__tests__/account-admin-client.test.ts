@@ -515,6 +515,53 @@ describe("account admin client", () => {
     });
   });
 
+  it("resolves only the active subject bound to the main LINE profile", async () => {
+    const subjectId = "018f0c1f-18d0-7e81-9f6f-69c456db7003";
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ bound: true, active: true, subject_id: subjectId }));
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(client.resolveLineSubject({ lineUserId, profileName: "main" })).resolves.toEqual({
+      bound: true,
+      active: true,
+      subjectId
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://account-api/priv/account/v1/line/subject",
+      expect.objectContaining({
+        body: JSON.stringify({ line_user_id: lineUserId, profile_name: "main" })
+      })
+    );
+  });
+
+  it.each([
+    { bound: false, active: false, subject_id: "018f0c1f-18d0-7e81-9f6f-69c456db7003" },
+    { bound: false, active: true },
+    { bound: true, active: true },
+    { bound: true, active: true, subject_id: "not-a-uuid" },
+    {
+      bound: true,
+      active: true,
+      subject_id: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+      permission: "cms:bulletins:read"
+    }
+  ])("rejects a noncanonical LINE subject response", async (payload) => {
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload))
+    });
+
+    await expect(
+      client.resolveLineSubject({ lineUserId, profileName: "main" })
+    ).rejects.toMatchObject({ message: "account_api_invalid_line_subject", retryable: false });
+  });
+
   it.each([
     ["raw email", { account: { display_name: "Ada", masked_email: "ada@example.com", roles: [] } }],
     [

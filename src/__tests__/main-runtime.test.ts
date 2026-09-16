@@ -43,15 +43,35 @@ function input(text: string, eventSource = source) {
 
 describe("main runtime", () => {
   it.each([
-    ["下載最新週報", "/api/bulletins/latest?locale=zh-Hant"],
-    ["下載第 1733 期週報", "/api/bulletins/by-number/1733?locale=zh-Hant"]
-  ])("honors disabled public access for %s", async (text, expectedPath) => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue(Response.json({ error: { code: "bulletin_disabled" } }, { status: 404 }));
+    ["下載最新週報", "/api/member/bulletins/latest?series=general&locale=zh-Hant", false],
+    [
+      "下載第 1733 期週報",
+      "/api/member/bulletins?series=general&locale=zh-Hant&issueNumber=1733",
+      true
+    ]
+  ])("routes %s through protected member access", async (text, expectedPath, numbered) => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      Response.json({
+        data: numbered
+          ? { items: [{ issueNumber: 1733, locale: "zh-Hant" }] }
+          : { issueNumber: 1733, locale: "zh-Hant" },
+        meta: {},
+        error: null
+      })
+    );
     const runtime = createMainRuntime({
       handlers: {
-        download_weekly_paper: (args) => downloadWeeklyPaper(args, fetchImpl)
+        download_weekly_paper: (args) =>
+          downloadWeeklyPaper(args, fetchImpl, {
+            lineUserId: `U${"a".repeat(32)}`,
+            profileName: "main",
+            requestId: "request-1",
+            resolveLineSubject: vi.fn().mockResolvedValue({
+              bound: true,
+              active: true,
+              subjectId: "018f0c1f-18d0-7e81-9f6f-69c456db7003"
+            })
+          })
       },
       sessions: new InMemorySessionStore(),
       jobs: new InMemoryAgentJobStore()
@@ -59,10 +79,9 @@ describe("main runtime", () => {
 
     const result = await runtime.handleTextTurn(input(text));
     expect(result).toMatchObject({
-      replyText: "週報下載目前暫停開放。",
-      agentResult: { status: "unavailable" }
+      replyText: "第 1733 期週報可在會員頁面查看或下載。",
+      agentResult: { status: "success" }
     });
-    expect(result?.quickReplies).toBeUndefined();
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[0]).toEqual(expect.stringContaining(expectedPath));
   });

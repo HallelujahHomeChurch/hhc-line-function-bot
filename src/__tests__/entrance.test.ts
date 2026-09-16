@@ -278,14 +278,7 @@ describe("LINE entrance", () => {
       Response.json({
         data: {
           issueNumber: 1733,
-          locale: "zh-Hant",
-          issueDate: "2026-09-01",
-          title: "週報",
-          subtitle: "",
-          downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
-          downloadFileName: "1733-weekly.pdf",
-          publishedAt: "2026-09-01T00:00:00.000Z",
-          version: 1
+          locale: "zh-Hant"
         },
         error: null,
         meta: {}
@@ -294,7 +287,14 @@ describe("LINE entrance", () => {
     const registries = createTestFunctionRegistries(config, {
       sessionStore: sessions,
       agentJobStore: jobs,
-      fetchImpl
+      fetchImpl,
+      accountAdminClient: {
+        resolveLineSubject: vi.fn().mockResolvedValue({
+          bound: true,
+          active: true,
+          subjectId: "018f0c1f-18d0-7e81-9f6f-69c456db7003"
+        })
+      } as never
     });
     registries.functions.update_own_profile = vi.fn(async (args) => ({
       ok: true,
@@ -4122,7 +4122,7 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).toContain("target=group:Cnew");
   });
 
-  it("keeps public main direct functions provider-free and blocks group events without replying", async () => {
+  it("keeps member main direct functions provider-free and blocks group events without replying", async () => {
     const deepSeekGenerate = vi.fn<TextGenerationProvider["completeText"]>();
     const embedding = vi.fn().mockResolvedValue([[0]]);
     const replyText = vi.fn<LineReplyClient["replyText"]>();
@@ -4134,20 +4134,19 @@ describe("LINE entrance", () => {
           vi.fn().mockResolvedValue(
             Response.json({
               data: {
-                issueNumber: 1733,
-                locale: "zh-Hant",
-                issueDate: "2026-09-01",
-                title: "週報",
-                subtitle: "",
-                downloadUrl: "/assets/0123456789abcdef0123456789abcdef?filename=1733-weekly.pdf",
-                downloadFileName: "1733-weekly.pdf",
-                publishedAt: "2026-09-01T00:00:00.000Z",
-                version: 1
+                items: [{ issueNumber: 1733, locale: "zh-Hant" }]
               },
               error: null,
               meta: {}
             })
-          )
+          ),
+          {
+            resolveLineSubject: vi.fn().mockResolvedValue({
+              bound: true,
+              active: true,
+              subjectId: "018f0c1f-18d0-7e81-9f6f-69c456db7003"
+            })
+          }
         )
       },
       functionRegistry: {

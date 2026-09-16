@@ -1337,6 +1337,11 @@ function allowedAccountClient() {
     }: {
       functionNames: BotProfileConfig["enabledFunctions"];
     }) => ({ bound: true, active: true, administrator: true, allowedFunctions: functionNames }),
+    resolveLineSubject: async () => ({
+      bound: true as const,
+      active: true as const,
+      subjectId: "00000000-0000-4000-8000-000000000000"
+    }),
     verifyFunctionPermissions: async ({
       functionNames
     }: {
