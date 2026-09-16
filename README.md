@@ -350,6 +350,16 @@ Do not commit real `.env` files. In Azure Container Apps, store only real creden
 
 The app assigns a request id to each handled LINE event and includes it in route observer logs, recent route diagnostics, and recent error records. Basic per-source rate limiting is enabled by default:
 
+Media Sync binding-code creation, group binding, and binding removal also commit an exact central Audit event to `audit_outboxes` in the same PostgreSQL transaction as the owned mutation. The separate dispatcher posts only the released `hhc-line-function-bot` catalog fixture through Dapr; existing local access/audit history remains independent. Dispatch is dark by default:
+
+```text
+AUDIT_DISPATCH_ENABLED=false
+AUDIT_APP_ID=audit-log
+# AUDIT_TOKEN is required only when dispatch is enabled.
+```
+
+`AUDIT_TOKEN` is a private caller credential and must never become a human permission, profile capability, or checked-in value. The Admin actor that issues a one-time binding code remains the accountable Account user for the later code-consumption binding event; the LINE user/group identifiers are not copied into central Audit metadata.
+
 - `RATE_LIMIT_ENABLED=true`
 - `RATE_LIMIT_WINDOW_MS=60000`
 - `RATE_LIMIT_MAX_REQUESTS=20`

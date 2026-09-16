@@ -148,6 +148,7 @@ The retired SDK compatibility wrapper, turn-state engine, generic pending/slot/r
 - `REDIS_URL` also moves requester-scoped conversation windows and long-running job results to Redis.
 - Redis rate limiting must use atomic counters, not read-modify-write JSON buckets.
 - PostgreSQL backs managed access principals and audit events when registration is enabled.
+- PostgreSQL also stores the central Media Sync Audit outbox. Binding-code creation, binding creation, and binding removal must enqueue their exact released catalog event in the same transaction; never merge this with local access audit history or synchronously depend on Audit delivery.
 - PostgreSQL backs agent memory when configured. The app creates access and agent memory tables on startup.
 - PostgreSQL also backs the official helper LangGraph checkpointer and the short-lived `agent_sdk_threads` TTL index. Delete expired checkpoint chains; never treat checkpoints as audit logs or durable user memory.
 - PostgreSQL must not store remote provider API keys, access tokens, or refresh tokens. Use it only for policy, registry, audit, and memory/catalog metadata.

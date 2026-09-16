@@ -538,7 +538,6 @@ export function createAssetApiClient(options: {
       return requireCollection(await readJson(response));
     },
     async addCollectionAcl(collectionId, input, idempotencyKey, requestOptions) {
-      const { actorUserId } = requestOptions;
       const response = await request(
         "add_collection_acl",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl`,
@@ -546,8 +545,7 @@ export function createAssetApiClient(options: {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": idempotencyKey,
-            "x-hhc-actor-user-id": actorUserId
+            "idempotency-key": idempotencyKey
           },
           body: JSON.stringify({ ...input, permission: "read" })
         },
@@ -556,13 +554,12 @@ export function createAssetApiClient(options: {
       return requireCollectionAclMutation(await readJson(response));
     },
     async revokeCollectionAcl(collectionId, aclId, idempotencyKey, requestOptions) {
-      const { actorUserId } = requestOptions;
       const response = await request(
         "revoke_collection_acl",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/acl/${encodeURIComponent(aclId)}`,
         {
           method: "DELETE",
-          headers: { "idempotency-key": idempotencyKey, "x-hhc-actor-user-id": actorUserId }
+          headers: { "idempotency-key": idempotencyKey }
         },
         requestOptions
       );

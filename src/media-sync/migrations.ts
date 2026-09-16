@@ -173,6 +173,25 @@ const migrations = [
   create index if not exists media_sync_outbox_claim_idx
   on media_sync_outbox (available_at, claimed_until)
   where completed_at is null
+  `,
+  `
+  create table if not exists audit_outboxes (
+    event_id uuid primary key,
+    payload text not null,
+    payload_hash text not null check (payload_hash ~ '^[0-9a-f]{64}$'),
+    attempts integer not null default 0 check (attempts >= 0),
+    available_at timestamptz not null default now(),
+    claimed_until timestamptz,
+    delivered_at timestamptz,
+    terminal_at timestamptz,
+    last_error_category text,
+    created_at timestamptz not null default now()
+  )
+  `,
+  `
+  create index if not exists audit_outboxes_dispatch_idx
+  on audit_outboxes (available_at, created_at)
+  where delivered_at is null and terminal_at is null
   `
 ];
 

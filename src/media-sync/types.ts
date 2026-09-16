@@ -15,6 +15,7 @@ export type CreateMediaSyncBindingCodeInput = {
   collectionId: string;
   createdByHhcUserId: string;
   idempotencyKey: string;
+  requestId: string;
   now?: Date;
 };
 
@@ -31,6 +32,7 @@ export type BindMediaSyncCodeInput = {
   groupId: string;
   groupDisplayName: string;
   boundByLineUserId?: string;
+  requestId: string;
   now?: Date;
 };
 

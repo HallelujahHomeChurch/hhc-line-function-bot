@@ -367,6 +367,7 @@ export interface AppConfig {
   account?: AccountServiceConfig;
   asset?: AssetServiceConfig;
   mediaSync?: MediaSyncConfig;
+  audit?: AuditConfig;
 }
 
 export interface AccountServiceConfig {
@@ -382,6 +383,13 @@ export interface AssetServiceConfig {
 export interface MediaSyncConfig {
   gatewayCallerAppId: string;
   appApiToken: string;
+}
+
+export interface AuditConfig {
+  dispatchEnabled: boolean;
+  appId: "audit-log" | "audit-log-test";
+  token?: string;
+  daprHttpPort: number;
 }
 
 export interface ObservabilityConfig {

@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 
 import { generateInviteCode } from "../access/registration-invite-code-store.js";
+import { createAuditEvent, type AuditEvent } from "../audit/catalog.js";
 import type {
   BeginCollectionDeletionResult,
   BindMediaSyncCodeInput,
@@ -91,6 +92,14 @@ type PublicationRow = {
   manual_title: string | null;
 };
 
+type AuditOutboxRow = {
+  event_id: string;
+  payload: string | Record<string, unknown>;
+  payload_hash: string;
+  attempts: number;
+  claimed_until: Date | string;
+};
+
 export class PostgresMediaSyncStore {
   private readonly codeFactory: () => string;
   private readonly now: () => Date;
@@ -147,13 +156,14 @@ export class PostgresMediaSyncStore {
       );
       const expiresAt = new Date(now.getTime() + 60 * 60 * 1000);
       const code = this.codeFactory();
+      const bindingCodeId = randomUUID();
       await client.query(
         `insert into media_sync_binding_codes
           (id, profile_name, collection_id, code_hash, created_by_hhc_user_id, expires_at,
            request_key_hash)
          values ($1, $2, $3, $4, $5, $6, $7)`,
         [
-          randomUUID(),
+          bindingCodeId,
           input.profileName,
           input.collectionId,
           hashCode(code),
@@ -161,6 +171,16 @@ export class PostgresMediaSyncStore {
           expiresAt,
           requestKeyHash
         ]
+      );
+      await enqueueAudit(
+        client,
+        createAuditEvent({
+          action: "media_sync.binding_code.create",
+          resourceId: bindingCodeId,
+          actor: { type: "user", id: input.createdByHhcUserId },
+          requestId: input.requestId ?? randomUUID(),
+          now
+        })
       );
       await client.query("commit");
       return { status: "issued", code, expiresAt: expiresAt.toISOString() };
@@ -232,6 +252,7 @@ export class PostgresMediaSyncStore {
         await client.query("rollback");
         return { status: "collection_already_bound" };
       }
+      const bindingId = randomUUID();
       const binding = await client.query<BindingRow>(
         `insert into media_sync_bindings
           (id, profile_name, group_id, collection_id, group_display_name,
@@ -239,7 +260,7 @@ export class PostgresMediaSyncStore {
          values ($1, $2, $3, $4, $5, $6, $7, $8)
          returning *`,
         [
-          randomUUID(),
+          bindingId,
           input.profileName,
           input.groupId,
           codeRow.collection_id,
@@ -254,6 +275,16 @@ export class PostgresMediaSyncStore {
          set consumed_at=$2, consumed_group_id=$3
          where id=$1`,
         [codeRow.id, now, input.groupId]
+      );
+      await enqueueAudit(
+        client,
+        createAuditEvent({
+          action: "media_sync.binding.create",
+          resourceId: bindingId,
+          actor: { type: "user", id: codeRow.created_by_hhc_user_id },
+          requestId: input.requestId ?? randomUUID(),
+          now
+        })
       );
       await client.query("commit");
       return { status: "bound", binding: mapBinding(binding.rows[0]!) };
@@ -367,6 +398,8 @@ export class PostgresMediaSyncStore {
   async completeCollectionDeletion(input: {
     profileName: string;
     collectionId: string;
+    actor: { type: "user"; id: string } | { type: "service"; id: "hhc-line-function-bot" };
+    requestId: string;
     now?: Date;
   }): Promise<boolean> {
     const client = await this.pool.connect();
@@ -383,11 +416,24 @@ export class PostgresMediaSyncStore {
         await client.query("rollback");
         return false;
       }
-      await client.query(
+      const disabled = await client.query<{ id: string }>(
         `update media_sync_bindings set disabled_at=$2
-         where collection_id=$1 and disabled_at is null`,
+         where collection_id=$1 and disabled_at is null
+         returning id`,
         [input.collectionId, now]
       );
+      for (const binding of disabled.rows) {
+        await enqueueAudit(
+          client,
+          createAuditEvent({
+            action: "media_sync.binding.delete",
+            resourceId: binding.id,
+            actor: input.actor ?? { type: "service", id: "hhc-line-function-bot" },
+            requestId: input.requestId ?? randomUUID(),
+            now
+          })
+        );
+      }
       await client.query("commit");
       return true;
     } catch (error) {
@@ -396,6 +442,117 @@ export class PostgresMediaSyncStore {
     } finally {
       client.release();
     }
+  }
+
+  async claimAuditOutbox(input: { limit: number; leaseMs: number }): Promise<
+    Array<{
+      eventId: string;
+      payload: string;
+      payloadHash: string;
+      attempts: number;
+      claimedUntil: string;
+    }>
+  > {
+    assertOutboxLease(input.limit, input.leaseMs);
+    const result = await this.pool.query<AuditOutboxRow>(
+      `with claimed as (
+         select event_id from audit_outboxes
+         where delivered_at is null and terminal_at is null
+           and available_at <= now()
+           and (claimed_until is null or claimed_until <= now())
+         order by available_at, created_at
+         limit $1 for update skip locked
+       )
+       update audit_outboxes outbox
+       set attempts=outbox.attempts+1,
+           claimed_until=now()+($2::bigint * interval '1 millisecond')
+       from claimed where outbox.event_id=claimed.event_id
+       returning outbox.event_id, outbox.payload, outbox.payload_hash,
+                 outbox.attempts, outbox.claimed_until`,
+      [input.limit, input.leaseMs]
+    );
+    return result.rows.map((row) => ({
+      eventId: row.event_id,
+      payload: typeof row.payload === "string" ? row.payload : JSON.stringify(row.payload),
+      payloadHash: row.payload_hash,
+      attempts: row.attempts,
+      claimedUntil: timestamp(row.claimed_until)
+    }));
+  }
+
+  async markAuditDelivered(input: {
+    eventId: string;
+    payloadHash: string;
+    attempts: number;
+    claimedUntil: string;
+  }): Promise<boolean> {
+    const result = await this.pool.query(
+      `update audit_outboxes set delivered_at=now(), claimed_until=null,
+         last_error_category=null
+       where event_id=$1 and payload_hash=$2 and attempts=$3 and claimed_until is not null
+         and delivered_at is null and terminal_at is null`,
+      [input.eventId, input.payloadHash, input.attempts]
+    );
+    return Boolean(result.rowCount);
+  }
+
+  async markAuditRetry(
+    input: { eventId: string; payloadHash: string; attempts: number; claimedUntil: string },
+    delayMs: number,
+    reason: string
+  ): Promise<boolean> {
+    assertRetry(delayMs, reason);
+    const result = await this.pool.query(
+      `update audit_outboxes set claimed_until=null,
+         available_at=now()+($4::bigint * interval '1 millisecond'),
+         last_error_category=$3
+       where event_id=$1 and payload_hash=$2 and attempts=$5 and claimed_until is not null
+         and delivered_at is null and terminal_at is null`,
+      [input.eventId, input.payloadHash, reason, delayMs, input.attempts]
+    );
+    return Boolean(result.rowCount);
+  }
+
+  async markAuditTerminal(
+    input: { eventId: string; payloadHash: string; attempts: number; claimedUntil: string },
+    reason: string
+  ): Promise<boolean> {
+    assertRetry(0, reason);
+    const result = await this.pool.query(
+      `update audit_outboxes set terminal_at=now(), claimed_until=null,
+         last_error_category=$3
+       where event_id=$1 and payload_hash=$2 and attempts=$4 and claimed_until is not null
+         and delivered_at is null and terminal_at is null`,
+      [input.eventId, input.payloadHash, reason, input.attempts]
+    );
+    return Boolean(result.rowCount);
+  }
+
+  async auditOutboxStats(): Promise<{
+    pendingCount: number;
+    oldestPendingSeconds: number;
+    deadLetterCount: number;
+  }> {
+    const result = await this.pool.query<{
+      pending_count: string;
+      oldest_pending_seconds: string;
+      dead_letter_count: string;
+    }>(
+      `select
+         count(*) filter (where delivered_at is null and terminal_at is null
+           and (claimed_until is null or claimed_until <= now()))::text pending_count,
+         coalesce(greatest(extract(epoch from (now()-min(created_at) filter
+           (where delivered_at is null and terminal_at is null
+             and (claimed_until is null or claimed_until <= now())))),0),0)::text oldest_pending_seconds,
+         count(*) filter (where terminal_at is not null)::text dead_letter_count
+       from audit_outboxes`
+    );
+    const row = result.rows[0]!;
+    return {
+      pendingCount: Number(row.pending_count),
+      oldestPendingSeconds: Number(row.oldest_pending_seconds),
+      deadLetterCount: Number(row.dead_letter_count)
+    };
   }
 
   async createIngest(
@@ -1447,6 +1604,34 @@ function hashRequestIdentity(
       "utf8"
     )
     .digest("hex");
+}
+
+async function enqueueAudit(client: PoolClient, event: AuditEvent): Promise<void> {
+  const payload = JSON.stringify(event);
+  const payloadHash = createHash("sha256").update(payload).digest("hex");
+  await client.query(
+    `insert into audit_outboxes (event_id, payload, payload_hash)
+     values ($1, $2, $3)`,
+    [event.eventId, payload, payloadHash]
+  );
+}
+
+function assertOutboxLease(limit: number, leaseMs: number): void {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("audit_outbox_limit_invalid");
+  }
+  assertLease(leaseMs);
+}
+
+function assertRetry(delayMs: number, reason: string): void {
+  if (
+    !Number.isSafeInteger(delayMs) ||
+    delayMs < 0 ||
+    delayMs > 21_600_000 ||
+    !/^[a-z0-9_]{1,64}$/u.test(reason)
+  ) {
+    throw new Error("audit_outbox_result_invalid");
+  }
 }
 
 async function rollback(client: PoolClient): Promise<void> {

@@ -154,7 +154,8 @@ async function handleMediaSyncCommand(
     code: args[0].trim(),
     groupId,
     groupDisplayName: groupDisplayName.trim(),
-    boundByLineUserId: userId
+    boundByLineUserId: userId,
+    requestId: input.productContext.requestId
   });
   if (result.status === "bound") return { ok: true, replyText: "已綁定這個群組的媒體資料夾。" };
   if (result.status === "group_already_bound")

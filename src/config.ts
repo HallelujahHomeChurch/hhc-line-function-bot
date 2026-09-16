@@ -311,6 +311,15 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     throw new Error("OBSERVABILITY_HMAC_KEY is required in production");
   }
   const catalogSyncDependencies = loadCatalogSyncDependencies(env);
+  const auditDispatchEnabled = readBool(env.AUDIT_DISPATCH_ENABLED, false);
+  const auditAppId = env.AUDIT_APP_ID?.trim() || "audit-log";
+  const auditToken = env.AUDIT_TOKEN?.trim();
+  if (auditAppId !== "audit-log" && auditAppId !== "audit-log-test") {
+    throw new Error("AUDIT_APP_ID is invalid");
+  }
+  if (auditDispatchEnabled && !auditToken) {
+    throw new Error("AUDIT_TOKEN is required when audit dispatch is enabled");
+  }
   return {
     serviceName: env.SERVICE_NAME || "hhc-line-function-bot",
     host: env.HOST || "0.0.0.0",
@@ -400,6 +409,12 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
         "MEDIA_SYNC_GATEWAY_CALLER_APP_ID"
       ),
       appApiToken: env.APP_API_TOKEN ?? ""
+    },
+    audit: {
+      dispatchEnabled: auditDispatchEnabled,
+      appId: auditAppId,
+      ...(auditToken ? { token: auditToken } : {}),
+      daprHttpPort: readInt(env.DAPR_HTTP_PORT, 3500)
     }
   };
 }
