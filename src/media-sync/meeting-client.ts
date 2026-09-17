@@ -45,7 +45,7 @@ export class MeetingWindowClient {
   private async refresh(now: Date): Promise<void> {
     const lead = this.options.leadMs ?? 5 * 60_000;
     const tail = this.options.tailMs ?? 10 * 60_000;
-    const url = new URL("/priv/meeting-sync-windows", this.options.baseUrl);
+    const url = new URL("/priv/operations/sync-windows", this.options.baseUrl);
     url.searchParams.set("from", new Date(now.getTime() - tail).toISOString());
     url.searchParams.set("to", new Date(now.getTime() + lead).toISOString());
     const response = await (this.options.fetcher ?? fetch)(url, {

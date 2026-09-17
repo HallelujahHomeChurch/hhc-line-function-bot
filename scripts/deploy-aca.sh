@@ -39,7 +39,7 @@ done
 : "${CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs}"
 : "${ATTACHMENT_JOB_IDENTITY_NAME:=hhc-line-bot-attachment}"
 : "${ASSET_API_CONTAINER_APP_NAME:=asset-api}"
-: "${MEETING_API_CONTAINER_APP_NAME:=hhc-web-api}"
+: "${MEETING_API_CONTAINER_APP_NAME:=operations-api}"
 : "${AZURE_OPENAI_EMBEDDING_RESOURCE_NAME:=bible-text-embedding-resource}"
 : "${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:=text-embedding-3-small}"
 : "${AZURE_OPENAI_EMBEDDING_API_VERSION:=2024-10-21}"
