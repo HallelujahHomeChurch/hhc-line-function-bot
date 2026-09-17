@@ -285,7 +285,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   });
   const registries = composeCapabilities(config, {
     readMeetingOccurrences: createMeetingOccurrenceReader({
-      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method"
+      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/operations-api/method"
     }),
     accountAdminClient,
     graph,

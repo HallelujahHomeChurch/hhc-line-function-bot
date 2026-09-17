@@ -30,7 +30,7 @@ export function createMeetingOccurrenceReader(options: {
     const to = new Date(from.getTime() + 90 * 86_400_000);
     const query = new URLSearchParams({ from: fromKey, to: to.toISOString() });
     const response = await (options.fetcher ?? fetch)(
-      `${options.baseUrl.replace(/\/$/u, "")}/priv/meeting-occurrences?${query}`,
+      `${options.baseUrl.replace(/\/$/u, "")}/priv/operations/meeting-occurrences?${query}`,
       { signal: AbortSignal.timeout(3_000) }
     );
     if (!response.ok) throw new Error("meeting_occurrences_unavailable");
