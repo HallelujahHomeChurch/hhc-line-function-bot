@@ -4,15 +4,15 @@ import { MeetingWindowClient, meetingAccessTokenScope } from "../media-sync/meet
 
 describe("MeetingWindowClient", () => {
   it("coalesces refreshes, caches for 60 seconds, and derives the 5/10 minute warm union", async () => {
-    const fetcher = vi.fn().mockImplementation(
-      async () =>
-        new Response(
-          JSON.stringify({
-            data: [{ startsAt: "2026-09-06T01:00:00.000Z", endsAt: "2026-09-06T02:00:00.000Z" }]
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        )
-    );
+    const fetcher = vi.fn().mockImplementation(async (input: URL | RequestInfo) => {
+      expect(new URL(String(input)).pathname).toBe("/priv/operations/sync-windows");
+      return new Response(
+        JSON.stringify({
+          data: [{ startsAt: "2026-09-06T01:00:00.000Z", endsAt: "2026-09-06T02:00:00.000Z" }]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
     const client = new MeetingWindowClient({
       baseUrl: "https://meeting.internal",
       getAccessToken: async () => "token",

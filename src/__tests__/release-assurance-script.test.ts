@@ -745,7 +745,7 @@ else if (command("containerapp", "show") && name === "fixture-bot" && query === 
 else if (command("identity", "show") && query === "id") output("/identities/fixture-jobs");
 else if (command("identity", "show")) output({ id: "/identities/fixture-attachment", clientId: "attachment-client", principalId: "attachment-principal" });
 else if (command("containerapp", "show") && name === "asset-api") output("asset.internal.example");
-else if (command("containerapp", "show") && name === "hhc-web-api") output("meeting.internal.example");
+else if (command("containerapp", "show") && name === "operations-api") output("meeting.internal.example");
 else if (command("storage", "account", "show")) output("/storage/fixture-attachments");
 else if (command("acr", "show")) output("/acr/fixture");
 else if (command("role", "assignment", "list")) output("1");

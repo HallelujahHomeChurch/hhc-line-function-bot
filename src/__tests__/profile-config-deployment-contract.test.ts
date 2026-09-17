@@ -25,6 +25,12 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).not.toContain("APP_API_TOKEN\n            secretRef:");
   });
 
+  it("resolves direct sync-window reads from Operations", () => {
+    expect(readProjectFile("scripts/deploy-aca.sh")).toContain(
+      "MEETING_API_CONTAINER_APP_NAME:=operations-api"
+    );
+  });
+
   it("requires a manual LINE Provider checkpoint and the bounded Account preflight", () => {
     const workflow = readProjectFile(".github/workflows/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
