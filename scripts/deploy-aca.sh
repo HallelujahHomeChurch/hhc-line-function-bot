@@ -183,6 +183,29 @@ acr_id="$(az acr show \
   --query id \
   --output tsv \
   --only-show-errors)"
+bot_principal_id="$(az containerapp show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CONTAINER_APP_NAME}" \
+  --query "identity.principalId" \
+  --output tsv \
+  --only-show-errors)"
+audit_vault_id="$(az keyvault show \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "alive-vault" \
+  --query id \
+  --output tsv \
+  --only-show-errors)"
+audit_token_scope="${audit_vault_id}/secrets/audit-log-production-token-line-bot"
+if [[ -z "${bot_principal_id}" || -z "${audit_vault_id}" \
+  || "$(az role assignment list \
+    --scope "${audit_token_scope}" \
+    --assignee-object-id "${bot_principal_id}" \
+    --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" \
+    --output tsv \
+    --only-show-errors)" != "1" ]]; then
+  echo "LINE bot identity is missing Key Vault Secrets User on its Audit token" >&2
+  exit 1
+fi
 if [[ "$(az role assignment list \
   --scope "${attachment_queue_scope}" \
   --assignee-object-id "${attachment_job_principal_id}" \

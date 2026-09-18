@@ -139,8 +139,12 @@ describe("production profile configuration deployment contract", () => {
       expect(manifest).toContain(`- name: ${envName}\n            secretRef: ${placeholder}`);
       expect(manifest.match(new RegExp(placeholder, "g"))).toHaveLength(1);
     }
-    expect(manifest.match(/secretRef:/g)).toHaveLength(secretRefs.length);
-    expect(manifest).not.toMatch(/\n {4}secrets:/);
+    expect(manifest.match(/secretRef:/g)).toHaveLength(secretRefs.length + 1);
+    expect(manifest).toContain(`    secrets:
+      - name: audit-token
+        keyVaultUrl: https://alive-vault.vault.azure.net/secrets/audit-log-production-token-line-bot
+        identity: system`);
+    expect(manifest).toContain("- name: AUDIT_TOKEN\n            secretRef: audit-token");
     expect(manifest).not.toContain("PLACEHOLDER_SET_IN_AZURE_CONTAINER_APP_SECRETS");
     expect(manifest).not.toContain("attachment-scan-queue-connection-string");
     expect(manifest).not.toContain("clamav-signature-storage-key");
@@ -456,12 +460,20 @@ describe("production profile configuration deployment contract", () => {
     );
   });
 
-  it("keeps central audit dispatch dark in the production manifest", () => {
+  it("enables central audit dispatch through a Key Vault reference", () => {
     const bot = readProjectFile("aca.containerapp.yaml");
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
 
-    expect(bot).not.toContain("AUDIT_DISPATCH_ENABLED");
-    expect(bot).not.toContain("AUDIT_APP_ID");
-    expect(bot).not.toContain("AUDIT_TOKEN");
+    expect(bot).toContain('- name: AUDIT_DISPATCH_ENABLED\n            value: "true"');
+    expect(bot).toContain("- name: AUDIT_APP_ID\n            value: audit-log");
+    expect(bot).toContain("- name: AUDIT_TOKEN\n            secretRef: audit-token");
+    expect(bot).toContain(
+      "keyVaultUrl: https://alive-vault.vault.azure.net/secrets/audit-log-production-token-line-bot"
+    );
+    expect(deployment).toContain(
+      'audit_token_scope="${audit_vault_id}/secrets/audit-log-production-token-line-bot"'
+    );
+    expect(deployment).toContain("Key Vault Secrets User");
   });
 
   it("keeps the normalized permission policy required in the runtime profile type", () => {

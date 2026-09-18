@@ -5,6 +5,10 @@ properties:
   managedEnvironmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
   configuration:
     activeRevisionsMode: Single
+    secrets:
+      - name: audit-token
+        keyVaultUrl: https://alive-vault.vault.azure.net/secrets/audit-log-production-token-line-bot
+        identity: system
     dapr:
       enabled: true
       appId: hhc-line-function-bot
@@ -120,6 +124,12 @@ properties:
             value: "20"
           - name: LAST_ERRORS_MAX_ENTRIES
             value: "20"
+          - name: AUDIT_DISPATCH_ENABLED
+            value: "true"
+          - name: AUDIT_APP_ID
+            value: audit-log
+          - name: AUDIT_TOKEN
+            secretRef: audit-token
           - name: GRAPH_TENANT_ID
             value: PLACEHOLDER_GRAPH_TENANT_ID
           - name: GRAPH_CLIENT_ID
