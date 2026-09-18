@@ -742,12 +742,14 @@ const output = (value) => process.stdout.write(typeof value === "string" ? value
 if (command("acr", "manifest", "show-metadata")) output("sha256:${"1".repeat(64)}");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "properties.managedEnvironmentId") output("/subscriptions/fixture/managedEnvironments/fixture-env");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "location") output("eastasia");
+else if (command("containerapp", "show") && name === "fixture-bot" && query === "identity.principalId") output("bot-principal");
 else if (command("identity", "show") && query === "id") output("/identities/fixture-jobs");
 else if (command("identity", "show")) output({ id: "/identities/fixture-attachment", clientId: "attachment-client", principalId: "attachment-principal" });
 else if (command("containerapp", "show") && name === "asset-api") output("asset.internal.example");
 else if (command("containerapp", "show") && name === "operations-api") output("meeting.internal.example");
 else if (command("storage", "account", "show")) output("/storage/fixture-attachments");
 else if (command("acr", "show")) output("/acr/fixture");
+else if (command("keyvault", "show")) output("/vaults/fixture");
 else if (command("role", "assignment", "list")) output("1");
 else if (command("ad", "sp", "show")) output({ id: "asset-sp", appRoles: [{ id: "asset-role", value: "Asset.Invoke", isEnabled: true, allowedMemberTypes: ["Application"] }] });
 else if (command("rest")) output({ value: [{ appRoleId: "asset-role", resourceId: "asset-sp" }] });

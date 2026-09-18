@@ -360,6 +360,8 @@ AUDIT_APP_ID=audit-log
 
 `AUDIT_TOKEN` is a private caller credential and must never become a human permission, profile capability, or checked-in value. The Admin actor that issues a one-time binding code remains the accountable Account user for the later code-consumption binding event; the LINE user/group identifiers are not copied into central Audit metadata.
 
+Production enables this dispatcher only through the bot system identity's single `Key Vault Secrets User` grant on its own Audit token; the token value is never copied into the manifest or release configuration.
+
 - `RATE_LIMIT_ENABLED=true`
 - `RATE_LIMIT_WINDOW_MS=60000`
 - `RATE_LIMIT_MAX_REQUESTS=20`
