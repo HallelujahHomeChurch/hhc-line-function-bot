@@ -440,6 +440,13 @@ az containerapp secret set \
   --output none
 unset attachment_scan_storage_key attachment_scan_queue_sas attachment_scan_queue_url
 
+az containerapp secret set \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CONTAINER_APP_NAME}" \
+  --secrets "audit-token=keyvaultref:https://alive-vault.vault.azure.net/secrets/audit-log-production-token-line-bot,identityref:system" \
+  --only-show-errors \
+  --output none
+
 searxng_secret_key="$(openssl rand -hex 32)"
 SEARXNG_MANIFEST_TEMPLATE="${searxng_manifest_template}" \
 SEARXNG_SETTINGS_TEMPLATE="${searxng_settings_template}" \

@@ -5,10 +5,6 @@ properties:
   managedEnvironmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
   configuration:
     activeRevisionsMode: Single
-    secrets:
-      - name: audit-token
-        keyVaultUrl: https://alive-vault.vault.azure.net/secrets/audit-log-production-token-line-bot
-        identity: system
     dapr:
       enabled: true
       appId: hhc-line-function-bot
