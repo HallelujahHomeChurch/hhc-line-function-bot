@@ -295,7 +295,7 @@ export async function runMediaSyncWorker(
                 mimeType: file.contentType ?? sourceWork.ingest.expectedMime,
                 maxSizeBytes: file.sizeBytes
               },
-              { signal: options.signal }
+              { requestId: workId, signal: options.signal }
             );
             await requireEligibilityOrCompensateAsset(
               created.asset,
@@ -325,7 +325,7 @@ export async function runMediaSyncWorker(
                   checksumSha256: file.checksumSha256,
                   mimeType: file.contentType ?? sourceWork.ingest.expectedMime
                 },
-                { signal: options.signal }
+                { requestId: workId, signal: options.signal }
               );
               options.onTiming?.("upload_completed", workId, {
                 assetId: current.id,
@@ -470,7 +470,7 @@ export async function runMediaSyncWorker(
           sourceRevision
         },
         idempotencyKey("media-sync-collection", work.ingest.sourceKey),
-        { signal: options.signal }
+        { requestId: workId, signal: options.signal }
       );
       const eligibility = await eligibilityAfterExternal(workId, claim.claimedUntil, options.store);
       const finalized =
@@ -604,7 +604,7 @@ async function runDeleteWorker(
           publication.destinationId,
           publication.targetId,
           idempotencyKey("media-sync-delete-collection", workId),
-          { signal: options.signal }
+          { requestId: workId, signal: options.signal }
         );
       } catch (error) {
         if (!isAssetAlreadyGone(error)) {
@@ -651,7 +651,10 @@ async function runDeleteWorker(
         return retryDelete(work, claim.claimedUntil, now, options);
       }
       try {
-        await options.assets.softDelete(ownedAsset.id, { signal: options.signal });
+        await options.assets.softDelete(ownedAsset.id, {
+          requestId: workId,
+          signal: options.signal
+        });
       } catch (error) {
         if (!isAssetAlreadyGone(error)) {
           return retryDelete(work, claim.claimedUntil, now, options);
@@ -749,7 +752,7 @@ async function publishManualResource(input: {
     await options.assets.grantServiceRead(
       input.asset.id,
       idempotencyKey("media-sync-manual-read", input.work.ingest.sourceKey),
-      { signal: options.signal }
+      { requestId: input.work.ingest.workId, signal: options.signal }
     );
   } catch (error) {
     return isPermanentAssetApiError(error)
@@ -988,7 +991,7 @@ async function compensateOwnedAsset(
   options: { store: AssetStageStore; assets: AssetApiClient }
 ): Promise<boolean> {
   try {
-    await options.assets.softDelete(asset.id);
+    await options.assets.softDelete(asset.id, { requestId: workId });
     return true;
   } catch {
     await options.store.rememberOwnedAsset({
@@ -1010,7 +1013,8 @@ async function compensateOccurrence(
     await options.assets.deleteCollectionItem(
       collectionId,
       occurrenceId,
-      idempotencyKey("media-sync-collection-compensate", workId)
+      idempotencyKey("media-sync-collection-compensate", workId),
+      { requestId: workId }
     );
     return true;
   } catch {
