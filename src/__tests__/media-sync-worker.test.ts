@@ -118,7 +118,7 @@ describe("media sync source stage", () => {
     expect(one.assets.complete).toHaveBeenCalledWith(
       "asset-1",
       expect.objectContaining({ sizeBytes: 1 }),
-      { signal: undefined }
+      { requestId: "work-opaque-1", signal: undefined }
     );
 
     const megabyte = Buffer.alloc(1024 * 1024);
@@ -130,7 +130,7 @@ describe("media sync source stage", () => {
     expect(boundary.assets.complete).toHaveBeenCalledWith(
       "asset-1",
       expect.objectContaining({ sizeBytes: MEDIA_SYNC_MAX_BYTES }),
-      { signal: undefined }
+      { requestId: "work-opaque-1", signal: undefined }
     );
   }, 20_000);
 
@@ -240,7 +240,7 @@ describe("media sync Asset and collection stage", () => {
         mimeType: "video/mp4",
         maxSizeBytes: 5
       },
-      { signal: undefined }
+      { requestId: "work-opaque-1", signal: undefined }
     );
     expect(fixture.store.loadClaimedWork).toHaveBeenCalledTimes(5);
     expect(fixture.store.persistCompletedAsset).toHaveBeenCalledWith({
@@ -326,11 +326,14 @@ describe("media sync Asset and collection stage", () => {
         status: "permanent_failure",
         reason
       });
-      expect(fixture.assets.softDelete).toHaveBeenCalledWith("asset-1");
+      expect(fixture.assets.softDelete).toHaveBeenCalledWith("asset-1", {
+        requestId: "work-opaque-1"
+      });
       expect(fixture.assets.deleteCollectionItem).toHaveBeenCalledWith(
         "collection-1",
         "occurrence-actual-1",
-        expect.stringMatching(/^media-sync-collection-compensate:/u)
+        expect.stringMatching(/^media-sync-collection-compensate:/u),
+        { requestId: "work-opaque-1" }
       );
       expect(fixture.publisher.tombstonePublishedResource).toHaveBeenCalledWith(
         "resource-actual-1",
@@ -396,7 +399,7 @@ describe("media sync Asset and collection stage", () => {
         sourceRevision: "a".repeat(64)
       },
       expect.stringMatching(/^media-sync-collection:/u),
-      { signal: undefined }
+      { requestId: "work-opaque-1", signal: undefined }
     );
     expect(fixture.store.finalizeCollectionPublication).toHaveBeenCalledWith({
       workId: "work-opaque-1",
@@ -601,7 +604,9 @@ describe("media sync Asset and collection stage", () => {
       status: "permanent_failure",
       reason: "asset_policy_rejected"
     });
-    expect(fixture.assets.softDelete).toHaveBeenNthCalledWith(1, "asset-1");
+    expect(fixture.assets.softDelete).toHaveBeenNthCalledWith(1, "asset-1", {
+      requestId: "work-opaque-1"
+    });
     expect(fixture.store.rememberOwnedAsset).toHaveBeenCalledWith({
       workId: "work-opaque-1",
       assetId: "asset-1",
@@ -615,6 +620,7 @@ describe("media sync Asset and collection stage", () => {
       status: "completed"
     });
     expect(fixture.assets.softDelete).toHaveBeenNthCalledWith(2, "asset-1", {
+      requestId: "work-opaque-1",
       signal: undefined
     });
     expect(fixture.store.completeDeleteWork).toHaveBeenCalledOnce();
@@ -632,7 +638,8 @@ describe("media sync Asset and collection stage", () => {
     expect(fixture.assets.deleteCollectionItem).toHaveBeenCalledWith(
       "collection-1",
       "occurrence-actual-1",
-      expect.stringMatching(/^media-sync-collection-compensate:/u)
+      expect.stringMatching(/^media-sync-collection-compensate:/u),
+      { requestId: "work-opaque-1" }
     );
     expect(fixture.store.rememberExternalHandle).not.toHaveBeenCalled();
   });
@@ -666,7 +673,9 @@ describe("media sync Asset and collection stage", () => {
     await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "contention"
     });
-    expect(fixture.assets.softDelete).toHaveBeenCalledWith("asset-1");
+    expect(fixture.assets.softDelete).toHaveBeenCalledWith("asset-1", {
+      requestId: "work-opaque-1"
+    });
 
     const failedCompensation = createAssetFixture();
     failedCompensation.assets.createUpload.mockResolvedValue({
@@ -740,6 +749,11 @@ describe("media sync Asset and collection stage", () => {
 
     expect(fixture.line.getMessageContentStream).not.toHaveBeenCalled();
     expect(fixture.assets.createUpload).not.toHaveBeenCalled();
+    expect(fixture.assets.grantServiceRead).toHaveBeenCalledWith(
+      "asset-1",
+      expect.stringMatching(/^media-sync-manual-read:/u),
+      { requestId: "work-opaque-1", signal: undefined }
+    );
     expect(fixture.assets.download).toHaveBeenCalledTimes(1);
     expect(fixture.publisher.publishVerifiedResource).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -939,14 +953,17 @@ describe("media sync tombstone deletion", () => {
       "collection-1",
       "occurrence-actual-1",
       expect.stringMatching(/^media-sync-delete-collection:/u),
-      { signal: undefined }
+      { requestId: "work-opaque-1", signal: undefined }
     );
     expect(fixture.publisher.tombstonePublishedResource).toHaveBeenCalledWith(
       "resource-actual-1",
       new Date("2026-08-16T00:00:00.000Z")
     );
     expect(fixture.assets.get).toHaveBeenCalledWith("asset-1", { signal: undefined });
-    expect(fixture.assets.softDelete).toHaveBeenCalledWith("asset-1", { signal: undefined });
+    expect(fixture.assets.softDelete).toHaveBeenCalledWith("asset-1", {
+      requestId: "work-opaque-1",
+      signal: undefined
+    });
     expect(fixture.store.completeDeleteWork).toHaveBeenCalledWith({
       workId: "work-opaque-1",
       expectedClaimedUntil: fixture.claim.claimedUntil
