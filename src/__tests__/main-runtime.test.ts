@@ -115,6 +115,56 @@ describe("main runtime", () => {
     expect(querySchedule).not.toHaveBeenCalled();
   });
 
+  it("collects one nickname and requires explicit confirmation", async () => {
+    const update = vi.fn<FunctionHandler>(async (args) => ({
+      ok: true,
+      writePhase: args.confirm === true ? "commit" : "preview",
+      replyText: String(args.nickname)
+    }));
+    const runtime = createMainRuntime({
+      handlers: { update_own_profile: update },
+      sessions: new InMemorySessionStore(),
+      jobs: new InMemoryAgentJobStore(),
+      idFactory: () => "nickname-review"
+    });
+    const turn = (text: string) => ({ ...input(text), nicknameWriteEnabled: () => true });
+    expect((await runtime.handleTextTurn(turn("修改暱稱")))?.replyText).toContain("暱稱");
+    expect(update).not.toHaveBeenCalled();
+    expect((await runtime.handleTextTurn(turn("小睿")))?.writePhase).toBe("preview");
+    expect(update).toHaveBeenLastCalledWith({ nickname: "小睿" }, expect.anything());
+    await runtime.handleTextTurn(turn("確認"));
+    expect(update).toHaveBeenLastCalledWith({ nickname: "小睿", confirm: true }, expect.anything());
+  });
+
+  it("invalidates collected fields and previews when the server changes write mode", async () => {
+    let nicknameEnabled = false;
+    const update = vi.fn<FunctionHandler>(async () => ({
+      ok: true,
+      writePhase: "preview",
+      replyText: "preview"
+    }));
+    const runtime = createMainRuntime({
+      handlers: { update_own_profile: update },
+      sessions: new InMemorySessionStore(),
+      jobs: new InMemoryAgentJobStore(),
+      idFactory: () => "mode-review"
+    });
+    const turn = (text: string) => ({
+      ...input(text),
+      nicknameWriteEnabled: () => nicknameEnabled
+    });
+    await runtime.handleTextTurn(turn("/profile"));
+    nicknameEnabled = true;
+    expect((await runtime.handleTextTurn(turn("Old given name")))?.replyText).toContain("重新");
+    expect(update).not.toHaveBeenCalled();
+    await runtime.handleTextTurn(turn("/profile"));
+    await runtime.handleTextTurn(turn("New alias"));
+    nicknameEnabled = false;
+    await runtime.handleTextTurn(turn("確認"));
+    expect(update).toHaveBeenCalledOnce();
+    expect(update.mock.calls[0]?.[0]).toEqual({ nickname: "New alias" });
+  });
+
   it("collects name slots before creating a reviewed update", async () => {
     const sessions = new InMemorySessionStore();
     const jobs = new InMemoryAgentJobStore();

@@ -267,6 +267,59 @@ function providerFreeMainConfig(): AppConfig {
 }
 
 describe("LINE entrance", () => {
+  it("passes current Account nickname capability through signed main turns and confirmation", async () => {
+    const config = providerFreeMainConfig();
+    const main = config.profiles[0]!;
+    main.enabledFunctions = ["update_own_profile"];
+    main.permissionRequiredFunctions = ["update_own_profile"];
+    const update = vi.fn(async (args: Record<string, unknown>) => ({
+      ok: true,
+      replyText: String(args.nickname),
+      writePhase: args.confirm === true ? ("commit" as const) : ("preview" as const)
+    }));
+    const sessions = new InMemorySessionStore();
+    const jobs = new InMemoryAgentJobStore();
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const runtime = createMainRuntime({ handlers: { update_own_profile: update }, sessions, jobs });
+    const app = createApp(config, {
+      sessionStore: sessions,
+      agentJobStore: jobs,
+      profileRuntime: runtime,
+      createLineReplyClient: () => ({ replyText }),
+      accountAdminClient: {
+        authorizeFunctions: vi.fn(async () => ({
+          bound: true,
+          active: true,
+          administrator: false,
+          allowedFunctions: ["update_own_profile" as const],
+          nicknameWriteEnabled: true
+        }))
+      }
+    });
+    for (const [index, text] of ["/profile", "小睿", "確認"].entries()) {
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `nickname-${index}`,
+        replyToken: `reply-${index}`,
+        source: { type: "user", userId: "Uadmin" },
+        message: { type: "text", text, id: String(index) }
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: main.webhookPath,
+            payload: body,
+            headers: signedHeaders(body, main.channelSecret)
+          })
+        ).statusCode
+      ).toBe(200);
+    }
+    expect(replyText.mock.calls[0]?.[1]).toContain("暱稱");
+    expect(update).toHaveBeenLastCalledWith({ nickname: "小睿", confirm: true }, expect.anything());
+    await app.close();
+  });
+
   it("lets the production-composed main runtime exclusively own Weekly Paper interruption", async () => {
     const config = providerFreeMainConfig();
     const main = config.profiles[0]!;

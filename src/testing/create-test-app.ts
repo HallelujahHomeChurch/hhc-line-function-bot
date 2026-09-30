@@ -90,8 +90,10 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     async finalizeBinding() {
       return { status: "completed" as const };
     },
-    async updateOwnProfile({ firstName, lastName }) {
-      return { firstName, lastName };
+    async updateOwnProfile(input) {
+      return input.nickname !== undefined
+        ? { nickname: input.nickname, firstName: "", lastName: "" }
+        : { firstName: input.firstName, lastName: input.lastName };
     }
   };
   const suppliedAccountAdminClient = overrides.accountAdminClient;

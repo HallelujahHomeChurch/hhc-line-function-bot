@@ -32,14 +32,19 @@ export interface VerifyLineFunctionPermissionsInput {
   functionNames: CapabilityName[];
 }
 
-export interface UpdateOwnProfileInput {
-  lineUserId: string;
-  profileName: string;
+export type UpdateOwnProfileInput = { lineUserId: string; profileName: string } & (
+  | { nickname: string; firstName?: never; lastName?: never }
+  | { nickname?: never; firstName: string; lastName: string }
+);
+
+export interface OwnProfileResult {
+  nickname?: string;
   firstName: string;
   lastName: string;
 }
 
 export interface LineFunctionAuthorization {
+  nicknameWriteEnabled?: boolean;
   bound: boolean;
   active: boolean;
   administrator: boolean;
@@ -97,7 +102,7 @@ export interface AccountAdminClient {
   authorizeFunctions(input: AuthorizeLineFunctionsInput): Promise<LineFunctionAuthorization>;
   resolveLineSubject(input: ResolveLineSubjectInput): Promise<ResolvedLineSubject>;
   verifyFunctionPermissions(input: VerifyLineFunctionPermissionsInput): Promise<CapabilityName[]>;
-  updateOwnProfile(input: UpdateOwnProfileInput): Promise<{ firstName: string; lastName: string }>;
+  updateOwnProfile(input: UpdateOwnProfileInput): Promise<OwnProfileResult>;
   createBinding(input: CreateLineBindingInput): Promise<{ bindingUrl: string; expiresAt: string }>;
   finalizeBinding(input: FinalizeLineBindingInput): Promise<{ status: LineBindingTerminalStatus }>;
 }
@@ -230,8 +235,9 @@ export function createAccountAdminClient(options: {
       const payload = await post("/priv/account/v1/line/profile", {
         line_user_id: input.lineUserId,
         profile_name: input.profileName,
-        first_name: input.firstName,
-        last_name: input.lastName
+        ...(input.nickname !== undefined
+          ? { nickname: input.nickname }
+          : { first_name: input.firstName, last_name: input.lastName })
       });
       const profile = parseOwnProfileResult(payload);
       if (!profile) {
@@ -339,17 +345,36 @@ function validAclSubjectText(value: unknown, maxBytes: number): value is string 
   );
 }
 
-function parseOwnProfileResult(
-  value: unknown
-): { firstName: string; lastName: string } | undefined {
-  if (!isExactRecord(value, ["first_name", "last_name", "updated_at"])) return undefined;
-  const { first_name: firstName, last_name: lastName, updated_at: updatedAt } = value;
-  return validProfileName(firstName) &&
-    validProfileName(lastName) &&
-    typeof updatedAt === "string" &&
-    Number.isFinite(Date.parse(updatedAt))
-    ? { firstName, lastName }
-    : undefined;
+function parseOwnProfileResult(value: unknown): OwnProfileResult | undefined {
+  if (!isExactRecord(value, ["nickname", "first_name", "last_name", "updated_at"], ["nickname"]))
+    return undefined;
+  const { nickname, first_name: firstName, last_name: lastName, updated_at: updatedAt } = value;
+  const nicknamePresent = Object.hasOwn(value, "nickname");
+  if (nicknamePresent && !validNickname(nickname)) return undefined;
+  if (
+    typeof firstName !== "string" ||
+    typeof lastName !== "string" ||
+    (!nicknamePresent && (!validProfileName(firstName) || !validProfileName(lastName))) ||
+    (nicknamePresent &&
+      ((firstName !== "" && !validProfileName(firstName)) ||
+        (lastName !== "" && !validProfileName(lastName)))) ||
+    typeof updatedAt !== "string" ||
+    !Number.isFinite(Date.parse(updatedAt))
+  )
+    return undefined;
+  return { ...(nicknamePresent ? { nickname: nickname as string } : {}), firstName, lastName };
+}
+
+function validNickname(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    Array.from(value).length <= 511 &&
+    !/\p{Cc}|[\uD800-\uDFFF]/u.test(value) &&
+    !Array.from(value).some(
+      (character) => /\p{Cf}/u.test(character) && character !== "\u200c" && character !== "\u200d"
+    )
+  );
 }
 
 function validProfileName(value: unknown): value is string {
@@ -366,10 +391,32 @@ function parseFunctionAuthorization(
   value: unknown,
   requestedFunctions: readonly CapabilityName[]
 ): LineFunctionAuthorization | undefined {
-  if (!isExactRecord(value, ["bound", "active", "administrator", "allowed_functions", "account"])) {
+  if (
+    !isExactRecord(
+      value,
+      [
+        "bound",
+        "active",
+        "administrator",
+        "allowed_functions",
+        "account",
+        "nickname_write_enabled"
+      ],
+      ["nickname_write_enabled"]
+    )
+  ) {
     return undefined;
   }
-  const { bound, active, administrator, allowed_functions: allowedFunctions, account } = value;
+  const {
+    bound,
+    active,
+    administrator,
+    allowed_functions: allowedFunctions,
+    account,
+    nickname_write_enabled: nicknameWriteEnabled
+  } = value;
+  if (Object.hasOwn(value, "nickname_write_enabled") && typeof nicknameWriteEnabled !== "boolean")
+    return undefined;
   if (
     typeof bound !== "boolean" ||
     typeof active !== "boolean" ||
@@ -386,7 +433,16 @@ function parseFunctionAuthorization(
   }
   const parsedAccount = parseAccountSummary(account);
   if (!parsedAccount) return undefined;
-  return { bound, active, administrator, allowedFunctions, account: parsedAccount };
+  return {
+    bound,
+    active,
+    administrator,
+    allowedFunctions,
+    account: parsedAccount,
+    ...(nicknameWriteEnabled === undefined
+      ? {}
+      : { nicknameWriteEnabled: nicknameWriteEnabled as boolean })
+  };
 }
 
 function parseResolvedLineSubject(value: unknown): ResolvedLineSubject | undefined {
@@ -428,8 +484,8 @@ function parseAccountSummary(value: unknown): LineFunctionAuthorization["account
   if (
     typeof displayName !== "string" ||
     displayName.trim() !== displayName ||
-    displayName.length === 0 ||
-    displayName.length > 160 ||
+    Array.from(displayName).length > 511 ||
+    /[\uD800-\uDFFF]/u.test(displayName) ||
     typeof maskedEmail !== "string" ||
     !isMaskedEmail(maskedEmail) ||
     !Array.isArray(roles) ||
@@ -448,13 +504,16 @@ function isMaskedEmail(value: string): boolean {
 
 function isExactRecord(
   value: unknown,
-  allowedKeys: readonly string[]
+  allowedKeys: readonly string[],
+  optionalKeys: readonly string[] = []
 ): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const keys = Object.keys(value);
   return (
     keys.every((key) => allowedKeys.includes(key)) &&
-    allowedKeys.filter((key) => key !== "account").every((key) => keys.includes(key))
+    allowedKeys
+      .filter((key) => key !== "account" && !optionalKeys.includes(key))
+      .every((key) => keys.includes(key))
   );
 }
 

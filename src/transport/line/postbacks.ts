@@ -142,6 +142,7 @@ export async function handleAgentTextTurnWithLongJob(input: {
   configuredFunctions?: readonly CapabilityName[];
   authorizeFunctions?(functionNames: readonly CapabilityName[]): Promise<readonly CapabilityName[]>;
   accountAdministrator?(): boolean;
+  nicknameWriteEnabled?(): boolean;
   completeResult?(result: FunctionExecutionResult): Promise<FunctionExecutionResult>;
 }): Promise<FunctionExecutionResult | undefined> {
   const turnPromise = input.runtime
@@ -155,7 +156,8 @@ export async function handleAgentTextTurnWithLongJob(input: {
       authorizeFunctions: input.authorizeFunctions
         ? async (names) => [...(await input.authorizeFunctions!(names))]
         : undefined,
-      accountAdministrator: input.accountAdministrator
+      accountAdministrator: input.accountAdministrator,
+      nicknameWriteEnabled: input.nicknameWriteEnabled
     })
     .then((result) => (result && input.completeResult ? input.completeResult(result) : result));
   return handleAgentOperationWithLongJob({

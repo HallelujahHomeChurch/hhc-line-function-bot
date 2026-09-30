@@ -928,6 +928,7 @@ async function handleWebhook(
                     authorizeFunctions: async (names) => [
                       ...(await turnAccountAuthorization.allowedFunctions(names))
                     ],
+                    nicknameWriteEnabled: turnAccountAuthorization.nicknameWriteEnabled,
                     accountAdministrator: turnAccountAuthorization.administrator,
                     reviewId: review.reviewId,
                     resultJobId: review.resultJobId,
@@ -1442,6 +1443,7 @@ async function handleWebhook(
       authorizeFunctions: async (names: CapabilityName[]) => [
         ...(await turnAccountAuthorization.allowedFunctions(names))
       ],
+      nicknameWriteEnabled: turnAccountAuthorization.nicknameWriteEnabled,
       accountAdministrator: turnAccountAuthorization.administrator
     };
     const researchOutcome = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
@@ -2803,6 +2805,7 @@ function createTurnFunctionAuthorizer(
   state(functionNames: readonly CapabilityName[]): Promise<FunctionAuthorizationState>;
   allowedFunctions(functionNames: readonly CapabilityName[]): Promise<readonly CapabilityName[]>;
   administrator(): boolean;
+  nicknameWriteEnabled(): boolean;
 } {
   let authorization: Promise<FunctionAuthorizationState> | undefined;
   let resolvedState: FunctionAuthorizationState | undefined;
@@ -2857,6 +2860,12 @@ function createTurnFunctionAuthorizer(
               getFunctionDefinition(functionName)?.sideEffectLevel !== "read"
         )
       ];
+    },
+    nicknameWriteEnabled() {
+      return (
+        resolvedState?.available === true &&
+        resolvedState.authorization.nicknameWriteEnabled === true
+      );
     },
     administrator() {
       return Boolean(

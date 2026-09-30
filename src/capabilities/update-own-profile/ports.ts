@@ -1,7 +1,10 @@
-import type { UpdateOwnProfileInput } from "../../account/account-admin-client.js";
+import type {
+  UpdateOwnProfileInput,
+  OwnProfileResult
+} from "../../account/account-admin-client.js";
 
 export interface UpdateOwnProfileClient {
-  updateOwnProfile(input: UpdateOwnProfileInput): Promise<{ firstName: string; lastName: string }>;
+  updateOwnProfile(input: UpdateOwnProfileInput): Promise<OwnProfileResult>;
 }
 
 export interface UpdateOwnProfileDependencies {

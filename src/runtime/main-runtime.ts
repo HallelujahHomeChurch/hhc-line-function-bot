@@ -155,14 +155,19 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
         if (pending) await options.sessions.delete(pending.id);
         return { ok: true, replyText: "已取消這次操作。" };
       }
+      const nicknameEnabled = input.nicknameWriteEnabled?.() === true;
+      if (pending && (pending.nicknameWriteEnabled === true) !== nicknameEnabled) {
+        await options.sessions.delete(pending.id);
+        return { ok: true, replyText: "帳戶資料設定已更新，請重新輸入 /profile。" };
+      }
       const args = normalizeFunctionArguments(
         "update_own_profile",
-        pending ? applyProfileUpdateAnswer(pending.arguments, text) : {},
+        pending ? applyProfileUpdateAnswer(pending.arguments, text, nicknameEnabled) : {},
         { text }
       );
       if (pending) await options.sessions.delete(pending.id);
       const context = handlerContext(authorizedInput);
-      const clarification = await collectProfileUpdateSlot(args, context);
+      const clarification = await collectProfileUpdateSlot(args, context, nicknameEnabled);
       if (clarification) return clarification;
       return createUpdateReview(authorizedInput, args, context);
     },
@@ -258,10 +263,14 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
 
   async function collectProfileUpdateSlot(
     args: JsonRecord,
-    context: FunctionHandlerContext
+    context: FunctionHandlerContext,
+    nicknameEnabled: boolean
   ): Promise<FunctionExecutionResult | undefined> {
-    const missing =
-      typeof args.firstName !== "string"
+    const missing = nicknameEnabled
+      ? typeof args.nickname !== "string"
+        ? "nickname"
+        : undefined
+      : typeof args.firstName !== "string"
         ? "firstName"
         : typeof args.lastName !== "string"
           ? "lastName"
@@ -270,6 +279,7 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
     await options.sessions.set({
       id: `${context.requestId ?? idFactory()}:profile-update`,
       type: "profile_update",
+      nicknameWriteEnabled: nicknameEnabled,
       profileName: "main",
       requesterUserId: context.event.source.userId,
       source: context.event.source,
@@ -280,13 +290,22 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
       ok: true,
       replyText: withRequesterDisplayName(
         context,
-        missing === "firstName" ? "請輸入名字（First name）。" : "請輸入姓氏（Last name）。"
+        missing === "nickname"
+          ? "請輸入暱稱。"
+          : missing === "firstName"
+            ? "請輸入名字（First name）。"
+            : "請輸入姓氏（Last name）。"
       )
     };
   }
 }
 
-function applyProfileUpdateAnswer(args: JsonRecord, answer: string): JsonRecord {
+function applyProfileUpdateAnswer(
+  args: JsonRecord,
+  answer: string,
+  nicknameEnabled: boolean
+): JsonRecord {
+  if (nicknameEnabled) return { nickname: answer };
   if (typeof args.firstName !== "string") return { ...args, firstName: answer };
   if (typeof args.lastName !== "string") return { ...args, lastName: answer };
   return args;
@@ -318,6 +337,7 @@ function mainPolicyKey(input: ProfileTurnInput): string {
     .update(
       JSON.stringify({
         profile: input.profile.name,
+        nicknameWriteEnabled: input.nicknameWriteEnabled?.() === true,
         configured: [...(input.configuredFunctions ?? input.profile.enabledFunctions)].sort()
       })
     )
@@ -346,7 +366,9 @@ function matchesWeeklyPaper(text: string): boolean {
 }
 
 function matchesOwnProfileUpdate(text: string): boolean {
-  return /^(?:\/profile|修改個人資料|修改姓名|更新姓名)$/u.test(text.normalize("NFKC").trim());
+  return /^(?:\/profile|修改個人資料|修改姓名|更新姓名|修改暱稱|更新暱稱)$/u.test(
+    text.normalize("NFKC").trim()
+  );
 }
 
 async function existingResult(
