@@ -31,6 +31,7 @@ export interface SelectionSession {
 export interface ProfileUpdateSession {
   id: string;
   type: "profile_update";
+  nicknameWriteEnabled?: boolean;
   profileName: "main";
   requesterUserId: string;
   source: LineSource;

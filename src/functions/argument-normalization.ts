@@ -121,6 +121,7 @@ export function normalizeFunctionArguments(
     case "update_own_profile":
       return {
         ...args,
+        ...(typeof args.nickname === "string" ? { nickname: args.nickname.trim() } : {}),
         ...(typeof args.firstName === "string" ? { firstName: args.firstName.trim() } : {}),
         ...(typeof args.lastName === "string" ? { lastName: args.lastName.trim() } : {})
       };

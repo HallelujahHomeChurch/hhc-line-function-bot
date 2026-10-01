@@ -1,3 +1,4 @@
+import type { UpdateOwnProfileInput } from "../account/account-admin-client.js";
 import { writeFileSync } from "node:fs";
 import { ChatDeepSeek } from "@langchain/deepseek";
 import { MemorySaver } from "@langchain/langgraph";
@@ -1347,10 +1348,10 @@ function allowedAccountClient() {
     }: {
       functionNames: BotProfileConfig["enabledFunctions"];
     }) => functionNames,
-    updateOwnProfile: async ({ firstName, lastName }: { firstName: string; lastName: string }) => ({
-      firstName,
-      lastName
-    }),
+    updateOwnProfile: async (input: UpdateOwnProfileInput) =>
+      input.nickname !== undefined
+        ? { nickname: input.nickname, firstName: "", lastName: "" }
+        : { firstName: input.firstName, lastName: input.lastName },
     createBinding: async () => ({
       bindingUrl: "https://example.invalid/bind",
       expiresAt: "2026-09-04T01:00:00.000Z"

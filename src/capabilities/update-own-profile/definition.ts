@@ -3,16 +3,16 @@ import type { FunctionDefinition } from "../catalog.js";
 
 export const updateOwnProfileDefinition: FunctionDefinition = {
   name: "update_own_profile",
-  displayName: "修改姓名",
-  shortDescription: "修改目前連結 HHC 帳戶的姓名。",
-  examples: ["/profile", "修改個人資料", "修改姓名", "更新姓名"],
+  displayName: "修改暱稱",
+  shortDescription: "修改目前連結 HHC 帳戶的暱稱。",
+  examples: ["/profile", "修改個人資料", "修改暱稱", "更新暱稱", "修改姓名", "更新姓名"],
   requires: ["session"],
   scope: "profile",
   sideEffectLevel: "write",
   agentCapability: {
-    intents: ["/profile", "修改個人資料", "修改姓名", "更新姓名"],
+    intents: ["/profile", "修改個人資料", "修改暱稱", "更新暱稱", "修改姓名", "更新姓名"],
     exactIntents: true,
-    semanticDescription: "修改目前已連結 HHC 帳戶的名字與姓氏。",
+    semanticDescription: "修改目前已連結 HHC 帳戶的暱稱；由伺服器決定相容的欄位。",
     operations: []
   },
   allowedSources: ["user"],
@@ -22,8 +22,8 @@ export const updateOwnProfileDefinition: FunctionDefinition = {
       argument: "firstName",
       missingWhen: "blank",
       genericRequest: {
-        phrases: ["/profile", "修改個人資料", "修改姓名", "更新姓名"],
-        clearArguments: ["firstName", "lastName", "confirm", "cancel"]
+        phrases: ["/profile", "修改個人資料", "修改暱稱", "更新暱稱", "修改姓名", "更新姓名"],
+        clearArguments: ["nickname", "firstName", "lastName", "confirm", "cancel"]
       },
       prompt: "請輸入名字（First name）。"
     },
@@ -40,6 +40,6 @@ export const updateOwnProfileDefinition: FunctionDefinition = {
   description:
     '- update_own_profile: update only the linked caller\'s first and last name after preview and explicit confirmation. Arguments: {"firstName":"given name","lastName":"family name"}.',
   argumentSchema: updateOwnProfileArgumentsSchema,
-  quickReply: { label: "修改姓名", command: "/profile" },
-  helpText: "修改已連結 HHC 帳戶的姓名，預覽確認後才會更新。"
+  quickReply: { label: "修改暱稱", command: "/profile" },
+  helpText: "修改已連結 HHC 帳戶的暱稱，預覽確認後才會更新。"
 };

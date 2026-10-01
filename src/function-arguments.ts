@@ -29,13 +29,31 @@ const profileNameSchema = z
     }
   });
 
+const nicknameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .superRefine((value, context) => {
+    if (
+      Array.from(value).length > 511 ||
+      /\p{Cc}|[\uD800-\uDFFF]/u.test(value) ||
+      Array.from(value).some(
+        (character) => /\p{Cf}/u.test(character) && character !== "\u200c" && character !== "\u200d"
+      )
+    ) {
+      context.addIssue({ code: "custom", message: "invalid nickname" });
+    }
+  });
+
 export type UpdateOwnProfileArgs = {
+  nickname?: string;
   firstName?: string;
   lastName?: string;
 };
 
 export const updateOwnProfileArgumentsSchema = z
   .object({
+    nickname: nicknameSchema.optional(),
     firstName: profileNameSchema.optional(),
     lastName: profileNameSchema.optional(),
     confirm: z.boolean().optional(),

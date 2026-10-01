@@ -376,6 +376,30 @@ describe("account admin client", () => {
     );
   });
 
+  it("uses the nickname contract while allowing only known response fields", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        nickname: "小睿👨‍👩‍👧",
+        first_name: "",
+        last_name: "",
+        updated_at: "2026-10-01T00:00:00Z"
+      })
+    );
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+    await expect(
+      client.updateOwnProfile({ lineUserId, profileName: "main", nickname: "小睿👨‍👩‍👧" })
+    ).resolves.toEqual({ nickname: "小睿👨‍👩‍👧", firstName: "", lastName: "" });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
+      line_user_id: lineUserId,
+      profile_name: "main",
+      nickname: "小睿👨‍👩‍👧"
+    });
+  });
+
   it("rejects profile update responses containing identity or permission fields", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -467,6 +491,34 @@ describe("account admin client", () => {
       })
     );
   });
+
+  it.each(["علي\u200f", "Ada\nMarie Lovelace"])(
+    "accepts preserved historical display name %j and an optional nickname capability",
+    async (displayName) => {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          bound: true,
+          active: true,
+          administrator: false,
+          allowed_functions: ["update_own_profile"],
+          nickname_write_enabled: true,
+          account: { display_name: displayName, masked_email: "a***@example.com", roles: ["user"] }
+        })
+      );
+      const client = createAccountAdminClient({
+        baseUrl: "http://account-api",
+        timeoutMs: 1000,
+        fetchImpl
+      });
+      await expect(
+        client.authorizeFunctions({
+          lineUserId,
+          profileName: "main",
+          functionNames: ["update_own_profile"]
+        })
+      ).resolves.toMatchObject({ nicknameWriteEnabled: true, account: { displayName } });
+    }
+  );
 
   it("authorizes a bounded function set and returns only canonical sanitized account state", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(

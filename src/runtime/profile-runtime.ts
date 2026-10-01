@@ -11,6 +11,7 @@ export interface ProfileTurnInput {
   configuredFunctions?: CapabilityName[];
   authorizeFunctions?: (names: CapabilityName[]) => Promise<CapabilityName[]>;
   accountAdministrator?: () => boolean;
+  nicknameWriteEnabled?: () => boolean;
 }
 
 export interface ProfileActionReviewInput extends ProfileTurnInput {
