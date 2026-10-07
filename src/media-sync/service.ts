@@ -71,7 +71,13 @@ export class MediaSyncManagementService {
 
   listCollectionItems(
     collectionId: string,
-    input: { query?: string; cursor?: string; limit?: number },
+    input: {
+      query?: string;
+      cursor?: string;
+      limit?: number;
+      sort?: "name" | "type" | "size" | "created" | "retention";
+      direction?: "asc" | "desc";
+    },
     requestId: string,
     actorUserId: string
   ) {

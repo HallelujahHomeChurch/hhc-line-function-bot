@@ -472,12 +472,23 @@ function parseListQuery(value: unknown): { cursor?: string; limit?: number } | u
   };
 }
 
-function parseManagedItemListQuery(
-  value: unknown
-): { query?: string; cursor?: string; limit?: number } | undefined {
+function parseManagedItemListQuery(value: unknown):
+  | {
+      query?: string;
+      cursor?: string;
+      limit?: number;
+      sort?: "name" | "type" | "size" | "created" | "retention";
+      direction?: "asc" | "desc";
+    }
+  | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const query = value as Record<string, unknown>;
-  if (Object.keys(query).some((key) => key !== "q" && key !== "cursor" && key !== "limit")) {
+  if (
+    Object.keys(query).some(
+      (key) =>
+        key !== "q" && key !== "cursor" && key !== "limit" && key !== "sort" && key !== "direction"
+    )
+  ) {
     return undefined;
   }
   if (
@@ -492,6 +503,11 @@ function parseManagedItemListQuery(
   ) {
     return undefined;
   }
+  const sort = query.sort as "name" | "type" | "size" | "created" | "retention" | undefined;
+  const direction = query.direction as "asc" | "desc" | undefined;
+  if (sort !== undefined && !["name", "type", "size", "created", "retention"].includes(sort))
+    return undefined;
+  if (direction !== undefined && direction !== "asc" && direction !== "desc") return undefined;
   let limit: number | undefined;
   if (query.limit !== undefined) {
     if (typeof query.limit !== "string" || !/^[1-9]\d*$/u.test(query.limit)) return undefined;
@@ -501,7 +517,9 @@ function parseManagedItemListQuery(
   return {
     ...(typeof query.q === "string" ? { query: query.q } : {}),
     ...(typeof query.cursor === "string" ? { cursor: query.cursor } : {}),
-    ...(limit === undefined ? {} : { limit })
+    ...(limit === undefined ? {} : { limit }),
+    ...(sort === undefined ? {} : { sort }),
+    ...(direction === undefined ? {} : { direction })
   };
 }
 

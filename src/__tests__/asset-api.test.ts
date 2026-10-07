@@ -22,6 +22,15 @@ afterEach(async () => {
 });
 
 describe("asset api client", () => {
+  it("forwards managed item sorting to the asset owner", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ items: [], hasMore: false }));
+    const client = createAssetApiClient({ baseUrl: "http://asset-api", fetcher });
+    await client.listManagedCollectionItems("collection-1", { sort: "size", direction: "asc" });
+    expect(String(fetcher.mock.calls[0][0])).toContain("sort=size&direction=asc");
+  });
+
   it.each([
     [401, "authorization_rejected"],
     [403, "authorization_rejected"],

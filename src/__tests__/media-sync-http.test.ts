@@ -326,6 +326,31 @@ describe("media sync management HTTP", () => {
     await instance.close();
   });
 
+  it("accepts and forwards managed item sorting, rejecting invalid sort values", async () => {
+    const assets = asset();
+    const { instance } = await app({ assets });
+    const response = await instance.inject({
+      method: "GET",
+      url: "/api/line/media-sync/collections/collection-1/items?sort=created&direction=desc&limit=100",
+      headers: trustedHeaders
+    });
+    expect(response.statusCode).toBe(200);
+    expect(assets.listManagedCollectionItems).toHaveBeenCalledWith(
+      "collection-1",
+      { sort: "created", direction: "desc", limit: 100 },
+      { requestId: "request-1", actorUserId: userId }
+    );
+    for (const query of ["sort=unknown", "direction=sideways", "sort=created&extra=1"]) {
+      const invalid = await instance.inject({
+        method: "GET",
+        url: `/api/line/media-sync/collections/collection-1/items?${query}`,
+        headers: trustedHeaders
+      });
+      expect(invalid.statusCode).toBe(400);
+    }
+    await instance.close();
+  });
+
   it("validates managed retention and item selection boundaries", async () => {
     const assets = asset();
     const { instance } = await app({ assets });
