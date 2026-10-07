@@ -130,7 +130,13 @@ export interface AssetApiClient {
   ): Promise<ManagedCollection>;
   listManagedCollectionItems(
     collectionId: string,
-    input?: { query?: string; cursor?: string; limit?: number },
+    input?: {
+      query?: string;
+      cursor?: string;
+      limit?: number;
+      sort?: "name" | "type" | "size" | "created" | "retention";
+      direction?: "asc" | "desc";
+    },
     options?: AssetApiRequestOptions
   ): Promise<ManagedCollectionItemPage>;
   updateCollectionRetention(
@@ -398,6 +404,8 @@ export function createAssetApiClient(options: {
       if (input.query !== undefined) query.set("q", input.query);
       if (input.cursor !== undefined) query.set("cursor", input.cursor);
       if (input.limit !== undefined) query.set("limit", String(input.limit));
+      if (input.sort !== undefined) query.set("sort", input.sort);
+      if (input.direction !== undefined) query.set("direction", input.direction);
       const response = await request(
         "list_managed_collection_items",
         `/priv/assets/collections/${encodeURIComponent(collectionId)}/items${

@@ -274,6 +274,20 @@ paths:
             not: { pattern: '\p{Cc}|[\uD800-\uDFFF]' }
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
+        - name: sort
+          in: query
+          description: Item ordering delegated to Asset; defaults to creation time.
+          schema:
+            type: string
+            enum: [name, type, size, created, retention]
+            default: created
+        - name: direction
+          in: query
+          description: Ordering direction; defaults to descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
       responses:
         "200":
           description: Managed collection item page.
