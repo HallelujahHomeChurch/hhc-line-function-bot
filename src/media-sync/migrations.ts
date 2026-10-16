@@ -157,6 +157,9 @@ const migrations = [
     primary key (source_key, publication_type)
   )
   `,
+  `alter table media_sync_publications add column if not exists attempt_id uuid`,
+  `alter table media_sync_publications add column if not exists attempt_started_at timestamptz`,
+  `alter table media_sync_publications add column if not exists attempt_completed_at timestamptz`,
   `alter table media_sync_publications add column if not exists destination_id text`,
   `
   update media_sync_publications publication

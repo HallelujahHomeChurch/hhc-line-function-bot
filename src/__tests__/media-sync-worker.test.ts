@@ -446,11 +446,16 @@ describe("media sync Asset and collection stage", () => {
       expect.stringMatching(/^media-sync-collection:/u),
       { requestId: "work-opaque-1", signal: undefined }
     );
-    expect(fixture.store.finalizeCollectionPublication).toHaveBeenCalledWith({
+    expect(fixture.store.reservePublication).toHaveBeenCalledWith({
       workId: "work-opaque-1",
       expectedClaimedUntil: fixture.claim.claimedUntil,
-      collectionId: "collection-1",
-      occurrenceId: "occurrence-actual-1"
+      publicationType: "collection"
+    });
+    expect(fixture.store.settlePublication).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      publicationType: "collection",
+      attemptId: "attempt-collection",
+      result: { targetId: "occurrence-actual-1" }
     });
     expect(fixture.store.completeClaimedWork).toHaveBeenCalledWith({
       workId: "work-opaque-1",
@@ -600,92 +605,52 @@ describe("media sync Asset and collection stage", () => {
     });
   });
 
-  it("settles an Asset created before the collection deletion fence without an active item", async () => {
+  it("blocks uncertain external publication without replaying or deleting its owners", async () => {
     const fixture = cleanAssetFixture();
-    let tombstoned = false;
-    let assetActive = true;
-    let softDeleteAttempts = 0;
-    const activeCollectionItems: string[] = [];
-    const rejectingAssets = createAssetApiClient({
-      baseUrl: "https://asset.internal",
-      fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 409 }))
-    });
-    fixture.store.claimWork.mockImplementation(async ({ operation }) => {
-      if (operation === "intake") return tombstoned ? "terminal" : fixture.claim;
-      return fixture.claim;
-    });
-    fixture.store.tombstoneClaimedWorkForCleanup.mockImplementation(async () => {
-      tombstoned = true;
-      fixture.work.ingest.state = "tombstoned";
-      return true;
-    });
-    fixture.assets.get
-      .mockResolvedValueOnce(
-        asset({
-          scanStatus: "clean",
-          scanSignatureVersion: "daily-20260816",
-          processingStatus: "ready"
-        })
-      )
-      .mockResolvedValueOnce(
-        asset({
-          ownerService: "hhc-line-function-bot",
-          ownerType: "media_sync_ingest",
-          ownerId: "work-opaque-1"
-        })
-      );
-    fixture.assets.addCollectionItem.mockImplementation(async (...args) => {
-      const mutation = await rejectingAssets.addCollectionItem(...args);
-      activeCollectionItems.push(mutation.item.id);
-      return mutation;
-    });
-    fixture.assets.softDelete.mockImplementation(async () => {
-      softDeleteAttempts += 1;
-      if (softDeleteAttempts === 1) throw new Error("asset_api_503");
-      assetActive = false;
-    });
-
-    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
-      status: "permanent_failure",
-      reason: "asset_policy_rejected"
-    });
-    expect(fixture.assets.softDelete).toHaveBeenNthCalledWith(1, "asset-1", {
-      requestId: "work-opaque-1"
-    });
-    expect(fixture.store.rememberOwnedAsset).toHaveBeenCalledWith({
-      workId: "work-opaque-1",
-      assetId: "asset-1",
-      assetEtag: "etag-1"
-    });
-    expect(fixture.store.tombstoneClaimedWorkForCleanup).toHaveBeenCalledOnce();
-    expect(fixture.store.finalizeCollectionPublication).not.toHaveBeenCalled();
-    expect(activeCollectionItems).toEqual([]);
-
-    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
-      status: "completed"
-    });
-    expect(fixture.assets.softDelete).toHaveBeenNthCalledWith(2, "asset-1", {
-      requestId: "work-opaque-1",
-      signal: undefined
-    });
-    expect(fixture.store.completeDeleteWork).toHaveBeenCalledOnce();
-    expect(assetActive).toBe(false);
-    expect(activeCollectionItems).toEqual([]);
+    fixture.assets.addCollectionItem.mockRejectedValue(new Error("response_lost"));
+    const expected = { status: "uncertain", reason: "publication_uncertain" };
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual(expected);
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual(expected);
+    expect(fixture.assets.addCollectionItem).toHaveBeenCalledTimes(1);
+    expect(fixture.assets.softDelete).not.toHaveBeenCalled();
+    expect(fixture.assets.deleteCollectionItem).not.toHaveBeenCalled();
+    expect(fixture.store.blockUncertainPublication).toHaveBeenCalledTimes(2);
+    expect(
+      shouldAcknowledgeMediaSyncResult({ status: "uncertain", reason: "publication_uncertain" })
+    ).toBe(true);
   });
 
-  it("remembers a completed occurrence when finalization loses its execution fence", async () => {
+  it("retains a known external owner when persisting its result is unavailable", async () => {
     const fixture = cleanAssetFixture();
-    fixture.store.finalizeCollectionPublication.mockResolvedValue(false);
+    fixture.store.settlePublication.mockResolvedValue(false);
     await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
-      status: "contention"
+      status: "uncertain",
+      reason: "publication_uncertain"
     });
     expect(fixture.assets.deleteCollectionItem).not.toHaveBeenCalled();
-    expect(fixture.store.rememberExternalHandle).toHaveBeenCalledWith({
+    expect(fixture.store.settlePublication).toHaveBeenCalledWith({
       workId: "work-opaque-1",
       publicationType: "collection",
-      destinationId: "collection-1",
+      attemptId: "attempt-collection",
+      result: { targetId: "occurrence-actual-1" }
+    });
+  });
+
+  it("records a completed publication after admission is revoked without deleting the result", async () => {
+    const fixture = cleanAssetFixture();
+    fixture.assets.addCollectionItem.mockImplementation(async () => {
+      fixture.store.isBindingAdmitted.mockResolvedValue(false);
+      return { collection: { id: "collection-1" }, item: { id: "occurrence-actual-1" } };
+    });
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "permanent_failure",
+      reason: "admission_revoked"
+    });
+    expect(fixture.work.publications[0]).toMatchObject({
+      state: "published",
       targetId: "occurrence-actual-1"
     });
+    expect(fixture.assets.deleteCollectionItem).not.toHaveBeenCalled();
   });
 
   it("retains a completed Asset after losing its persistence fence", async () => {
@@ -782,11 +747,11 @@ describe("media sync Asset and collection stage", () => {
         scan: { status: "clean", signatureVersion: "daily-20260816" }
       })
     );
-    expect(fixture.store.finalizeManualPublication).toHaveBeenCalledWith({
+    expect(fixture.store.settlePublication).toHaveBeenCalledWith({
       workId: "work-opaque-1",
-      expectedClaimedUntil: fixture.claim.claimedUntil,
-      destinationId: "pending-attachment-1",
-      resourceId: "resource-actual-1"
+      publicationType: "manual",
+      attemptId: "attempt-manual",
+      result: { targetId: "resource-actual-1" }
     });
     expect(fixture.agentJobs.complete).toHaveBeenCalledWith(
       "job-manual-1",
@@ -812,7 +777,9 @@ describe("media sync Asset and collection stage", () => {
       destinationId: "pending-attachment-1",
       failureCategory: "manual_file_too_large"
     });
-    expect(fixture.store.finalizeCollectionPublication).toHaveBeenCalledTimes(1);
+    expect(fixture.store.settlePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ publicationType: "collection" })
+    );
     expect(fixture.store.failClaimedWork).not.toHaveBeenCalled();
     expect(fixture.agentJobs.fail).toHaveBeenCalledWith("job-manual-1", "manual_file_too_large");
   });
@@ -853,7 +820,9 @@ describe("media sync Asset and collection stage", () => {
       expect.objectContaining({ failureCategory: "manual_format_rejected" })
     );
     expect(fixture.store.failClaimedWork).not.toHaveBeenCalled();
-    expect(fixture.store.finalizeCollectionPublication).toHaveBeenCalledTimes(1);
+    expect(fixture.store.settlePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ publicationType: "collection" })
+    );
   });
 
   it("keeps the published collection when manual Asset access is permanently rejected", async () => {
@@ -875,7 +844,9 @@ describe("media sync Asset and collection stage", () => {
       expect.objectContaining({ failureCategory: "manual_asset_rejected" })
     );
     expect(fixture.store.failClaimedWork).not.toHaveBeenCalled();
-    expect(fixture.store.finalizeCollectionPublication).toHaveBeenCalledTimes(1);
+    expect(fixture.store.settlePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ publicationType: "collection" })
+    );
   });
 
   it("does not claim or compensate an existing catalog resource returned as a duplicate", async () => {
@@ -892,8 +863,8 @@ describe("media sync Asset and collection stage", () => {
     await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
       status: "completed"
     });
-    expect(fixture.store.failManualPublication).toHaveBeenCalledWith(
-      expect.objectContaining({ failureCategory: "manual_duplicate" })
+    expect(fixture.store.settlePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ publicationType: "manual", result: { duplicate: true } })
     );
     expect(fixture.store.finalizeManualPublication).not.toHaveBeenCalled();
     expect(fixture.publisher.tombstonePublishedResource).not.toHaveBeenCalled();
@@ -904,22 +875,36 @@ describe("media sync Asset and collection stage", () => {
     );
   });
 
-  it("retains a completed manual resource when its finalization fence rejects it", async () => {
+  it("blocks a manual publication whose outcome cannot be persisted", async () => {
     const fixture = cleanAssetFixture();
     makePptxManual(fixture.work);
     fixture.work.publications.push(manualPublication());
     fixture.assets.download.mockResolvedValue({ data: pptxBytes });
-    fixture.store.finalizeManualPublication.mockResolvedValue(false);
+    fixture.store.settlePublication.mockResolvedValueOnce(true).mockResolvedValue(false);
     await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
-      status: "contention"
+      status: "uncertain",
+      reason: "publication_uncertain"
     });
     expect(fixture.publisher.tombstonePublishedResource).not.toHaveBeenCalled();
-    expect(fixture.store.rememberExternalHandle).toHaveBeenCalledWith({
+    expect(fixture.store.settlePublication).toHaveBeenCalledWith({
       workId: "work-opaque-1",
       publicationType: "manual",
-      destinationId: "pending-attachment-1",
-      targetId: "resource-actual-1"
+      attemptId: "attempt-manual",
+      result: { targetId: "resource-actual-1" }
     });
+  });
+
+  it("keeps withdrawal cleanup pending while a publication result is unknown", async () => {
+    const fixture = deleteFixture();
+    fixture.work.publications[0]!.attemptId = "unfinished-attempt";
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "rescheduled",
+      reason: "cleanup_unavailable"
+    });
+    expect(fixture.assets.deleteCollectionItem).not.toHaveBeenCalled();
+    expect(fixture.publisher.tombstonePublishedResource).not.toHaveBeenCalled();
+    expect(fixture.assets.softDelete).not.toHaveBeenCalled();
+    expect(fixture.store.completeDeleteWork).not.toHaveBeenCalled();
   });
 
   it("deletes exact persisted owners and completes only the delete lease", async () => {
@@ -1160,6 +1145,24 @@ function createAssetFixture() {
     loadClaimedWork: vi.fn().mockImplementation(async () => work),
     isBindingAdmitted: vi.fn().mockResolvedValue(true),
     findActiveBinding: vi.fn().mockResolvedValue({ id: "binding-1", collectionId: "collection-1" }),
+    reservePublication: vi.fn().mockImplementation(async ({ publicationType }) => {
+      const publication = work.publications.find(
+        (item) => item.publicationType === publicationType
+      )!;
+      if (publication.attemptId) return undefined;
+      publication.attemptId = `attempt-${publicationType}`;
+      return publication.attemptId;
+    }),
+    settlePublication: vi.fn().mockImplementation(async ({ publicationType, result }) => {
+      const publication = work.publications.find(
+        (item) => item.publicationType === publicationType
+      )!;
+      publication.attemptCompletedAt = "2026-08-16T00:00:00.000Z";
+      publication.state = "targetId" in result ? "published" : "failed";
+      if ("targetId" in result) publication.targetId = result.targetId;
+      return true;
+    }),
+    blockUncertainPublication: vi.fn().mockResolvedValue(true),
     retryOutbox: vi.fn().mockResolvedValue(true),
     blockUnavailableWork: vi.fn().mockResolvedValue(true),
     failClaimedWork: vi.fn().mockResolvedValue(true),

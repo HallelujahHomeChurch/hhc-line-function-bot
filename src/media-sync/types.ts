@@ -95,6 +95,8 @@ export type MediaSyncWorkClaim =
   | "unbound_generation";
 
 export type MediaSyncPublication = {
+  attemptId?: string;
+  attemptCompletedAt?: string;
   sourceKey: string;
   publicationType: MediaSyncPublicationType;
   destinationId: string;

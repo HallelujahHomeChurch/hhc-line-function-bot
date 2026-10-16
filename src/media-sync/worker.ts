@@ -29,6 +29,9 @@ export function nextDelay(scanStatus: string, warm: boolean): number {
 type AssetStageStore = Pick<
   PostgresMediaSyncStore,
   | "claimWork"
+  | "reservePublication"
+  | "settlePublication"
+  | "blockUncertainPublication"
   | "blockUnavailableWork"
   | "isBindingAdmitted"
   | "loadClaimedWork"
@@ -70,6 +73,7 @@ type MediaSyncSourceStageResult =
 
 export type MediaSyncWorkerResult =
   | { status: "completed" }
+  | { status: "uncertain"; reason: "publication_uncertain" }
   | { status: "missing" }
   | { status: "terminal" }
   | {
@@ -103,6 +107,7 @@ export type MediaSyncWorkerResult =
 export function shouldAcknowledgeMediaSyncResult(result: MediaSyncWorkerResult): boolean {
   return (
     result.status === "completed" ||
+    result.status === "uncertain" ||
     result.status === "missing" ||
     result.status === "terminal" ||
     result.status === "rescheduled" ||
@@ -265,6 +270,13 @@ export async function runMediaSyncWorker(
   });
   if (!loadedWork) return { status: "contention" };
   let work: MediaSyncWork = loadedWork;
+  if (
+    work.publications.some(
+      (publication) => publication.attemptId && !publication.attemptCompletedAt
+    )
+  ) {
+    return blockUncertain(workId, claim.claimedUntil, options.store);
+  }
   const initialFence = await bindingFence(work, options.store);
   if (initialFence !== "active") {
     return terminalFailure(initialFence, workId, claim.claimedUntil, work, now, options);
@@ -465,41 +477,38 @@ export async function runMediaSyncWorker(
         );
       }
       await requireExecutionFence(workId, claim.claimedUntil, options.store);
-      const mutation = await options.assets.addCollectionItem(
-        work.ingest.collectionId,
-        {
-          assetId: asset.id,
-          remoteItemId: work.ingest.workId,
-          displayName: safeMediaFileName(work.ingest),
-          sourceRevision
-        },
-        idempotencyKey("media-sync-collection", work.ingest.sourceKey),
-        { requestId: workId, signal: options.signal }
-      );
-      const eligibility = await eligibilityAfterExternal(workId, claim.claimedUntil, options.store);
-      const finalized =
-        eligibility !== "lease_lost" &&
-        eligibility !== "unbound_generation" &&
-        eligibility !== "admission_revoked" &&
-        (await options.store.finalizeCollectionPublication({
-          workId,
-          expectedClaimedUntil: claim.claimedUntil,
-          collectionId: work.ingest.collectionId,
-          occurrenceId: mutation.item.id
-        }));
-      if (!finalized) {
-        await options.store.rememberExternalHandle({
+      const attemptId = await options.store.reservePublication({
+        workId,
+        expectedClaimedUntil: claim.claimedUntil,
+        publicationType: "collection"
+      });
+      if (!attemptId) return { status: "contention" };
+      try {
+        const mutation = await options.assets.addCollectionItem(
+          work.ingest.collectionId,
+          {
+            assetId: asset.id,
+            remoteItemId: work.ingest.workId,
+            displayName: safeMediaFileName(work.ingest),
+            sourceRevision
+          },
+          idempotencyKey("media-sync-collection", work.ingest.sourceKey),
+          { requestId: workId, signal: options.signal }
+        );
+        const settled = await options.store.settlePublication({
           workId,
           publicationType: "collection",
-          destinationId: work.ingest.collectionId,
-          targetId: mutation.item.id
+          attemptId,
+          result: { targetId: mutation.item.id }
         });
-        if (eligibility === "unbound_generation" || eligibility === "admission_revoked")
-          return terminalFailure(eligibility, workId, claim.claimedUntil, work, now, options);
-        return { status: "contention" };
+        if (!settled) return blockUncertain(workId, claim.claimedUntil, options.store);
+        collectionPublished = true;
+        publishedItemId = mutation.item.id;
+        collection.state = "published";
+        collection.targetId = mutation.item.id;
+      } catch {
+        return blockUncertain(workId, claim.claimedUntil, options.store);
       }
-      collectionPublished = true;
-      publishedItemId = mutation.item.id;
     }
     if (collectionPublished) {
       options.onTiming?.("collection_published", workId, {
@@ -507,6 +516,7 @@ export async function runMediaSyncWorker(
         collectionItemId: publishedItemId
       });
     }
+    await requireExecutionFence(workId, claim.claimedUntil, options.store);
     const manual = work.publications.find(
       (publication) => publication.publicationType === "manual"
     );
@@ -607,6 +617,14 @@ async function runDeleteWorker(
     expectedClaimedUntil: claim.claimedUntil
   });
   if (!work) return { status: "contention" };
+
+  if (
+    work.publications.some(
+      (publication) => publication.attemptId && !publication.attemptCompletedAt
+    )
+  ) {
+    return retryDelete(work, claim.claimedUntil, now, options);
+  }
 
   for (const publication of work.publications) {
     if (!publication.targetId) continue;
@@ -835,51 +853,40 @@ async function publishManualResource(input: {
   if (!prepared.ok) return failManualBranch(input, "manual_format_rejected");
 
   await requireExecutionFence(input.workId, input.expectedClaimedUntil, options.store);
-  const outcome = await options.publisher.publishVerifiedResource({
-    resource: prepared.resource,
-    scan: { status: "clean", signatureVersion: input.asset.scanSignatureVersion },
-    now: input.now
+  const attemptId = await options.store.reservePublication({
+    workId: input.workId,
+    expectedClaimedUntil: input.expectedClaimedUntil,
+    publicationType: "manual"
   });
-  if (outcome.status === "failed") return failManualBranch(input, "manual_publish_failed");
-  if (outcome.status === "duplicate") {
-    const failed = await options.store.failManualPublication({
-      workId: input.workId,
-      expectedClaimedUntil: input.expectedClaimedUntil,
-      destinationId: publication.destinationId,
-      failureCategory: "manual_duplicate"
+  if (!attemptId) return { status: "contention" };
+  let outcome: Awaited<ReturnType<ResourceBinaryPublisher["publishVerifiedResource"]>>;
+  try {
+    outcome = await options.publisher.publishVerifiedResource({
+      resource: prepared.resource,
+      scan: { status: "clean", signatureVersion: input.asset.scanSignatureVersion },
+      now: input.now
     });
-    if (!failed) return { status: "contention" };
+    if (outcome.status === "failed")
+      return blockUncertain(input.workId, input.expectedClaimedUntil, options.store);
+    const settled = await options.store.settlePublication({
+      workId: input.workId,
+      publicationType: "manual",
+      attemptId,
+      result:
+        outcome.status === "duplicate" ? { duplicate: true } : { targetId: outcome.resourceId }
+    });
+    if (!settled) return blockUncertain(input.workId, input.expectedClaimedUntil, options.store);
+  } catch {
+    return blockUncertain(input.workId, input.expectedClaimedUntil, options.store);
+  }
+  if (outcome.status === "duplicate") {
     publication.state = "failed";
     try {
       await options.agentJobStore.complete(publication.jobId, outcome.result, "save_resource");
     } catch {
-      // The durable duplicate disposition is authoritative.
+      /* The durable duplicate disposition is authoritative. */
     }
     return undefined;
-  }
-  eligibility = await eligibilityAfterExternal(
-    input.workId,
-    input.expectedClaimedUntil,
-    options.store
-  );
-  const finalized =
-    eligibility !== "lease_lost" &&
-    eligibility !== "unbound_generation" &&
-    eligibility !== "admission_revoked" &&
-    (await options.store.finalizeManualPublication({
-      workId: input.workId,
-      expectedClaimedUntil: input.expectedClaimedUntil,
-      destinationId: publication.destinationId,
-      resourceId: outcome.resourceId
-    }));
-  if (!finalized) {
-    await options.store.rememberExternalHandle({
-      workId: input.workId,
-      publicationType: "manual",
-      destinationId: publication.destinationId,
-      targetId: outcome.resourceId
-    });
-    return { status: "contention" };
   }
   publication.state = "published";
   publication.targetId = outcome.resourceId;
@@ -1093,6 +1100,16 @@ async function retryWorker(
     lastErrorCategory: reason
   });
   return released ? { status: "rescheduled", reason } : { status: "contention" };
+}
+
+async function blockUncertain(
+  workId: string,
+  expectedClaimedUntil: string,
+  store: AssetStageStore
+): Promise<MediaSyncWorkerResult> {
+  return (await store.blockUncertainPublication({ workId, expectedClaimedUntil }))
+    ? { status: "uncertain", reason: "publication_uncertain" }
+    : { status: "contention" };
 }
 
 async function terminalFailure(
