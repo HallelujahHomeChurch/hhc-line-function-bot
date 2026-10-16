@@ -38,6 +38,7 @@ const visibilities = new Set(["public", "admin", "private", "operations"]);
 const expectedOperations = [
   "GET /api/line/media-sync/acl-subjects",
   "GET /api/line/media-sync/collections",
+  "GET /api/line/media-sync/collections/{collectionId}/status",
   "DELETE /api/line/media-sync/collections/{collectionId}",
   "PATCH /api/line/media-sync/collections/{collectionId}",
   "POST /api/line/media-sync/collections",

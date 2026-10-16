@@ -7,6 +7,8 @@ import type {
 } from "../clients/asset-api.js";
 import type { PostgresMediaSyncStore } from "./store.js";
 
+import type { MediaSyncStatusQuery } from "./status.js";
+
 export class MediaSyncManagementError extends Error {
   constructor(
     readonly code: "collection_deleted" | "collection_bound" | "binding_code_already_issued"
@@ -63,6 +65,20 @@ export class MediaSyncManagementService {
       ...(page.cursor ? { cursor: page.cursor } : {}),
       hasMore: page.hasMore
     };
+  }
+
+  async listCollectionStatus(
+    collectionId: string,
+    query: MediaSyncStatusQuery,
+    requestId: string,
+    actorUserId: string
+  ) {
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
+    if (managed.collection.deletedAt) throw new MediaSyncManagementError("collection_deleted");
+    return this.store.listCollectionStatus(collectionId, query);
   }
 
   createCollection(name: string, idempotencyKey: string, requestId: string, actorUserId: string) {

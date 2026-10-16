@@ -101,6 +101,8 @@ const migrations = [
   `,
   `alter table media_sync_ingests add column if not exists work_id uuid default gen_random_uuid()`,
   `alter table media_sync_ingests alter column work_id set not null`,
+  `create index if not exists media_sync_ingests_collection_status_idx
+   on media_sync_ingests (profile_name, collection_id, created_at desc, work_id desc)`,
   `create unique index if not exists media_sync_ingests_work_id_idx on media_sync_ingests(work_id)`,
   `alter table media_sync_ingests add column if not exists asset_etag text`,
   `alter table media_sync_ingests drop constraint if exists media_sync_ingests_state_check`,
