@@ -16,3 +16,7 @@ Existing bindings are not automatically deleted when the code issuer loses acces
 
 This slice does not expose pause, unbind or retry. Those operations require the
 publication-preserving worker fences described in the reviewed implementation plan.
+
+Validation includes signed group ingress, exact-code and post-lock expiry tests
+on PostgreSQL, and the offline kernel integration harness with real PostgreSQL
+and Redis. CI is required against `main`; PR #104 is the preceding status slice.
