@@ -1,210 +1,225 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
+import { weeklyPaperArguments } from "../capabilities/weekly-paper-request.js";
+import type { MemberAccessSnapshot } from "../account/member-access.js";
 
 const lineUserId = `U${"a".repeat(32)}`;
 const subjectId = "018f0c1f-18d0-7e81-9f6f-69c456db7003";
-
-function response(data: unknown, status = 200): Response {
-  return Response.json(status === 200 ? { data, meta: {}, error: null } : data, { status });
-}
-
+const grant: MemberAccessSnapshot = {
+  qualified: true,
+  editions: [{ series: "general", locale: "zh-Hant" }],
+  legal: "allowed"
+};
+const item = {
+  issueNumber: 1733,
+  series: "general",
+  contentLocale: "zh-Hant",
+  pdfPublished: true,
+  onlineRevision: 2
+};
+const envelope = (data: unknown) => Response.json({ data, meta: {}, error: null });
 function access(
   resolveLineSubject = vi.fn().mockResolvedValue({ bound: true, active: true, subjectId })
 ) {
   return { lineUserId, profileName: "main", requestId: "request-1", resolveLineSubject };
 }
-
+function upstream(data: unknown = { items: [item] }, membership: MemberAccessSnapshot = grant) {
+  return vi
+    .fn<typeof fetch>()
+    .mockImplementation(async (url) =>
+      String(url).includes("/priv/line/member-access")
+        ? envelope(membership)
+        : data instanceof Response
+          ? data
+          : envelope(data)
+    );
+}
 afterEach(() => vi.useRealTimers());
 
-describe("download_weekly_paper", () => {
-  it("resolves the linked subject and checks the protected latest bulletin", async () => {
-    const resolveLineSubject = vi.fn().mockResolvedValue({ bound: true, active: true, subjectId });
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(response({ issueNumber: 1733, series: "general", locale: "zh-Hant" }));
-
-    const result = await downloadWeeklyPaper({}, fetchImpl, access(resolveLineSubject));
-
-    expect(resolveLineSubject).toHaveBeenCalledWith({ lineUserId, profileName: "main" });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method/api/member/bulletins/latest?series=general&locale=zh-Hant",
-      expect.objectContaining({
-        method: "GET",
-        redirect: "error",
-        headers: {
-          "X-HHC-User-ID": subjectId,
-          "X-HHC-Auth-Provider": "account-api",
-          "X-HHC-Request-ID": "request-1"
-        }
-      })
+describe("member bulletin entry", () => {
+  it("checks fresh membership and discovers the exact authorized issue", async () => {
+    const fetchImpl = upstream();
+    const member = access();
+    const result = await downloadWeeklyPaper({ issueNumber: 1733 }, fetchImpl, member);
+    expect(member.resolveLineSubject).toHaveBeenCalledWith({ lineUserId, profileName: "main" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchImpl.mock.calls[1]!;
+    expect(String(url)).toContain(
+      "/api/member/bulletins/online?series=general&locales=zh-Hant&offset=0&limit=1&issueNumber=1733"
     );
-    expect(result).toMatchObject({
-      ok: true,
-      replyText: "第 1733 期週報可在會員頁面查看或下載。",
-      quickReplies: [
-        { action: { type: "uri", uri: "https://www.alive.org.tw/zh-Hant/literature-ministry" } }
-      ],
-      agentResult: { status: "success" }
+    expect(init).toMatchObject({
+      method: "GET",
+      redirect: "error",
+      headers: {
+        "X-HHC-User-ID": subjectId,
+        "X-HHC-Auth-Provider": "account-api",
+        "X-HHC-Request-ID": "request-1"
+      }
+    });
+    expect(result.agentResult?.status).toBe("success");
+    expect(result.quickReplies?.[0]?.action).toMatchObject({
+      type: "uri",
+      uri: "https://www.alive.org.tw/zh-Hant/literature-ministry?series=general&issueNumber=1733&contentLocale=zh-Hant&mode=online"
     });
   });
-
-  it("queries an exact issue only through the protected member list", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(response([{ issueNumber: 1733, series: "general", locale: "zh-Hant" }]));
-
-    await expect(
-      downloadWeeklyPaper({ issueNumber: 1733 }, fetchImpl, access())
-    ).resolves.toMatchObject({
-      agentResult: { status: "success" }
+  it("offers every authorized edition without guessing content language", async () => {
+    const membership: MemberAccessSnapshot = {
+      ...grant,
+      editions: [...grant.editions, { series: "children", locale: "en" }]
+    };
+    const fetchImpl = upstream(undefined, membership);
+    const result = await downloadWeeklyPaper({ issueNumber: 1733 }, fetchImpl, access());
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(result.agentResult?.status).toBe("ambiguous");
+    expect(result.quickReplies).toHaveLength(2);
+    const action = result.quickReplies![1]!.action;
+    if (action.type !== "message") throw new Error("missing edition choice");
+    expect(weeklyPaperArguments(action.text)).toEqual({
+      issueNumber: 1733,
+      series: "children",
+      locale: "en"
     });
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-      "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method/api/member/bulletins?series=general&locale=zh-Hant&issueNumber=1733&page=1&pageSize=1"
-    );
   });
-
-  it.each([
-    [{ bound: false, active: false }, "請先輸入「登入」連結 HHC 帳號，再查看會員週報。"],
-    [{ bound: true, active: false }, "此 HHC 帳號目前無法使用，請聯絡管理同工協助。"]
-  ])(
-    "denies unavailable linked-account states before HHC data access",
-    async (decision, replyText) => {
-      const fetchImpl = vi.fn<typeof fetch>();
-      const result = await downloadWeeklyPaper(
-        {},
-        fetchImpl,
-        access(vi.fn().mockResolvedValue(decision))
-      );
-
-      expect(fetchImpl).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ replyText, agentResult: { status: "unavailable" } });
-      expect(result).not.toHaveProperty("quickReplies");
-    }
-  );
-
-  it("fails closed when Account subject resolution is unavailable", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
+  it("supports children English without a PDF under a Traditional Chinese interface", async () => {
+    const fetchImpl = upstream(
+      { items: [{ ...item, series: "children", contentLocale: "en", pdfPublished: false }] },
+      { ...grant, editions: [{ series: "children", locale: "en" }] }
+    );
     const result = await downloadWeeklyPaper(
+      { series: "children", locale: "en" },
+      fetchImpl,
+      access()
+    );
+    expect(result.quickReplies?.[0]?.action).toMatchObject({
+      uri: expect.stringContaining("series=children&issueNumber=1733&contentLocale=en&mode=online")
+    });
+    expect(String(fetchImpl.mock.calls[1]?.[0])).not.toContain("issueNumber=");
+  });
+  it("links PDF-only issues to the exact PDF entry", async () => {
+    const result = await downloadWeeklyPaper(
+      {},
+      upstream({ items: [{ ...item, onlineRevision: null }] }),
+      access()
+    );
+    expect(result.quickReplies?.[0]?.action).toMatchObject({
+      uri: expect.stringContaining("issueNumber=1733&contentLocale=zh-Hant&mode=pdf")
+    });
+  });
+  it("does not substitute an explicitly ungranted edition", async () => {
+    const fetchImpl = upstream();
+    const result = await downloadWeeklyPaper(
+      { series: "children", locale: "en" },
+      fetchImpl,
+      access()
+    );
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(result.agentResult?.status).toBe("unavailable");
+    expect(result.replyText).toContain("存取資格");
+  });
+  it.each([
+    { bound: false, active: false },
+    { bound: true, active: false }
+  ])("stops before member APIs for %j", async (decision) => {
+    const fetchImpl = upstream();
+    expect(
+      (await downloadWeeklyPaper({}, fetchImpl, access(vi.fn().mockResolvedValue(decision))))
+        .agentResult?.status
+    ).toBe("unavailable");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  it("fails closed on Account or membership authority outage", async () => {
+    const fetchImpl = upstream();
+    await downloadWeeklyPaper(
       {},
       fetchImpl,
       access(vi.fn().mockRejectedValue(new Error("offline")))
     );
-
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ agentResult: { status: "unavailable" } });
+    expect(
+      (await downloadWeeklyPaper({}, async () => new Response("", { status: 503 }), access()))
+        .quickReplies
+    ).toBeUndefined();
   });
-
-  it("maps entitlement denial or a missing issue to a non-disclosing result", async () => {
+  it.each([undefined, 1733])(
+    "preserves legal return edition and requested issue %s",
+    async (issueNumber) => {
+      const fetchImpl = upstream(undefined, { ...grant, legal: "required" });
+      const result = await downloadWeeklyPaper(
+        { ...(issueNumber ? { issueNumber } : {}) },
+        fetchImpl,
+        access()
+      );
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      const action = result.quickReplies?.[0]?.action;
+      if (action?.type !== "uri") throw new Error("missing legal action");
+      const target = new URL(new URL(action.uri).searchParams.get("return_to")!);
+      expect(target.searchParams.get("contentLocale")).toBe("zh-Hant");
+      expect(target.searchParams.get("issueNumber")).toBe(issueNumber ? String(issueNumber) : null);
+    }
+  );
+  it.each([
+    [403, "access_required"],
+    [428, "policy_acceptance_required"]
+  ] as const)("retains an actionable fresh content denial %s", async (status, code) => {
     const result = await downloadWeeklyPaper(
       { issueNumber: 1733 },
-      vi.fn<typeof fetch>().mockResolvedValue(response({ error: {} }, 404)),
+      upstream(Response.json({ error: { code } }, { status })),
       access()
     );
-
-    expect(result).toMatchObject({
-      replyText: "目前找不到或無法存取這一期週報。",
-      agentResult: { status: "not_found" }
-    });
-    expect(result).not.toHaveProperty("quickReplies");
+    expect(result.quickReplies?.[0]?.action.type).toBe("uri");
   });
-
   it.each([
-    ["dependency failure", response({ error: {} }, 503)],
-    ["invalid JSON", new Response("not-json")],
-    ["wrong locale", response({ issueNumber: 1733, locale: "en" })],
-    ["mismatched issue", response([{ issueNumber: 1732, series: "general", locale: "zh-Hant" }])]
-  ])("fails closed for %s", async (_name, upstream) => {
-    const args = _name === "mismatched issue" ? { issueNumber: 1733 } : {};
-    const result = await downloadWeeklyPaper(
-      args,
-      vi.fn<typeof fetch>().mockResolvedValue(upstream),
-      access()
-    );
-    expect(result).toMatchObject({ agentResult: { status: "unavailable" } });
-    expect(result).not.toHaveProperty("quickReplies");
-  });
-
-  it.each([
-    [
-      403,
-      "access_required",
-      "此帳號目前不符合會員週報存取資格，請至會員頁面確認，或聯絡管理同工。",
-      "查看會員頁面"
-    ],
-    [428, "policy_acceptance_required", "請先確認最新的會員條款，再回來查看週報。", "確認會員條款"]
-  ])("provides an actionable next step for %s", async (status, code, replyText, label) => {
-    const result = await downloadWeeklyPaper(
-      {},
-      async () => Response.json({ data: null, meta: {}, error: { code } }, { status }),
-      access()
-    );
-    expect(result).toMatchObject({ replyText, quickReplies: [{ label, action: { type: "uri" } }] });
-  });
-
-  it("does not interpret an unrelated 403 as membership denial", async () => {
-    const result = await downloadWeeklyPaper(
-      {},
-      async () => Response.json({ error: { code: "forbidden_workload" } }, { status: 403 }),
-      access()
-    );
-    expect(result.replyText).toBe("目前無法取得週報，請稍後再試。");
+    new Response("", { status: 503 }),
+    new Response("invalid"),
+    Response.json({ error: { code: "forbidden_workload" } }, { status: 403 })
+  ])("does not mislabel malformed or workload errors", async (response) => {
+    const result = await downloadWeeklyPaper({}, upstream(response), access());
+    expect(result.agentResult?.status).toBe("unavailable");
     expect(result.quickReplies).toBeUndefined();
   });
-
-  it("reports an empty exact-issue list without disclosing access", async () => {
-    const result = await downloadWeeklyPaper(
-      { issueNumber: 1733 },
-      async () => response([]),
-      access()
-    );
-    expect(result.agentResult?.status).toBe("not_found");
+  it.each([
+    { items: [] },
+    { items: [{ ...item, onlineRevision: null, pdfPublished: false }] },
+    new Response("", { status: 404 })
+  ])("does not disclose an unavailable issue", async (data) => {
+    expect(
+      (await downloadWeeklyPaper({ issueNumber: 1733 }, upstream(data), access())).agentResult
+        ?.status
+    ).toBe("not_found");
   });
-
-  it.each(
-    [
-      { items: [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }] },
-      [{ issueNumber: 1733, series: "children", locale: "zh-Hant" }],
-      [{ issueNumber: 1733, series: "general", locale: "en" }],
-      [
-        { issueNumber: 1733, series: "general", locale: "zh-Hant" },
-        { issueNumber: 1733, series: "general", locale: "zh-Hant" }
-      ]
-    ].map((data) => ({ data }))
-  )("rejects a mismatched exact-issue contract", async ({ data }) => {
-    const result = await downloadWeeklyPaper(
-      { issueNumber: 1733 },
-      async () => response(data),
-      access()
-    );
-    expect(result.agentResult?.status).toBe("unavailable");
+  it.each([
+    { items: [{ ...item, issueNumber: 1732 }] },
+    { items: [{ ...item, contentLocale: "en" }] },
+    { items: [{ ...item, series: "children" }] },
+    { items: [item, item] },
+    { items: [{ ...item, onlineRevision: "2" }] },
+    [item]
+  ])("rejects mismatched discovery contracts", async (data) => {
+    expect(
+      (await downloadWeeklyPaper({ issueNumber: 1733 }, upstream(data), access())).agentResult
+        ?.status
+    ).toBe("unavailable");
   });
-
-  it("rejects invalid input before calling dependencies", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    const resolveLineSubject = vi.fn();
-    const result = await downloadWeeklyPaper(
-      { issueNumber: 0 },
-      fetchImpl,
-      access(resolveLineSubject)
-    );
-    expect(resolveLineSubject).not.toHaveBeenCalled();
+  it("rejects invalid input before dependencies", async () => {
+    const member = access();
+    const fetchImpl = upstream();
+    await downloadWeeklyPaper({ issueNumber: 0 }, fetchImpl, member);
+    expect(member.resolveLineSubject).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ agentResult: { status: "unavailable" } });
   });
-
-  it("enforces a hard HHC request timeout", async () => {
+  it("aborts a stalled discovery request", async () => {
     vi.useFakeTimers();
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
-      (_input, init) =>
-        new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-            once: true
-          });
-        })
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation((url, init) =>
+      String(url).includes("/priv/line/member-access")
+        ? Promise.resolve(envelope(grant))
+        : new Promise((_resolve, reject) =>
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true
+            })
+          )
     );
-    const resultPromise = downloadWeeklyPaper({}, fetchImpl, access());
-    await vi.advanceTimersByTimeAsync(3_001);
-    await expect(resultPromise).resolves.toMatchObject({ agentResult: { status: "unavailable" } });
+    const result = downloadWeeklyPaper({}, fetchImpl, access());
+    await vi.advanceTimersByTimeAsync(3001);
+    expect((await result).agentResult?.status).toBe("unavailable");
   });
 });

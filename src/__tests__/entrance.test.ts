@@ -1,4 +1,5 @@
 import type { ProfileTurnInput } from "../runtime/profile-runtime.js";
+import { memberBulletinFixture } from "../testing/member-bulletin-fixture.js";
 import type { QuoteStore } from "../quotes/types.js";
 import { randomUUID } from "node:crypto";
 
@@ -4299,13 +4300,7 @@ describe("LINE entrance", () => {
       textFallbackGenerator: { completeText: deepSeekGenerate },
       textMessageHandlers: {
         main_weekly_paper: createDownloadWeeklyPaperTextMessageHandler(
-          vi.fn().mockResolvedValue(
-            Response.json({
-              data: [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }],
-              error: null,
-              meta: {}
-            })
-          ),
+          vi.fn<typeof fetch>(async (url) => memberBulletinFixture(url)),
           {
             resolveLineSubject: vi.fn().mockResolvedValue({
               bound: true,

@@ -102,12 +102,12 @@ Companion producer/consumer PRs:
   restart, consent reset, unchanged original expiry and terminal winner. Required CI passed.
 - Gateway #171 (`1d5c0f8`): exact public POST cancel/restart routing, with CSRF and
   intent proof enforced by Account. Required CI passed.
-- Account FE #112 (`ebb113a`): current intent view, cancellation, restart-before-switch,
+- Account FE #112 (`e633db3`): current intent view, cancellation, restart-before-switch,
   stale-response guards and terminal states. Required CI passed.
-- Web API #240 (`34c7cf9`): Bot-only current qualification,
+- Web API #240 (`e30dbb3`): Bot-only current qualification,
   edition grants and legal acceptance projection. Focused tests/OpenAPI passed;
-  local full race hit a package timeout; CI policy has a scanner finding under
-  investigation, image passed and Go verification is pending.
+  local full race hit a package timeout; CI policy and image passed; Go verification is pending. The synthetic fixture
+  scanner finding uses an exact rule/path/literal allowlist with a negative control.
 
 The Bot recognizes cancelled/superseded status and validates additive Account intent
 correlation. An unbound direct main-profile bulletin request can start Account login
@@ -137,11 +137,36 @@ one-use parallel clicks, source isolation, generation drift, cancellation, expir
 pending login, legacy producer, authority failure and transient credential exclusion.
 The focused regression passed 221 tests (one optional integration skipped); the other
 focused Account/main/result suites also passed. Typecheck, lint, build, format and
-architecture checks passed. Full Bot regression/CI and live native LINE/browser
-acceptance remain pending.
+architecture checks passed. Bot PR #102 (`dce50d2`) passed required full CI. Local full runs hit timing
+failures and stalled shell fixtures, so are not reported as passing. Live native
+LINE/browser acceptance remains pending.
 
 Deploy additive Account/Web API producers first, drain old Account replicas before
 new consumers rely on generation fences, deploy Bot terminal-status support and
 Gateway routes before enabling the Account FE cancellation/restart UI. No merge or
 production rollout is included. P6 edition/discovery/exact website target, P7 binding
 lifecycle and P8 ingest/Admin improvements remain pending.
+
+## P6 authorized bulletin editions and exact website entry
+
+Bot now reads fresh member access, asks for an authorized edition when ambiguous,
+and discovers only that edition via the member online-discovery API. Explicit
+series/language/issue selectors survive login and legal confirmation. Unknown,
+unavailable or denied responses never fall back to another edition or public
+content. Both PDF-only and online-only publications can return the exact website
+entry; the Bot does not promise online reading when the website feature is off.
+
+Website PR #218 adds bounded exact/latest edition targets, preserves them through
+mode switches and legal navigation, and retains authorization-scoped request
+cancellation. Account FE #112 accepts only the fixed-origin legal return allowlist.
+The website full test step passed; its React Compiler lint failure was corrected by
+memoizing the parsed target, with 18 focused tests and lint passing before re-push. Required website CI
+then passed at `0a5f264`.
+
+Bot focused regression passed 285 tests (one optional integration skipped), with
+57 additional/current normalization, completion and continuation tests passing.
+Typecheck, lint, format and build passed. The local full suite hit existing
+shell-fixture and upload timeouts; it is not reported as passing. Offline
+architecture/evaluation checks and required PR CI remain tracked separately. Deployment order remains
+Web API producer, Account FE return support, website target support, then Bot.
+No merge, deployment, live LINE or browser acceptance is claimed. P7/P8 remain open.

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { memberBulletinFixture } from "../testing/member-bulletin-fixture.js";
 
 import { createDownloadWeeklyPaperTextMessageHandler } from "../capabilities/download-weekly-paper.js";
 import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
@@ -46,13 +47,7 @@ describe("main provider-free direct functions", () => {
   );
 
   it("handles Weekly Paper without the semantic agent router", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      Response.json({
-        data: [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }],
-        error: null,
-        meta: {}
-      })
-    );
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => memberBulletinFixture(url));
     const handler = createDownloadWeeklyPaperTextMessageHandler(fetchImpl, {
       resolveLineSubject: vi.fn().mockResolvedValue({
         bound: true,
@@ -67,11 +62,11 @@ describe("main provider-free direct functions", () => {
       { profile, event, requestId: "weekly" }
     );
 
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(weeklyPaperReply.ok).toBe(true);
     expect(weeklyPaperReply).toMatchObject({
       executedAction: "download_weekly_paper",
-      quickReplies: [expect.objectContaining({ label: "查看會員週報" })]
+      quickReplies: [expect.objectContaining({ label: "查看該期週報" })]
     });
   });
 

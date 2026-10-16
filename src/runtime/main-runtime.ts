@@ -1,4 +1,5 @@
 import type { QuoteScope, QuoteToken } from "../quotes/types.js";
+import { matchesWeeklyPaper } from "../capabilities/weekly-paper-request.js";
 import { createHash, randomUUID } from "node:crypto";
 
 import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
@@ -395,15 +396,6 @@ function withUpdateCapability<T extends ProfileTurnInput>(input: T): T {
           enabledFunctions: [...input.profile.enabledFunctions, "update_own_profile"]
         }
       };
-}
-
-function matchesWeeklyPaper(text: string): boolean {
-  return (
-    !/(?:不要|不用|取消)/u.test(text) &&
-    /(?:下載|最新|第\s*\d+\s*期).*週報|週報.*(?:下載|最新|第\s*\d+\s*期)/u.test(
-      text.normalize("NFKC")
-    )
-  );
 }
 
 function matchesOwnProfileUpdate(text: string): boolean {

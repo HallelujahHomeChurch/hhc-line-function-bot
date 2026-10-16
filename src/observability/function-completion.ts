@@ -221,6 +221,7 @@ function guideFunctionResult(
   result: FunctionExecutionResult,
   action: CapabilityName
 ): FunctionExecutionResult {
+  if (action === "download_weekly_paper" && result.quickReplies?.length) return result;
   const definition = getFunctionDefinition(action);
   return applyResultGuidance({
     state: functionResultState(result),

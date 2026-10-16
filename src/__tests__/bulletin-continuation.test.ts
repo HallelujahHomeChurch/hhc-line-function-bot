@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { memberBulletinFixture } from "../testing/member-bulletin-fixture.js";
 import { createAccountAdminClient } from "../account/account-admin-client.js";
 import {
   completedBulletinButton,
@@ -79,13 +80,7 @@ function fixture() {
     }
   };
   const postback: PostbackContext = { ...context, isContextCurrent: current };
-  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () =>
-    Response.json({
-      data: [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }],
-      meta: {},
-      error: null
-    })
-  );
+  const fetchImpl = vi.fn<typeof fetch>(async (url) => memberBulletinFixture(url));
   const handler = createBulletinContinuationHandler({ account, sessions, fetchImpl });
   const start = () =>
     startBulletinBinding(
@@ -115,6 +110,45 @@ function fixture() {
 }
 
 describe("exact LINE bulletin continuation", () => {
+  it("preserves explicit content language and series across login", async () => {
+    const f = fixture();
+    await startBulletinBinding(
+      { issueNumber: 1733, series: "children", locale: "en" },
+      f.context,
+      f.account,
+      f.sessions,
+      new Date("2026-10-17T00:00:00Z")
+    );
+    expect((await findBulletinContinuation(f.sessions, intentId))?.arguments).toEqual({
+      issueNumber: 1733,
+      series: "children",
+      locale: "en"
+    });
+    f.fetchImpl.mockImplementation(async (url) => {
+      const response = memberBulletinFixture(url);
+      const body = await response.json();
+      if (String(url).includes("member-access"))
+        body.data.editions = [{ series: "children", locale: "en" }];
+      else
+        body.data.items = [
+          {
+            issueNumber: 1733,
+            series: "children",
+            contentLocale: "en",
+            pdfPublished: false,
+            onlineRevision: 1
+          }
+        ];
+      return Response.json(body);
+    });
+    const result = await f.handler(request, f.postback);
+    const discovery = new URL(String(f.fetchImpl.mock.calls[1]?.[0]));
+    expect(discovery.searchParams.get("series")).toBe("children");
+    expect(discovery.searchParams.get("locales")).toBe("en");
+    expect(discovery.searchParams.get("issueNumber")).toBe("1733");
+    const action = result.quickReplies?.[0]?.action;
+    expect(action?.type === "uri" && action.uri).toContain("contentLocale=en");
+  });
   it("wires a signed request, exact completion and explicit continuation through the production registries", async () => {
     const f = fixture();
     const config: AppConfig = {
@@ -227,7 +261,7 @@ describe("exact LINE bulletin continuation", () => {
           })
         ).statusCode
       ).toBe(200);
-      expect(f.fetchImpl).toHaveBeenCalledOnce();
+      expect(f.fetchImpl).toHaveBeenCalledTimes(2);
       expect(replyText.mock.calls[2]?.[1]).toContain("1733");
     } finally {
       await app.close();
@@ -250,8 +284,8 @@ describe("exact LINE bulletin continuation", () => {
     ]);
     expect(results.filter((result) => result.agentResult?.status === "success")).toHaveLength(1);
     expect(f.resolve).toHaveBeenCalledOnce();
-    expect(f.fetchImpl).toHaveBeenCalledOnce();
-    expect(f.fetchImpl.mock.calls[0]?.[0]).toContain("issueNumber=1733");
+    expect(f.fetchImpl).toHaveBeenCalledTimes(2);
+    expect(f.fetchImpl.mock.calls[1]?.[0]).toContain("issueNumber=1733");
     expect(f.inspect).toHaveBeenCalledWith({
       correlation: f.correlation,
       expectedLineUserId: "U1",
