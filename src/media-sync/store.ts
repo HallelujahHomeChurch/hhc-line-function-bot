@@ -277,6 +277,26 @@ export class PostgresMediaSyncStore {
     }
   }
 
+  async inspectBindingCode(
+    profileName: string,
+    code: string
+  ): Promise<{ id: string; collectionId: string; createdByHhcUserId: string } | undefined> {
+    const result = await this.pool.query<BindingCodeRow>(
+      `select id, collection_id, created_by_hhc_user_id from media_sync_binding_codes
+       where profile_name=$1 and code_hash=$2 and consumed_at is null and expires_at > clock_timestamp()
+         and not exists (select 1 from media_sync_collection_deletions deletion where deletion.collection_id=media_sync_binding_codes.collection_id)`,
+      [profileName, hashCode(code)]
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          collectionId: row.collection_id,
+          createdByHhcUserId: row.created_by_hhc_user_id
+        }
+      : undefined;
+  }
+
   async bindWithCode(input: BindMediaSyncCodeInput): Promise<BindMediaSyncCodeResult> {
     const client = await this.pool.connect();
     const now = input.now ?? this.now();
@@ -295,7 +315,10 @@ export class PostgresMediaSyncStore {
         [input.profileName, hashCode(input.code), now]
       );
       const candidateRow = candidate.rows[0];
-      if (!candidateRow) {
+      if (
+        !candidateRow ||
+        (input.expectedCodeId !== undefined && candidateRow.id !== input.expectedCodeId)
+      ) {
         await client.query("rollback");
         return { status: "invalid_code" };
       }
@@ -310,7 +333,7 @@ export class PostgresMediaSyncStore {
              where deletion.collection_id=media_sync_binding_codes.collection_id
            )
          for update`,
-        [candidateRow.id, input.profileName, hashCode(input.code), now]
+        [candidateRow.id, input.profileName, hashCode(input.code), input.now ?? this.now()]
       );
       const codeRow = code.rows[0];
       if (!codeRow) {
