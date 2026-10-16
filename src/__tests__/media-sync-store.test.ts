@@ -1,3 +1,5 @@
+import { PostgresAccessStore } from "../access/postgres-access-store.js";
+import { runAccessMigrations } from "../access/migrations.js";
 import { createHash, randomUUID } from "node:crypto";
 
 import { Pool, type PoolClient } from "pg";
@@ -93,8 +95,16 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await owner.query(`create schema "${schemaName}"`);
     left = schemaPool(databaseUrl!, schemaName);
     right = schemaPool(databaseUrl!, schemaName);
+    await runAccessMigrations(left);
     await runMediaSyncMigrations(left);
+    await runAccessMigrations(left);
     await runMediaSyncMigrations(left);
+    await new PostgresAccessStore(left).addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: "bound-group",
+      createdBy: "synthetic-admin"
+    });
   });
 
   afterAll(async () => {
@@ -192,6 +202,11 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await left.query(
       "truncate audit_outboxes, media_sync_binding_codes, media_sync_bindings, media_sync_collection_deletions, media_sync_ingests cascade"
     );
+    await left.query(`insert into media_sync_bindings
+      (id,profile_name,group_id,collection_id,group_display_name,binding_code_created_by_hhc_user_id,bound_at,admission_generation)
+      select gen_random_uuid(),'helper','bound-group','bound-collection','Synthetic group',
+        '018f47d2-e5d1-4f3f-8f18-6c8e32621f71',clock_timestamp(),execution_generation
+      from access_principals where profile_name='helper' and principal_type='group' and principal_id='bound-group'`);
   });
 
   it("stores only a hash and fixes code expiry at 60 minutes", async () => {
@@ -586,7 +601,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
 
   it("enforces one active group and collection binding without overwriting", async () => {
     const store = new PostgresMediaSyncStore(left);
-    await bind(store, "collection-unique-a", "group-unique-a");
+    await bind(left, store, "collection-unique-a", "group-unique-a");
     const sameGroupCode = await store.createBindingCode({
       profileName: "helper",
       collectionId: "collection-unique-b",
@@ -630,7 +645,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const now = new Date("2099-01-01T00:00:00.000Z");
     const completedAt = new Date("2099-01-01T00:01:00.000Z");
     const store = new PostgresMediaSyncStore(left, { now: () => now });
-    await bind(store, "collection-delete-lifecycle", "group-delete-lifecycle");
+    await bind(left, store, "collection-delete-lifecycle", "group-delete-lifecycle");
     await left.query(
       `insert into media_sync_binding_codes
         (id, profile_name, collection_id, code_hash, created_by_hhc_user_id, expires_at)
@@ -747,7 +762,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const store = new PostgresMediaSyncStore(left, { now: () => now });
     const collectionId = "collection-delete-fence";
     const groupId = "group-delete-fence";
-    await bind(store, collectionId, groupId);
+    await bind(left, store, collectionId, groupId);
     const input = { ...ingest("delete-fence"), collectionId, groupId };
     const created = await store.createIngest(input, {
       manualIntent: { destinationId: "pending-delete-fence", requesterUserId: "line-user" }
@@ -864,7 +879,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     const pausedBegin = pausePoolAfterInsert(left);
     const deletion = new PostgresMediaSyncStore(pausedBegin.pool, { now: () => now });
     const writer = new PostgresMediaSyncStore(right, { now: () => now });
-    await bind(setup, collectionId, groupId);
+    await bind(left, setup, collectionId, groupId);
     const input = { ...ingest(suffix), sourceKey, collectionId, groupId };
     const manual = operation === "finalizeManualPublication";
     const created = await setup.createIngest(
@@ -1586,13 +1601,144 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     ).resolves.toBe(false);
   });
 
+  it("rotates group execution authority atomically and never revives old work after registration", async () => {
+    const store = new PostgresMediaSyncStore(left),
+      access = new PostgresAccessStore(left);
+    const groupId = "group-admission-revocation",
+      collectionId = "collection-admission-revocation";
+    const binding = await bind(left, store, collectionId, groupId);
+    if (binding.status !== "bound") throw new Error("expected binding");
+    const created = await store.createIngest({
+      ...ingest("admission-revocation"),
+      groupId,
+      collectionId
+    });
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await left.query(
+      `update media_sync_outbox set dispatched_at=clock_timestamp() where source_key=$1`,
+      [created.ingest.sourceKey]
+    );
+    const before = await left.query(
+      `select execution_generation from access_principals where principal_type='group' and principal_id=$1`,
+      [groupId]
+    );
+    expect(await store.isBindingAdmitted(binding.binding.id)).toBe(true);
+    expect(
+      await access.disablePrincipal({
+        profileName: "helper",
+        type: "group",
+        principalId: groupId,
+        disabledBy: "synthetic-admin"
+      })
+    ).toBe(true);
+    const after = await left.query(
+      `select execution_generation from access_principals where principal_type='group' and principal_id=$1`,
+      [groupId]
+    );
+    expect(after.rows[0].execution_generation).not.toBe(before.rows[0].execution_generation);
+    await access.addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: groupId,
+      createdBy: "synthetic-admin"
+    });
+    expect(await store.isBindingAdmitted(binding.binding.id)).toBe(false);
+    expect(
+      await store.claimWork({ workId: created.ingest.workId, operation: "intake", leaseMs: 60000 })
+    ).toBe("admission_revoked");
+    expect(
+      await store.blockUnavailableWork({
+        workId: created.ingest.workId,
+        reason: "admission_revoked"
+      })
+    ).toBe(true);
+    expect(
+      (
+        await left.query(
+          `select state, failure_category from media_sync_publications where source_key=$1`,
+          [created.ingest.sourceKey]
+        )
+      ).rows[0]
+    ).toEqual({ state: "revoked", failure_category: "admission_revoked" });
+    await runAccessMigrations(left);
+    await runMediaSyncMigrations(left);
+    expect(await store.isBindingAdmitted(binding.binding.id)).toBe(false);
+  });
+
+  it("waits for concurrent group revocation before finalizing a publication", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const groupId = "group-finalize-revocation",
+      collectionId = "collection-finalize-revocation";
+    await bind(left, store, collectionId, groupId);
+    const created = await store.createIngest({
+      ...ingest("finalize-revocation"),
+      groupId,
+      collectionId
+    });
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await left.query(
+      `update media_sync_outbox set dispatched_at=clock_timestamp() where source_key=$1`,
+      [created.ingest.sourceKey]
+    );
+    const claim = await store.claimWork({
+      workId: created.ingest.workId,
+      operation: "intake",
+      leaseMs: 60000
+    });
+    if (typeof claim === "string" || !claim.claimedUntil) throw new Error("expected claim");
+    const blocker = await right.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query(
+        `update access_principals set disabled_at=clock_timestamp(), execution_generation=gen_random_uuid() where principal_type='group' and principal_id=$1`,
+        [groupId]
+      );
+      let settled = false;
+      const finalized = store
+        .finalizeCollectionPublication({
+          workId: created.ingest.workId,
+          expectedClaimedUntil: claim.claimedUntil,
+          collectionId,
+          occurrenceId: "must-not-publish"
+        })
+        .finally(() => {
+          settled = true;
+        });
+      let waiting = false;
+      for (let attempt = 0; attempt < 100 && !settled; attempt++) {
+        const result = await blocker.query(
+          `select exists(select 1 from pg_locks waiter join pg_locks holder on waiter.locktype=holder.locktype and waiter.transactionid=holder.transactionid where not waiter.granted and holder.granted and holder.pid=pg_backend_pid()) waiting`
+        );
+        if (result.rows[0].waiting) {
+          waiting = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      await blocker.query("commit");
+      expect(await finalized).toBe(false);
+    } finally {
+      await blocker.query("rollback");
+      blocker.release();
+    }
+    expect(
+      (
+        await left.query(
+          `select state,target_id from media_sync_publications where source_key=$1`,
+          [created.ingest.sourceKey]
+        )
+      ).rows[0]
+    ).toEqual({ state: "pending", target_id: null });
+  });
+
   it.each(["collection", "manual"] as const)(
     "blocks old binding work without removing a published %s",
     async (published) => {
       const store = new PostgresMediaSyncStore(left);
       const collectionId = `collection-generation-${published}`,
         groupId = `group-generation-${published}`;
-      const original = await bind(store, collectionId, groupId);
+      const original = await bind(left, store, collectionId, groupId);
       if (original.status !== "bound") throw new Error("expected binding");
       const input = {
         ...ingest(`generation-${published}`),
@@ -1656,7 +1802,9 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
           checksumSha256: "a".repeat(64)
         })
       ).toBe(false);
-      expect(await store.blockUnboundWork(fence)).toBe(true);
+      expect(await store.blockUnavailableWork({ ...fence, reason: "unbound_generation" })).toBe(
+        true
+      );
       const rows = await left.query(
         `select publication_type,state,target_id from media_sync_publications where source_key=$1 order by publication_type`,
         [input.sourceKey]
@@ -1677,6 +1825,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
           )
         ).rows[0]
       ).toEqual({ asset_id: "retained-asset", binding_id: original.binding.id });
+      await runAccessMigrations(left);
       await runMediaSyncMigrations(left);
       expect(
         (
@@ -1698,7 +1847,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
 
   it("fences Asset persistence and stores only the actual collection occurrence", async () => {
     const store = new PostgresMediaSyncStore(left, { codeFactory: () => "ASSETBIND123" });
-    await bind(store, "collection-asset-stage", "group-asset-stage");
+    await bind(left, store, "collection-asset-stage", "group-asset-stage");
     const input = {
       ...ingest("asset-stage"),
       groupId: "group-asset-stage",
@@ -1783,7 +1932,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
 
   it("completes automatic publication before late manual confirmation, then reopens exact work", async () => {
     const store = new PostgresMediaSyncStore(left);
-    await bind(store, "collection-late-manual", "group-late-manual");
+    await bind(left, store, "collection-late-manual", "group-late-manual");
     const input = {
       ...ingest("late-manual"),
       groupId: "group-late-manual",
@@ -1864,7 +2013,7 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
 
   it("rejects manual finalize after the source tombstone and retains the actual handle for delete", async () => {
     const store = new PostgresMediaSyncStore(left);
-    await bind(store, "collection-manual-race", "group-manual-race");
+    await bind(left, store, "collection-manual-race", "group-manual-race");
     const input = {
       ...ingest("manual-race"),
       groupId: "group-manual-race",
@@ -2234,7 +2383,18 @@ function schemaPool(connectionString: string, schemaName: string): Pool {
   return new Pool({ connectionString, max: 4, options: `-c search_path=${schemaName},public` });
 }
 
-async function bind(store: PostgresMediaSyncStore, collectionId: string, groupId: string) {
+async function bind(
+  pool: Pool,
+  store: PostgresMediaSyncStore,
+  collectionId: string,
+  groupId: string
+) {
+  await new PostgresAccessStore(pool).addPrincipal({
+    profileName: "helper",
+    type: "group",
+    principalId: groupId,
+    createdBy: "synthetic-admin"
+  });
   const issued = await store.createBindingCode({
     profileName: "helper",
     collectionId,

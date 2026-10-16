@@ -85,6 +85,7 @@ describe("LINE media-sync lifecycle", () => {
       mediaSyncStore: {
         tombstoneSource,
         findActiveBinding,
+        isBindingAdmitted: vi.fn().mockResolvedValue(true),
         createIngest
       } as unknown as PostgresMediaSyncStore
     });
@@ -242,6 +243,7 @@ describe("LINE media-sync lifecycle", () => {
         accessStore,
         sessionStore: sessions,
         mediaSyncStore: {
+          isBindingAdmitted: vi.fn().mockResolvedValue(true),
           findActiveBinding: vi.fn().mockResolvedValue({ collectionId: "collection-1" }),
           createIngest: vi.fn().mockResolvedValue({ created: false, tombstoned: true }),
           attachManualIntent
@@ -399,6 +401,7 @@ async function manualMediaHarness(
     }),
     sessionStore: sessions,
     mediaSyncStore: {
+      isBindingAdmitted: vi.fn().mockResolvedValue(true),
       findActiveBinding: vi.fn().mockResolvedValue({ collectionId: "collection-1" }),
       createIngest: vi.fn().mockResolvedValue({ created: true, ingest: { workId: "work-1" } }),
       attachManualIntent

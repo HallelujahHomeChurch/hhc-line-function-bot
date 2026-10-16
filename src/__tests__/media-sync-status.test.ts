@@ -1,3 +1,4 @@
+import { runAccessMigrations } from "../access/migrations.js";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -48,6 +49,7 @@ describe.runIf(Boolean(databaseUrl))("media status PostgreSQL projection", () =>
     owner = new Pool({ connectionString: databaseUrl });
     await owner.query(`create schema "${schema}"`);
     pool = new Pool({ connectionString: databaseUrl, options: `-c search_path=${schema}` });
+    await runAccessMigrations(pool);
     await runMediaSyncMigrations(pool);
     store = new PostgresMediaSyncStore(pool);
     await pool.query(`insert into media_sync_ingests

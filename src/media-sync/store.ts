@@ -365,8 +365,10 @@ export class PostgresMediaSyncStore {
       const binding = await client.query<BindingRow>(
         `insert into media_sync_bindings
           (id, profile_name, group_id, collection_id, group_display_name,
-           bound_by_line_user_id, binding_code_created_by_hhc_user_id, bound_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8)
+           bound_by_line_user_id, binding_code_created_by_hhc_user_id, bound_at, admission_generation)
+         values ($1, $2, $3, $4, $5, $6, $7, $8,
+           (select execution_generation from access_principals where profile_name=$2
+            and principal_type='group' and principal_id=$3 and disabled_at is null))
          returning *`,
         [
           bindingId,
@@ -410,6 +412,19 @@ export class PostgresMediaSyncStore {
     } finally {
       client.release();
     }
+  }
+
+  async isBindingAdmitted(bindingId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `select 1 from media_sync_bindings binding
+       join access_principals principal on principal.profile_name=binding.profile_name
+         and principal.principal_type='group' and principal.principal_id=binding.group_id
+         and principal.disabled_at is null
+         and principal.execution_generation=binding.admission_generation
+       where binding.id=$1 and binding.disabled_at is null`,
+      [bindingId]
+    );
+    return Boolean(result.rowCount);
   }
 
   async findActiveBinding(input: {
@@ -908,7 +923,14 @@ export class PostgresMediaSyncStore {
          and outbox.dispatched_at is not null
          and (outbox.claimed_until is null or outbox.claimed_until <= $3)
          and (
-           (outbox.operation='intake' and ingest.state<>'tombstoned')
+           (outbox.operation='intake' and ingest.state<>'tombstoned' and exists (
+             select 1 from media_sync_bindings binding join access_principals principal
+               on principal.profile_name=binding.profile_name and principal.principal_type='group'
+               and principal.principal_id=binding.group_id and principal.disabled_at is null
+               and principal.execution_generation=binding.admission_generation
+             where binding.id=ingest.binding_id and binding.disabled_at is null
+             for share of binding, principal
+           ))
            or (outbox.operation='delete' and exists (
              select 1 from media_sync_source_tombstones tombstone
              where tombstone.source_key=outbox.source_key
@@ -923,8 +945,17 @@ export class PostgresMediaSyncStore {
       operation: MediaSyncOutboxOperation | null;
       completed_at: Date | string | null;
       tombstoned: boolean;
+      binding_active: boolean;
+      admitted: boolean;
     }>(
       `select ingest.state, outbox.operation, outbox.completed_at,
+              exists (select 1 from media_sync_bindings binding
+                where binding.id=ingest.binding_id and binding.disabled_at is null) binding_active,
+              exists (select 1 from media_sync_bindings binding join access_principals principal
+                on principal.profile_name=binding.profile_name and principal.principal_type='group'
+                and principal.principal_id=binding.group_id and principal.disabled_at is null
+                and principal.execution_generation=binding.admission_generation
+                where binding.id=ingest.binding_id and binding.disabled_at is null) admitted,
               exists (
                 select 1 from media_sync_source_tombstones tombstone
                 where tombstone.source_key=ingest.source_key
@@ -947,6 +978,8 @@ export class PostgresMediaSyncStore {
     ) {
       return "terminal";
     }
+    if (input.operation === "intake" && !existing.binding_active) return "unbound_generation";
+    if (input.operation === "intake" && !existing.admitted) return "admission_revoked";
     return "busy";
   }
 
@@ -1035,9 +1068,10 @@ export class PostgresMediaSyncStore {
     }
   }
 
-  async blockUnboundWork(input: {
+  async blockUnavailableWork(input: {
     workId: string;
-    expectedClaimedUntil: string;
+    reason: "unbound_generation" | "admission_revoked";
+    expectedClaimedUntil?: string;
   }): Promise<boolean> {
     const client = await this.pool.connect();
     try {
@@ -1047,9 +1081,16 @@ export class PostgresMediaSyncStore {
          join media_sync_outbox outbox using (source_key)
          where ingest.work_id=$1 and ingest.state<>'tombstoned'
            and outbox.operation='intake' and outbox.completed_at is null
-           and outbox.claimed_until=$2::timestamptz and outbox.claimed_until>clock_timestamp()
+           and (($2::timestamptz is not null and outbox.claimed_until=$2::timestamptz
+                 and outbox.claimed_until>clock_timestamp())
+             or ($2::timestamptz is null and (outbox.claimed_until is null or outbox.claimed_until<=clock_timestamp())
+               and not exists (select 1 from media_sync_bindings binding join access_principals principal
+                 on principal.profile_name=binding.profile_name and principal.principal_type='group'
+                 and principal.principal_id=binding.group_id and principal.disabled_at is null
+                 and principal.execution_generation=binding.admission_generation
+                 where binding.id=ingest.binding_id and binding.disabled_at is null)))
          for update of ingest, outbox`,
-        [input.workId, input.expectedClaimedUntil]
+        [input.workId, input.expectedClaimedUntil ?? null]
       );
       const sourceKey = owned.rows[0]?.source_key;
       if (!sourceKey) {
@@ -1061,10 +1102,10 @@ export class PostgresMediaSyncStore {
            state=case when target_id is not null then 'published'
              when publication_type='collection' then 'revoked' else state end,
            failure_category=case when target_id is not null then null
-             when publication_type='collection' then 'unbound_generation' else 'manual_authority_unavailable' end,
+             when publication_type='collection' then $2 else 'manual_authority_unavailable' end,
            updated_at=clock_timestamp()
          where source_key=$1 and state='pending'`,
-        [sourceKey]
+        [sourceKey, input.reason]
       );
       await client.query(
         `update media_sync_ingests set state='failed', updated_at=clock_timestamp() where source_key=$1`,
@@ -1072,8 +1113,8 @@ export class PostgresMediaSyncStore {
       );
       await client.query(
         `update media_sync_outbox set completed_at=clock_timestamp(), claimed_until=null,
-           last_error_category='unbound_generation' where source_key=$1 and operation='intake'`,
-        [sourceKey]
+           last_error_category=$2 where source_key=$1 and operation='intake'`,
+        [sourceKey, input.reason]
       );
       await client.query("commit");
       return true;
@@ -1176,6 +1217,11 @@ export class PostgresMediaSyncStore {
                and binding.group_id=ingest.group_id
                and binding.collection_id=ingest.collection_id
                and binding.disabled_at is null
+               and exists (select 1 from access_principals principal
+                 where principal.profile_name=binding.profile_name and principal.principal_type='group'
+                   and principal.principal_id=binding.group_id and principal.disabled_at is null
+                   and principal.execution_generation=binding.admission_generation
+                 for share of principal)
            )
            and not exists (
              select 1 from media_sync_collection_deletions deletion
@@ -1265,6 +1311,11 @@ export class PostgresMediaSyncStore {
                and binding.group_id=ingest.group_id
                and binding.collection_id=ingest.collection_id
                and binding.disabled_at is null
+               and exists (select 1 from access_principals principal
+                 where principal.profile_name=binding.profile_name and principal.principal_type='group'
+                   and principal.principal_id=binding.group_id and principal.disabled_at is null
+                   and principal.execution_generation=binding.admission_generation
+                 for share of principal)
            )
            and not exists (
              select 1 from media_sync_collection_deletions deletion
@@ -1304,6 +1355,11 @@ export class PostgresMediaSyncStore {
                and binding.group_id=ingest.group_id
                and binding.collection_id=ingest.collection_id
                and binding.disabled_at is null
+               and exists (select 1 from access_principals principal
+                 where principal.profile_name=binding.profile_name and principal.principal_type='group'
+                   and principal.principal_id=binding.group_id and principal.disabled_at is null
+                   and principal.execution_generation=binding.admission_generation
+                 for share of principal)
            )
            and not exists (
              select 1 from media_sync_collection_deletions deletion
@@ -1359,6 +1415,11 @@ export class PostgresMediaSyncStore {
                and binding.group_id=ingest.group_id
                and binding.collection_id=ingest.collection_id
                and binding.disabled_at is null
+               and exists (select 1 from access_principals principal
+                 where principal.profile_name=binding.profile_name and principal.principal_type='group'
+                   and principal.principal_id=binding.group_id and principal.disabled_at is null
+                   and principal.execution_generation=binding.admission_generation
+                 for share of principal)
            )
            and not exists (
              select 1 from media_sync_collection_deletions deletion

@@ -1,3 +1,5 @@
+import { PostgresAccessStore } from "../access/postgres-access-store.js";
+import { runAccessMigrations } from "../access/migrations.js";
 import { MediaSyncManagementService } from "../media-sync/service.js";
 import { randomUUID } from "node:crypto";
 
@@ -7118,6 +7120,7 @@ describe("LINE entrance", () => {
     const createIngest = vi.fn().mockRejectedValue(new Error("postgres unavailable"));
     const tryStart = vi.fn().mockResolvedValue("started");
     const mediaSyncStore = {
+      isBindingAdmitted: vi.fn().mockResolvedValue(true),
       findActiveBinding: vi.fn().mockResolvedValue({
         profileName: "helper",
         groupId: "Gmedia",
@@ -7196,6 +7199,7 @@ describe("LINE entrance", () => {
         router: { route },
         sessionStore: new InMemorySessionStore(),
         mediaSyncStore: {
+          isBindingAdmitted: vi.fn().mockResolvedValue(true),
           findActiveBinding: vi.fn().mockResolvedValue({ collectionId: "burst-collection" }),
           createIngest
         } as unknown as PostgresMediaSyncStore,
@@ -7293,6 +7297,7 @@ describe("LINE entrance", () => {
     const app = createTestApp(config, {
       accessStore,
       mediaSyncStore: {
+        isBindingAdmitted: vi.fn().mockResolvedValue(true),
         findActiveBinding: vi.fn().mockResolvedValue({
           profileName: "helper",
           groupId: "Gmedia-video",
@@ -7380,6 +7385,7 @@ describe("LINE entrance", () => {
         sessionStore,
         accountAdminClient: { authorizeFunctions },
         mediaSyncStore: {
+          isBindingAdmitted: vi.fn().mockResolvedValue(true),
           findActiveBinding: vi.fn().mockResolvedValue({
             profileName: "helper",
             groupId: "Gmedia-redelivery",
@@ -7465,6 +7471,7 @@ describe.runIf(
     let app: ReturnType<typeof createApp> | undefined;
     try {
       await owner.query(`create schema "${schemaName}"`);
+      await runAccessMigrations(pool);
       await runMediaSyncMigrations(pool);
       await redis.connect();
       const bindingCodes = ["BIND-GROUP-ONE", "BIND-GROUP-TWO"];
@@ -7497,7 +7504,7 @@ describe.runIf(
           })
         ).resolves.toMatchObject({ status: "issued" });
       }
-      const accessStore = new InMemoryAccessStore();
+      const accessStore = new PostgresAccessStore(pool);
       const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
       app = createApp(accessConfig(), {
         accessStore,

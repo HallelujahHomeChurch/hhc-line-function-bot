@@ -35,6 +35,7 @@ function event(message: LineEvent["message"]): LineEvent {
 
 function store(overrides: Partial<PostgresMediaSyncStore> = {}): PostgresMediaSyncStore {
   return {
+    isBindingAdmitted: vi.fn().mockResolvedValue(true),
     findActiveBinding: vi.fn().mockResolvedValue({
       profileName: "helper",
       groupId: "group-1",
@@ -50,6 +51,18 @@ function store(overrides: Partial<PostgresMediaSyncStore> = {}): PostgresMediaSy
 }
 
 describe("media sync webhook intake", () => {
+  it("does not enqueue media for a revoked binding admission", async () => {
+    const mediaStore = store({ isBindingAdmitted: vi.fn().mockResolvedValue(false) });
+    const result = await prepareMediaSyncIntake({
+      profile,
+      event: event({ id: "revoked-image", type: "image" }),
+      store: mediaStore,
+      now: new Date()
+    });
+    expect(result).toEqual({ eligible: false });
+    expect(mediaStore.createIngest).not.toHaveBeenCalled();
+  });
+
   it("ignores non-LINE content providers before touching durable state", async () => {
     const mediaStore = store();
 

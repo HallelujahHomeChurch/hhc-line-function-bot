@@ -22,7 +22,8 @@ const migrations = [
   `
   alter table access_principals
     add column if not exists last_success_function_name text,
-    add column if not exists last_success_at timestamptz
+    add column if not exists last_success_at timestamptz,
+    add column if not exists execution_generation uuid not null default gen_random_uuid()
   `,
   `
   create table if not exists access_audit_events (

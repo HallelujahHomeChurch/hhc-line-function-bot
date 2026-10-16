@@ -16,6 +16,21 @@ const migrations = [
     disabled_at timestamptz
   )
   `,
+  `do $$ begin
+    lock table media_sync_bindings in access exclusive mode;
+    if not exists (select 1 from pg_attribute where attrelid='media_sync_bindings'::regclass
+                   and attname='admission_generation' and not attisdropped) then
+      alter table media_sync_bindings add column admission_generation uuid;
+      update media_sync_bindings binding set admission_generation=principal.execution_generation
+      from access_principals principal
+      where principal.profile_name=binding.profile_name and principal.principal_type='group'
+        and principal.principal_id=binding.group_id and principal.disabled_at is null
+        and not exists (select 1 from access_audit_events audit
+          where audit.profile_name=binding.profile_name and audit.action='access.group.remove'
+            and audit.target_type='group' and audit.target_id=binding.group_id
+            and audit.created_at>=binding.bound_at);
+    end if;
+  end $$`,
   `
   create unique index if not exists media_sync_bindings_active_group_idx
   on media_sync_bindings (profile_name, group_id)

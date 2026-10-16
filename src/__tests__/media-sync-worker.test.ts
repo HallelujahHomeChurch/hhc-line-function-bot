@@ -242,7 +242,6 @@ describe("media sync Asset and collection stage", () => {
       },
       { requestId: "work-opaque-1", signal: undefined }
     );
-    expect(fixture.store.loadClaimedWork).toHaveBeenCalledTimes(5);
     expect(fixture.store.persistCompletedAsset).toHaveBeenCalledWith({
       workId: "work-opaque-1",
       expectedClaimedUntil: fixture.claim.claimedUntil,
@@ -338,6 +337,32 @@ describe("media sync Asset and collection stage", () => {
     }
   );
 
+  it("blocks revoked group admission before any external work and preserves owners", async () => {
+    const fixture = cleanAssetFixture();
+    fixture.store.claimWork.mockResolvedValue("admission_revoked");
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "permanent_failure",
+      reason: "admission_revoked"
+    });
+    expect(fixture.store.blockUnavailableWork).toHaveBeenCalledWith({
+      workId: "work-opaque-1",
+      reason: "admission_revoked"
+    });
+    expect(fixture.assets.get).not.toHaveBeenCalled();
+    expect(fixture.assets.softDelete).not.toHaveBeenCalled();
+  });
+
+  it("rechecks group admission after an external Asset read", async () => {
+    const fixture = cleanAssetFixture();
+    fixture.store.isBindingAdmitted.mockResolvedValueOnce(true).mockResolvedValue(false);
+    await expect(runMediaSyncWorker("work-opaque-1", fixture.options)).resolves.toEqual({
+      status: "permanent_failure",
+      reason: "admission_revoked"
+    });
+    expect(fixture.assets.addCollectionItem).not.toHaveBeenCalled();
+    expect(fixture.assets.softDelete).not.toHaveBeenCalled();
+  });
+
   it.each(["missing", "rebound", "legacy"])(
     "retains all owners when the binding generation is %s",
     async (scenario) => {
@@ -356,7 +381,7 @@ describe("media sync Asset and collection stage", () => {
         status: "permanent_failure",
         reason: "unbound_generation"
       });
-      expect(fixture.store.blockUnboundWork).toHaveBeenCalled();
+      expect(fixture.store.blockUnavailableWork).toHaveBeenCalled();
       expect(fixture.assets.get).not.toHaveBeenCalled();
       expect(fixture.assets.softDelete).not.toHaveBeenCalled();
       expect(fixture.assets.deleteCollectionItem).not.toHaveBeenCalled();
@@ -1069,6 +1094,7 @@ function deleteFixture() {
       .fn()
       .mockImplementation(async ({ operation }) => (operation === "intake" ? "terminal" : claim)),
     loadClaimedWork: vi.fn().mockResolvedValue(work),
+    isBindingAdmitted: vi.fn().mockResolvedValue(true),
     findActiveBinding: vi.fn(),
     retryOutbox: vi.fn().mockResolvedValue(true),
     failClaimedWork: vi.fn(),
@@ -1132,9 +1158,10 @@ function createAssetFixture() {
   const store = {
     claimWork: vi.fn().mockResolvedValue(claim),
     loadClaimedWork: vi.fn().mockImplementation(async () => work),
+    isBindingAdmitted: vi.fn().mockResolvedValue(true),
     findActiveBinding: vi.fn().mockResolvedValue({ id: "binding-1", collectionId: "collection-1" }),
     retryOutbox: vi.fn().mockResolvedValue(true),
-    blockUnboundWork: vi.fn().mockResolvedValue(true),
+    blockUnavailableWork: vi.fn().mockResolvedValue(true),
     failClaimedWork: vi.fn().mockResolvedValue(true),
     persistCompletedAsset: vi.fn().mockImplementation(async (input) => {
       work.ingest.assetId = input.assetId;

@@ -86,7 +86,13 @@ export type MediaSyncOutboxItem = {
   lastErrorCategory?: string;
 };
 
-export type MediaSyncWorkClaim = MediaSyncOutboxItem | "busy" | "terminal" | "missing";
+export type MediaSyncWorkClaim =
+  | MediaSyncOutboxItem
+  | "busy"
+  | "terminal"
+  | "missing"
+  | "admission_revoked"
+  | "unbound_generation";
 
 export type MediaSyncPublication = {
   sourceKey: string;
