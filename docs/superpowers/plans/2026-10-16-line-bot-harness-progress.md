@@ -60,6 +60,8 @@ has been merged or deployed; final head checks are recorded on the linked PRs.
   The completed media controls/retry slice passed 1,678 full-suite tests before
   the conversation/member integration. The integrated entry/control suite passed
   432 tests, including signed ingress and the existing 30/60-media regressions.
+  The final integrated full suite passed 1,755 tests across 146 files; Admin passed
+  1,283 tests across 129 files.
 - New PostgreSQL tests cover concurrent publication reservation, immutable late
   results, withdrawal cleanup, binding/admission changes, exact-code revocation,
   idempotent audits, pause/resume owner retention and constrained single-work retry.
@@ -76,6 +78,12 @@ has been merged or deployed; final head checks are recorded on the linked PRs.
   refusal to roll back non-empty audit data.
 
 ## Accepted boundaries and remaining acceptance
+
+- Implementation adjustment: worker outcomes explicitly distinguish pause, unbind
+  and admission revocation. Source withdrawal retains the existing tombstone/delete
+  outbox flow; explicit collection deletion retains its separate deletion ledger
+  and Asset service operation. These durable paths distinguish destructive intent
+  without introducing duplicate worker outcome names for existing deletion flows.
 
 - Unknown external publication results remain blocked for authoritative
   reconciliation. No automatic replay or guessed-owner deletion is provided.

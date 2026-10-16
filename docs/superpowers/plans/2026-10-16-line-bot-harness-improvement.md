@@ -211,7 +211,7 @@ Owner：Bot、Admin；Asset／Account／Gateway 僅依實際契約需求修改�
 
 pause/unbind completion 必須等待或明確呈現 settling 的 in-flight 狀態，不能宣稱已停而仍有未受控 publication。外部已成功但本地未知的結果先 reconciliation，不直接刪掉或重發。既有 unsend 依歷史 source key 繼續 tombstone／撤回，不因 unbind 失效。Bot leave/rejoin 不默默轉移 binding 或清除資料。
 
-worker 必須用不同 outcome 區分 paused、unbound_generation、admission_revoked、source_tombstoned、collection_deleted，不能把新停用情境映射成既有 binding_inactive。現有 terminalFailure/compensatePersistedOwners 可能刪除 Asset、已發布 collection occurrence 與 manual publication，P7 必須拆分判斷與 publication-specific compensation：pause 只釋放／暫停 claim；unbind/admission_revoked 只取消未發布的 auto collection 分支；已發布成果與被其他 publication 引用的 Asset 不被清除。只有明確 unsend/delete 沿原刪除語義。
+worker 必須用不同 outcome 區分 paused、unbound_generation、admission_revoked，不能把新停用情境映射成既有 binding_inactive。實作採既有刪除流程區分 source tombstone 與 collection deletion：前者使用 source tombstone 與 delete outbox，後者使用 collection deletion ledger 與明確的 Asset collection delete；不新增重複的 worker outcome。現有 terminalFailure/compensatePersistedOwners 可能刪除 Asset、已發布 collection occurrence 與 manual publication，P7 必須拆分判斷與 publication-specific compensation：pause 只釋放／暫停 claim；unbind/admission_revoked 只取消未發布的 auto collection 分支；已發布成果與被其他 publication 引用的 Asset 不被清除。只有明確 unsend/delete 沿原刪除語義。
 
 同一 work 的 manual save_resource 分支維持原批准 scope 與 current authorization，與 auto binding 分開判斷：僅 unbind/pause 不取消已明確授權的 manual 分支；group admission 撤銷則阻止該群組 manual 新執行，但仍保留已發布成果。worker 若要繼續 manual 必須能隔離 auto publication，不能沿共用 activeBinding shortcut。無法證明獨立時保持 blocked/uncertain，不自動重發或刪共用 Asset。
 
