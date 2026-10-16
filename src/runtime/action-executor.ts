@@ -160,6 +160,12 @@ export function createActionExecutor(options: ActionExecutorOptions) {
           await deny("handler_unavailable");
           return { status: "unavailable" };
         }
+        if (
+          !options.jobs.markStarted ||
+          !(await options.jobs.markStarted(input.review.resultJobId, 120_000))
+        ) {
+          return { status: "unavailable" };
+        }
         result = await handler(
           { ...(parsed.data as JsonRecord), confirm: true },
           {
@@ -170,7 +176,9 @@ export function createActionExecutor(options: ActionExecutorOptions) {
         );
         result = { ...result, executedAction: action.capability };
       } catch {
-        await deny("execution_unavailable");
+        await options.jobs
+          .fail(input.review.resultJobId, "execution_uncertain")
+          .catch(() => undefined);
         return { status: "unavailable" };
       }
       if (result.writePhase !== "commit") return deny("execution_denied", result);
@@ -189,6 +197,9 @@ export function createActionExecutor(options: ActionExecutorOptions) {
         } catch {
           // The unavailable result below fails closed without overwriting an uncertain commit.
         }
+        await options.jobs
+          .fail(input.review.resultJobId, "execution_uncertain")
+          .catch(() => undefined);
         return { status: "unavailable" };
       }
     }

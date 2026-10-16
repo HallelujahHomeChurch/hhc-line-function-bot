@@ -21,7 +21,9 @@ describe("SDK agent acceptance corpus", () => {
       "error/provider-failure-support-id",
       "action/reply-failure-durable-result",
       "web/prompt-injection-contained",
-      "main/provider-free"
+      "main/provider-free",
+      "quote/untrusted-envelope-and-authority",
+      "quote/confirmation-is-not-approval"
     ];
 
     expect(validateAgentEvalCorpus()).toEqual([]);

@@ -1,3 +1,4 @@
+import { PostgresQuoteStore } from "../quotes/postgres-store.js";
 import { createMeetingOccurrenceReader } from "../clients/meeting-occurrences.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
@@ -314,6 +315,19 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const helperProfile = config.profiles.find(
     (profile) => profile.name === "helper" && profile.agent
   );
+  const quoteStore =
+    postgres?.pool && helperProfile
+      ? new PostgresQuoteStore(
+          postgres.pool,
+          config.observability?.hmacKey ?? helperProfile.channelSecret
+        )
+      : undefined;
+  await quoteStore?.setup();
+  await quoteStore?.cleanupExpired();
+  const quoteCleanupTimer = quoteStore
+    ? setInterval(() => void quoteStore.cleanupExpired().catch(() => undefined), 300_000)
+    : undefined;
+  quoteCleanupTimer?.unref();
   let stopSdkStateCleanup: (() => void) | undefined;
   let helperStateLockPool: ReturnType<typeof createPostgresPool> | undefined;
   const runtimes: Partial<Record<string, ProfileRuntime>> = {};
@@ -407,6 +421,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     memoryCommands,
     resourceMemory,
     profileRuntime,
+    quoteStore,
     diagnostics: createDependencyDiagnostics({
       config,
       postgres: postgres?.pool,
@@ -425,6 +440,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       clearInterval(memoryPurgeTimer);
       clearInterval(knowledgePurgeTimer);
       stopSdkStateCleanup?.();
+      clearInterval(quoteCleanupTimer);
       stopAttachmentScanOutbox?.();
       stopMediaSyncOutbox?.();
       stopAuditOutbox?.();
