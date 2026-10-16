@@ -53,8 +53,8 @@ describe("main runtime", () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       Response.json({
         data: numbered
-          ? { items: [{ issueNumber: 1733, locale: "zh-Hant" }] }
-          : { issueNumber: 1733, locale: "zh-Hant" },
+          ? [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }]
+          : { issueNumber: 1733, series: "general", locale: "zh-Hant" },
         meta: {},
         error: null
       })

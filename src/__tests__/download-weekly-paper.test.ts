@@ -22,7 +22,7 @@ describe("download_weekly_paper", () => {
     const resolveLineSubject = vi.fn().mockResolvedValue({ bound: true, active: true, subjectId });
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(response({ issueNumber: 1733, locale: "zh-Hant" }));
+      .mockResolvedValue(response({ issueNumber: 1733, series: "general", locale: "zh-Hant" }));
 
     const result = await downloadWeeklyPaper({}, fetchImpl, access(resolveLineSubject));
 
@@ -52,7 +52,7 @@ describe("download_weekly_paper", () => {
   it("queries an exact issue only through the protected member list", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(response({ items: [{ issueNumber: 1733, locale: "zh-Hant" }] }));
+      .mockResolvedValue(response([{ issueNumber: 1733, series: "general", locale: "zh-Hant" }]));
 
     await expect(
       downloadWeeklyPaper({ issueNumber: 1733 }, fetchImpl, access())
@@ -66,7 +66,7 @@ describe("download_weekly_paper", () => {
 
   it.each([
     [{ bound: false, active: false }, "請先輸入「登入」連結 HHC 帳號，再查看會員週報。"],
-    [{ bound: true, active: false }, "此帳號目前沒有會員週報存取權。"]
+    [{ bound: true, active: false }, "此 HHC 帳號目前無法使用，請聯絡管理同工協助。"]
   ])(
     "denies unavailable linked-account states before HHC data access",
     async (decision, replyText) => {
@@ -113,7 +113,7 @@ describe("download_weekly_paper", () => {
     ["dependency failure", response({ error: {} }, 503)],
     ["invalid JSON", new Response("not-json")],
     ["wrong locale", response({ issueNumber: 1733, locale: "en" })],
-    ["mismatched issue", response({ items: [{ issueNumber: 1732, locale: "zh-Hant" }] })]
+    ["mismatched issue", response([{ issueNumber: 1732, series: "general", locale: "zh-Hant" }])]
   ])("fails closed for %s", async (_name, upstream) => {
     const args = _name === "mismatched issue" ? { issueNumber: 1733 } : {};
     const result = await downloadWeeklyPaper(
@@ -123,6 +123,61 @@ describe("download_weekly_paper", () => {
     );
     expect(result).toMatchObject({ agentResult: { status: "unavailable" } });
     expect(result).not.toHaveProperty("quickReplies");
+  });
+
+  it.each([
+    [
+      403,
+      "access_required",
+      "此帳號目前不符合會員週報存取資格，請至會員頁面確認，或聯絡管理同工。",
+      "查看會員頁面"
+    ],
+    [428, "policy_acceptance_required", "請先確認最新的會員條款，再回來查看週報。", "確認會員條款"]
+  ])("provides an actionable next step for %s", async (status, code, replyText, label) => {
+    const result = await downloadWeeklyPaper(
+      {},
+      async () => Response.json({ data: null, meta: {}, error: { code } }, { status }),
+      access()
+    );
+    expect(result).toMatchObject({ replyText, quickReplies: [{ label, action: { type: "uri" } }] });
+  });
+
+  it("does not interpret an unrelated 403 as membership denial", async () => {
+    const result = await downloadWeeklyPaper(
+      {},
+      async () => Response.json({ error: { code: "forbidden_workload" } }, { status: 403 }),
+      access()
+    );
+    expect(result.replyText).toBe("目前無法取得週報，請稍後再試。");
+    expect(result.quickReplies).toBeUndefined();
+  });
+
+  it("reports an empty exact-issue list without disclosing access", async () => {
+    const result = await downloadWeeklyPaper(
+      { issueNumber: 1733 },
+      async () => response([]),
+      access()
+    );
+    expect(result.agentResult?.status).toBe("not_found");
+  });
+
+  it.each(
+    [
+      { items: [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }] },
+      [{ issueNumber: 1733, series: "children", locale: "zh-Hant" }],
+      [{ issueNumber: 1733, series: "general", locale: "en" }],
+      [
+        { issueNumber: 1733, series: "general", locale: "zh-Hant" },
+        { issueNumber: 1733, series: "general", locale: "zh-Hant" }
+      ]
+    ].map((data) => ({ data }))
+  )("rejects a mismatched exact-issue contract", async ({ data }) => {
+    const result = await downloadWeeklyPaper(
+      { issueNumber: 1733 },
+      async () => response(data),
+      access()
+    );
+    expect(result.agentResult?.status).toBe("unavailable");
   });
 
   it("rejects invalid input before calling dependencies", async () => {

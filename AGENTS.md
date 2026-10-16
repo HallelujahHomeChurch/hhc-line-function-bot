@@ -28,7 +28,7 @@ Read these first when starting work:
 - Each profile has its own LINE credential references, access policy, wake-word behavior, and enabled functions.
 - The intended split is:
   - `helper`: managed direct users/groups, registration enabled, DeepSeek SDK agent.
-  - `main`: public direct users, groups blocked, registration disabled, provider-free, with public Weekly Paper download and Account-authorized own-profile updates.
+  - `main`: public direct users, groups blocked, registration disabled, provider-free, with protected member Weekly Paper access and Account-authorized own-profile updates.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
 - Administrator authority comes from a current linked Account administrator role and is rechecked for each protected operation. Legacy bootstrap or allowlist fields should not be reintroduced.
 - Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv` and `channelAccessTokenEnv`; do not put real LINE credentials or user IDs in the file.

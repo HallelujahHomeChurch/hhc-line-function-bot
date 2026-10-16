@@ -438,6 +438,7 @@ export interface AccessConfig {
 }
 
 export interface RateLimitConfig {
+  groupMaxRequests?: number;
   enabled: boolean;
   windowMs: number;
   maxRequests: number;

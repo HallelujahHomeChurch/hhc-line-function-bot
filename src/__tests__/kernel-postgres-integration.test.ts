@@ -1,3 +1,6 @@
+import { RedisAgentJobStore } from "../agent/jobs.js";
+import { handleAgentOperationWithLongJob } from "../transport/line/postbacks.js";
+import type { BotProfileConfig } from "../types.js";
 import { randomUUID } from "node:crypto";
 
 import { Pool } from "pg";
@@ -11,6 +14,7 @@ import { runCatalogMigrations } from "../catalog/migrations.js";
 import { PostgresCatalogStore } from "../catalog/postgres-store.js";
 import {
   createKernelPostgresEnvironment,
+  createKernelRedisEnvironment,
   type KernelPostgresEnvironment
 } from "../evals/kernel/integration/environment.js";
 import { runPostgresIntegrationMatrix } from "../evals/kernel/integration/postgres-matrix.js";
@@ -73,6 +77,57 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
       ).toBe("public");
     } finally {
       await observer.end();
+    }
+  });
+
+  it("does not repeat a PostgreSQL commit when the handler throws before returning its result", async () => {
+    const redis = await createKernelRedisEnvironment();
+    const [pool] = requiredEnvironment(environment).pools;
+    try {
+      await pool.query(
+        "create table webhook_commit_probe (id bigint generated always as identity primary key)"
+      );
+      const stores = redis.clients.map(
+        (client) => new RedisAgentJobStore({ client, keyPrefix: redis.keyPrefix })
+      );
+      const profile: BotProfileConfig = {
+        name: "helper",
+        webhookPath: "/api/line/webhook/helper",
+        channelSecret: "synthetic",
+        channelAccessToken: "unused",
+        allowDirectUser: true,
+        allowRooms: false,
+        allowedMessageTypes: ["text"],
+        groupRequireWakeWord: false,
+        wakeKeywords: [],
+        acceptMention: true,
+        enabledFunctions: [],
+        permissionRequiredFunctions: []
+      };
+      const event = {
+        type: "message",
+        webhookEventId: "committed-then-disconnected",
+        source: { type: "user", userId: "synthetic-requester" }
+      };
+      const operation = async () => {
+        await pool.query("insert into webhook_commit_probe default values");
+        throw new Error("connection lost after commit");
+      };
+      await expect(
+        handleAgentOperationWithLongJob({ jobStore: stores[0]!, profile, event, operation })
+      ).rejects.toThrow("connection lost after commit");
+      const retry = await handleAgentOperationWithLongJob({
+        jobStore: stores[1]!,
+        profile,
+        event,
+        operation
+      });
+      expect(retry?.replyText).toContain("已有處理紀錄");
+      expect(
+        (await pool.query("select count(*)::int as count from webhook_commit_probe")).rows[0].count
+      ).toBe(1);
+    } finally {
+      await redis.cleanup();
     }
   });
 
