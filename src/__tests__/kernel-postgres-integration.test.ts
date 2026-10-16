@@ -1,3 +1,6 @@
+import { RedisAgentJobStore } from "../agent/jobs.js";
+import { handleAgentOperationWithLongJob } from "../transport/line/postbacks.js";
+import type { BotProfileConfig } from "../types.js";
 import { randomUUID } from "node:crypto";
 
 import { Pool } from "pg";
@@ -11,6 +14,7 @@ import { runCatalogMigrations } from "../catalog/migrations.js";
 import { PostgresCatalogStore } from "../catalog/postgres-store.js";
 import {
   createKernelPostgresEnvironment,
+  createKernelRedisEnvironment,
   type KernelPostgresEnvironment
 } from "../evals/kernel/integration/environment.js";
 import { runPostgresIntegrationMatrix } from "../evals/kernel/integration/postgres-matrix.js";
@@ -73,6 +77,57 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
       ).toBe("public");
     } finally {
       await observer.end();
+    }
+  });
+
+  it("does not repeat a PostgreSQL commit when the handler throws before returning its result", async () => {
+    const redis = await createKernelRedisEnvironment();
+    const [pool] = requiredEnvironment(environment).pools;
+    try {
+      await pool.query(
+        "create table webhook_commit_probe (id bigint generated always as identity primary key)"
+      );
+      const stores = redis.clients.map(
+        (client) => new RedisAgentJobStore({ client, keyPrefix: redis.keyPrefix })
+      );
+      const profile: BotProfileConfig = {
+        name: "helper",
+        webhookPath: "/api/line/webhook/helper",
+        channelSecret: "synthetic",
+        channelAccessToken: "unused",
+        allowDirectUser: true,
+        allowRooms: false,
+        allowedMessageTypes: ["text"],
+        groupRequireWakeWord: false,
+        wakeKeywords: [],
+        acceptMention: true,
+        enabledFunctions: [],
+        permissionRequiredFunctions: []
+      };
+      const event = {
+        type: "message",
+        webhookEventId: "committed-then-disconnected",
+        source: { type: "user", userId: "synthetic-requester" }
+      };
+      const operation = async () => {
+        await pool.query("insert into webhook_commit_probe default values");
+        throw new Error("connection lost after commit");
+      };
+      await expect(
+        handleAgentOperationWithLongJob({ jobStore: stores[0]!, profile, event, operation })
+      ).rejects.toThrow("connection lost after commit");
+      const retry = await handleAgentOperationWithLongJob({
+        jobStore: stores[1]!,
+        profile,
+        event,
+        operation
+      });
+      expect(retry?.replyText).toContain("已有處理紀錄");
+      expect(
+        (await pool.query("select count(*)::int as count from webhook_commit_probe")).rows[0].count
+      ).toBe(1);
+    } finally {
+      await redis.cleanup();
     }
   });
 
@@ -321,3 +376,170 @@ function requiredEnvironment(
   if (!environment) throw new Error("kernel_postgres_test_environment_missing");
   return environment;
 }
+
+describe("LINE quote context in real PostgreSQL", () => {
+  it("isolates quotes and fences delayed replies, reset, unsend and expired lineage", async () => {
+    const { PostgresQuoteStore } = await import("../quotes/postgres-store.js");
+    const environment = await createKernelPostgresEnvironment();
+    let now = new Date("2026-10-16T00:00:00Z");
+    const [left, right] = environment.pools.map(
+      (pool) => new PostgresQuoteStore(pool, "synthetic-hmac-key", () => now)
+    );
+    const scope = {
+      profileName: "helper",
+      source: { type: "group", groupId: "group-one", userId: "user-one" }
+    };
+    const begin = (messageId: string, quotedMessageId?: string) =>
+      left.begin({
+        ...scope,
+        messageId,
+        quotedMessageId,
+        text: "下週服事表",
+        timestamp: now.getTime()
+      });
+    try {
+      await left.setup();
+      const original = (await begin("original"))!;
+      await left.recordReply(original, [
+        { id: "bot-one", text: "https://example.test/private?token=synthetic" },
+        { id: "bot-two", text: "private tool payload" }
+      ]);
+      expect((await begin("quote-user", "original"))?.quoted).toMatchObject({
+        status: "resolved",
+        author: "user",
+        kind: "message_text"
+      });
+      expect((await begin("quote-bot", "bot-two"))?.quoted).toEqual({
+        status: "resolved",
+        author: "bot",
+        kind: "reply_to_request",
+        text: "下週服事表"
+      });
+      const other = await left.begin({
+        ...scope,
+        source: { ...scope.source, userId: "user-two" },
+        messageId: "other",
+        quotedMessageId: "bot-one",
+        text: "繼續",
+        timestamp: now.getTime()
+      });
+      expect(other?.quoted).toEqual({ status: "other_requester" });
+      for (const changed of [
+        { ...scope, profileName: "other" },
+        { ...scope, source: { ...scope.source, groupId: "group-two" } }
+      ])
+        expect(await left.inspect(changed, "bot-one")).toEqual({ bot: false });
+      const stored = await environment.pools[0].query(
+        "select safe_text from line_quote_messages where author='bot'"
+      );
+      expect(JSON.stringify(stored.rows)).not.toMatch(/private|token|payload/);
+      await right.reset(scope);
+      expect(await left.isCurrent(original.token)).toBe(false);
+      await left.recordReply(original, [{ id: "late-bot", text: "old" }]);
+      expect(await left.inspect(scope, "late-bot")).toEqual({ bot: false });
+      const afterReset = (await begin("after-reset"))!;
+      expect(afterReset.clearCheckpoint).toBe(true);
+      // A failed checkpoint clear remains pending across webhook retries/replicas.
+      expect((await begin("after-failed-clear"))?.clearCheckpoint).toBe(true);
+      await left.acknowledgeClear(afterReset.token);
+      expect((await begin("after-clear"))?.clearCheckpoint).toBe(false);
+      await right.unsend(scope, "future-original");
+      expect(await begin("future-original")).toBeUndefined();
+      const active = (await begin("active"))!;
+      const affected = await right.unsend(scope, "active");
+      expect(affected).toContainEqual(scope);
+      expect(await right.unsend(scope, "active")).toContainEqual(scope);
+      expect(await left.isCurrent(active.token)).toBe(false);
+      await left.recordReply(active, [{ id: "late-unsent", text: "old" }]);
+      expect(await left.inspect(scope, "late-unsent")).toEqual({ bot: false });
+      expect((await begin("after-unsend"))?.clearCheckpoint).toBe(true);
+      now = new Date(now.getTime() + 16 * 60_000);
+      expect((await begin("expired", "original"))?.quoted).toEqual({ status: "unavailable" });
+      expect(
+        await left.begin({
+          ...scope,
+          messageId: "too-old",
+          timestamp: now.getTime() - 7 * 24 * 60 * 60_000
+        })
+      ).toBeUndefined();
+      expect(
+        await left.begin({
+          ...scope,
+          source: { type: "group", groupId: "group-one" },
+          timestamp: now.getTime()
+        })
+      ).toBeUndefined();
+    } finally {
+      await environment.cleanup();
+    }
+  });
+});
+
+it("deletes a real late LangGraph checkpoint after a concurrent quote reset", async () => {
+  const { PostgresQuoteStore } = await import("../quotes/postgres-store.js");
+  const { PostgresSaver } = await import("@langchain/langgraph-checkpoint-postgres");
+  const { FakeToolCallingModel } = await import("langchain");
+  const { createHelperAgent } = await import("../helper-agent/agent.js");
+  const { createPostgresHelperAgentState } = await import("../helper-agent/state.js");
+  const environment = await createKernelPostgresEnvironment();
+  const [pool, lockPool] = environment.pools;
+  const store = new PostgresQuoteStore(pool, "synthetic-key");
+  const second = new PostgresQuoteStore(lockPool, "synthetic-key");
+  const saver = new PostgresSaver(pool);
+  const state = createPostgresHelperAgentState({
+    pool,
+    lockPool,
+    checkpointer: saver,
+    hmacKey: "synthetic-key"
+  });
+  const scope = { profileName: "helper", source: { type: "user", userId: "synthetic-user" } };
+  try {
+    await saver.setup();
+    await state.setup();
+    await store.setup();
+    const turn = (await store.begin({
+      ...scope,
+      messageId: "original",
+      text: "synthetic request",
+      timestamp: Date.now()
+    }))!;
+    expect(turn.token.threadId).toBe(state.threadId(scope));
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = state.run({
+      threadId: turn.token.threadId,
+      source: scope.source,
+      policyKey: "synthetic",
+      isCurrent: () => store.isCurrent(turn.token),
+      task: async () => {
+        entered();
+        await gate;
+        await createHelperAgent({
+          checkpointer: saver,
+          model: new FakeToolCallingModel({ toolCalls: [[]] }),
+          summaryModel: new FakeToolCallingModel({ toolCalls: [[]] })
+        }).invoke(
+          { messages: [{ role: "user", content: "late synthetic text" }] },
+          { configurable: { thread_id: turn.token.threadId } }
+        );
+      }
+    });
+    await started;
+    await second.reset(scope);
+    release();
+    await expect(pending).rejects.toThrow("context_invalidated");
+    expect(
+      (await pool.query("select 1 from checkpoints where thread_id=$1", [turn.token.threadId])).rows
+    ).toHaveLength(0);
+    await store.recordReply(turn, [{ id: "late-reply", text: "late" }]);
+    expect(await second.inspect(scope, "late-reply")).toEqual({ bot: false });
+  } finally {
+    await environment.cleanup();
+  }
+});

@@ -7,6 +7,10 @@ import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import type { CacheStore } from "../cache/cache-store.js";
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
+import {
+  createBulletinContinuationHandler,
+  startBulletinBinding
+} from "../account/bulletin-continuation.js";
 import { createQueryScheduleHandler } from "../capabilities/query-schedule/handler.js";
 import { createUpdateOwnProfileHandler } from "../capabilities/update-own-profile/handler.js";
 import { createCatalogAdminHandlers } from "../catalog/admin-handlers.js";
@@ -107,6 +111,14 @@ export function composeCapabilities(
               lineUserId: context.event.source.userId,
               profileName: context.profile.name,
               requestId: context.requestId,
+              startBinding: (args) =>
+                startBulletinBinding(
+                  args,
+                  context,
+                  clients.accountAdminClient ?? missingAccountClient(),
+                  clients.sessionStore,
+                  clients.now?.()
+                ),
               resolveLineSubject: (clients.accountAdminClient ?? missingAccountClient())
                 .resolveLineSubject
             }
@@ -193,6 +205,14 @@ export function composeCapabilities(
   }
 
   const postbacks: PostbackHandlerRegistry = {};
+  postbacks.continue_bulletin = {
+    capability: "download_weekly_paper",
+    handle: createBulletinContinuationHandler({
+      account: clients.accountAdminClient ?? missingAccountClient(),
+      sessions: clients.sessionStore,
+      fetchImpl: clients.fetchImpl ?? fetch
+    })
+  };
   const textMessages: TextMessageHandlerRegistry = {};
   if (clients.graph) {
     postbacks.select_ppt = {

@@ -29,6 +29,29 @@ function context(): FunctionHandlerContext {
 }
 
 describe("controlled completion observer", () => {
+  it("preserves the bulletin legal continuation without counting an unavailable action as success", async () => {
+    const firstSuccessStore = { tryMark: vi.fn() };
+    const observer = createFunctionCompletionObserver({ firstSuccessStore });
+    const result = {
+      ok: true,
+      replyText: "請先確認會員條款，再繼續查看指定週報。",
+      agentResult: { status: "unavailable" as const, replyText: "需要確認條款" },
+      quickReplies: [
+        {
+          label: "確認條款",
+          action: {
+            type: "uri" as const,
+            label: "確認條款",
+            uri: "https://account.alive.org.tw/legal"
+          }
+        }
+      ]
+    };
+    expect(
+      await observer.complete({ context: context(), action: "download_weekly_paper", result })
+    ).toEqual(result);
+    expect(firstSuccessStore.tryMark).not.toHaveBeenCalled();
+  });
   it("records group summary, completion, first success, and write events once per completion", async () => {
     const accessStore = new InMemoryAccessStore();
     await accessStore.addPrincipal({

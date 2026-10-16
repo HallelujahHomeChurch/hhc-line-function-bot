@@ -103,7 +103,7 @@ describe("agent long-running jobs", () => {
       type: "postback" as const,
       source: { type: "group" as const, groupId: "g1", userId: "u1" }
     };
-    const job = await store.createPending({ scope, label: "safe", ttlMs: 60_000 });
+    let job = await store.createPending({ scope, label: "safe", ttlMs: 60_000 });
     const retrieve = (
       authorize?: (names: readonly CapabilityName[]) => Promise<readonly CapabilityName[]>
     ) =>
@@ -123,6 +123,7 @@ describe("agent long-running jobs", () => {
       resultAuthority: { kind: "public" }
     });
     expect((await retrieve()).result.replyText).toBe("plain answer");
+    job = await store.createPending({ scope, label: "protected", ttlMs: 60_000 });
     await store.complete(job.id, {
       ok: true,
       replyText: "protected",
@@ -130,6 +131,7 @@ describe("agent long-running jobs", () => {
     });
     expect((await retrieve(async () => [])).result.replyText).not.toBe("protected");
     expect((await retrieve(async (names) => names)).result.replyText).toBe("protected");
+    job = await store.createPending({ scope, label: "preview", ttlMs: 60_000 });
     await store.complete(job.id, {
       ok: true,
       replyText: "old preview",
@@ -195,6 +197,111 @@ describe("agent long-running jobs", () => {
       capability: "save_memory",
       result: { replyText: "saved" }
     });
+  });
+
+  it("persists the event operation before dispatch and never repeats a committed-then-thrown operation", async () => {
+    const store = new InMemoryAgentJobStore();
+    const pending = vi.spyOn(store, "createPending");
+    const event = {
+      type: "message",
+      webhookEventId: "stable-event",
+      source: { type: "user", userId: "u1" }
+    };
+    const operation = vi.fn(async () => {
+      const job = await pending.mock.results[0]!.value;
+      expect(
+        await store.get(job.id, {
+          profileName: "helper",
+          sourceKey: "user:u1",
+          requesterUserId: "u1"
+        })
+      ).toMatchObject({ status: "pending", executionStartedAt: expect.any(String) });
+      throw new Error("committed then connection lost");
+    });
+    await expect(
+      handleAgentOperationWithLongJob({ jobStore: store, profile: jobProfile(), event, operation })
+    ).rejects.toThrow("committed");
+    const job = await pending.mock.results[0]!.value;
+    expect(
+      await store.get(job.id, {
+        profileName: "helper",
+        sourceKey: "user:u1",
+        requesterUserId: "u1"
+      })
+    ).toMatchObject({ status: "uncertain" });
+    await handleAgentOperationWithLongJob({
+      jobStore: store,
+      profile: jobProfile(),
+      event,
+      operation
+    });
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("does not dispatch when durable job creation fails", async () => {
+    const store = new InMemoryAgentJobStore();
+    vi.spyOn(store, "createPending").mockRejectedValue(new Error("store offline"));
+    const operation = vi.fn();
+    await expect(
+      handleAgentOperationWithLongJob({
+        jobStore: store,
+        profile: jobProfile(),
+        event: { type: "message", source: { type: "user", userId: "u1" } },
+        operation
+      })
+    ).rejects.toThrow("store offline");
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it("shows a started job as uncertain after a lost worker lease and never starts it twice", async () => {
+    let now = new Date("2026-10-16T00:00:00Z");
+    const store = new InMemoryAgentJobStore({ now: () => now });
+    const job = await store.createPending({ id: "stable", scope, label: "crashed", ttlMs: 60_000 });
+    expect(await store.markStarted(job.id, 100)).toBe(true);
+    now = new Date(now.getTime() + 101);
+    expect((await store.get(job.id, scope))?.status).toBe("uncertain");
+    expect(await store.renewExecution(job.id, 100)).toBe(false);
+    expect(await store.markStarted(job.id, 100)).toBe(false);
+    expect(
+      await store.createPending({ id: "stable", scope, label: "retry", ttlMs: 60_000 })
+    ).toMatchObject({ executionStartedAt: expect.any(String) });
+  });
+
+  it("retains uncertainty when the result store fails after the operation returns", async () => {
+    const store = new InMemoryAgentJobStore();
+    const create = vi.spyOn(store, "createPending");
+    vi.spyOn(store, "complete").mockRejectedValue(new Error("result store offline"));
+    const event = {
+      type: "message",
+      webhookEventId: "result-store-failure",
+      source: { type: "user", userId: "u1" }
+    };
+    const operation = vi.fn(async () => ({
+      ok: true,
+      replyText: "saved",
+      executedAction: "save_memory" as const,
+      writePhase: "commit" as const
+    }));
+    await expect(
+      handleAgentOperationWithLongJob({ jobStore: store, profile: jobProfile(), event, operation })
+    ).rejects.toThrow("result store offline");
+    const job = await create.mock.results[0]!.value;
+    expect(
+      (
+        await store.get(job.id, {
+          profileName: "helper",
+          sourceKey: "user:u1",
+          requesterUserId: "u1"
+        })
+      )?.status
+    ).toBe("uncertain");
+    await handleAgentOperationWithLongJob({
+      jobStore: store,
+      profile: jobProfile(),
+      event,
+      operation
+    });
+    expect(operation).toHaveBeenCalledOnce();
   });
 
   it("clears the inline timer when the agent completes early", async () => {
@@ -339,3 +446,50 @@ function jobProfile(): BotProfileConfig {
     longRunningJobs: { enabled: true, inlineReplyTimeoutMs: 1000, resultTtlMinutes: 30 }
   };
 }
+
+it("invalidates both result retrieval and review buttons when their source context is reset", async () => {
+  const store = new InMemoryAgentJobStore();
+  const token = {
+    threadId: "thread",
+    generation: "old",
+    chatKey: "chat",
+    sourceKeys: ["source"],
+    eventTimestamp: Date.now()
+  };
+  const job = await store.createPending({
+    scope,
+    label: "quote-result",
+    ttlMs: 60_000,
+    contextToken: token
+  });
+  await store.complete(job.id, {
+    ok: true,
+    replyText: "old private result",
+    resultAuthority: { kind: "public" }
+  });
+  const review = vi.fn();
+  for (const data of [
+    `action=agent_job_result&jobId=${job.id}`,
+    `action=helper_action_review&reviewId=review&resultJobId=${job.id}&decision=approve`
+  ]) {
+    const result = await handlePostbackEvent(
+      {
+        type: "postback",
+        source: { type: "group", groupId: "g1", userId: "u1" },
+        postback: { data }
+      },
+      jobProfile(),
+      {},
+      "request",
+      undefined,
+      store,
+      [],
+      undefined,
+      review,
+      async () => false
+    );
+    expect(result.result.replyText).toContain("重設");
+    expect(result.result.replyText).not.toContain("old private");
+  }
+  expect(review).not.toHaveBeenCalled();
+});

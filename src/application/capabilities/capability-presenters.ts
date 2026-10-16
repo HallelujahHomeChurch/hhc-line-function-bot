@@ -1,5 +1,6 @@
 import type { FunctionExecutionResult, QuickReplyItem } from "../contracts/function-execution.js";
 import type { BotProfileConfig } from "../../types.js";
+import { memberAccessLines, type MemberAccessPresentation } from "../../account/member-access.js";
 import type {
   CapabilityPresentation,
   EffectiveCapabilityProjection
@@ -12,6 +13,7 @@ export function renderCapabilityHelp(
   account?: AccountSurfacePresentation,
   commandContext?: { sourceType: "user" | "group" | "room"; authorized: boolean }
 ): FunctionExecutionResult {
+  projection = memberVisibleProjection(projection, account?.membership);
   const identityLine = profile?.identityLine ?? "我是小哈，家教會的小幫手。";
   const heading =
     mode === "introduction" ? [identityLine, "", "我目前可以協助："] : ["我目前可以協助："];
@@ -54,6 +56,7 @@ function renderHelpCommandSection(
 }
 
 export interface AccountSurfacePresentation {
+  membership?: MemberAccessPresentation;
   status: "disabled" | "unbound" | "active" | "inactive" | "unavailable";
   account?: {
     displayName: string;
@@ -82,7 +85,8 @@ export function renderAccountIdentity(
       quickReplies: [accountLoginQuickReply()]
     };
   }
-  const functionNames = [...allowedProjection.reads, ...allowedProjection.writes].map(
+  const visible = memberVisibleProjection(allowedProjection, account.membership);
+  const functionNames = [...visible.reads, ...visible.writes].map(
     ({ displayName }) => `- ${displayName}`
   );
   return {
@@ -91,9 +95,31 @@ export function renderAccountIdentity(
       "HHC 帳戶",
       `名稱：${account.account.displayName}`,
       `Email：${account.account.maskedEmail}`,
-      `身分：${account.account.roles.join("、")}`,
+      `帳戶角色：${account.account.roles.join("、")}`,
+      ...memberAccessLines(account.membership),
       ...(functionNames.length > 0 ? ["", "已授權功能", ...functionNames] : [])
     ].join("\n")
+  };
+}
+
+function memberVisibleProjection(
+  projection: EffectiveCapabilityProjection,
+  access: MemberAccessPresentation | undefined
+): EffectiveCapabilityProjection {
+  if (
+    !access ||
+    (access !== "unavailable" &&
+      access.qualified &&
+      access.editions.length > 0 &&
+      access.legal === "allowed")
+  )
+    return projection;
+  return {
+    ...projection,
+    reads: projection.reads.filter(({ functionName }) => functionName !== "download_weekly_paper"),
+    onboarding: projection.onboarding.filter(
+      ({ functionName }) => functionName !== "download_weekly_paper"
+    )
   };
 }
 
@@ -110,7 +136,10 @@ function renderHelpAccountSection(
     return "帳戶\n- 登入 HHC 帳戶：連結你的 HHC 帳戶。";
   }
   if (account.status === "active" && account.account) {
-    return `帳戶\n- 已連結 ${account.account.displayName}（${account.account.maskedEmail}）`;
+    return [
+      `帳戶\n- 已連結 ${account.account.displayName}（${account.account.maskedEmail}）`,
+      ...memberAccessLines(account.membership)
+    ].join("\n");
   }
   if (account.status === "inactive") {
     return "帳戶\n- HHC 帳戶目前無法使用，請聯絡管理同工協助。";

@@ -1,3 +1,8 @@
+import type { QuoteContext, QuoteStore } from "../../quotes/types.js";
+import { completedBulletinButton } from "../../account/bulletin-continuation.js";
+import type { MemberAccessPresentation } from "../../account/member-access.js";
+import { prepareQuoteContext } from "./quote-context.js";
+import { WebhookReceipt } from "./webhook-receipt.js";
 import type { CapabilityName } from "../../capabilities/names.js";
 import fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -25,6 +30,7 @@ import {
   AccountApiError,
   type AccountAdminClient,
   type FinalizeLineBindingInput,
+  type LineBindingCorrelation,
   type LineBindingTerminalStatus,
   type LineFunctionAuthorization
 } from "../../account/account-admin-client.js";
@@ -101,6 +107,12 @@ import { memoryCommandCapabilityName, type MemoryCommandHandler } from "./memory
 import { pendingAttachmentPrompt } from "./attachment-intake.js";
 
 export interface AppDependencies {
+  readMemberAccess?(
+    lineUserId: string,
+    profileName: string,
+    requestId: string
+  ): Promise<MemberAccessPresentation>;
+  quoteStore?: QuoteStore;
   adminActionRegistry: AdminActionRegistry;
   adminActionRouter?: AdminActionRouterPort;
   postbackHandlers: PostbackHandlerRegistry;
@@ -291,7 +303,9 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.completionObserver,
         deps.accountAdminClient,
         deps.mediaSyncStore,
-        deps.mediaSyncManagementService
+        deps.mediaSyncManagementService,
+        deps.quoteStore,
+        deps.readMemberAccess
       );
     });
   }
@@ -333,7 +347,9 @@ async function handleWebhook(
   completionObserver: FunctionCompletionObserver,
   accountAdminClient: AccountAdminClient,
   mediaSyncStore: PostgresMediaSyncStore | undefined,
-  mediaSyncManagementService: MediaSyncManagementService | undefined
+  mediaSyncManagementService: MediaSyncManagementService | undefined,
+  quoteStore: QuoteStore | undefined,
+  readMemberAccess: AppDependencies["readMemberAccess"]
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -354,9 +370,32 @@ async function handleWebhook(
   const handledLifecycleEvents = new Set<LineEvent>();
   for (const event of payload.events) {
     if (!isOrdinaryLineEvent(event)) continue;
+    if (quoteStore && event.type === "unsend" && event.unsend?.messageId) {
+      try {
+        const scopes = await quoteStore.unsend(
+          { profileName: profile.name, source: event.source },
+          event.unsend.messageId
+        );
+        for (const scope of scopes) {
+          await profileRuntime.clearContext?.(scope);
+          const key = sourceKey(scope.source);
+          if (key)
+            await conversationWindowStore.clear?.({
+              profileName: scope.profileName,
+              sourceKey: key,
+              requesterUserId: scope.source.userId
+            });
+        }
+      } catch {
+        return reply.code(503).send({ ok: false, error: "quote_lifecycle_unavailable" });
+      }
+      handledLifecycleEvents.add(event);
+      incrementIgnored(ignoredCounts, "quote_unsend");
+    }
     const action = mediaSyncLifecycleAction(profile, event);
     if (!action) continue;
     if (!mediaSyncStore) {
+      if (quoteStore && !config.mediaSync) continue;
       return reply.code(503).send({ ok: false, error: "media_sync_lifecycle_unavailable" });
     }
     try {
@@ -377,8 +416,9 @@ async function handleWebhook(
     const requestId = requestIdFactory();
     const startedAt = Date.now();
     let status: LineBindingTerminalStatus;
+    let correlation: LineBindingCorrelation | undefined;
     try {
-      status = (await accountAdminClient.finalizeBinding(input)).status;
+      ({ status, correlation } = await accountAdminClient.finalizeBinding(input));
     } catch (error) {
       const retryable = !(error instanceof AccountApiError) || error.retryable;
       if (retryable) {
@@ -434,12 +474,29 @@ async function handleWebhook(
     });
     if (input.result === "ok" && event.replyToken) {
       const line = createReplyClient(profile);
+      const continuation =
+        status === "completed" && event.source?.type === "user"
+          ? await completedBulletinButton({
+              sessions: sessionStore,
+              account: accountAdminClient,
+              correlation,
+              profileName: profile.name,
+              lineUserId: event.source.userId,
+              channelId: payload.destination,
+              isContextCurrent: quoteStore ? (token) => quoteStore.isCurrent(token) : undefined
+            })
+          : undefined;
       await replyTextBestEffort(
         line,
         event.replyToken,
         status === "completed"
           ? "已完成 HHC 帳戶登入／綁定。"
-          : "目前無法完成 HHC 帳戶登入／綁定，請重新操作。"
+          : status === "cancelled"
+            ? "這次登入要求已取消，既有帳號連結不受影響。"
+            : status === "superseded"
+              ? "已有較新的登入要求，請使用 LINE 中最新的登入連結。"
+              : "目前無法完成 HHC 帳戶登入／綁定，請重新操作。",
+        continuation ? { quickReplies: [continuation] } : undefined
       );
     }
     incrementIgnored(ignoredCounts, `account_link_${status}`);
@@ -484,17 +541,16 @@ async function handleWebhook(
 
     const startedAt = Date.now();
     let status: LineBindingTerminalStatus;
+    let correlation: LineBindingCorrelation | undefined;
     try {
-      status = (
-        await accountAdminClient.finalizeBinding({
-          nonce,
-          result: "ok",
-          actualLineUserId: event.source.userId,
-          profileName: profile.name,
-          channelId: payload.destination,
-          webhookEventId: event.webhookEventId
-        })
-      ).status;
+      ({ status, correlation } = await accountAdminClient.finalizeBinding({
+        nonce,
+        result: "ok",
+        actualLineUserId: event.source.userId,
+        profileName: profile.name,
+        channelId: payload.destination,
+        webhookEventId: event.webhookEventId
+      }));
     } catch (error) {
       const retryable = !(error instanceof AccountApiError) || error.retryable;
       if (retryable) {
@@ -524,12 +580,29 @@ async function handleWebhook(
       durationMs: elapsedMs(startedAt)
     });
     if (event.replyToken) {
+      const continuation =
+        status === "completed"
+          ? await completedBulletinButton({
+              sessions: sessionStore,
+              account: accountAdminClient,
+              correlation,
+              profileName: profile.name,
+              lineUserId: event.source.userId,
+              channelId: payload.destination,
+              isContextCurrent: quoteStore ? (token) => quoteStore.isCurrent(token) : undefined
+            })
+          : undefined;
       await replyTextBestEffort(
         createReplyClient(profile),
         event.replyToken,
         status === "completed"
           ? "已完成 HHC 帳戶登入／連結。"
-          : "目前無法完成 HHC 帳戶登入／連結，請重新操作。"
+          : status === "cancelled"
+            ? "這次登入要求已取消，既有帳號連結不受影響。"
+            : status === "superseded"
+              ? "已有較新的登入要求，請使用 LINE 中最新的登入連結。"
+              : "目前無法完成 HHC 帳戶登入／連結，請重新操作。",
+        continuation ? { quickReplies: [continuation] } : undefined
       );
     }
     incrementIgnored(ignoredCounts, `account_link_${status}`);
@@ -611,481 +684,802 @@ async function handleWebhook(
     (lineIdentity ??= createIdentityClient(profile));
   let admittedEvents = mediaSyncOnlyEvents.length;
   let rejectedAfterStructuralGate = false;
+  const transportLine = line;
   for (const event of allowedEvents) {
-    if (
-      event.webhookEventId &&
-      (await webhookEventStore.tryStart(
-        profile.name,
-        event.webhookEventId,
-        7 * 24 * 60 * 60 * 1000
-      )) === "duplicate"
-    ) {
-      ignoredCounts.set(
-        "duplicate_webhook_event",
-        (ignoredCounts.get("duplicate_webhook_event") ?? 0) + 1
-      );
+    const sourceCommand = parseAdminCommand(event.message?.text)?.command;
+    if (!event.source.userId && sourceCommand !== "media-sync" && sourceCommand !== "registry") {
+      incrementIgnored(ignoredCounts, "missing_requester");
       continue;
     }
-    const requestId = requestIdFactory();
-    const rateLimit = await rateLimiter.check({ profileName: profile.name, source: event.source });
-    if (!rateLimit.allowed) {
-      if (event.replyToken) {
-        await line.replyText(event.replyToken, "你傳得太快了，請稍後再試。", undefined);
-      }
-      await emitRouteEvent(routeObserver, {
-        kind: "rate_limited",
-        profileName: profile.name,
-        sourceType: event.source.type,
-        requestId,
-        ok: false
-      });
-      continue;
-    }
-    const turnAccountAuthorization = createTurnFunctionAuthorizer(
-      accountAdminClient,
-      profile,
-      event.source.userId
-    );
-    const localAction =
-      event.type === "message" && event.message?.type === "text"
-        ? matchNaturalLanguageSystemActionHint(event.message.text ?? "")
-        : undefined;
-    if (
-      localAction === "show_help" ||
-      localAction === "show_account" ||
-      localAction === "account_login"
-    ) {
-      const policy = await evaluateActionPolicy({
-        action: localAction,
-        profile,
-        source: event.source
-      });
-      if (!policy.allowed || !event.replyToken) {
-        incrementIgnored(ignoredCounts, policy.allowed ? "missing_reply_token" : policy.reason);
+    let receipt: WebhookReceipt | undefined;
+    if (event.webhookEventId) {
+      const claimed = webhookEventStore.claim
+        ? await webhookEventStore.claim(
+            profile.name,
+            event.webhookEventId,
+            7 * 24 * 60 * 60 * 1000,
+            120_000
+          )
+        : {
+            status: await webhookEventStore.tryStart(
+              profile.name,
+              event.webhookEventId,
+              7 * 24 * 60 * 60 * 1000
+            )
+          };
+      if (claimed.status === "duplicate" || claimed.status === "uncertain") {
+        incrementIgnored(
+          ignoredCounts,
+          claimed.status === "uncertain" ? "uncertain_webhook_event" : "duplicate_webhook_event"
+        );
         continue;
       }
-      const requestedFunctions =
-        localAction === "account_login"
-          ? []
-          : profile.permissionRequiredFunctions.filter((name) =>
-              profile.enabledFunctions.includes(name)
-            );
-      const shouldAuthorizeAccount = Boolean(
-        event.source.userId &&
-        ((localAction === "show_help" && profileUsesProviders(profile)) ||
-          (profile.accountLink && (event.source.type === "user" || requestedFunctions.length > 0)))
+      if ("lease" in claimed) receipt = new WebhookReceipt(webhookEventStore, claimed.lease);
+    }
+    let line = receipt ? receipt.lineClient(transportLine) : transportLine;
+    let quoteContext: QuoteContext | undefined;
+    const attachQuoteContext = async (): Promise<boolean> => {
+      if (!quoteStore || !event.source.userId) return true;
+      {
+        const prepared = await prepareQuoteContext({
+          store: quoteStore,
+          runtime: profileRuntime,
+          scope: { profileName: profile.name, source: event.source },
+          clearConversation: async () => {
+            const scope = buildConversationWindowScope(profile, event);
+            if (scope) await conversationWindowStore.clear?.(scope);
+          },
+          event,
+          line
+        });
+        if (!prepared) {
+          incrementIgnored(ignoredCounts, "stale_quote_context");
+          return false;
+        }
+        quoteContext = prepared.context;
+        line = prepared.line;
+      }
+      return true;
+    };
+    let eventSucceeded = true;
+    try {
+      const knownBotQuote = Boolean(
+        quoteStore &&
+        event.message?.quotedMessageId &&
+        (
+          await quoteStore.inspect(
+            { profileName: profile.name, source: event.source },
+            event.message.quotedMessageId
+          )
+        ).bot
       );
-      const accountState = shouldAuthorizeAccount
-        ? await turnAccountAuthorization.state(requestedFunctions)
-        : {
-            available: Boolean(profile.accountLink),
-            authorization: emptyFunctionAuthorization()
-          };
-      const requesterIsAdmin = accountState.authorization.administrator;
-      const resolveCurrentAccess = async () =>
-        applyAccountFunctionAuthorization(
-          await resolveEffectiveAccessContext({ profile, event, accessStore, requesterIsAdmin }),
-          profile,
-          accountState
-        );
-      let bindingAttempted = false;
-      let bindingStarted = false;
-      const startedAt = Date.now();
-      const result = await handlePublicAccessCommand({
-        text: event.message?.text ?? "",
-        profile,
-        event,
-        accessStore,
-        registrationInviteCodeStore,
-        lineIdentity: undefined,
-        adminHandlers,
-        productContext: {
-          routeObserver,
+      // Read-only admission precedes conversational quota; ambient group chat is free.
+      if (event.source.type === "group" && event.message?.type === "text") {
+        const systemAction = matchNaturalLanguageSystemActionHint(event.message.text ?? "");
+        if (!systemAction) {
+          const admission = await allowEvent(
+            profile,
+            event,
+            textMessageHandlers,
+            accessStore,
+            conversationWindowStore,
+            false,
+            sessionStore,
+            knownBotQuote
+          );
+          if (!admission.allowed) {
+            rejectedAfterStructuralGate = true;
+            incrementIgnored(ignoredCounts, admission.reason);
+            continue;
+          }
+        }
+      }
+      const requestId = requestIdFactory();
+      const rateLimit = await rateLimiter.check({
+        profileName: profile.name,
+        source: event.source
+      });
+      if (!rateLimit.allowed) {
+        if (event.replyToken && rateLimit.shouldNotify === true) {
+          await replyTextBestEffort(line, event.replyToken, "你傳得太快了，請稍後再試。");
+        }
+        await emitRouteEvent(routeObserver, {
+          kind: "rate_limited",
+          profileName: profile.name,
+          sourceType: event.source.type,
           requestId,
-          hmacKey: config.observability?.hmacKey
-        },
-        requesterIsAdmin,
-        account:
+          ok: false
+        });
+        continue;
+      }
+      const turnAccountAuthorization = createTurnFunctionAuthorizer(
+        accountAdminClient,
+        profile,
+        event.source.userId
+      );
+      const localAction =
+        event.type === "message" && event.message?.type === "text"
+          ? matchNaturalLanguageSystemActionHint(event.message.text ?? "")
+          : undefined;
+      if (
+        localAction === "show_help" ||
+        localAction === "show_account" ||
+        localAction === "account_login"
+      ) {
+        const policy = await evaluateActionPolicy({
+          action: localAction,
+          profile,
+          source: event.source
+        });
+        if (!policy.allowed || !event.replyToken) {
+          incrementIgnored(ignoredCounts, policy.allowed ? "missing_reply_token" : policy.reason);
+          continue;
+        }
+        if (!(await attachQuoteContext())) continue;
+        await receipt?.start();
+        const requestedFunctions =
+          localAction === "account_login"
+            ? []
+            : profile.permissionRequiredFunctions.filter((name) =>
+                profile.enabledFunctions.includes(name)
+              );
+        const shouldAuthorizeAccount = Boolean(
+          event.source.userId &&
+          ((localAction === "show_help" && profileUsesProviders(profile)) ||
+            (profile.accountLink &&
+              (event.source.type === "user" || requestedFunctions.length > 0)))
+        );
+        const accountState = shouldAuthorizeAccount
+          ? await turnAccountAuthorization.state(requestedFunctions)
+          : {
+              available: Boolean(profile.accountLink),
+              authorization: emptyFunctionAuthorization()
+            };
+        const requesterIsAdmin = accountState.authorization.administrator;
+        const resolveCurrentAccess = async () =>
+          applyAccountFunctionAuthorization(
+            await resolveEffectiveAccessContext({ profile, event, accessStore, requesterIsAdmin }),
+            profile,
+            accountState
+          );
+        let bindingAttempted = false;
+        let bindingStarted = false;
+        const startedAt = Date.now();
+        const accountPresentation =
           event.source.type === "user"
             ? accountSurfacePresentation(profile, accountState)
-            : undefined,
-        accountAllowedFunctions: accountState.authorization.allowedFunctions,
-        startAccountLogin: async () => {
-          bindingAttempted = true;
-          if (
-            !profile.accountLink ||
-            !boundedOpaque(event.source.userId, 255) ||
-            !boundedOpaque(payload.destination, 255)
-          ) {
-            throw new Error("invalid_account_login");
-          }
-          const binding = await accountAdminClient.createBinding({
-            expectedLineUserId: event.source.userId,
+            : undefined;
+        if (
+          accountPresentation?.status === "active" &&
+          event.source.userId &&
+          (localAction === "show_help" || localAction === "show_account")
+        ) {
+          accountPresentation.membership = readMemberAccess
+            ? await readMemberAccess(event.source.userId, profile.name, requestId).catch(
+                () => "unavailable" as const
+              )
+            : "unavailable";
+        }
+        const result = await handlePublicAccessCommand({
+          text: event.message?.text ?? "",
+          profile,
+          event,
+          accessStore,
+          registrationInviteCodeStore,
+          lineIdentity: undefined,
+          adminHandlers,
+          productContext: {
+            routeObserver,
+            requestId,
+            hmacKey: config.observability?.hmacKey
+          },
+          requesterIsAdmin,
+          account: accountPresentation,
+          accountAllowedFunctions: accountState.authorization.allowedFunctions,
+          startAccountLogin: async () => {
+            bindingAttempted = true;
+            if (
+              !profile.accountLink ||
+              !boundedOpaque(event.source.userId, 255) ||
+              !boundedOpaque(payload.destination, 255)
+            ) {
+              throw new Error("invalid_account_login");
+            }
+            const binding = await accountAdminClient.createBinding({
+              expectedLineUserId: event.source.userId,
+              profileName: profile.name,
+              channelId: payload.destination,
+              presentation: profile.accountLink
+            });
+            bindingStarted = true;
+            return binding;
+          },
+          policies: {
+            parseCommand: parseAdminCommand,
+            adminAllowed,
+            formatAdminHelp: formatAdminCommandHelpByMode,
+            directAccessPolicy,
+            groupAccessPolicy,
+            isDirectUserAllowed,
+            isGroupAllowed
+          },
+          resolveCurrentAccess
+        });
+        if (!result) {
+          incrementIgnored(ignoredCounts, "unsupported_public_surface");
+          continue;
+        }
+        admittedEvents += 1;
+        await replyTextBestEffort(
+          line,
+          event.replyToken,
+          result.replyText,
+          result.quickReplies ? { quickReplies: result.quickReplies } : undefined
+        );
+        await emitRouteEvent(routeObserver, {
+          kind: "route",
+          profileName: profile.name,
+          sourceType: event.source.type,
+          requestId,
+          provider: "keyword",
+          outcome: "respond",
+          action: localAction,
+          ok: result.ok,
+          durationMs: elapsedMs(startedAt)
+        });
+        if (localAction === "account_login" && bindingAttempted) {
+          await emitProductEvent(routeObserver, {
+            eventName: "account_link_started",
+            requestId,
             profileName: profile.name,
-            channelId: payload.destination,
-            presentation: profile.accountLink
+            source: event.source,
+            hmacKey: config.observability?.hmacKey,
+            action: "account_login",
+            resultClass: bindingStarted ? "success" : "error",
+            retry: false,
+            durationMs: elapsedMs(startedAt)
           });
-          bindingStarted = true;
-          return binding;
-        },
-        policies: {
-          parseCommand: parseAdminCommand,
-          adminAllowed,
-          formatAdminHelp: formatAdminCommandHelpByMode,
-          directAccessPolicy,
-          groupAccessPolicy,
-          isDirectUserAllowed,
-          isGroupAllowed
-        },
-        resolveCurrentAccess
-      });
-      if (!result) {
-        incrementIgnored(ignoredCounts, "unsupported_public_surface");
+        }
+        continue;
+      }
+      const eventText = event.type === "message" ? event.message?.text : undefined;
+      const introVariant = eventText ? introVariantForText(eventText) : undefined;
+      const parsedAdminCommand = parseAdminCommand(eventText);
+      const functionOwnedCommand = isConfiguredExactFunctionCommand(
+        profile,
+        eventText,
+        event.source.type
+      );
+      const needsAdminAuthorization = Boolean(
+        (!functionOwnedCommand &&
+          parsedAdminCommand &&
+          requiresAdminAuthorization(parsedAdminCommand, adminHandlers)) ||
+        (eventText && matchesNaturalLanguageAdminActionHint(eventText))
+      );
+      const needsAttachmentAuthorization =
+        event.type === "message" &&
+        event.message?.type !== "text" &&
+        profile.enabledFunctions.includes("save_resource");
+      const attachmentAuthorization = needsAttachmentAuthorization
+        ? profile.permissionRequiredFunctions.filter((name) => name === "save_resource")
+        : [];
+      const introAuthorization =
+        introVariant === "capabilities"
+          ? profile.permissionRequiredFunctions.filter((name) =>
+              profile.enabledFunctions.includes(name)
+            )
+          : [];
+      const registrationAuthorization =
+        parsedAdminCommand?.command === "registry"
+          ? profile.permissionRequiredFunctions.filter((name) =>
+              profile.enabledFunctions.includes(name)
+            )
+          : [];
+      const needsIntroAuthorization = Boolean(
+        event.source.userId &&
+        introVariant === "capabilities" &&
+        (profile.accountLink || introAuthorization.length > 0)
+      );
+      const needsRegistrationAuthorization = Boolean(
+        event.source.userId && profile.accountLink && parsedAdminCommand?.command === "registry"
+      );
+      const needsManagedDirectAuthorization = Boolean(
+        event.source.type === "user" &&
+        event.source.userId &&
+        profile.accountLink &&
+        directAccessPolicy(profile) === "managed"
+      );
+      const managedDirectAuthorization = needsManagedDirectAuthorization
+        ? profile.permissionRequiredFunctions.filter((name) =>
+            profile.enabledFunctions.includes(name)
+          )
+        : [];
+      let accountAuthorizationUsed =
+        needsAdminAuthorization ||
+        needsAttachmentAuthorization ||
+        needsIntroAuthorization ||
+        needsRegistrationAuthorization ||
+        needsManagedDirectAuthorization;
+      let accountState = accountAuthorizationUsed
+        ? await turnAccountAuthorization.state(
+            needsManagedDirectAuthorization
+              ? managedDirectAuthorization
+              : needsAttachmentAuthorization
+                ? attachmentAuthorization
+                : needsIntroAuthorization
+                  ? introAuthorization
+                  : registrationAuthorization
+          )
+        : { available: true, authorization: emptyFunctionAuthorization() };
+      let accountAuthorization = adminAuthorizationFromFunctionState(accountState);
+      let allow = await allowEvent(
+        profile,
+        event,
+        textMessageHandlers,
+        accessStore,
+        conversationWindowStore,
+        accountAuthorization.allowed,
+        sessionStore,
+        knownBotQuote
+      );
+      if (
+        !allow.allowed &&
+        !needsAdminAuthorization &&
+        event.source.type === "user" &&
+        directAccessPolicy(profile) === "managed" &&
+        event.source.userId
+      ) {
+        accountAuthorizationUsed = true;
+        accountState = await turnAccountAuthorization.state([]);
+        accountAuthorization = adminAuthorizationFromFunctionState(accountState);
+        if (accountAuthorization.allowed) {
+          allow = await allowEvent(
+            profile,
+            event,
+            textMessageHandlers,
+            accessStore,
+            conversationWindowStore,
+            true,
+            sessionStore,
+            knownBotQuote
+          );
+        }
+      }
+      if (!allow.allowed) {
+        incrementIgnored(ignoredCounts, allow.reason);
+        rejectedAfterStructuralGate = true;
         continue;
       }
       admittedEvents += 1;
-      await replyTextBestEffort(
-        line,
-        event.replyToken,
-        result.replyText,
-        result.quickReplies ? { quickReplies: result.quickReplies } : undefined
-      );
-      await emitRouteEvent(routeObserver, {
-        kind: "route",
-        profileName: profile.name,
-        sourceType: event.source.type,
-        requestId,
-        provider: "keyword",
-        outcome: "respond",
-        action: localAction,
-        ok: result.ok,
-        durationMs: elapsedMs(startedAt)
-      });
-      if (localAction === "account_login" && bindingAttempted) {
-        await emitProductEvent(routeObserver, {
-          eventName: "account_link_started",
-          requestId,
-          profileName: profile.name,
-          source: event.source,
-          hmacKey: config.observability?.hmacKey,
-          action: "account_login",
-          resultClass: bindingStarted ? "success" : "error",
-          retry: false,
-          durationMs: elapsedMs(startedAt)
-        });
-      }
-      continue;
-    }
-    const eventText = event.type === "message" ? event.message?.text : undefined;
-    const introVariant = eventText ? introVariantForText(eventText) : undefined;
-    const parsedAdminCommand = parseAdminCommand(eventText);
-    const functionOwnedCommand = isConfiguredExactFunctionCommand(
-      profile,
-      eventText,
-      event.source.type
-    );
-    const needsAdminAuthorization = Boolean(
-      (!functionOwnedCommand &&
-        parsedAdminCommand &&
-        requiresAdminAuthorization(parsedAdminCommand, adminHandlers)) ||
-      (eventText && matchesNaturalLanguageAdminActionHint(eventText))
-    );
-    const needsAttachmentAuthorization =
-      event.type === "message" &&
-      event.message?.type !== "text" &&
-      profile.enabledFunctions.includes("save_resource");
-    const attachmentAuthorization = needsAttachmentAuthorization
-      ? profile.permissionRequiredFunctions.filter((name) => name === "save_resource")
-      : [];
-    const introAuthorization =
-      introVariant === "capabilities"
-        ? profile.permissionRequiredFunctions.filter((name) =>
-            profile.enabledFunctions.includes(name)
-          )
-        : [];
-    const registrationAuthorization =
-      parsedAdminCommand?.command === "registry"
-        ? profile.permissionRequiredFunctions.filter((name) =>
-            profile.enabledFunctions.includes(name)
-          )
-        : [];
-    const needsIntroAuthorization = Boolean(
-      event.source.userId &&
-      introVariant === "capabilities" &&
-      (profile.accountLink || introAuthorization.length > 0)
-    );
-    const needsRegistrationAuthorization = Boolean(
-      event.source.userId && profile.accountLink && parsedAdminCommand?.command === "registry"
-    );
-    const needsManagedDirectAuthorization = Boolean(
-      event.source.type === "user" &&
-      event.source.userId &&
-      profile.accountLink &&
-      directAccessPolicy(profile) === "managed"
-    );
-    const managedDirectAuthorization = needsManagedDirectAuthorization
-      ? profile.permissionRequiredFunctions.filter((name) =>
-          profile.enabledFunctions.includes(name)
-        )
-      : [];
-    let accountAuthorizationUsed =
-      needsAdminAuthorization ||
-      needsAttachmentAuthorization ||
-      needsIntroAuthorization ||
-      needsRegistrationAuthorization ||
-      needsManagedDirectAuthorization;
-    let accountState = accountAuthorizationUsed
-      ? await turnAccountAuthorization.state(
-          needsManagedDirectAuthorization
-            ? managedDirectAuthorization
-            : needsAttachmentAuthorization
-              ? attachmentAuthorization
-              : needsIntroAuthorization
-                ? introAuthorization
-                : registrationAuthorization
-        )
-      : { available: true, authorization: emptyFunctionAuthorization() };
-    let accountAuthorization = adminAuthorizationFromFunctionState(accountState);
-    let allow = await allowEvent(
-      profile,
-      event,
-      textMessageHandlers,
-      accessStore,
-      conversationWindowStore,
-      accountAuthorization.allowed,
-      sessionStore
-    );
-    if (
-      !allow.allowed &&
-      !needsAdminAuthorization &&
-      event.source.type === "user" &&
-      directAccessPolicy(profile) === "managed" &&
-      event.source.userId
-    ) {
-      accountAuthorizationUsed = true;
-      accountState = await turnAccountAuthorization.state([]);
-      accountAuthorization = adminAuthorizationFromFunctionState(accountState);
-      if (accountAuthorization.allowed) {
-        allow = await allowEvent(
-          profile,
-          event,
-          textMessageHandlers,
-          accessStore,
-          conversationWindowStore,
-          true,
-          sessionStore
-        );
-      }
-    }
-    if (!allow.allowed) {
-      incrementIgnored(ignoredCounts, allow.reason);
-      rejectedAfterStructuralGate = true;
-      continue;
-    }
-    admittedEvents += 1;
-    const requesterIsAdmin = accountAuthorization.allowed;
-    const baseEffectiveAccess = await resolveEffectiveAccessContext({
-      profile,
-      event,
-      accessStore,
-      requesterIsAdmin
-    });
-    const effectiveAccess = accountAuthorizationUsed
-      ? applyAccountFunctionAuthorization(baseEffectiveAccess, profile, accountState)
-      : baseEffectiveAccess;
-    const effectiveProfile = effectiveAccess.profile;
-    const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
-    const requesterDisplayName = await resolveRequesterDisplayName(getLineIdentity(), event);
-
-    if (event.type === "postback") {
-      if (!event.replyToken) {
-        continue;
-      }
-      const startedAt = Date.now();
-      const {
-        result,
-        completionEligible,
-        capability,
-        profile: authorizedPostbackProfile
-      } = await handlePostbackEvent(
+      const requesterIsAdmin = accountAuthorization.allowed;
+      const baseEffectiveAccess = await resolveEffectiveAccessContext({
+        profile,
         event,
-        effectiveProfile,
-        postbackHandlers,
-        requestId,
-        requesterDisplayName,
-        agentJobStore,
-        profile.enabledFunctions,
-        turnAccountAuthorization.allowedFunctions,
-        profileRuntime.handleActionReview
-          ? async (review) =>
-              (await handleAgentOperationWithLongJob({
-                jobStore: agentJobStore,
-                profile: review.profile,
-                event: review.event,
-                requesterDisplayName: review.requesterDisplayName,
-                operation: async () => {
-                  const reviewOutcome = await profileRuntime.handleActionReview!({
-                    profile: review.profile,
-                    event: review.event,
-                    requestId: review.requestId,
-                    requesterDisplayName: review.requesterDisplayName,
-                    requesterIsAdmin,
-                    configuredFunctions: [...profile.enabledFunctions],
-                    authorizeFunctions: async (names) => [
-                      ...(await turnAccountAuthorization.allowedFunctions(names))
-                    ],
-                    nicknameWriteEnabled: turnAccountAuthorization.nicknameWriteEnabled,
-                    accountAdministrator: turnAccountAuthorization.administrator,
-                    reviewId: review.reviewId,
-                    resultJobId: review.resultJobId,
-                    text: review.text
-                  });
-                  if (!reviewOutcome) return { ok: true, replyText: messages.postbackUnsupported };
-                  const reviewResult = reviewOutcome.result;
-                  if (
-                    reviewOutcome.freshExecution &&
-                    reviewResult.writePhase === "commit" &&
-                    reviewResult.executedAction
-                  ) {
-                    return completionObserver.complete({
-                      context: {
-                        profile: review.profile,
-                        event: review.event,
-                        requestId: review.requestId,
-                        requesterDisplayName: review.requesterDisplayName,
-                        requesterIsAdmin
-                      },
-                      action: reviewResult.executedAction,
-                      result: reviewResult,
-                      durationMs: elapsedMs(startedAt),
-                      clarificationCount: 0
-                    });
-                  }
-                  return reviewResult;
-                }
-              })) ?? { ok: true, replyText: messages.postbackUnsupported }
-          : undefined
-      );
-      const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
-      const postbackCapabilityName = completionEligible ? capability : undefined;
-      if (postbackCapabilityName) {
-        await resourceMemory?.afterFunctionResult({
-          context: { profile: postbackProfile, event, requestId, requesterDisplayName },
-          action: postbackCapabilityName,
-          arguments: {},
-          result
-        });
-      }
-      const durationMs = elapsedMs(startedAt);
-      const completedResult = postbackCapabilityName
-        ? await completionObserver.complete({
-            context: {
-              profile: postbackProfile,
-              event,
-              requestId,
-              requesterDisplayName,
-              requesterIsAdmin
-            },
-            action: postbackCapabilityName,
-            result,
-            durationMs,
-            clarificationCount: 0
-          })
-        : result;
-      if (
-        postbackCapabilityName &&
-        getFunctionDefinition(postbackCapabilityName)?.sideEffectLevel === "read"
-      ) {
-        await profileRuntime.recordExternalResult?.(
-          {
-            profile: postbackProfile,
-            event,
-            requestId,
-            requesterDisplayName,
-            configuredFunctions: [...profile.enabledFunctions],
-            authorizeFunctions: async (names) => [
-              ...(await turnAccountAuthorization.allowedFunctions(names))
-            ]
-          },
-          completedResult
-        );
-      }
-      await emitRouteEvent(routeObserver, {
-        kind: "postback",
-        profileName: profile.name,
-        sourceType: event.source.type,
-        requestId,
-        action: parsePostbackData(event.postback?.data ?? "")?.action,
-        ok: completedResult.ok,
-        durationMs
+        accessStore,
+        requesterIsAdmin
       });
-      await line.replyText(
-        event.replyToken,
-        completedResult.replyText,
-        completedResult.quickReplies ? { quickReplies: completedResult.quickReplies } : undefined
-      );
-      continue;
-    }
+      const effectiveAccess = accountAuthorizationUsed
+        ? applyAccountFunctionAuthorization(baseEffectiveAccess, profile, accountState)
+        : baseEffectiveAccess;
+      const effectiveProfile = effectiveAccess.profile;
+      const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
+      const requesterDisplayName = await resolveRequesterDisplayName(getLineIdentity(), event);
+      if (!(await attachQuoteContext())) continue;
+      await receipt?.start();
 
-    if (event.type === "message" && event.message?.type !== "text") {
-      if (!event.replyToken) {
-        continue;
-      }
-      const attachmentResult = await handleAttachmentIntake({
+      const profileTurnInput = {
+        channelId: payload.destination,
+        quoteContext,
         profile: effectiveProfile,
         event,
         requestId,
         requesterDisplayName,
-        sessionStore,
-        maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
-        now: new Date(),
-        textHandlers: attachmentTextHandlers
-      });
-      if (attachmentResult) {
-        await line.replyText(
-          event.replyToken,
-          attachmentResult.replyText,
-          attachmentResult.quickReplies
-            ? { quickReplies: attachmentResult.quickReplies }
-            : undefined
-        );
-      }
-      continue;
-    }
-
-    if (event.type !== "message" || event.message?.type !== "text" || !event.message.text) {
-      continue;
-    }
-
-    if (!event.replyToken) {
-      continue;
-    }
-
-    if (isAdminCommand(event.message.text) && !functionOwnedCommand) {
-      const parsedAdminCommand = parseAdminCommand(event.message.text);
+        requesterIsAdmin,
+        configuredFunctions: [...profile.enabledFunctions],
+        authorizeFunctions: async (names: CapabilityName[]) => [
+          ...(await turnAccountAuthorization.allowedFunctions(names))
+        ],
+        nicknameWriteEnabled: turnAccountAuthorization.nicknameWriteEnabled,
+        accountAdministrator: turnAccountAuthorization.administrator
+      };
       if (
-        !profileUsesProviders(effectiveProfile) &&
-        !(parsedAdminCommand?.command === "help" && parsedAdminCommand.args.length === 0)
+        event.message?.quotedMessageId &&
+        event.message.type === "text" &&
+        event.replyToken &&
+        !/^(?:\/reset|忘記這段對話)$/u.test(event.message.text?.trim() ?? "")
       ) {
-        const localHelp = renderCapabilityHelp(
-          capabilityProjection,
-          "help",
+        const result = /^(確認|取消)$/u.test(event.message.text?.trim() ?? "")
+          ? {
+              ok: true,
+              replyText: "引用訊息不會確認或取消操作；請使用原預覽的按鈕，或重新提出需求。"
+            }
+          : quoteContext?.quoted?.status === "resolved"
+            ? await handleAgentTextTurnWithLongJob({
+                runtime: profileRuntime,
+                jobStore: agentJobStore,
+                receipt,
+                ...profileTurnInput
+              })
+            : {
+                ok: true,
+                replyText:
+                  "我無法取得這則引用的內容。請在這段對話重新描述需求；若涉及其他人的內容，請由原發話者提出。"
+              };
+        if (result) {
+          await line.replyText(
+            event.replyToken,
+            result.replyText,
+            result.quickReplies ? { quickReplies: result.quickReplies } : undefined
+          );
+          if (!quoteContext || (await quoteContext.isCurrent()))
+            await recordConversationReply(conversationWindowStore, effectiveProfile, event, result);
+        }
+        continue;
+      }
+
+      if (event.type === "postback") {
+        if (!event.replyToken) {
+          continue;
+        }
+        const startedAt = Date.now();
+        const {
+          result,
+          completionEligible,
+          capability,
+          profile: authorizedPostbackProfile
+        } = await handlePostbackEvent(
+          event,
           effectiveProfile,
-          undefined,
-          { sourceType: effectiveAccess.sourceType, authorized: effectiveAccess.authorized }
+          postbackHandlers,
+          requestId,
+          requesterDisplayName,
+          agentJobStore,
+          profile.enabledFunctions,
+          turnAccountAuthorization.allowedFunctions,
+          profileRuntime.handleActionReview
+            ? async (review) =>
+                (await handleAgentOperationWithLongJob({
+                  jobStore: agentJobStore,
+                  quoteContext,
+                  receipt,
+                  profile: review.profile,
+                  event: review.event,
+                  requesterDisplayName: review.requesterDisplayName,
+                  operation: async () => {
+                    const reviewOutcome = await profileRuntime.handleActionReview!({
+                      quoteContext,
+                      profile: review.profile,
+                      event: review.event,
+                      requestId: review.requestId,
+                      requesterDisplayName: review.requesterDisplayName,
+                      requesterIsAdmin,
+                      configuredFunctions: [...profile.enabledFunctions],
+                      authorizeFunctions: async (names) => [
+                        ...(await turnAccountAuthorization.allowedFunctions(names))
+                      ],
+                      nicknameWriteEnabled: turnAccountAuthorization.nicknameWriteEnabled,
+                      accountAdministrator: turnAccountAuthorization.administrator,
+                      reviewId: review.reviewId,
+                      resultJobId: review.resultJobId,
+                      text: review.text
+                    });
+                    if (!reviewOutcome)
+                      return { ok: true, replyText: messages.postbackUnsupported };
+                    const reviewResult = reviewOutcome.result;
+                    if (
+                      reviewOutcome.freshExecution &&
+                      reviewResult.writePhase === "commit" &&
+                      reviewResult.executedAction
+                    ) {
+                      return completionObserver.complete({
+                        context: {
+                          profile: review.profile,
+                          event: review.event,
+                          requestId: review.requestId,
+                          requesterDisplayName: review.requesterDisplayName,
+                          requesterIsAdmin
+                        },
+                        action: reviewResult.executedAction,
+                        result: reviewResult,
+                        durationMs: elapsedMs(startedAt),
+                        clarificationCount: 0
+                      });
+                    }
+                    return reviewResult;
+                  }
+                })) ?? { ok: true, replyText: messages.postbackUnsupported }
+            : undefined,
+          quoteStore ? (token) => quoteStore.isCurrent(token) : undefined,
+          payload.destination
         );
+        const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
+        const postbackCapabilityName = completionEligible ? capability : undefined;
+        if (postbackCapabilityName) {
+          await resourceMemory?.afterFunctionResult({
+            context: { profile: postbackProfile, event, requestId, requesterDisplayName },
+            action: postbackCapabilityName,
+            arguments: {},
+            result
+          });
+        }
+        const durationMs = elapsedMs(startedAt);
+        const completedResult = postbackCapabilityName
+          ? await completionObserver.complete({
+              context: {
+                profile: postbackProfile,
+                event,
+                requestId,
+                requesterDisplayName,
+                requesterIsAdmin
+              },
+              action: postbackCapabilityName,
+              result,
+              durationMs,
+              clarificationCount: 0
+            })
+          : result;
+        if (
+          postbackCapabilityName &&
+          getFunctionDefinition(postbackCapabilityName)?.sideEffectLevel === "read"
+        ) {
+          await profileRuntime.recordExternalResult?.(
+            {
+              profile: postbackProfile,
+              event,
+              requestId,
+              requesterDisplayName,
+              configuredFunctions: [...profile.enabledFunctions],
+              authorizeFunctions: async (names) => [
+                ...(await turnAccountAuthorization.allowedFunctions(names))
+              ]
+            },
+            completedResult
+          );
+        }
+        await emitRouteEvent(routeObserver, {
+          kind: "postback",
+          profileName: profile.name,
+          sourceType: event.source.type,
+          requestId,
+          action: parsePostbackData(event.postback?.data ?? "")?.action,
+          ok: completedResult.ok,
+          durationMs
+        });
         await line.replyText(
           event.replyToken,
-          localHelp.replyText,
-          localHelp.quickReplies ? { quickReplies: localHelp.quickReplies } : undefined
+          completedResult.replyText,
+          completedResult.quickReplies ? { quickReplies: completedResult.quickReplies } : undefined
         );
         continue;
       }
-      if (
-        parsedAdminCommand &&
-        requiresAdminAuthorization(parsedAdminCommand, adminHandlers) &&
-        !requesterIsAdmin
-      ) {
+
+      if (event.type === "message" && event.message?.type !== "text") {
+        if (!event.replyToken) {
+          continue;
+        }
+        const attachmentResult = await handleAttachmentIntake({
+          profile: effectiveProfile,
+          event,
+          requestId,
+          requesterDisplayName,
+          sessionStore,
+          maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
+          now: new Date(),
+          textHandlers: attachmentTextHandlers
+        });
+        if (attachmentResult) {
+          await line.replyText(
+            event.replyToken,
+            attachmentResult.replyText,
+            attachmentResult.quickReplies
+              ? { quickReplies: attachmentResult.quickReplies }
+              : undefined
+          );
+        }
+        continue;
+      }
+
+      if (event.type !== "message" || event.message?.type !== "text" || !event.message.text) {
+        continue;
+      }
+
+      if (!event.replyToken) {
+        continue;
+      }
+
+      if (isAdminCommand(event.message.text) && !functionOwnedCommand) {
+        const parsedAdminCommand = parseAdminCommand(event.message.text);
+        if (
+          !profileUsesProviders(effectiveProfile) &&
+          !(parsedAdminCommand?.command === "help" && parsedAdminCommand.args.length === 0)
+        ) {
+          const localHelp = renderCapabilityHelp(
+            capabilityProjection,
+            "help",
+            effectiveProfile,
+            undefined,
+            { sourceType: effectiveAccess.sourceType, authorized: effectiveAccess.authorized }
+          );
+          await line.replyText(
+            event.replyToken,
+            localHelp.replyText,
+            localHelp.quickReplies ? { quickReplies: localHelp.quickReplies } : undefined
+          );
+          continue;
+        }
+        if (
+          parsedAdminCommand &&
+          requiresAdminAuthorization(parsedAdminCommand, adminHandlers) &&
+          !requesterIsAdmin
+        ) {
+          await line.replyText(
+            event.replyToken,
+            await adminAuthorizationReply({
+              event,
+              authorization: accountAuthorization
+            }),
+            undefined
+          );
+          continue;
+        }
+        const memoryCommandFunction = memoryCommandCapabilityName(event.message.text);
+        let agentCommandProfile = effectiveProfile;
+        let agentCommandIsAdmin = requesterIsAdmin;
+        if (memoryCommandFunction) {
+          const definition = getFunctionDefinition(memoryCommandFunction);
+          const sourceType = event.source.type;
+          if (
+            !profile.enabledFunctions.includes(memoryCommandFunction) ||
+            (sourceType !== "user" && sourceType !== "group") ||
+            !definition?.allowedSources.includes(sourceType)
+          ) {
+            await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+            continue;
+          }
+          const allowed = await turnAccountAuthorization.allowedFunctions([memoryCommandFunction]);
+          if (!allowed.includes(memoryCommandFunction)) {
+            await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+            continue;
+          }
+          if (!agentCommandProfile.enabledFunctions.includes(memoryCommandFunction)) {
+            agentCommandProfile = {
+              ...agentCommandProfile,
+              enabledFunctions: [...agentCommandProfile.enabledFunctions, memoryCommandFunction]
+            };
+          }
+          const commandPolicy = await evaluateActionPolicy({
+            action: memoryCommandFunction,
+            profile,
+            source: event.source,
+            requesterIsAdmin: turnAccountAuthorization.administrator() || requesterIsAdmin,
+            effectiveFunctions: agentCommandProfile.enabledFunctions
+          });
+          if (!commandPolicy.allowed) {
+            await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+            continue;
+          }
+          agentCommandIsAdmin = turnAccountAuthorization.administrator() || requesterIsAdmin;
+        }
+        const agentCommandResult = await memoryCommands?.handleCommand({
+          text: event.message.text,
+          context: { profile: agentCommandProfile, event, requestId, requesterDisplayName },
+          isAdmin: memoryCommandFunction
+            ? agentCommandIsAdmin
+            : await adminAllowed(
+                effectiveProfile,
+                event,
+                requesterIsAdmin,
+                parsedAdminCommand?.command
+              )
+        });
+        if (agentCommandResult) {
+          await line.replyText(
+            event.replyToken,
+            agentCommandResult.replyText,
+            agentCommandResult.quickReplies
+              ? { quickReplies: agentCommandResult.quickReplies }
+              : undefined
+          );
+          continue;
+        }
+        const accessCommandResult = await handlePublicAccessCommand({
+          text: event.message.text,
+          profile: effectiveProfile,
+          event,
+          accessStore,
+          registrationInviteCodeStore,
+          lineIdentity: getLineIdentity(),
+          adminHandlers,
+          productContext: {
+            routeObserver,
+            requestId,
+            hmacKey: config.observability?.hmacKey
+          },
+          requesterIsAdmin,
+          policies: {
+            parseCommand: parseAdminCommand,
+            adminAllowed,
+            formatAdminHelp: formatAdminCommandHelpByMode,
+            directAccessPolicy,
+            groupAccessPolicy,
+            isDirectUserAllowed,
+            isGroupAllowed
+          },
+          resolveCurrentAccess: async () => {
+            const context = await resolveEffectiveAccessContext({
+              profile,
+              event,
+              accessStore,
+              requesterIsAdmin
+            });
+            return accountAuthorizationUsed
+              ? applyAccountFunctionAuthorization(context, profile, accountState)
+              : context;
+          },
+          mediaSyncStore,
+          mediaSyncManagementService
+        });
+        if (accessCommandResult) {
+          await line.replyText(
+            event.replyToken,
+            accessCommandResult.replyText,
+            accessCommandResult.quickReplies
+              ? { quickReplies: accessCommandResult.quickReplies }
+              : undefined
+          );
+          continue;
+        }
+        const adminStartedAt = Date.now();
+        const adminResult = await runAdminCommand({
+          context: { profile: effectiveProfile, event, requestId },
+          command: parsedAdminCommand?.command ?? "unknown",
+          lastErrorStore,
+          routeObserver,
+          isAuthorized: () =>
+            adminAllowed(profile, event, requesterIsAdmin, parsedAdminCommand?.command),
+          elapsedMs: () => elapsedMs(adminStartedAt),
+          handler: () =>
+            handleAdminCommand(
+              event.message!.text!,
+              effectiveProfile,
+              profile,
+              event,
+              config,
+              adminHandlers,
+              lastErrorStore,
+              lastRouteStore,
+              accessStore,
+              adminActionRegistry,
+              diagnostics,
+              agentTraceStore,
+              requestId,
+              requesterIsAdmin
+            )
+        });
+        await line.replyText(
+          event.replyToken,
+          adminResult.replyText,
+          adminResult.quickReplies ? { quickReplies: adminResult.quickReplies } : undefined
+        );
+        continue;
+      }
+
+      if (!requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
+        if (!profileUsesProviders(effectiveProfile)) {
+          const localHelp = renderCapabilityHelp(
+            capabilityProjection,
+            "help",
+            effectiveProfile,
+            undefined,
+            { sourceType: effectiveAccess.sourceType, authorized: effectiveAccess.authorized }
+          );
+          await line.replyText(
+            event.replyToken,
+            localHelp.replyText,
+            localHelp.quickReplies ? { quickReplies: localHelp.quickReplies } : undefined
+          );
+          continue;
+        }
         await line.replyText(
           event.replyToken,
           await adminAuthorizationReply({
@@ -1096,511 +1490,337 @@ async function handleWebhook(
         );
         continue;
       }
-      const memoryCommandFunction = memoryCommandCapabilityName(event.message.text);
-      let agentCommandProfile = effectiveProfile;
-      let agentCommandIsAdmin = requesterIsAdmin;
-      if (memoryCommandFunction) {
-        const definition = getFunctionDefinition(memoryCommandFunction);
-        const sourceType = event.source.type;
+
+      if (requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
         if (
-          !profile.enabledFunctions.includes(memoryCommandFunction) ||
-          (sourceType !== "user" && sourceType !== "group") ||
-          !definition?.allowedSources.includes(sourceType)
+          event.source.type !== "user" &&
+          !matchesGroupScopedNaturalLanguageAdminActionHint(event.message.text)
         ) {
-          await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+          await line.replyText(event.replyToken, "管理操作請到個人對話使用。", undefined);
           continue;
         }
-        const allowed = await turnAccountAuthorization.allowedFunctions([memoryCommandFunction]);
-        if (!allowed.includes(memoryCommandFunction)) {
-          await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+        if (!adminActionRouter) {
+          await line.replyText(event.replyToken, "目前無法辨識這個管理操作。", undefined);
           continue;
         }
-        if (!agentCommandProfile.enabledFunctions.includes(memoryCommandFunction)) {
-          agentCommandProfile = {
-            ...agentCommandProfile,
-            enabledFunctions: [...agentCommandProfile.enabledFunctions, memoryCommandFunction]
-          };
-        }
-        const commandPolicy = await evaluateActionPolicy({
-          action: memoryCommandFunction,
-          profile,
-          source: event.source,
-          requesterIsAdmin: turnAccountAuthorization.administrator() || requesterIsAdmin,
-          effectiveFunctions: agentCommandProfile.enabledFunctions
+        const adminRouteStartedAt = Date.now();
+        const route = await adminActionRouter.route({
+          profileName: effectiveProfile.name,
+          text: event.message.text,
+          enabledActions: enabledNaturalLanguageAdminActionNames(),
+          source: event.source
         });
-        if (!commandPolicy.allowed) {
-          await line.replyText(event.replyToken, messages.permissionDenied, undefined);
+        const adminRouteDurationMs = elapsedMs(adminRouteStartedAt);
+        await emitRouteEvent(routeObserver, {
+          kind: "admin_action_route",
+          profileName: effectiveProfile.name,
+          sourceType: event.source.type,
+          requestId,
+          provider: route.provider,
+          lane: route.lane,
+          outcome: route.type,
+          action: route.type === "execute" ? route.action : undefined,
+          reason: route.type === "deny" ? route.reason : undefined,
+          durationMs: adminRouteDurationMs
+        });
+        await lastRouteStore.record({
+          requestId,
+          occurredAt: new Date().toISOString(),
+          profileName: effectiveProfile.name,
+          sourceType: event.source.type,
+          phase: "admin_route",
+          provider: route.provider,
+          outcome: route.type,
+          action: route.type === "execute" ? route.action : undefined,
+          reason: route.type === "deny" ? route.reason : undefined,
+          durationMs: adminRouteDurationMs
+        });
+        if (route.type !== "execute") {
+          await line.replyText(event.replyToken, "目前無法辨識這個管理操作。", undefined);
           continue;
         }
-        agentCommandIsAdmin = turnAccountAuthorization.administrator() || requesterIsAdmin;
-      }
-      const agentCommandResult = await memoryCommands?.handleCommand({
-        text: event.message.text,
-        context: { profile: agentCommandProfile, event, requestId, requesterDisplayName },
-        isAdmin: memoryCommandFunction
-          ? agentCommandIsAdmin
-          : await adminAllowed(
-              effectiveProfile,
-              event,
-              requesterIsAdmin,
-              parsedAdminCommand?.command
-            )
-      });
-      if (agentCommandResult) {
-        await line.replyText(
-          event.replyToken,
-          agentCommandResult.replyText,
-          agentCommandResult.quickReplies
-            ? { quickReplies: agentCommandResult.quickReplies }
-            : undefined
-        );
-        continue;
-      }
-      const accessCommandResult = await handlePublicAccessCommand({
-        text: event.message.text,
-        profile: effectiveProfile,
-        event,
-        accessStore,
-        registrationInviteCodeStore,
-        lineIdentity: getLineIdentity(),
-        adminHandlers,
-        productContext: {
-          routeObserver,
-          requestId,
-          hmacKey: config.observability?.hmacKey
-        },
-        requesterIsAdmin,
-        policies: {
-          parseCommand: parseAdminCommand,
-          adminAllowed,
-          formatAdminHelp: formatAdminCommandHelpByMode,
-          directAccessPolicy,
-          groupAccessPolicy,
-          isDirectUserAllowed,
-          isGroupAllowed
-        },
-        resolveCurrentAccess: async () => {
-          const context = await resolveEffectiveAccessContext({
-            profile,
-            event,
-            accessStore,
-            requesterIsAdmin
-          });
-          return accountAuthorizationUsed
-            ? applyAccountFunctionAuthorization(context, profile, accountState)
-            : context;
-        },
-        mediaSyncStore,
-        mediaSyncManagementService
-      });
-      if (accessCommandResult) {
-        await line.replyText(
-          event.replyToken,
-          accessCommandResult.replyText,
-          accessCommandResult.quickReplies
-            ? { quickReplies: accessCommandResult.quickReplies }
-            : undefined
-        );
-        continue;
-      }
-      const adminStartedAt = Date.now();
-      const adminResult = await runAdminCommand({
-        context: { profile: effectiveProfile, event, requestId },
-        command: parsedAdminCommand?.command ?? "unknown",
-        lastErrorStore,
-        routeObserver,
-        isAuthorized: () =>
-          adminAllowed(profile, event, requesterIsAdmin, parsedAdminCommand?.command),
-        elapsedMs: () => elapsedMs(adminStartedAt),
-        handler: () =>
-          handleAdminCommand(
-            event.message!.text!,
-            effectiveProfile,
-            profile,
-            event,
-            config,
-            adminHandlers,
-            lastErrorStore,
-            lastRouteStore,
-            accessStore,
-            adminActionRegistry,
-            diagnostics,
-            agentTraceStore,
-            requestId,
-            requesterIsAdmin
-          )
-      });
-      await line.replyText(
-        event.replyToken,
-        adminResult.replyText,
-        adminResult.quickReplies ? { quickReplies: adminResult.quickReplies } : undefined
-      );
-      continue;
-    }
-
-    if (!requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
-      if (!profileUsesProviders(effectiveProfile)) {
-        const localHelp = renderCapabilityHelp(
-          capabilityProjection,
-          "help",
-          effectiveProfile,
-          undefined,
-          { sourceType: effectiveAccess.sourceType, authorized: effectiveAccess.authorized }
-        );
-        await line.replyText(
-          event.replyToken,
-          localHelp.replyText,
-          localHelp.quickReplies ? { quickReplies: localHelp.quickReplies } : undefined
-        );
-        continue;
-      }
-      await line.replyText(
-        event.replyToken,
-        await adminAuthorizationReply({
+        const adminResult = await adminActionRegistry.execute({
+          action: route.action,
+          profile: effectiveProfile,
           event,
-          authorization: accountAuthorization
-        }),
-        undefined
-      );
-      continue;
-    }
+          arguments: route.arguments,
+          requesterIsAdmin: true
+        });
+        await emitRouteEvent(routeObserver, {
+          kind: "admin_action_result",
+          profileName: effectiveProfile.name,
+          sourceType: event.source.type,
+          requestId,
+          action: route.action,
+          ok: adminResult.ok
+        });
+        await lastRouteStore.record({
+          requestId,
+          occurredAt: new Date().toISOString(),
+          profileName: effectiveProfile.name,
+          sourceType: event.source.type,
+          phase: "admin_action",
+          action: route.action,
+          ok: adminResult.ok
+        });
+        await line.replyText(
+          event.replyToken,
+          adminResult.replyText,
+          adminResult.quickReplies ? { quickReplies: adminResult.quickReplies } : undefined
+        );
+        continue;
+      }
 
-    if (requesterIsAdmin && matchesNaturalLanguageAdminActionHint(event.message.text)) {
+      if (await shouldPromptManagedRegistration(profile, event, accessStore, requesterIsAdmin)) {
+        await line.replyText(event.replyToken, registrationPrompt(profile, event), undefined);
+        continue;
+      }
+
+      const pendingActionReview =
+        sessionStore && event.source.userId
+          ? await sessionStore.findActionReview({
+              profileName: profile.name,
+              source: event.source,
+              requesterUserId: event.source.userId
+            })
+          : undefined;
+      const groupEngagement =
+        event.source.type === "group"
+          ? classifyGroupEngagement(effectiveProfile, event.message)
+          : undefined;
+      const conversationScope = buildConversationWindowScope(effectiveProfile, event);
+      const conversationWindowActive =
+        event.source.type === "group" &&
+        Boolean(effectiveProfile.generalAgent?.enabled) &&
+        Boolean(conversationScope) &&
+        (await conversationWindowStore.isActive(conversationScope as ConversationWindowScope));
+      if (groupEngagement?.kind === "intro") {
+        const intro = createIntroReply(capabilityProjection, event.message.text, {
+          force: true,
+          profile: effectiveProfile,
+          account:
+            event.source.type === "user" && accountAuthorizationUsed
+              ? accountSurfacePresentation(profile, accountState)
+              : undefined
+        });
+        await emitRouteEvent(routeObserver, {
+          kind: "route",
+          profileName: profile.name,
+          sourceType: event.source.type,
+          requestId,
+          outcome: "respond",
+          action: "introduce_bot",
+          engagement: "intro"
+        });
+        await line.replyText(
+          event.replyToken,
+          intro?.replyText ?? messages.requestFailed,
+          intro?.quickReplies ? { quickReplies: intro.quickReplies } : undefined
+        );
+        if (intro) {
+          await recordConversationReply(conversationWindowStore, effectiveProfile, event, intro);
+        }
+        continue;
+      }
       if (
-        event.source.type !== "user" &&
-        !matchesGroupScopedNaturalLanguageAdminActionHint(event.message.text)
+        profile.name !== "helper" &&
+        groupEngagement?.kind === "small_talk" &&
+        groupEngagement.smallTalkCategory
       ) {
-        await line.replyText(event.replyToken, "管理操作請到個人對話使用。", undefined);
+        const result = await createControlledSmallTalkReply({
+          profile: effectiveProfile,
+          text: event.message.text,
+          category: groupEngagement.smallTalkCategory,
+          generator: textGenerator,
+          fallbackGenerator: textFallbackGenerator
+        });
+        await emitRouteEvent(routeObserver, {
+          kind: "route",
+          profileName: profile.name,
+          sourceType: event.source.type,
+          requestId,
+          outcome: "respond",
+          action: "small_talk",
+          engagement: groupEngagement.kind,
+          smallTalkCategory: groupEngagement.smallTalkCategory
+        });
+        await line.replyText(event.replyToken, result.replyText, undefined);
+        await recordConversationReply(conversationWindowStore, effectiveProfile, event, result);
         continue;
       }
-      if (!adminActionRouter) {
-        await line.replyText(event.replyToken, "目前無法辨識這個管理操作。", undefined);
-        continue;
-      }
-      const adminRouteStartedAt = Date.now();
-      const route = await adminActionRouter.route({
-        profileName: effectiveProfile.name,
-        text: event.message.text,
-        enabledActions: enabledNaturalLanguageAdminActionNames(),
-        source: event.source
-      });
-      const adminRouteDurationMs = elapsedMs(adminRouteStartedAt);
-      await emitRouteEvent(routeObserver, {
-        kind: "admin_action_route",
-        profileName: effectiveProfile.name,
-        sourceType: event.source.type,
-        requestId,
-        provider: route.provider,
-        lane: route.lane,
-        outcome: route.type,
-        action: route.type === "execute" ? route.action : undefined,
-        reason: route.type === "deny" ? route.reason : undefined,
-        durationMs: adminRouteDurationMs
-      });
-      await lastRouteStore.record({
-        requestId,
-        occurredAt: new Date().toISOString(),
-        profileName: effectiveProfile.name,
-        sourceType: event.source.type,
-        phase: "admin_route",
-        provider: route.provider,
-        outcome: route.type,
-        action: route.type === "execute" ? route.action : undefined,
-        reason: route.type === "deny" ? route.reason : undefined,
-        durationMs: adminRouteDurationMs
-      });
-      if (route.type !== "execute") {
-        await line.replyText(event.replyToken, "目前無法辨識這個管理操作。", undefined);
-        continue;
-      }
-      const adminResult = await adminActionRegistry.execute({
-        action: route.action,
-        profile: effectiveProfile,
-        event,
-        arguments: route.arguments,
-        requesterIsAdmin: true
-      });
-      await emitRouteEvent(routeObserver, {
-        kind: "admin_action_result",
-        profileName: effectiveProfile.name,
-        sourceType: event.source.type,
-        requestId,
-        action: route.action,
-        ok: adminResult.ok
-      });
-      await lastRouteStore.record({
-        requestId,
-        occurredAt: new Date().toISOString(),
-        profileName: effectiveProfile.name,
-        sourceType: event.source.type,
-        phase: "admin_action",
-        action: route.action,
-        ok: adminResult.ok
-      });
-      await line.replyText(
-        event.replyToken,
-        adminResult.replyText,
-        adminResult.quickReplies ? { quickReplies: adminResult.quickReplies } : undefined
-      );
-      continue;
-    }
 
-    if (await shouldPromptManagedRegistration(profile, event, accessStore, requesterIsAdmin)) {
-      await line.replyText(event.replyToken, registrationPrompt(profile, event), undefined);
-      continue;
-    }
-
-    const pendingActionReview =
-      sessionStore && event.source.userId
-        ? await sessionStore.findActionReview({
-            profileName: profile.name,
-            source: event.source,
-            requesterUserId: event.source.userId
-          })
-        : undefined;
-    const groupEngagement =
-      event.source.type === "group"
-        ? classifyGroupEngagement(effectiveProfile, event.message)
-        : undefined;
-    const conversationScope = buildConversationWindowScope(effectiveProfile, event);
-    const conversationWindowActive =
-      event.source.type === "group" &&
-      Boolean(effectiveProfile.generalAgent?.enabled) &&
-      Boolean(conversationScope) &&
-      (await conversationWindowStore.isActive(conversationScope as ConversationWindowScope));
-    if (groupEngagement?.kind === "intro") {
       const intro = createIntroReply(capabilityProjection, event.message.text, {
-        force: true,
         profile: effectiveProfile,
         account:
           event.source.type === "user" && accountAuthorizationUsed
             ? accountSurfacePresentation(profile, accountState)
             : undefined
       });
-      await emitRouteEvent(routeObserver, {
-        kind: "route",
-        profileName: profile.name,
-        sourceType: event.source.type,
-        requestId,
-        outcome: "respond",
-        action: "introduce_bot",
-        engagement: "intro"
-      });
-      await line.replyText(
-        event.replyToken,
-        intro?.replyText ?? messages.requestFailed,
-        intro?.quickReplies ? { quickReplies: intro.quickReplies } : undefined
-      );
       if (intro) {
-        await recordConversationReply(conversationWindowStore, effectiveProfile, event, intro);
-      }
-      continue;
-    }
-    if (
-      profile.name !== "helper" &&
-      groupEngagement?.kind === "small_talk" &&
-      groupEngagement.smallTalkCategory
-    ) {
-      const result = await createControlledSmallTalkReply({
-        profile: effectiveProfile,
-        text: event.message.text,
-        category: groupEngagement.smallTalkCategory,
-        generator: textGenerator,
-        fallbackGenerator: textFallbackGenerator
-      });
-      await emitRouteEvent(routeObserver, {
-        kind: "route",
-        profileName: profile.name,
-        sourceType: event.source.type,
-        requestId,
-        outcome: "respond",
-        action: "small_talk",
-        engagement: groupEngagement.kind,
-        smallTalkCategory: groupEngagement.smallTalkCategory
-      });
-      await line.replyText(event.replyToken, result.replyText, undefined);
-      await recordConversationReply(conversationWindowStore, effectiveProfile, event, result);
-      continue;
-    }
-
-    const intro = createIntroReply(capabilityProjection, event.message.text, {
-      profile: effectiveProfile,
-      account:
-        event.source.type === "user" && accountAuthorizationUsed
-          ? accountSurfacePresentation(profile, accountState)
-          : undefined
-    });
-    if (intro) {
-      await line.replyText(
-        event.replyToken,
-        intro.replyText,
-        intro.quickReplies ? { quickReplies: intro.quickReplies } : undefined
-      );
-      await recordConversationReply(conversationWindowStore, effectiveProfile, event, intro);
-      continue;
-    }
-
-    const profileTurnInput = {
-      profile: effectiveProfile,
-      event,
-      requestId,
-      requesterDisplayName,
-      requesterIsAdmin,
-      configuredFunctions: [...profile.enabledFunctions],
-      authorizeFunctions: async (names: CapabilityName[]) => [
-        ...(await turnAccountAuthorization.allowedFunctions(names))
-      ],
-      nicknameWriteEnabled: turnAccountAuthorization.nicknameWriteEnabled,
-      accountAdministrator: turnAccountAuthorization.administrator
-    };
-    const researchOutcome = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
-    if (researchOutcome?.kind === "handled") {
-      await line.replyText(
-        event.replyToken,
-        researchOutcome.result.replyText,
-        researchOutcome.result.quickReplies
-          ? { quickReplies: researchOutcome.result.quickReplies }
-          : undefined
-      );
-      await recordConversationReply(
-        conversationWindowStore,
-        effectiveProfile,
-        event,
-        researchOutcome.result
-      );
-      continue;
-    }
-    const researchAccepted = researchOutcome?.kind === "accepted";
-    if (!researchAccepted) {
-      const attachmentResult = await executeAttachmentTextIntake({
-        intake: {
-          profile: effectiveProfile,
-          event,
-          requestId,
-          requesterDisplayName,
-          requesterIsAdmin,
-          configuredFunctions: profile.enabledFunctions,
-          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-          sessionStore,
-          maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
-          now: new Date(),
-          textHandlers: attachmentTextHandlers
-        },
-        completion: {
-          profile: effectiveProfile,
-          event,
-          requestId,
-          requesterDisplayName,
-          requesterIsAdmin,
-          completionObserver,
-          accessStore,
-          resourceMemory,
-          routeObserver,
-          lastRouteStore
-        },
-        lastErrorStore
-      });
-      if (attachmentResult) {
         await line.replyText(
           event.replyToken,
-          attachmentResult.replyText,
-          attachmentResult.quickReplies
-            ? { quickReplies: attachmentResult.quickReplies }
+          intro.replyText,
+          intro.quickReplies ? { quickReplies: intro.quickReplies } : undefined
+        );
+        await recordConversationReply(conversationWindowStore, effectiveProfile, event, intro);
+        continue;
+      }
+
+      const researchOutcome = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
+      if (researchOutcome?.kind === "handled") {
+        await line.replyText(
+          event.replyToken,
+          researchOutcome.result.replyText,
+          researchOutcome.result.quickReplies
+            ? { quickReplies: researchOutcome.result.quickReplies }
             : undefined
         );
         await recordConversationReply(
           conversationWindowStore,
           effectiveProfile,
           event,
-          attachmentResult
+          researchOutcome.result
         );
         continue;
       }
-    }
-
-    const continuation = researchAccepted
-      ? { matched: false as const }
-      : await executeDeterministicTextContinuation({
-          event,
-          profile: effectiveProfile,
-          configuredFunctions: profile.enabledFunctions,
-          handlers: textMessageHandlers,
-          requesterDisplayName,
-          requesterIsAdmin,
-          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-          sessionStore,
-          resourceMemory,
-          completionObserver,
-          accessStore,
-          routeObserver,
-          lastErrorStore,
-          lastRouteStore,
-          requestId
+      const researchAccepted = researchOutcome?.kind === "accepted";
+      if (!researchAccepted) {
+        const attachmentResult = await executeAttachmentTextIntake({
+          intake: {
+            profile: effectiveProfile,
+            event,
+            requestId,
+            requesterDisplayName,
+            requesterIsAdmin,
+            configuredFunctions: profile.enabledFunctions,
+            authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+            sessionStore,
+            maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
+            now: new Date(),
+            textHandlers: attachmentTextHandlers
+          },
+          completion: {
+            profile: effectiveProfile,
+            event,
+            requestId,
+            requesterDisplayName,
+            requesterIsAdmin,
+            completionObserver,
+            accessStore,
+            resourceMemory,
+            routeObserver,
+            lastRouteStore
+          },
+          lastErrorStore
         });
-    if (continuation.matched) {
-      if (continuation.result) {
-        await profileRuntime.recordExternalResult?.(profileTurnInput, continuation.result);
+        if (attachmentResult) {
+          await line.replyText(
+            event.replyToken,
+            attachmentResult.replyText,
+            attachmentResult.quickReplies
+              ? { quickReplies: attachmentResult.quickReplies }
+              : undefined
+          );
+          await recordConversationReply(
+            conversationWindowStore,
+            effectiveProfile,
+            event,
+            attachmentResult
+          );
+          continue;
+        }
+      }
+
+      const continuation = researchAccepted
+        ? { matched: false as const }
+        : await executeDeterministicTextContinuation({
+            event,
+            profile: effectiveProfile,
+            configuredFunctions: profile.enabledFunctions,
+            handlers: textMessageHandlers,
+            requesterDisplayName,
+            requesterIsAdmin,
+            authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+            sessionStore,
+            resourceMemory,
+            completionObserver,
+            accessStore,
+            routeObserver,
+            lastErrorStore,
+            lastRouteStore,
+            requestId
+          });
+      if (continuation.matched) {
+        if (continuation.result) {
+          await profileRuntime.recordExternalResult?.(profileTurnInput, continuation.result);
+          await line.replyText(
+            event.replyToken,
+            continuation.result.replyText,
+            continuation.result.quickReplies
+              ? { quickReplies: continuation.result.quickReplies }
+              : undefined
+          );
+          await recordConversationReply(
+            conversationWindowStore,
+            effectiveProfile,
+            event,
+            continuation.result
+          );
+        }
+        continue;
+      }
+
+      const routingAllowed =
+        Boolean(researchAccepted) ||
+        Boolean(pendingActionReview) ||
+        !groupEngagement ||
+        groupEngagementAllowsReply(groupEngagement) ||
+        conversationWindowActive;
+
+      const agentTurnResult = routingAllowed
+        ? await handleAgentTextTurnWithLongJob({
+            runtime: profileRuntime,
+            jobStore: agentJobStore,
+            receipt,
+            ...profileTurnInput,
+            completeResult: (result) =>
+              result.executedAction &&
+              result.writePhase !== "preview" &&
+              !profileRuntime.observesCompletion
+                ? completionObserver.complete({
+                    context: {
+                      profile: effectiveProfile,
+                      event,
+                      requestId,
+                      requesterDisplayName,
+                      requesterIsAdmin
+                    },
+                    action: result.executedAction,
+                    result,
+                    durationMs: 0,
+                    clarificationCount: 0
+                  })
+                : Promise.resolve(result)
+          })
+        : undefined;
+      if (agentTurnResult) {
         await line.replyText(
           event.replyToken,
-          continuation.result.replyText,
-          continuation.result.quickReplies
-            ? { quickReplies: continuation.result.quickReplies }
-            : undefined
+          agentTurnResult.replyText,
+          agentTurnResult.quickReplies ? { quickReplies: agentTurnResult.quickReplies } : undefined
         );
         await recordConversationReply(
           conversationWindowStore,
           effectiveProfile,
           event,
-          continuation.result
+          agentTurnResult
         );
       }
-      continue;
-    }
-
-    const routingAllowed =
-      Boolean(researchAccepted) ||
-      Boolean(pendingActionReview) ||
-      !groupEngagement ||
-      groupEngagementAllowsReply(groupEngagement) ||
-      conversationWindowActive;
-
-    const agentTurnResult = routingAllowed
-      ? await handleAgentTextTurnWithLongJob({
-          runtime: profileRuntime,
-          jobStore: agentJobStore,
-          ...profileTurnInput,
-          completeResult: (result) =>
-            result.executedAction &&
-            result.writePhase !== "preview" &&
-            !profileRuntime.observesCompletion
-              ? completionObserver.complete({
-                  context: {
-                    profile: effectiveProfile,
-                    event,
-                    requestId,
-                    requesterDisplayName,
-                    requesterIsAdmin
-                  },
-                  action: result.executedAction,
-                  result,
-                  durationMs: 0,
-                  clarificationCount: 0
-                })
-              : Promise.resolve(result)
-        })
-      : undefined;
-    if (agentTurnResult) {
-      await line.replyText(
-        event.replyToken,
-        agentTurnResult.replyText,
-        agentTurnResult.quickReplies ? { quickReplies: agentTurnResult.quickReplies } : undefined
-      );
-      await recordConversationReply(
-        conversationWindowStore,
-        effectiveProfile,
-        event,
-        agentTurnResult
-      );
+    } catch (error) {
+      eventSucceeded = false;
+      throw error;
+    } finally {
+      if (!receipt?.deferred) await receipt?.finish(eventSucceeded);
     }
   }
 
@@ -2012,7 +2232,8 @@ async function allowEvent(
   accessStore: AccessStore,
   conversationWindowStore: ConversationWindowStore,
   requesterIsAdmin: boolean,
-  sessionStore?: SessionStore
+  sessionStore?: SessionStore,
+  knownBotQuote = false
 ): Promise<AllowResult> {
   const eventType = event.type?.trim().toLowerCase();
   const sourceType = event.source?.type?.trim().toLowerCase();
@@ -2056,6 +2277,7 @@ async function allowEvent(
       if (command) {
         return { allowed: true, reason: "group_admin_command_allowed" };
       }
+      if (knownBotQuote) return { allowed: true, reason: "group_bot_quote" };
       const engagement = classifyGroupEngagement(profile, event.message);
       if (!profile.groupRequireWakeWord || groupEngagementAllowsReply(engagement)) {
         return { allowed: true, reason: `group_${engagement.kind}_matched` };
@@ -2224,8 +2446,8 @@ async function recordConversationReply(
   if (!ttlMs || !scope || !userText || !result.replyText) {
     return;
   }
-  await store.recordTurn({ scope, role: "user", text: userText, ttlMs });
-  await store.recordTurn({ scope, role: "assistant", text: result.replyText, ttlMs });
+  await store.recordTurn({ scope, role: "user", text: "[admitted turn]", ttlMs });
+  await store.recordTurn({ scope, role: "assistant", text: "[reply]", ttlMs });
 }
 
 function buildConversationWindowScope(

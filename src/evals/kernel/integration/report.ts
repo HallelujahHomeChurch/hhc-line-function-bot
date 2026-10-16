@@ -6,6 +6,9 @@ import { z } from "zod";
 import type { KernelIntegrationCaseResult } from "./redis-matrix.js";
 
 export const KERNEL_INTEGRATION_CASE_CONTRACTS = [
+  { caseId: "redis/webhook/lease-owner-and-uncertain", boundary: "entrance_access" },
+  { caseId: "redis/job/pre-dispatch-operation", boundary: "write_workflow" },
+  { caseId: "redis/rate-limit/atomic-window-notification", boundary: "entrance_access" },
   { caseId: "redis/selection/atomic-consume", boundary: "slot_ambiguity_resolution" },
   { caseId: "redis/job/scope-restart", boundary: "external_dependency" },
   { caseId: "redis/webhook/cross-replica-deduplication", boundary: "entrance_access" },
