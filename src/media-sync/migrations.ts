@@ -16,6 +16,21 @@ const migrations = [
     disabled_at timestamptz
   )
   `,
+  `do $$ begin
+    lock table media_sync_bindings in access exclusive mode;
+    if not exists (select 1 from pg_attribute where attrelid='media_sync_bindings'::regclass
+                   and attname='admission_generation' and not attisdropped) then
+      alter table media_sync_bindings add column admission_generation uuid;
+      update media_sync_bindings binding set admission_generation=principal.execution_generation
+      from access_principals principal
+      where principal.profile_name=binding.profile_name and principal.principal_type='group'
+        and principal.principal_id=binding.group_id and principal.disabled_at is null
+        and not exists (select 1 from access_audit_events audit
+          where audit.profile_name=binding.profile_name and audit.action='access.group.remove'
+            and audit.target_type='group' and audit.target_id=binding.group_id
+            and audit.created_at>=binding.bound_at);
+    end if;
+  end $$`,
   `
   create unique index if not exists media_sync_bindings_active_group_idx
   on media_sync_bindings (profile_name, group_id)
@@ -101,8 +116,24 @@ const migrations = [
   `,
   `alter table media_sync_ingests add column if not exists work_id uuid default gen_random_uuid()`,
   `alter table media_sync_ingests alter column work_id set not null`,
+  `create index if not exists media_sync_ingests_collection_status_idx
+   on media_sync_ingests (profile_name, collection_id, created_at desc, work_id desc)`,
   `create unique index if not exists media_sync_ingests_work_id_idx on media_sync_ingests(work_id)`,
   `alter table media_sync_ingests add column if not exists asset_etag text`,
+  `do $$ begin
+    lock table media_sync_ingests in access exclusive mode;
+    if not exists (select 1 from pg_attribute where attrelid='media_sync_ingests'::regclass
+                   and attname='binding_id' and not attisdropped) then
+      alter table media_sync_ingests add column binding_id uuid;
+      update media_sync_ingests ingest set binding_id=(
+        select (array_agg(binding.id))[1] from media_sync_bindings binding
+        where binding.profile_name=ingest.profile_name and binding.group_id=ingest.group_id
+          and binding.collection_id=ingest.collection_id and binding.bound_at<=ingest.created_at
+          and (binding.disabled_at is null or ingest.created_at<binding.disabled_at)
+        having count(*)=1
+      );
+    end if;
+  end $$`,
   `alter table media_sync_ingests drop constraint if exists media_sync_ingests_state_check`,
   `
   alter table media_sync_ingests add constraint media_sync_ingests_state_check

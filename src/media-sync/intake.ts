@@ -26,7 +26,7 @@ export async function prepareMediaSyncIntake(input: {
     profileName: input.profile.name,
     groupId
   });
-  if (!binding) return { eligible: false };
+  if (!binding || !(await input.store.isBindingAdmitted(binding.id))) return { eligible: false };
 
   const sourceKey = mediaSyncSourceKey(input.profile.name, message.id);
   const result = await input.store.createIngest({
@@ -35,6 +35,7 @@ export async function prepareMediaSyncIntake(input: {
     messageId: message.id,
     groupId,
     collectionId: binding.collectionId,
+    bindingId: binding.id,
     displayName: displayName(message, input.event.timestamp ?? input.now.getTime()),
     mediaKind: message.type,
     expectedMime: expectedMime(message)

@@ -7,6 +7,8 @@ import type { AccountAdminClient } from "../account/account-admin-client.js";
 import { AccountApiError } from "../account/account-admin-client.js";
 import { MediaSyncManagementError, type MediaSyncManagementService } from "./service.js";
 
+import { parseMediaSyncStatusQuery } from "./status.js";
+
 type MediaSyncRouteDependencies = {
   gatewayCallerAppId: string;
   appApiToken: string;
@@ -57,6 +59,26 @@ export function registerMediaSyncRoutes(
     if (!query || !hasNoBody(request.body)) return sendError(reply, 400, "invalid_request");
     return run(reply, () => deps.service.listCollections(query, auth.requestId, auth.userId));
   });
+
+  app.get<{ Params: { collectionId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/status",
+    { preHandler: authorize },
+    async (request, reply) => {
+      reply.header("cache-control", "private, no-store");
+      const auth = requireAuth(request);
+      const query = parseMediaSyncStatusQuery(request.query, request.params.collectionId);
+      if (!validOpaqueId(request.params.collectionId) || !query || !hasNoBody(request.body))
+        return sendError(reply, 400, "invalid_request");
+      return run(reply, () =>
+        deps.service.listCollectionStatus(
+          request.params.collectionId,
+          query,
+          auth.requestId,
+          auth.userId
+        )
+      );
+    }
+  );
 
   app.get(
     "/api/line/media-sync/acl-subjects",
