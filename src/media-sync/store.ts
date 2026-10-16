@@ -22,6 +22,13 @@ import type {
   MediaSyncWorkClaim
 } from "./types.js";
 
+import {
+  statusCursor,
+  type MediaSyncStatusQuery,
+  type MediaSyncStatusPage,
+  type MediaSyncStatusItem
+} from "./status.js";
+
 type StoreOptions = {
   codeFactory?: () => string;
   now?: () => Date;
@@ -110,6 +117,84 @@ export class PostgresMediaSyncStore {
   ) {
     this.codeFactory = options.codeFactory ?? generateInviteCode;
     this.now = options.now ?? (() => new Date());
+  }
+
+  async listCollectionStatus(
+    collectionId: string,
+    query: MediaSyncStatusQuery
+  ): Promise<MediaSyncStatusPage> {
+    const result = await this.pool.query<{
+      counts: MediaSyncStatusPage["counts"];
+      total: number;
+      last_published_at: string | null;
+      items: MediaSyncStatusItem[];
+    }>(
+      `with scoped as materialized (
+        select ingest.work_id, ingest.media_kind, ingest.created_at, ingest.updated_at,
+          publication.updated_at published_at,
+          case when ingest.state='tombstoned' then 'tombstoned'
+            when publication.state='revoked' then 'cancelled'
+            when publication.state='published' then 'published'
+            when ingest.state='failed' or publication.state='failed' then 'failed'
+            when ingest.state='awaiting_scan' then 'awaiting_scan'
+            when ingest.state in ('processing', 'ready') then 'processing'
+            else 'received' end status,
+          case
+            when coalesce(publication.failure_category, outbox.last_error_category) in ('line_content_unavailable', 'source_unavailable') then 'source_unavailable'
+            when coalesce(publication.failure_category, outbox.last_error_category) in ('asset_policy_rejected', 'scan_infected', 'scan_failed', 'processing_failed') then 'rejected'
+            when coalesce(publication.failure_category, outbox.last_error_category) in ('publication_abandoned', 'publication_uncertain') then 'needs_review'
+            when publication.failure_category is not null or outbox.last_error_category is not null then 'temporarily_unavailable'
+            else null end failure
+        from media_sync_ingests ingest
+        left join media_sync_publications publication on publication.source_key=ingest.source_key
+          and publication.publication_type='collection' and publication.destination_id=ingest.collection_id
+        left join media_sync_outbox outbox on outbox.source_key=ingest.source_key and outbox.operation='intake'
+        where ingest.profile_name='helper' and ingest.collection_id=$1
+          and ingest.created_at >= $2::timestamptz and ingest.created_at < $3::timestamptz
+      ), page as (
+        select * from scoped
+        where $4::timestamptz is null or (created_at, work_id) < ($4::timestamptz, $5::uuid)
+        order by created_at desc, work_id desc limit $6
+      )
+      select jsonb_build_object(
+        'received', count(*) filter (where status='received'),
+        'processing', count(*) filter (where status='processing'),
+        'awaiting_scan', count(*) filter (where status='awaiting_scan'),
+        'published', count(*) filter (where status='published'),
+        'failed', count(*) filter (where status='failed'),
+        'cancelled', count(*) filter (where status='cancelled'),
+        'tombstoned', count(*) filter (where status='tombstoned')) counts,
+        count(*)::integer total,
+        to_char(max(published_at) filter (where status='published') at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') last_published_at,
+        coalesce((select jsonb_agg(jsonb_build_object(
+          'workId', work_id, 'mediaKind', media_kind, 'status', status,
+          'receivedAt', to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+          'updatedAt', to_char(updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+          'failure', case when status in ('failed', 'processing', 'awaiting_scan') then failure else null end
+        ) order by created_at desc, work_id desc) from page), '[]'::jsonb) items
+      from scoped`,
+      [
+        collectionId,
+        query.from,
+        query.until,
+        query.after?.createdAt ?? null,
+        query.after?.workId ?? null,
+        query.limit + 1
+      ]
+    );
+    const row = result.rows[0]!;
+    const hasMore = row.items.length > query.limit;
+    const items = row.items.slice(0, query.limit);
+    return {
+      from: query.from,
+      until: query.until,
+      counts: row.counts,
+      totalReceived: row.total,
+      lastPublishedAt: row.last_published_at,
+      items,
+      hasMore,
+      ...(hasMore ? { cursor: statusCursor(collectionId, query, items[items.length - 1]!) } : {})
+    };
   }
 
   async createBindingCode(
