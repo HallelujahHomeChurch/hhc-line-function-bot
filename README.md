@@ -367,6 +367,8 @@ Production enables this dispatcher only through the bot system identity's single
 - `RATE_LIMIT_MAX_REQUESTS=20`
 - `LAST_ERRORS_MAX_ENTRIES=20`
 
+Automatic Media Sync intake in registered, bound helper groups does not consume conversation rate-limit quota. Bulk images and files remain silent and use the existing durable sync pipeline. Explicit manual image/file saves retain their conversation rate limit and Account authorization checks.
+
 When Redis is configured, rate limits use atomic Redis counters. Recent routes and errors are sanitized before storage and do not include raw user text, function queries, invite codes, LINE reply tokens, credential URLs, or secrets. After the first successful controlled function in a profile/source/requester scope, an atomic 365-day marker emits one allowlisted `first_success` product event containing only the action and `success` result class. Registration, clarification, result-class, write-completion, latency, and retry events follow the same no-raw-content rule; telemetry failure never changes the reply.
 
 ## Smoke Testing
