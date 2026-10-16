@@ -553,9 +553,13 @@ async function handleWebhook(
           now: new Date(),
           onTiming: logMediaSyncTiming
         });
+        // Automatic sync does not spend chat quota; manual image/file saves retain authorization.
         if (
           intake.eligible &&
-          (!intake.workId || event.message?.type === "video" || event.message?.type === "audio")
+          (!intake.manual ||
+            !intake.workId ||
+            event.message?.type === "video" ||
+            event.message?.type === "audio")
         ) {
           if (
             event.webhookEventId &&
