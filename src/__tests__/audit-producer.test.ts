@@ -10,17 +10,21 @@ const userId = "018f47d2-e5d1-4f3f-8f18-6c8e32621f71";
 const resourceId = "4c03465b-8a87-45a2-9d0d-54f904f4e6ab";
 
 describe("central audit producer contract", () => {
-  it("pins the exact released LINE fixture checksum", () => {
+  it("pins the canonical LINE lifecycle fixture checksum", () => {
     const fixture = loadAuditFixture();
 
     expect(fixture.sourceService).toBe("hhc-line-function-bot");
     expect(fixture.checksum).toBe(
-      "sha256:ff521b52ac736ec03e4e614c04b6a7d6d7af2a5cf73f7d4c3906c87ab344812e"
+      "sha256:2876b94f47b6395094e09eb5c4adbb611025d7cd8d821a92d3f60597548f8188"
     );
     expect(fixture.actions.map(({ action }) => action)).toEqual([
       "media_sync.binding.create",
       "media_sync.binding.delete",
-      "media_sync.binding_code.create"
+      "media_sync.binding.pause",
+      "media_sync.binding.resume",
+      "media_sync.binding_code.create",
+      "media_sync.binding_code.revoke",
+      "media_sync.work.retry"
     ]);
   });
 

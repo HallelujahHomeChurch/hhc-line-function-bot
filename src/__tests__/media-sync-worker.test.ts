@@ -894,6 +894,22 @@ describe("media sync Asset and collection stage", () => {
     });
   });
 
+  it("holds paused work without deleting assets or publishing either destination", async () => {
+    const fixture = createAssetFixture();
+    fixture.store.findActiveBinding.mockResolvedValue({
+      id: fixture.work.ingest.bindingId,
+      collectionId: fixture.work.ingest.collectionId,
+      pausedAt: "2026-08-16T00:00:00Z"
+    });
+    expect(await runMediaSyncWorker("work-opaque-1", fixture.options)).toEqual({
+      status: "paused",
+      reason: "paused"
+    });
+    expect(fixture.store.holdPausedWork).toHaveBeenCalled();
+    expect(fixture.assets.addCollectionItem).not.toHaveBeenCalled();
+    expect(fixture.assets.softDelete).not.toHaveBeenCalled();
+  });
+
   it("keeps withdrawal cleanup pending while a publication result is unknown", async () => {
     const fixture = deleteFixture();
     fixture.work.publications[0]!.attemptId = "unfinished-attempt";
@@ -1200,6 +1216,7 @@ function createAssetFixture() {
       );
       return true;
     }),
+    holdPausedWork: vi.fn().mockResolvedValue(true),
     completeClaimedWork: vi.fn().mockResolvedValue(true),
     completeDeleteWork: vi.fn().mockResolvedValue(true),
     tombstoneClaimedWorkForCleanup: vi.fn().mockResolvedValue(true),

@@ -381,6 +381,7 @@ export interface AssetServiceConfig {
 }
 
 export interface MediaSyncConfig {
+  lifecycleEnabled?: boolean;
   gatewayCallerAppId: string;
   appApiToken: string;
 }

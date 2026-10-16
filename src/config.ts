@@ -403,6 +403,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       timeoutMs: readInt(env.ASSET_API_TIMEOUT_MS, 3000)
     },
     mediaSync: {
+      lifecycleEnabled: readBool(env.MEDIA_SYNC_LIFECYCLE_ENABLED, false),
       gatewayCallerAppId: readDaprAppId(
         env.MEDIA_SYNC_GATEWAY_CALLER_APP_ID,
         "api-gateway",

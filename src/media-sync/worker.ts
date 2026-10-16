@@ -29,6 +29,7 @@ export function nextDelay(scanStatus: string, warm: boolean): number {
 type AssetStageStore = Pick<
   PostgresMediaSyncStore,
   | "claimWork"
+  | "holdPausedWork"
   | "reservePublication"
   | "settlePublication"
   | "blockUncertainPublication"
@@ -73,6 +74,7 @@ type MediaSyncSourceStageResult =
 
 export type MediaSyncWorkerResult =
   | { status: "completed" }
+  | { status: "paused"; reason: "paused" }
   | { status: "uncertain"; reason: "publication_uncertain" }
   | { status: "missing" }
   | { status: "terminal" }
@@ -107,6 +109,7 @@ export type MediaSyncWorkerResult =
 export function shouldAcknowledgeMediaSyncResult(result: MediaSyncWorkerResult): boolean {
   return (
     result.status === "completed" ||
+    result.status === "paused" ||
     result.status === "uncertain" ||
     result.status === "missing" ||
     result.status === "terminal" ||
@@ -188,7 +191,7 @@ async function runClaimedSourceStage(
   } catch (error) {
     if (
       error instanceof LeaseFenceError ||
-      error instanceof PermanentMediaSyncError ||
+      error instanceof MediaSyncExecutionError ||
       isPermanentAssetApiError(error) ||
       isTransientAssetApiError(error)
     ) {
@@ -256,6 +259,7 @@ export async function runMediaSyncWorker(
     now
   });
   if (claim === "missing") return { status: "missing" };
+  if (claim === "paused") return { status: "paused", reason: "paused" };
   if (claim === "terminal") return runDeleteWorker(workId, options, now);
   if (claim === "admission_revoked" || claim === "unbound_generation") {
     return (await options.store.blockUnavailableWork({ workId, reason: claim }))
@@ -288,7 +292,11 @@ export async function runMediaSyncWorker(
       asset = await options.assets.get(work.ingest.assetId, { signal: options.signal });
       const eligibility = await eligibilityAfterExternal(workId, claim.claimedUntil, options.store);
       if (eligibility === "lease_lost") return { status: "contention" };
-      if (eligibility === "unbound_generation" || eligibility === "admission_revoked") {
+      if (
+        eligibility === "paused" ||
+        eligibility === "unbound_generation" ||
+        eligibility === "admission_revoked"
+      ) {
         return terminalFailure(eligibility, workId, claim.claimedUntil, work, now, options);
       }
       work = eligibility.work;
@@ -328,7 +336,7 @@ export async function runMediaSyncWorker(
             if (current.uploadStatus !== "completed") {
               if (current.uploadStatus !== "created" || !created.uploadTarget) {
                 await compensateOwnedAsset(current, workId, options);
-                throw new PermanentMediaSyncError("asset_policy_rejected");
+                throw new MediaSyncExecutionError("asset_policy_rejected");
               }
               await options.assets.uploadFile(created.uploadTarget, file.path, {
                 signal: options.signal
@@ -352,7 +360,7 @@ export async function runMediaSyncWorker(
             }
             if (current.uploadStatus !== "completed" || !current.etag?.trim()) {
               await compensateOwnedAsset(current, workId, options);
-              throw new PermanentMediaSyncError("asset_policy_rejected");
+              throw new MediaSyncExecutionError("asset_policy_rejected");
             }
             if (
               !(await options.store.persistCompletedAsset({
@@ -520,7 +528,11 @@ export async function runMediaSyncWorker(
     const manual = work.publications.find(
       (publication) => publication.publicationType === "manual"
     );
-    if (manual?.state === "pending" && isConfirmedManualPublication(manual)) {
+    if (
+      manual?.state === "pending" &&
+      manual.failureCategory !== "manual_authority_unavailable" &&
+      isConfirmedManualPublication(manual)
+    ) {
       if (manual.targetId) {
         if (
           !(await options.store.finalizeManualPublication({
@@ -563,6 +575,7 @@ export async function runMediaSyncWorker(
         );
       }
     }
+    await requireExecutionFence(workId, claim.claimedUntil, options.store);
     return (await options.store.completeClaimedWork({
       workId,
       expectedClaimedUntil: claim.claimedUntil
@@ -571,9 +584,9 @@ export async function runMediaSyncWorker(
       : { status: "contention" };
   } catch (error) {
     if (error instanceof LeaseFenceError) return { status: "contention" };
-    if (error instanceof PermanentMediaSyncError || isPermanentAssetApiError(error)) {
+    if (error instanceof MediaSyncExecutionError || isPermanentAssetApiError(error)) {
       return terminalFailure(
-        error instanceof PermanentMediaSyncError ? error.reason : "asset_policy_rejected",
+        error instanceof MediaSyncExecutionError ? error.reason : "asset_policy_rejected",
         workId,
         claim.claimedUntil,
         work,
@@ -961,9 +974,10 @@ function isResourcePublishItemKind(value: string): value is ResourcePublishItemK
 
 class LeaseFenceError extends Error {}
 
-class PermanentMediaSyncError extends Error {
+class MediaSyncExecutionError extends Error {
   constructor(
     readonly reason:
+      | "paused"
       | "unbound_generation"
       | "admission_revoked"
       | "asset_policy_rejected"
@@ -978,7 +992,7 @@ class PermanentMediaSyncError extends Error {
 async function bindingFence(
   work: MediaSyncWork,
   store: AssetStageStore
-): Promise<"active" | "unbound_generation" | "admission_revoked"> {
+): Promise<"active" | "paused" | "unbound_generation" | "admission_revoked"> {
   const binding = await store.findActiveBinding({
     profileName: work.ingest.profileName,
     groupId: work.ingest.groupId
@@ -989,14 +1003,17 @@ async function bindingFence(
     binding.collectionId !== work.ingest.collectionId
   )
     return "unbound_generation";
-  return (await store.isBindingAdmitted(binding.id)) ? "active" : "admission_revoked";
+  if (!(await store.isBindingAdmitted(binding.id))) return "admission_revoked";
+  return binding.pausedAt ? "paused" : "active";
 }
 
 async function eligibilityAfterExternal(
   workId: string,
   expectedClaimedUntil: string,
   store: AssetStageStore
-): Promise<{ work: MediaSyncWork } | "lease_lost" | "unbound_generation" | "admission_revoked"> {
+): Promise<
+  { work: MediaSyncWork } | "lease_lost" | "paused" | "unbound_generation" | "admission_revoked"
+> {
   const work = await store.loadClaimedWork({
     workId,
     operation: "intake",
@@ -1014,8 +1031,12 @@ async function requireExecutionFence(
 ): Promise<void> {
   const eligibility = await eligibilityAfterExternal(workId, expectedClaimedUntil, store);
   if (eligibility === "lease_lost") throw new LeaseFenceError();
-  if (eligibility === "unbound_generation" || eligibility === "admission_revoked")
-    throw new PermanentMediaSyncError(eligibility);
+  if (
+    eligibility === "paused" ||
+    eligibility === "unbound_generation" ||
+    eligibility === "admission_revoked"
+  )
+    throw new MediaSyncExecutionError(eligibility);
 }
 
 async function requireAssetExecutionFence(
@@ -1026,6 +1047,7 @@ async function requireAssetExecutionFence(
 ): Promise<void> {
   const eligibility = await eligibilityAfterExternal(workId, expectedClaimedUntil, options.store);
   if (
+    eligibility !== "paused" &&
     eligibility !== "lease_lost" &&
     eligibility !== "unbound_generation" &&
     eligibility !== "admission_revoked"
@@ -1037,8 +1059,12 @@ async function requireAssetExecutionFence(
     assetId: asset.id,
     ...(asset.etag ? { assetEtag: asset.etag } : {})
   });
-  if (eligibility === "unbound_generation" || eligibility === "admission_revoked")
-    throw new PermanentMediaSyncError(eligibility);
+  if (
+    eligibility === "paused" ||
+    eligibility === "unbound_generation" ||
+    eligibility === "admission_revoked"
+  )
+    throw new MediaSyncExecutionError(eligibility);
   throw new LeaseFenceError();
 }
 
@@ -1114,6 +1140,7 @@ async function blockUncertain(
 
 async function terminalFailure(
   reason:
+    | "paused"
     | "unbound_generation"
     | "admission_revoked"
     | "asset_policy_rejected"
@@ -1130,6 +1157,11 @@ async function terminalFailure(
     publisher?: ResourceBinaryPublisher;
   }
 ): Promise<MediaSyncWorkerResult> {
+  if (reason === "paused") {
+    return (await options.store.holdPausedWork({ workId, expectedClaimedUntil }))
+      ? { status: "paused", reason: "paused" }
+      : { status: "contention" };
+  }
   if (reason === "unbound_generation" || reason === "admission_revoked") {
     return (await options.store.blockUnavailableWork({ workId, expectedClaimedUntil, reason }))
       ? { status: "permanent_failure", reason }

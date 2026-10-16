@@ -1,4 +1,6 @@
 export type MediaSyncBinding = {
+  version: number;
+  pausedAt?: string;
   id: string;
   profileName: string;
   groupId: string;
@@ -22,7 +24,8 @@ export type CreateMediaSyncBindingCodeInput = {
 export type CreateMediaSyncBindingCodeResult =
   | { status: "issued"; code: string; expiresAt: string }
   | { status: "already_issued"; expiresAt: string }
-  | { status: "collection_bound" };
+  | { status: "collection_bound" }
+  | { status: "collection_settling" };
 
 export type BeginCollectionDeletionResult = { status: "started" | "replay" | "completed" };
 
@@ -89,6 +92,7 @@ export type MediaSyncOutboxItem = {
 export type MediaSyncWorkClaim =
   | MediaSyncOutboxItem
   | "busy"
+  | "paused"
   | "terminal"
   | "missing"
   | "admission_revoked"
@@ -114,4 +118,23 @@ export type MediaSyncPublication = {
 export type MediaSyncWork = {
   ingest: MediaSyncIngest;
   publications: MediaSyncPublication[];
+};
+
+export type MediaSyncBindingMutation =
+  | { action: "pause" | "resume" | "unbind"; bindingId: string; expectedVersion: number }
+  | { action: "revoke_code"; codeId: string };
+export type MediaSyncBindingMutationResult =
+  | { status: "updated"; version?: number }
+  | { status: "conflict" | "idempotency_conflict" | "admission_revoked" | "collection_deleted" };
+export type MediaSyncBindingStatus = {
+  binding: {
+    id: string;
+    version: number;
+    groupDisplayName: string;
+    boundAt: string;
+    state: "active" | "paused" | "unbound" | "admission_revoked";
+  } | null;
+  pendingCode: { id: string; expiresAt: string } | null;
+  settling: { inFlight: number; uncertain: number };
+  blockedManualCount: number;
 };

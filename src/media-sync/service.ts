@@ -8,12 +8,20 @@ import type {
 import type { PostgresMediaSyncStore } from "./store.js";
 
 import type { AccountAdminClient } from "../account/account-admin-client.js";
-import type { BindMediaSyncCodeInput, BindMediaSyncCodeResult } from "./types.js";
+import type {
+  BindMediaSyncCodeInput,
+  BindMediaSyncCodeResult,
+  MediaSyncBindingMutation
+} from "./types.js";
 import type { MediaSyncStatusQuery } from "./status.js";
 
 export class MediaSyncManagementError extends Error {
   constructor(
-    readonly code: "collection_deleted" | "collection_bound" | "binding_code_already_issued"
+    readonly code:
+      | "collection_deleted"
+      | "collection_bound"
+      | "binding_code_already_issued"
+      | "collection_settling"
   ) {
     super(code);
   }
@@ -93,6 +101,57 @@ export class MediaSyncManagementService {
       ...(page.cursor ? { cursor: page.cursor } : {}),
       hasMore: page.hasMore
     };
+  }
+
+  async retryWork(
+    collectionId: string,
+    workId: string,
+    idempotencyKey: string,
+    requestId: string,
+    actorUserId: string
+  ) {
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
+    if (managed.collection.deletedAt) throw new MediaSyncManagementError("collection_deleted");
+    return this.store.retryWork({
+      collectionId,
+      workId,
+      idempotencyKey,
+      requestId,
+      actorId: actorUserId
+    });
+  }
+
+  async bindingStatus(collectionId: string, requestId: string, actorUserId: string) {
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
+    if (managed.collection.deletedAt) throw new MediaSyncManagementError("collection_deleted");
+    return this.store.bindingStatus(collectionId);
+  }
+
+  async mutateBinding(
+    collectionId: string,
+    mutation: MediaSyncBindingMutation,
+    idempotencyKey: string,
+    requestId: string,
+    actorUserId: string
+  ) {
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
+    if (managed.collection.deletedAt) throw new MediaSyncManagementError("collection_deleted");
+    return this.store.mutateBinding({
+      collectionId,
+      mutation,
+      idempotencyKey,
+      requestId,
+      actorId: actorUserId
+    });
   }
 
   async listCollectionStatus(
@@ -286,6 +345,8 @@ export class MediaSyncManagementService {
     if (issued.status === "already_issued") {
       throw new MediaSyncManagementError("binding_code_already_issued");
     }
+    if (issued.status === "collection_settling")
+      throw new MediaSyncManagementError("collection_settling");
     if (issued.status === "collection_bound") {
       throw new MediaSyncManagementError("collection_bound");
     }

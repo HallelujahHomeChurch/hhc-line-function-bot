@@ -10,6 +10,7 @@ import { MediaSyncManagementError, type MediaSyncManagementService } from "./ser
 import { parseMediaSyncStatusQuery } from "./status.js";
 
 type MediaSyncRouteDependencies = {
+  lifecycleEnabled?: boolean;
   gatewayCallerAppId: string;
   appApiToken: string;
   requestIdFactory: () => string;
@@ -77,6 +78,131 @@ export function registerMediaSyncRoutes(
           auth.userId
         )
       );
+    }
+  );
+
+  app.get<{ Params: { collectionId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/binding",
+    { preHandler: authorize },
+    async (request, reply) => {
+      reply.header("cache-control", "private, no-store");
+      const auth = requireAuth(request);
+      if (
+        !validOpaqueId(request.params.collectionId) ||
+        !hasNoBody(request.body) ||
+        Object.keys(request.query as object).length
+      )
+        return sendError(reply, 400, "invalid_request");
+      return run(reply, async () => ({
+        ...(await deps.service.bindingStatus(
+          request.params.collectionId,
+          auth.requestId,
+          auth.userId
+        )),
+        controlsEnabled: deps.lifecycleEnabled === true
+      }));
+    }
+  );
+
+  for (const action of ["pause", "resume", "unbind"] as const) {
+    app.post<{ Params: { collectionId: string } }>(
+      `/api/line/media-sync/collections/:collectionId/binding/${action}`,
+      { preHandler: authorize },
+      async (request, reply) => {
+        reply.header("cache-control", "private, no-store");
+        if (!deps.lifecycleEnabled) return sendError(reply, 404, "not_found");
+        const auth = requireAuth(request),
+          key = idempotencyKey(request),
+          body = strictObject(request.body, ["bindingId", "expectedVersion"]);
+        if (
+          !validOpaqueId(request.params.collectionId) ||
+          !key ||
+          !body ||
+          typeof body.bindingId !== "string" ||
+          !uuidPattern.test(body.bindingId) ||
+          typeof body.expectedVersion !== "number" ||
+          !Number.isSafeInteger(body.expectedVersion) ||
+          body.expectedVersion < 1 ||
+          body.expectedVersion >= 2147483647
+        )
+          return sendError(reply, 400, "invalid_request");
+        const mutation = {
+          action,
+          bindingId: body.bindingId,
+          expectedVersion: body.expectedVersion
+        };
+        return run(reply, async () => {
+          const result = await deps.service.mutateBinding(
+            request.params.collectionId,
+            mutation,
+            key,
+            auth.requestId,
+            auth.userId
+          );
+          if (result.status !== "updated") reply.code(409);
+          return result;
+        });
+      }
+    );
+  }
+  app.delete<{ Params: { collectionId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/binding-code",
+    { preHandler: authorize },
+    async (request, reply) => {
+      reply.header("cache-control", "private, no-store");
+      if (!deps.lifecycleEnabled) return sendError(reply, 404, "not_found");
+      const auth = requireAuth(request),
+        key = idempotencyKey(request),
+        body = strictObject(request.body, ["codeId"]);
+      if (
+        !validOpaqueId(request.params.collectionId) ||
+        !key ||
+        !body ||
+        typeof body.codeId !== "string" ||
+        !uuidPattern.test(body.codeId)
+      )
+        return sendError(reply, 400, "invalid_request");
+      const mutation = { action: "revoke_code" as const, codeId: body.codeId };
+      return run(reply, async () => {
+        const result = await deps.service.mutateBinding(
+          request.params.collectionId,
+          mutation,
+          key,
+          auth.requestId,
+          auth.userId
+        );
+        if (result.status !== "updated") reply.code(409);
+        return result;
+      });
+    }
+  );
+
+  app.post<{ Params: { collectionId: string; workId: string } }>(
+    "/api/line/media-sync/collections/:collectionId/work/:workId/retry",
+    { preHandler: authorize },
+    async (request, reply) => {
+      reply.header("cache-control", "private, no-store");
+      if (!deps.lifecycleEnabled) return sendError(reply, 404, "not_found");
+      const auth = requireAuth(request),
+        key = idempotencyKey(request);
+      if (
+        !validOpaqueId(request.params.collectionId) ||
+        !uuidPattern.test(request.params.workId) ||
+        !key ||
+        !strictObject(request.body, [])
+      )
+        return sendError(reply, 400, "invalid_request");
+      return run(reply, async () => {
+        const updated = await deps.service.retryWork(
+          request.params.collectionId,
+          request.params.workId,
+          key,
+          auth.requestId,
+          auth.userId
+        );
+        if (!updated) reply.code(409);
+        return { status: updated ? "updated" : "not_retryable" };
+      });
     }
   );
 

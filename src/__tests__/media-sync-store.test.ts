@@ -2206,10 +2206,14 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     await first.createIngest(input);
     await completeOtherOutbox(left, input.sourceKey);
 
-    const firstClaim = (await first.claimOutbox({ limit: 1, leaseMs: 20 }))[0];
+    const firstClaim = (
+      await first.claimOutbox({ limit: 1, leaseMs: 20, now: await databaseNow(left) })
+    )[0];
     expect(firstClaim?.claimedUntil).toBeDefined();
     await waitForLeaseExpiry(left, firstClaim!.claimedUntil!);
-    const secondClaim = (await second.claimOutbox({ limit: 1, leaseMs: 60_000 }))[0];
+    const secondClaim = (
+      await second.claimOutbox({ limit: 1, leaseMs: 60_000, now: await databaseNow(left) })
+    )[0];
     expect(secondClaim?.claimedUntil).toBeDefined();
     expect(secondClaim?.claimedUntil).not.toBe(firstClaim?.claimedUntil);
 
@@ -2461,12 +2465,435 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     expect(outbox).toEqual({ completed_at: null, dispatched_at: null });
   });
 
+  it("pauses and resumes exact binding versions, preserves owners, and blocks interrupted manual work", async () => {
+    const store = new PostgresMediaSyncStore(left);
+    const collectionId = "lifecycle-pause";
+    const binding = await bind(left, store, collectionId, collectionId);
+    if (binding.status !== "bound") throw new Error("expected binding");
+    const input = {
+      ...ingest(collectionId),
+      collectionId,
+      groupId: collectionId,
+      bindingId: binding.binding.id
+    };
+    const created = await store.createIngest(input, {
+      manualIntent: { destinationId: "manual-approved", requesterUserId: "synthetic" }
+    });
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await left.query(
+      `update media_sync_ingests set asset_id='retained-asset',asset_etag='etag' where source_key=$1`,
+      [input.sourceKey]
+    );
+    await left.query(
+      `update media_sync_publications set target_id='retained-occurrence',state='published' where source_key=$1 and publication_type='collection'`,
+      [input.sourceKey]
+    );
+    await left.query(
+      `update media_sync_outbox set dispatched_at=clock_timestamp() where source_key=$1`,
+      [input.sourceKey]
+    );
+    const claim = await store.claimWork({
+      workId: created.ingest.workId,
+      operation: "intake",
+      leaseMs: 60000
+    });
+    if (typeof claim === "string" || !claim.claimedUntil) throw new Error("expected lease");
+    const request = {
+      collectionId,
+      actorId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+      requestId: "pause-request",
+      idempotencyKey: "pause-one",
+      mutation: { action: "pause" as const, bindingId: binding.binding.id, expectedVersion: 1 }
+    };
+    expect(
+      await Promise.all([
+        store.mutateBinding(request),
+        new PostgresMediaSyncStore(right).mutateBinding(request)
+      ])
+    ).toEqual([
+      { status: "updated", version: 2 },
+      { status: "updated", version: 2 }
+    ]);
+    expect(await store.bindingStatus(collectionId)).toMatchObject({
+      binding: { state: "paused", version: 2 },
+      settling: { inFlight: 1, uncertain: 0 },
+      blockedManualCount: 1
+    });
+    expect(
+      (
+        await store.loadClaimedWork({
+          workId: created.ingest.workId,
+          operation: "intake",
+          expectedClaimedUntil: claim.claimedUntil
+        })
+      )?.ingest.assetId
+    ).toBe("retained-asset");
+    expect(
+      await store.reservePublication({
+        workId: created.ingest.workId,
+        publicationType: "manual",
+        expectedClaimedUntil: claim.claimedUntil
+      })
+    ).toBeUndefined();
+    await expect(
+      store.createIngest({
+        ...input,
+        sourceKey: input.sourceKey + "-while-paused",
+        messageId: "while-paused"
+      })
+    ).rejects.toThrow("media_sync_binding_unavailable");
+    expect(
+      await store.holdPausedWork({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: claim.claimedUntil
+      })
+    ).toBe(true);
+    expect(
+      await store.claimWork({ workId: created.ingest.workId, operation: "intake", leaseMs: 60000 })
+    ).toBe("paused");
+    expect(
+      await store.mutateBinding({
+        ...request,
+        mutation: { ...request.mutation, action: "resume", expectedVersion: 2 }
+      })
+    ).toEqual({ status: "idempotency_conflict" });
+    expect(
+      await store.mutateBinding({
+        ...request,
+        idempotencyKey: "resume-stale",
+        mutation: { ...request.mutation, action: "resume" }
+      })
+    ).toEqual({ status: "conflict" });
+    expect(
+      await store.mutateBinding({
+        ...request,
+        idempotencyKey: "resume-current",
+        mutation: { ...request.mutation, action: "resume", expectedVersion: 2 }
+      })
+    ).toEqual({ status: "updated", version: 3 });
+    await completeOtherOutbox(left, input.sourceKey);
+    const dispatch = (
+      await store.claimOutboxForDispatch({ limit: 1, leaseMs: 60000, now: await databaseNow(left) })
+    )[0]!;
+    expect(dispatch.workId).toBe(created.ingest.workId);
+    expect(
+      await store.markOutboxDispatched({
+        workId: dispatch.workId,
+        operation: "intake",
+        expectedClaimedUntil: dispatch.claimedUntil!
+      })
+    ).toBe(true);
+    const resumed = await store.claimWork({
+      workId: created.ingest.workId,
+      operation: "intake",
+      leaseMs: 60000
+    });
+    if (typeof resumed === "string" || !resumed.claimedUntil)
+      throw new Error("expected resumed lease");
+    expect(
+      await store.completeClaimedWork({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: resumed.claimedUntil
+      })
+    ).toBe(true);
+    const publications = (
+      await left.query(
+        `select publication_type,state,target_id,failure_category from media_sync_publications where source_key=$1 order by publication_type`,
+        [input.sourceKey]
+      )
+    ).rows;
+    expect(publications).toEqual([
+      {
+        publication_type: "collection",
+        state: "published",
+        target_id: "retained-occurrence",
+        failure_category: null
+      },
+      {
+        publication_type: "manual",
+        state: "pending",
+        target_id: null,
+        failure_category: "manual_authority_unavailable"
+      }
+    ]);
+    expect(
+      (
+        await left.query(
+          `select count(*)::int count from audit_outboxes where payload::jsonb->>'resourceId'=$1 and payload::jsonb->>'action'='media_sync.binding.pause'`,
+          [binding.binding.id]
+        )
+      ).rows[0].count
+    ).toBe(1);
+  });
+
+  it("unbinds without deleting published manual owners and rejects stale or cross-collection mutations", async () => {
+    const store = new PostgresMediaSyncStore(left),
+      collectionId = "lifecycle-unbind";
+    const binding = await bind(left, store, collectionId, collectionId);
+    if (binding.status !== "bound") throw new Error("expected binding");
+    const created = await store.createIngest(
+      {
+        ...ingest(collectionId),
+        collectionId,
+        groupId: collectionId,
+        bindingId: binding.binding.id
+      },
+      { manualIntent: { destinationId: "approved", requesterUserId: "synthetic" } }
+    );
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await left.query(
+      `update media_sync_publications set state='published',target_id='manual-retained' where source_key=$1 and publication_type='manual'`,
+      [created.ingest.sourceKey]
+    );
+    const request = {
+      collectionId,
+      actorId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+      requestId: "unbind-request",
+      idempotencyKey: "unbind-one",
+      mutation: { action: "unbind" as const, bindingId: binding.binding.id, expectedVersion: 1 }
+    };
+    expect(await store.mutateBinding({ ...request, collectionId: "another-collection" })).toEqual({
+      status: "conflict"
+    });
+    expect(await store.mutateBinding(request)).toEqual({ status: "updated", version: 2 });
+    expect(await store.mutateBinding(request)).toEqual({ status: "updated", version: 2 });
+    expect(await store.mutateBinding({ ...request, idempotencyKey: "stale-unbind" })).toEqual({
+      status: "conflict"
+    });
+    expect(await store.bindingStatus(collectionId)).toMatchObject({
+      binding: { state: "unbound", version: 2 }
+    });
+    expect(
+      (
+        await left.query(
+          `select publication_type,state,target_id from media_sync_publications where source_key=$1 order by publication_type`,
+          [created.ingest.sourceKey]
+        )
+      ).rows
+    ).toEqual([
+      { publication_type: "collection", state: "revoked", target_id: null },
+      { publication_type: "manual", state: "published", target_id: "manual-retained" }
+    ]);
+    expect(
+      (
+        await left.query(
+          `select count(*)::int count from media_sync_source_tombstones where source_key=$1`,
+          [created.ingest.sourceKey]
+        )
+      ).rows[0].count
+    ).toBe(0);
+  });
+
+  it("revokes only the requested unused code and replay cannot revoke its replacement", async () => {
+    const store = new PostgresMediaSyncStore(left),
+      collectionId = "lifecycle-revoke";
+    const issuer = {
+      profileName: "helper",
+      collectionId,
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+      requestId: "code-request",
+      idempotencyKey: "first-code"
+    };
+    const issued = await store.createBindingCode(issuer);
+    const candidate = await store.inspectBindingCode("helper", issuedCode(issued));
+    const request = {
+      collectionId,
+      actorId: issuer.createdByHhcUserId,
+      requestId: "revoke-request",
+      idempotencyKey: "revoke-one",
+      mutation: { action: "revoke_code" as const, codeId: candidate!.id }
+    };
+    expect(await store.mutateBinding(request)).toEqual({ status: "updated" });
+    expect(await store.inspectBindingCode("helper", issuedCode(issued))).toBeUndefined();
+    const replacement = await store.createBindingCode({ ...issuer, idempotencyKey: "second-code" });
+    expect(await store.mutateBinding(request)).toEqual({ status: "updated" });
+    expect(await store.inspectBindingCode("helper", issuedCode(replacement))).toBeDefined();
+    expect(await store.bindingStatus(collectionId)).toMatchObject({
+      binding: null,
+      pendingCode: { id: expect.any(String) }
+    });
+  });
+
+  it("records a started publication after pause and keeps revoked admission unavailable on resume", async () => {
+    const store = new PostgresMediaSyncStore(left),
+      collectionId = "pause-in-flight";
+    const binding = await bind(left, store, collectionId, collectionId);
+    if (binding.status !== "bound") throw new Error("expected binding");
+    const created = await store.createIngest({
+      ...ingest(collectionId),
+      collectionId,
+      groupId: collectionId,
+      bindingId: binding.binding.id
+    });
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await left.query(
+      `update media_sync_outbox set dispatched_at=clock_timestamp() where source_key=$1`,
+      [created.ingest.sourceKey]
+    );
+    const claim = await store.claimWork({
+      workId: created.ingest.workId,
+      operation: "intake",
+      leaseMs: 60000
+    });
+    if (typeof claim === "string" || !claim.claimedUntil) throw new Error("expected claim");
+    const attemptId = await store.reservePublication({
+      workId: created.ingest.workId,
+      expectedClaimedUntil: claim.claimedUntil,
+      publicationType: "collection"
+    });
+    const actorId = "018f47d2-e5d1-4f3f-8f18-6c8e32621f71";
+    const request = {
+      collectionId,
+      actorId,
+      requestId: "pause-started",
+      idempotencyKey: "pause-started",
+      mutation: { action: "pause" as const, bindingId: binding.binding.id, expectedVersion: 1 }
+    };
+    expect(await store.mutateBinding(request)).toEqual({ status: "updated", version: 2 });
+    expect(await store.bindingStatus(collectionId)).toMatchObject({
+      binding: { state: "paused" },
+      settling: { inFlight: 1, uncertain: 0 }
+    });
+    expect(
+      await store.settlePublication({
+        workId: created.ingest.workId,
+        publicationType: "collection",
+        attemptId: attemptId!,
+        result: { targetId: "late-owned" }
+      })
+    ).toBe(true);
+    expect(
+      await store.holdPausedWork({
+        workId: created.ingest.workId,
+        expectedClaimedUntil: claim.claimedUntil
+      })
+    ).toBe(true);
+    await new PostgresAccessStore(left).disablePrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: collectionId
+    });
+    await new PostgresAccessStore(left).addPrincipal({
+      profileName: "helper",
+      type: "group",
+      principalId: collectionId,
+      createdBy: "synthetic-admin"
+    });
+    expect(
+      await store.mutateBinding({
+        ...request,
+        idempotencyKey: "resume-revoked",
+        mutation: { ...request.mutation, action: "resume", expectedVersion: 2 }
+      })
+    ).toEqual({ status: "admission_revoked" });
+    expect(await store.bindingStatus(collectionId)).toMatchObject({
+      binding: { state: "admission_revoked" }
+    });
+    expect(
+      (
+        await left.query(
+          `select state,target_id from media_sync_publications where source_key=$1`,
+          [created.ingest.sourceKey]
+        )
+      ).rows[0]
+    ).toEqual({ state: "published", target_id: "late-owned" });
+  });
+
+  it.each([
+    "recoverable",
+    "paused",
+    "revoked",
+    "unknown",
+    "source_unavailable",
+    "manual",
+    "busy"
+  ] as const)("only nudges safely recoverable work (%s)", async (scenario) => {
+    const store = new PostgresMediaSyncStore(left),
+      collectionId = `retry-${scenario}`;
+    const binding = await bind(left, store, collectionId, collectionId);
+    if (binding.status !== "bound") throw new Error("expected binding");
+    const created = await store.createIngest(
+      {
+        ...ingest(collectionId),
+        collectionId,
+        groupId: collectionId,
+        bindingId: binding.binding.id
+      },
+      scenario === "manual"
+        ? { manualIntent: { destinationId: "approved", requesterUserId: "synthetic" } }
+        : {}
+    );
+    if (created.tombstoned) throw new Error("unexpected tombstone");
+    await left.query(
+      `update media_sync_outbox set available_at=clock_timestamp()+interval '1 hour',last_error_category=$2 where source_key=$1`,
+      [
+        created.ingest.sourceKey,
+        scenario === "source_unavailable" ? "line_content_unavailable" : "asset_unavailable"
+      ]
+    );
+    if (scenario === "paused")
+      await left.query(`update media_sync_bindings set paused_at=clock_timestamp() where id=$1`, [
+        binding.binding.id
+      ]);
+    if (scenario === "revoked")
+      await left.query(
+        `update access_principals set execution_generation=gen_random_uuid() where principal_id=$1`,
+        [collectionId]
+      );
+    if (scenario === "unknown")
+      await left.query(
+        `update media_sync_publications set attempt_id=gen_random_uuid() where source_key=$1`,
+        [created.ingest.sourceKey]
+      );
+    if (scenario === "manual")
+      await left.query(
+        `update media_sync_publications set manual_source_key='approved-source' where source_key=$1 and publication_type='manual'`,
+        [created.ingest.sourceKey]
+      );
+    if (scenario === "busy")
+      await left.query(
+        `update media_sync_outbox set claimed_until=clock_timestamp()+interval '1 minute' where source_key=$1`,
+        [created.ingest.sourceKey]
+      );
+    const request = {
+      collectionId,
+      workId: created.ingest.workId,
+      actorId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+      requestId: "retry-request",
+      idempotencyKey: "retry-one"
+    };
+    expect(await store.retryWork({ ...request, collectionId: "wrong-collection" })).toBe(false);
+    expect(await store.retryWork(request)).toBe(scenario === "recoverable");
+    const audit = (
+      await left.query(
+        `select count(*)::int count from audit_outboxes where payload::jsonb->>'action'='media_sync.work.retry' and payload::jsonb->>'resourceId'=$1`,
+        [created.ingest.workId]
+      )
+    ).rows[0].count;
+    expect(audit).toBe(scenario === "recoverable" ? 1 : 0);
+    if (scenario === "recoverable") {
+      expect(await store.retryWork(request)).toBe(true);
+      expect(await store.retryWork({ ...request, workId: randomUUID() })).toBe(false);
+      expect(await store.retryWork({ ...request, idempotencyKey: "different-key" })).toBe(false);
+      expect(
+        (
+          await left.query(
+            `select last_error_category,dispatched_at,available_at<clock_timestamp() ready from media_sync_outbox where source_key=$1`,
+            [created.ingest.sourceKey]
+          )
+        ).rows[0]
+      ).toEqual({ last_error_category: null, dispatched_at: null, ready: true });
+    }
+  });
+
   it("rejects an expired lease even before another worker reclaims it", async () => {
     const store = new PostgresMediaSyncStore(left);
     const input = ingest("expired-lease");
     await store.createIngest(input);
     await completeOtherOutbox(left, input.sourceKey);
-    const claim = (await store.claimOutbox({ limit: 1, leaseMs: 20 }))[0];
+    const claim = (
+      await store.claimOutbox({ limit: 1, leaseMs: 20, now: await databaseNow(left) })
+    )[0];
     expect(claim?.claimedUntil).toBeDefined();
     await waitForLeaseExpiry(left, claim!.claimedUntil!);
 

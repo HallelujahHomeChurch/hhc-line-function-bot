@@ -21,7 +21,7 @@ export type AuditEvent = {
   action: AuditAction;
   category: "media_sync";
   resourceOwnerService: "hhc-line-function-bot";
-  resourceType: "binding" | "binding_code";
+  resourceType: "binding" | "binding_code" | "media_work";
   resourceId: string;
   outcome: "success";
   severity: "info";

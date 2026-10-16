@@ -36,6 +36,12 @@ type OpenApiDocument = {
 const methods = new Set(["delete", "get", "patch", "post", "put"]);
 const visibilities = new Set(["public", "admin", "private", "operations"]);
 const expectedOperations = [
+  "POST /api/line/media-sync/collections/{collectionId}/work/{workId}/retry",
+  "GET /api/line/media-sync/collections/{collectionId}/binding",
+  "POST /api/line/media-sync/collections/{collectionId}/binding/pause",
+  "POST /api/line/media-sync/collections/{collectionId}/binding/resume",
+  "POST /api/line/media-sync/collections/{collectionId}/binding/unbind",
+  "DELETE /api/line/media-sync/collections/{collectionId}/binding-code",
   "GET /api/line/media-sync/acl-subjects",
   "GET /api/line/media-sync/collections",
   "GET /api/line/media-sync/collections/{collectionId}/status",

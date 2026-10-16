@@ -157,6 +157,13 @@ const migrations = [
     primary key (source_key, publication_type)
   )
   `,
+  `alter table media_sync_bindings add column if not exists version integer not null default 1 check (version>0)`,
+  `alter table media_sync_bindings add column if not exists paused_at timestamptz`,
+  `create table if not exists media_sync_management_mutations (
+    actor_id text not null, collection_id text not null, key_hash text not null,
+    request_hash text not null, result jsonb not null, created_at timestamptz not null default clock_timestamp(),
+    primary key(actor_id,collection_id,key_hash)
+  )`,
   `alter table media_sync_publications add column if not exists attempt_id uuid`,
   `alter table media_sync_publications add column if not exists attempt_started_at timestamptz`,
   `alter table media_sync_publications add column if not exists attempt_completed_at timestamptz`,

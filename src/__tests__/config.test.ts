@@ -184,6 +184,7 @@ describe("config", () => {
         timeoutMs: 3000
       },
       mediaSync: {
+        lifecycleEnabled: false,
         gatewayCallerAppId: "api-gateway",
         appApiToken: "runtime-token"
       }

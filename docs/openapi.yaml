@@ -547,6 +547,182 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AclMutation" }
         <<: *assetErrorResponses
+  /api/line/media-sync/collections/{collectionId}/work/{workId}/retry:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+      - name: workId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: retryMediaSyncWork
+      summary: Nudge one safely recoverable media work item
+      description: Fresh Account and collection management access, current admitted binding and no active lease are required. Only transient backoff categories are eligible. Unknown publications, unavailable sources, interrupted manual authorization, paused bindings and old generations cannot be retried. Idempotent and audited; never a bulk replay. Disabled lifecycle controls return 404.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Rescheduled or exact idempotent replay. Does not imply publication completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status: { type: string, const: updated }
+        "409":
+          description: This work is not eligible for retry or the idempotency key belongs to another operation.
+        <<: *assetErrorResponses
+  /api/line/media-sync/collections/{collectionId}/binding:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    get:
+      operationId: getMediaSyncBinding
+      summary: Read current binding and outstanding publication state
+      description: Fresh Account and collection management access is required. No raw group ID, source ID or binding code is returned. Controls are disabled until all workers understand lifecycle fences.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Current binding, pending code identity and settling work counts.
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaSyncBindingStatus" }
+        <<: *assetErrorResponses
+  /api/line/media-sync/collections/{collectionId}/binding/pause:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    post:
+      operationId: pauseMediaSyncBinding
+      summary: Pause media binding while retaining published owners
+      description: Requires current Account and collection management access, exact binding ID/version and an idempotency key. Pause skips new intake without backfill; resume keeps the same binding generation; unbind preserves published media and ACLs. A successful mutation does not imply external work has finished; read binding status for settling and unknown results. Disabled rollout controls return 404.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MediaSyncBindingMutationRequest" }
+      responses:
+        "200":
+          description: Applied or exact idempotent replay. Read current state separately.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaSyncBindingMutationResult" }
+        "409":
+          description: Binding changed, admission revoked, collection deleted or idempotency identity reused.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/MediaSyncBindingMutationResult" }
+                  - { $ref: "#/components/schemas/ErrorResponse" }
+        <<: *assetErrorResponses
+  /api/line/media-sync/collections/{collectionId}/binding/resume:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    post:
+      operationId: resumeMediaSyncBinding
+      summary: Resume media binding while retaining published owners
+      description: Requires current Account and collection management access, exact binding ID/version and an idempotency key. Pause skips new intake without backfill; resume keeps the same binding generation; unbind preserves published media and ACLs. A successful mutation does not imply external work has finished; read binding status for settling and unknown results. Disabled rollout controls return 404.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MediaSyncBindingMutationRequest" }
+      responses:
+        "200":
+          description: Applied or exact idempotent replay. Read current state separately.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaSyncBindingMutationResult" }
+        "409":
+          description: Binding changed, admission revoked, collection deleted or idempotency identity reused.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/MediaSyncBindingMutationResult" }
+                  - { $ref: "#/components/schemas/ErrorResponse" }
+        <<: *assetErrorResponses
+  /api/line/media-sync/collections/{collectionId}/binding/unbind:
+    parameters:
+      - $ref: "#/components/parameters/CollectionId"
+    post:
+      operationId: unbindMediaSyncBinding
+      summary: Unbind media binding while retaining published owners
+      description: Requires current Account and collection management access, exact binding ID/version and an idempotency key. Pause skips new intake without backfill; resume keeps the same binding generation; unbind preserves published media and ACLs. A successful mutation does not imply external work has finished; read binding status for settling and unknown results. Disabled rollout controls return 404.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MediaSyncBindingMutationRequest" }
+      responses:
+        "200":
+          description: Applied or exact idempotent replay. Read current state separately.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaSyncBindingMutationResult" }
+        "409":
+          description: Binding changed, admission revoked, collection deleted or idempotency identity reused.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/MediaSyncBindingMutationResult" }
+                  - { $ref: "#/components/schemas/ErrorResponse" }
+        <<: *assetErrorResponses
   /api/line/media-sync/collections/{collectionId}/binding-code:
     parameters:
       - $ref: "#/components/parameters/CollectionId"
@@ -581,6 +757,45 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/BindingCodeResponse" }
+        <<: *assetErrorResponses
+    delete:
+      operationId: revokeMediaSyncBindingCode
+      summary: Revoke an exact unused binding code
+      description: Requires current Account and collection management access. Does not unbind an existing group. Retrying an old code ID never revokes its replacement. Disabled rollout controls return 404.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security:
+        - gatewayCaller: []
+          appApiToken: []
+          trustedUser: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [codeId]
+              properties:
+                codeId: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Code revoked or exact idempotent replay.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaSyncBindingMutationResult" }
+        "409":
+          description: Code consumed, missing, outside the collection or conflicting idempotency identity.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/MediaSyncBindingMutationResult" }
+                  - { $ref: "#/components/schemas/ErrorResponse" }
         <<: *assetErrorResponses
 components:
   securitySchemes:
@@ -752,6 +967,55 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
   schemas:
+    MediaSyncBindingMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [bindingId, expectedVersion]
+      properties:
+        bindingId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1, maximum: 2147483646 }
+    MediaSyncBindingMutationResult:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          {
+            type: string,
+            enum: [updated, conflict, idempotency_conflict, admission_revoked, collection_deleted]
+          }
+        version: { type: integer, minimum: 1 }
+    MediaSyncBindingStatus:
+      type: object
+      additionalProperties: false
+      required: [binding, pendingCode, settling, blockedManualCount, controlsEnabled]
+      properties:
+        controlsEnabled: { type: boolean }
+        binding:
+          type: [object, "null"]
+          additionalProperties: false
+          required: [id, version, groupDisplayName, boundAt, state]
+          properties:
+            id: { type: string, format: uuid }
+            version: { type: integer, minimum: 1 }
+            groupDisplayName: { type: string }
+            boundAt: { type: string, format: date-time }
+            state: { type: string, enum: [active, paused, unbound, admission_revoked] }
+        pendingCode:
+          type: [object, "null"]
+          additionalProperties: false
+          required: [id, expiresAt]
+          properties:
+            id: { type: string, format: uuid }
+            expiresAt: { type: string, format: date-time }
+        settling:
+          type: object
+          additionalProperties: false
+          required: [inFlight, uncertain]
+          properties:
+            inFlight: { type: integer, minimum: 0 }
+            uncertain: { type: integer, minimum: 0 }
+        blockedManualCount: { type: integer, minimum: 0 }
     MediaSyncStatus:
       type: string
       enum: [received, processing, awaiting_scan, published, failed, cancelled, tombstoned]

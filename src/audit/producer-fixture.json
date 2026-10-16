@@ -39,11 +39,83 @@
       "metadataSchema": "empty"
     },
     {
+      "action": "media_sync.binding.pause",
+      "sourceService": "hhc-line-function-bot",
+      "category": "media_sync",
+      "resourceOwnerService": "hhc-line-function-bot",
+      "resourceType": "binding",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": ["user"],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "empty"
+    },
+    {
+      "action": "media_sync.binding.resume",
+      "sourceService": "hhc-line-function-bot",
+      "category": "media_sync",
+      "resourceOwnerService": "hhc-line-function-bot",
+      "resourceType": "binding",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": ["user"],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "empty"
+    },
+    {
       "action": "media_sync.binding_code.create",
       "sourceService": "hhc-line-function-bot",
       "category": "media_sync",
       "resourceOwnerService": "hhc-line-function-bot",
       "resourceType": "binding_code",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": ["user"],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "empty"
+    },
+    {
+      "action": "media_sync.binding_code.revoke",
+      "sourceService": "hhc-line-function-bot",
+      "category": "media_sync",
+      "resourceOwnerService": "hhc-line-function-bot",
+      "resourceType": "binding_code",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": ["user"],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "empty"
+    },
+    {
+      "action": "media_sync.work.retry",
+      "sourceService": "hhc-line-function-bot",
+      "category": "media_sync",
+      "resourceOwnerService": "hhc-line-function-bot",
+      "resourceType": "media_work",
       "resourceIdGrammar": "uuid",
       "actorTypes": ["user"],
       "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
@@ -75,38 +147,132 @@
   },
   "denialBindings": [],
   "credentialFixtures": [
-    { "value": "YWJj.ZGVm.Z2hp", "valid": true },
-    { "value": "YWJj.ZGVm.Z2hp.amts.bW5v", "valid": true },
-    { "value": "YWJj", "valid": false },
-    { "value": "YWJj.ZGVm", "valid": false },
-    { "value": "YWJj.ZGVm.Z2hp.amts", "valid": false },
-    { "value": "YWJj.ZGVm.Z2hp.amts.bW5v.cHFy", "valid": false },
-    { "value": "YWJj..Z2hp", "valid": false },
-    { "value": "a.ZGVm.Z2hp", "valid": false },
-    { "value": "not-base64!.ZGVm.Z2hp", "valid": false },
-    { "value": "0123456789abcdef0123456789abcdef", "valid": false }
+    {
+      "value": "YWJj.ZGVm.Z2hp",
+      "valid": true
+    },
+    {
+      "value": "YWJj.ZGVm.Z2hp.amts.bW5v",
+      "valid": true
+    },
+    {
+      "value": "YWJj",
+      "valid": false
+    },
+    {
+      "value": "YWJj.ZGVm",
+      "valid": false
+    },
+    {
+      "value": "YWJj.ZGVm.Z2hp.amts",
+      "valid": false
+    },
+    {
+      "value": "YWJj.ZGVm.Z2hp.amts.bW5v.cHFy",
+      "valid": false
+    },
+    {
+      "value": "YWJj..Z2hp",
+      "valid": false
+    },
+    {
+      "value": "a.ZGVm.Z2hp",
+      "valid": false
+    },
+    {
+      "value": "not-base64!.ZGVm.Z2hp",
+      "valid": false
+    },
+    {
+      "value": "0123456789abcdef0123456789abcdef",
+      "valid": false
+    }
   ],
   "credentialPredicate": "credentialFixtures.valid means matches the forbidden credential shape: exactly 3 or 5 nonempty dot-separated [A-Za-z0-9_-]+ segments, each decodable with base64.RawURLEncoding. It does not mean a valid request ID.",
   "grammarFixtures": {
     "account_uuid": [
-      { "case": "valid-v4", "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71", "valid": true },
-      { "case": "valid-v7", "value": "018f47d2-e5d1-7f3f-8f18-6c8e32621f71", "valid": true },
-      { "case": "short", "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f7", "valid": false },
-      { "case": "long", "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f711", "valid": false },
-      { "case": "case", "value": "018F47D2-E5D1-4F3F-8F18-6C8E32621F71", "valid": false },
-      { "case": "hyphen", "value": "018f47d2e5d14f3f8f186c8e32621f71", "valid": false },
-      { "case": "nonhex", "value": "g18f47d2-e5d1-4f3f-8f18-6c8e32621f71", "valid": false },
-      { "case": "version", "value": "018f47d2-e5d1-1f3f-8f18-6c8e32621f71", "valid": false },
-      { "case": "variant", "value": "018f47d2-e5d1-4f3f-cf18-6c8e32621f71", "valid": false }
+      {
+        "case": "valid-v4",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": true
+      },
+      {
+        "case": "valid-v7",
+        "value": "018f47d2-e5d1-7f3f-8f18-6c8e32621f71",
+        "valid": true
+      },
+      {
+        "case": "short",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f7",
+        "valid": false
+      },
+      {
+        "case": "long",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f711",
+        "valid": false
+      },
+      {
+        "case": "case",
+        "value": "018F47D2-E5D1-4F3F-8F18-6C8E32621F71",
+        "valid": false
+      },
+      {
+        "case": "hyphen",
+        "value": "018f47d2e5d14f3f8f186c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "nonhex",
+        "value": "g18f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "version",
+        "value": "018f47d2-e5d1-1f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "variant",
+        "value": "018f47d2-e5d1-4f3f-cf18-6c8e32621f71",
+        "valid": false
+      }
     ],
     "asset_hex": [
-      { "case": "valid", "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "valid": true },
-      { "case": "short", "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "valid": false },
-      { "case": "long", "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "valid": false },
-      { "case": "case", "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "valid": false },
-      { "case": "nonhex", "value": "gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "valid": false },
-      { "case": "hyphen", "value": "-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "valid": false },
-      { "case": "uuid-shape", "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71", "valid": false },
+      {
+        "case": "valid",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": true
+      },
+      {
+        "case": "short",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      },
+      {
+        "case": "long",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      },
+      {
+        "case": "case",
+        "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "valid": false
+      },
+      {
+        "case": "nonhex",
+        "value": "gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      },
+      {
+        "case": "hyphen",
+        "value": "-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      },
+      {
+        "case": "uuid-shape",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
       {
         "case": "legacy",
         "value": "legacy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -114,26 +280,90 @@
       }
     ],
     "request": [
-      { "case": "valid", "value": "0123456789abcdef0123456789abcdef", "valid": true },
-      { "case": "worker", "value": "worker:scan-42", "valid": true },
-      { "case": "ipv4", "value": "192.168.1.1", "valid": false },
-      { "case": "ipv6", "value": "2001:db8::1", "valid": false },
-      { "case": "email", "value": "person@example.org", "valid": false },
-      { "case": "url", "value": "https://host/path?token=x", "valid": false },
-      { "case": "jwt", "value": "YWJj.ZGVm.Z2hp", "valid": false }
+      {
+        "case": "valid",
+        "value": "0123456789abcdef0123456789abcdef",
+        "valid": true
+      },
+      {
+        "case": "worker",
+        "value": "worker:scan-42",
+        "valid": true
+      },
+      {
+        "case": "ipv4",
+        "value": "192.168.1.1",
+        "valid": false
+      },
+      {
+        "case": "ipv6",
+        "value": "2001:db8::1",
+        "valid": false
+      },
+      {
+        "case": "email",
+        "value": "person@example.org",
+        "valid": false
+      },
+      {
+        "case": "url",
+        "value": "https://host/path?token=x",
+        "valid": false
+      },
+      {
+        "case": "jwt",
+        "value": "YWJj.ZGVm.Z2hp",
+        "valid": false
+      }
     ],
     "uuid": [
-      { "case": "valid-v4", "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71", "valid": true },
-      { "case": "short", "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f7", "valid": false },
-      { "case": "long", "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f711", "valid": false },
-      { "case": "case", "value": "018F47D2-E5D1-4F3F-8F18-6C8E32621F71", "valid": false },
-      { "case": "hyphen", "value": "018f47d2e5d14f3f8f186c8e32621f71", "valid": false },
-      { "case": "nonhex", "value": "g18f47d2-e5d1-4f3f-8f18-6c8e32621f71", "valid": false },
-      { "case": "version", "value": "018f47d2-e5d1-1f3f-8f18-6c8e32621f71", "valid": false },
-      { "case": "variant", "value": "018f47d2-e5d1-4f3f-cf18-6c8e32621f71", "valid": false },
-      { "case": "version-v7", "value": "018f47d2-e5d1-7f3f-8f18-6c8e32621f71", "valid": false }
+      {
+        "case": "valid-v4",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": true
+      },
+      {
+        "case": "short",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f7",
+        "valid": false
+      },
+      {
+        "case": "long",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f711",
+        "valid": false
+      },
+      {
+        "case": "case",
+        "value": "018F47D2-E5D1-4F3F-8F18-6C8E32621F71",
+        "valid": false
+      },
+      {
+        "case": "hyphen",
+        "value": "018f47d2e5d14f3f8f186c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "nonhex",
+        "value": "g18f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "version",
+        "value": "018f47d2-e5d1-1f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "variant",
+        "value": "018f47d2-e5d1-4f3f-cf18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "version-v7",
+        "value": "018f47d2-e5d1-7f3f-8f18-6c8e32621f71",
+        "valid": false
+      }
     ]
   },
   "identityFixtures": [],
-  "checksum": "sha256:ff521b52ac736ec03e4e614c04b6a7d6d7af2a5cf73f7d4c3906c87ab344812e"
+  "checksum": "sha256:2876b94f47b6395094e09eb5c4adbb611025d7cd8d821a92d3f60597548f8188"
 }

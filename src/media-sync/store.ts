@@ -19,7 +19,10 @@ import type {
   MediaSyncPublicationState,
   MediaSyncPublicationType,
   MediaSyncWork,
-  MediaSyncWorkClaim
+  MediaSyncWorkClaim,
+  MediaSyncBindingMutation,
+  MediaSyncBindingMutationResult,
+  MediaSyncBindingStatus
 } from "./types.js";
 
 import {
@@ -35,6 +38,8 @@ type StoreOptions = {
 };
 
 type BindingRow = {
+  version: number;
+  paused_at: Date | string | null;
   id: string;
   profile_name: string;
   group_id: string;
@@ -173,7 +178,7 @@ export class PostgresMediaSyncStore {
           'workId', work_id, 'mediaKind', media_kind, 'status', status,
           'receivedAt', to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
           'updatedAt', to_char(updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
-          'failure', case when status in ('failed', 'processing', 'awaiting_scan') then failure else null end
+          'failure', case when status in ('received', 'failed', 'processing', 'awaiting_scan') then failure else null end
         ) order by created_at desc, work_id desc) from page), '[]'::jsonb) items
       from scoped`,
       [
@@ -198,6 +203,256 @@ export class PostgresMediaSyncStore {
       hasMore,
       ...(hasMore ? { cursor: statusCursor(collectionId, query, items[items.length - 1]!) } : {})
     };
+  }
+
+  async bindingStatus(collectionId: string): Promise<MediaSyncBindingStatus> {
+    const result = await this.pool.query<{ result: MediaSyncBindingStatus }>(
+      `select jsonb_build_object(
+        'binding', (select jsonb_build_object('id',binding.id,'version',binding.version,
+          'groupDisplayName',binding.group_display_name,'boundAt',binding.bound_at,
+          'state',case when binding.disabled_at is not null then 'unbound'
+            when not exists(select 1 from access_principals principal where principal.profile_name=binding.profile_name
+              and principal.principal_type='group' and principal.principal_id=binding.group_id
+              and principal.disabled_at is null and principal.execution_generation=binding.admission_generation) then 'admission_revoked'
+            when binding.paused_at is not null then 'paused' else 'active' end)
+          from media_sync_bindings binding where binding.profile_name='helper' and binding.collection_id=$1
+          order by binding.disabled_at desc nulls first,binding.bound_at desc limit 1),
+        'pendingCode',(select jsonb_build_object('id',id,'expiresAt',expires_at)
+          from media_sync_binding_codes where profile_name='helper' and collection_id=$1
+            and consumed_at is null and expires_at>clock_timestamp() order by expires_at desc limit 1),
+        'settling',jsonb_build_object(
+          'inFlight',(select count(*) from media_sync_ingests ingest join media_sync_outbox outbox using(source_key)
+            where ingest.collection_id=$1 and outbox.operation='intake' and outbox.completed_at is null and outbox.claimed_until>clock_timestamp()),
+          'uncertain',(select count(distinct ingest.work_id) from media_sync_ingests ingest join media_sync_publications publication using(source_key)
+            left join media_sync_outbox outbox on outbox.source_key=ingest.source_key and outbox.operation='intake'
+            where ingest.collection_id=$1 and publication.attempt_id is not null and publication.attempt_completed_at is null
+              and (outbox.claimed_until is null or outbox.claimed_until<=clock_timestamp() or publication.failure_category='publication_uncertain'))),
+        'blockedManualCount',(select count(*) from media_sync_ingests ingest join media_sync_publications publication using(source_key)
+          where ingest.collection_id=$1 and publication.publication_type='manual' and publication.failure_category='manual_authority_unavailable')
+      ) result`,
+      [collectionId]
+    );
+    return result.rows[0]!.result;
+  }
+
+  async mutateBinding(input: {
+    collectionId: string;
+    actorId: string;
+    requestId: string;
+    idempotencyKey: string;
+    mutation: MediaSyncBindingMutation;
+  }): Promise<MediaSyncBindingMutationResult> {
+    if (!input.idempotencyKey.trim()) throw new Error("media_sync_binding_idempotency_invalid");
+    const keyHash = hashCode(input.idempotencyKey);
+    const mutation = input.mutation;
+    const requestHash = hashCode(
+      JSON.stringify(
+        mutation.action === "revoke_code"
+          ? [mutation.action, mutation.codeId]
+          : [mutation.action, mutation.bindingId, mutation.expectedVersion]
+      )
+    );
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await lockBindingCollection(client, "helper", input.collectionId);
+      const prior = await client.query<{
+        request_hash: string;
+        result: MediaSyncBindingMutationResult;
+      }>(
+        `select request_hash,result from media_sync_management_mutations where actor_id=$1 and collection_id=$2 and key_hash=$3`,
+        [input.actorId, input.collectionId, keyHash]
+      );
+      if (prior.rows[0]) {
+        await client.query("commit");
+        return prior.rows[0].request_hash === requestHash
+          ? prior.rows[0].result
+          : { status: "idempotency_conflict" };
+      }
+      if (await collectionDeletionExists(client, input.collectionId)) {
+        await client.query("rollback");
+        return { status: "collection_deleted" };
+      }
+      let version: number | undefined;
+      let resourceId: string;
+      if (mutation.action === "revoke_code") {
+        const changed = await client.query(
+          `update media_sync_binding_codes set expires_at=least(expires_at,clock_timestamp())
+          where id=$1 and collection_id=$2 and profile_name='helper' and consumed_at is null returning id`,
+          [mutation.codeId, input.collectionId]
+        );
+        if (!changed.rowCount) {
+          await client.query("rollback");
+          return { status: "conflict" };
+        }
+        resourceId = mutation.codeId;
+      } else {
+        const binding = (
+          await client.query<BindingRow>(
+            `select * from media_sync_bindings where id=$1 and collection_id=$2 and profile_name='helper' for update`,
+            [mutation.bindingId, input.collectionId]
+          )
+        ).rows[0];
+        if (
+          !binding ||
+          binding.disabled_at ||
+          binding.version !== mutation.expectedVersion ||
+          (mutation.action === "pause" && binding.paused_at) ||
+          (mutation.action === "resume" && !binding.paused_at)
+        ) {
+          await client.query("rollback");
+          return { status: "conflict" };
+        }
+        if (mutation.action === "resume") {
+          const admitted = await client.query(
+            `select 1 from access_principals principal join media_sync_bindings binding
+            on principal.profile_name=binding.profile_name and principal.principal_id=binding.group_id
+            and principal.principal_type='group' and principal.disabled_at is null and principal.execution_generation=binding.admission_generation
+            where binding.id=$1 for share of principal`,
+            [binding.id]
+          );
+          if (!admitted.rowCount) {
+            await client.query("rollback");
+            return { status: "admission_revoked" };
+          }
+        }
+        await client.query(
+          `update media_sync_bindings set version=version+1,
+          paused_at=case when $2='pause' then clock_timestamp() when $2='resume' then null else paused_at end,
+          disabled_at=case when $2='unbind' then clock_timestamp() else disabled_at end where id=$1`,
+          [binding.id, mutation.action]
+        );
+        await client.query(
+          `update media_sync_outbox outbox set dispatched_at=null
+          from media_sync_ingests ingest where outbox.source_key=ingest.source_key and ingest.binding_id=$1
+          and outbox.operation='intake' and outbox.completed_at is null`,
+          [binding.id]
+        );
+        if (mutation.action !== "resume") {
+          await client.query(
+            `update media_sync_publications publication set failure_category='manual_authority_unavailable',updated_at=clock_timestamp()
+            from media_sync_ingests ingest where publication.source_key=ingest.source_key and ingest.binding_id=$1
+              and publication.publication_type='manual' and publication.state='pending' and publication.target_id is null and publication.attempt_id is null`,
+            [binding.id]
+          );
+        }
+        if (mutation.action === "unbind") {
+          await client.query(
+            `update media_sync_publications publication set state='revoked',failure_category='unbound_generation',updated_at=clock_timestamp()
+            from media_sync_ingests ingest where publication.source_key=ingest.source_key and ingest.binding_id=$1
+              and publication.publication_type='collection' and publication.state='pending' and publication.target_id is null and publication.attempt_id is null`,
+            [binding.id]
+          );
+        }
+        resourceId = binding.id;
+        version = binding.version + 1;
+      }
+      const action =
+        mutation.action === "revoke_code"
+          ? "media_sync.binding_code.revoke"
+          : mutation.action === "unbind"
+            ? "media_sync.binding.delete"
+            : `media_sync.binding.${mutation.action}`;
+      await enqueueAudit(
+        client,
+        createAuditEvent({
+          action,
+          resourceId,
+          actor: { type: "user", id: input.actorId },
+          requestId: input.requestId
+        })
+      );
+      const result: MediaSyncBindingMutationResult = {
+        status: "updated",
+        ...(version ? { version } : {})
+      };
+      await client.query(
+        `insert into media_sync_management_mutations(actor_id,collection_id,key_hash,request_hash,result) values($1,$2,$3,$4,$5::jsonb)`,
+        [input.actorId, input.collectionId, keyHash, requestHash, JSON.stringify(result)]
+      );
+      await client.query("commit");
+      return result;
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async retryWork(input: {
+    collectionId: string;
+    workId: string;
+    actorId: string;
+    requestId: string;
+    idempotencyKey: string;
+  }): Promise<boolean> {
+    if (!input.idempotencyKey.trim()) throw new Error("media_sync_retry_idempotency_invalid");
+    const keyHash = hashCode(input.idempotencyKey),
+      requestHash = hashCode(JSON.stringify(["retry", input.workId]));
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await lockBindingCollection(client, "helper", input.collectionId);
+      const prior = await client.query<{ request_hash: string }>(
+        `select request_hash from media_sync_management_mutations where actor_id=$1 and collection_id=$2 and key_hash=$3`,
+        [input.actorId, input.collectionId, keyHash]
+      );
+      if (prior.rows[0]) {
+        await client.query("commit");
+        return prior.rows[0].request_hash === requestHash;
+      }
+      if (await collectionDeletionExists(client, input.collectionId)) {
+        await client.query("rollback");
+        return false;
+      }
+      const candidate = await client.query<{ source_key: string }>(
+        `select ingest.source_key from media_sync_ingests ingest
+        join media_sync_outbox outbox on outbox.source_key=ingest.source_key and outbox.operation='intake'
+        join media_sync_bindings binding on binding.id=ingest.binding_id and binding.disabled_at is null and binding.paused_at is null
+        join access_principals principal on principal.profile_name=binding.profile_name and principal.principal_type='group'
+          and principal.principal_id=binding.group_id and principal.disabled_at is null and principal.execution_generation=binding.admission_generation
+        where ingest.work_id=$1 and ingest.collection_id=$2 and ingest.profile_name='helper'
+          and ingest.state in ('pending','processing','awaiting_scan') and outbox.completed_at is null
+          and (outbox.claimed_until is null or outbox.claimed_until<=clock_timestamp())
+          and outbox.last_error_category in ('asset_unavailable','line_content_timeout','line_content_cancelled','scan_pending','processing_pending','transcoding_processing')
+          and not exists(select 1 from media_sync_publications publication where publication.source_key=ingest.source_key
+            and ((publication.attempt_id is not null and publication.attempt_completed_at is null)
+              or (publication.publication_type='manual' and publication.state='pending' and publication.manual_source_key is not null)))
+        for update of ingest,outbox for share of binding,principal`,
+        [input.workId, input.collectionId]
+      );
+      const sourceKey = candidate.rows[0]?.source_key;
+      if (!sourceKey) {
+        await client.query("rollback");
+        return false;
+      }
+      await client.query(
+        `update media_sync_outbox set available_at=clock_timestamp(),dispatched_at=null,claimed_until=null,last_error_category=null
+        where source_key=$1 and operation='intake'`,
+        [sourceKey]
+      );
+      await enqueueAudit(
+        client,
+        createAuditEvent({
+          action: "media_sync.work.retry",
+          resourceId: input.workId,
+          actor: { type: "user", id: input.actorId },
+          requestId: input.requestId
+        })
+      );
+      await client.query(
+        `insert into media_sync_management_mutations(actor_id,collection_id,key_hash,request_hash,result) values($1,$2,$3,$4,'{"status":"updated"}'::jsonb)`,
+        [input.actorId, input.collectionId, keyHash, requestHash]
+      );
+      await client.query("commit");
+      return true;
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async createBindingCode(
@@ -234,6 +489,10 @@ export class PostgresMediaSyncStore {
       if (binding.rowCount) {
         await client.query("commit");
         return { status: "collection_bound" };
+      }
+      if (await hasUnsettledPublication(client, input.collectionId)) {
+        await client.query("rollback");
+        return { status: "collection_settling" };
       }
       await client.query(
         `update media_sync_binding_codes
@@ -340,6 +599,10 @@ export class PostgresMediaSyncStore {
       );
       const codeRow = code.rows[0];
       if (!codeRow) {
+        await client.query("rollback");
+        return { status: "invalid_code" };
+      }
+      if (await hasUnsettledPublication(client, codeRow.collection_id)) {
         await client.query("rollback");
         return { status: "invalid_code" };
       }
@@ -698,6 +961,18 @@ export class PostgresMediaSyncStore {
       if (await collectionDeletionExists(client, input.collectionId)) {
         throw new Error("media_sync_collection_deleted");
       }
+      if (input.bindingId) {
+        const current = await client.query(
+          `select 1 from media_sync_bindings binding join access_principals principal
+          on principal.profile_name=binding.profile_name and principal.principal_type='group' and principal.principal_id=binding.group_id
+          and principal.disabled_at is null and principal.execution_generation=binding.admission_generation
+          where binding.id=$1 and binding.disabled_at is null and binding.paused_at is null
+            and binding.collection_id=$2 and binding.profile_name=$3 and binding.group_id=$4
+          for share of binding,principal`,
+          [input.bindingId, input.collectionId, input.profileName, input.groupId]
+        );
+        if (!current.rowCount) throw new Error("media_sync_binding_unavailable");
+      }
       const tombstone = await client.query(
         "select 1 from media_sync_source_tombstones where source_key=$1",
         [input.sourceKey]
@@ -825,7 +1100,9 @@ export class PostgresMediaSyncStore {
            and outbox.available_at <= $1
            and (outbox.claimed_until is null or outbox.claimed_until <= $1)
            and (
-             (outbox.operation='intake' and ingest.state<>'tombstoned')
+             (outbox.operation='intake' and ingest.state<>'tombstoned' and not exists(
+               select 1 from media_sync_bindings binding where binding.id=ingest.binding_id
+                 and binding.disabled_at is null and binding.paused_at is not null))
              or (outbox.operation='delete' and exists (
                select 1 from media_sync_source_tombstones tombstone
                where tombstone.source_key=outbox.source_key
@@ -865,7 +1142,9 @@ export class PostgresMediaSyncStore {
            and outbox.available_at <= $1
            and (outbox.claimed_until is null or outbox.claimed_until <= $1)
            and (
-             (outbox.operation='intake' and ingest.state<>'tombstoned')
+             (outbox.operation='intake' and ingest.state<>'tombstoned' and not exists(
+               select 1 from media_sync_bindings binding where binding.id=ingest.binding_id
+                 and binding.disabled_at is null and binding.paused_at is not null))
              or (outbox.operation='delete' and exists (
                select 1 from media_sync_source_tombstones tombstone
                where tombstone.source_key=outbox.source_key
@@ -930,7 +1209,7 @@ export class PostgresMediaSyncStore {
                on principal.profile_name=binding.profile_name and principal.principal_type='group'
                and principal.principal_id=binding.group_id and principal.disabled_at is null
                and principal.execution_generation=binding.admission_generation
-             where binding.id=ingest.binding_id and binding.disabled_at is null
+             where binding.id=ingest.binding_id and binding.disabled_at is null and binding.paused_at is null
              for share of binding, principal
            ))
            or (outbox.operation='delete' and exists (
@@ -949,8 +1228,10 @@ export class PostgresMediaSyncStore {
       tombstoned: boolean;
       binding_active: boolean;
       admitted: boolean;
+      paused: boolean;
     }>(
       `select ingest.state, outbox.operation, outbox.completed_at,
+              exists(select 1 from media_sync_bindings binding where binding.id=ingest.binding_id and binding.disabled_at is null and binding.paused_at is not null) paused,
               exists (select 1 from media_sync_bindings binding
                 where binding.id=ingest.binding_id and binding.disabled_at is null) binding_active,
               exists (select 1 from media_sync_bindings binding join access_principals principal
@@ -982,6 +1263,7 @@ export class PostgresMediaSyncStore {
     }
     if (input.operation === "intake" && !existing.binding_active) return "unbound_generation";
     if (input.operation === "intake" && !existing.admitted) return "admission_revoked";
+    if (input.operation === "intake" && existing.paused) return "paused";
     return "busy";
   }
 
@@ -1068,6 +1350,20 @@ export class PostgresMediaSyncStore {
     } finally {
       client.release();
     }
+  }
+
+  async holdPausedWork(input: { workId: string; expectedClaimedUntil: string }): Promise<boolean> {
+    const result = await this.pool.query(
+      `update media_sync_outbox outbox set claimed_until=null,dispatched_at=null,
+      available_at=clock_timestamp(),last_error_category='binding_paused'
+      from media_sync_ingests ingest,media_sync_bindings binding
+      where outbox.source_key=ingest.source_key and ingest.work_id=$1 and binding.id=ingest.binding_id
+        and binding.paused_at is not null and binding.disabled_at is null and ingest.state<>'tombstoned'
+        and outbox.operation='intake' and outbox.completed_at is null and outbox.claimed_until=$2::timestamptz
+        and outbox.claimed_until>clock_timestamp()`,
+      [input.workId, input.expectedClaimedUntil]
+    );
+    return Boolean(result.rowCount);
   }
 
   async blockUnavailableWork(input: {
@@ -1549,6 +1845,7 @@ export class PostgresMediaSyncStore {
            and not exists (
              select 1 from media_sync_publications publication
              where publication.source_key=ingest.source_key and publication.state='pending'
+               and publication.failure_category is distinct from 'manual_authority_unavailable'
                and (
                  publication.publication_type<>'manual'
                  or publication.manual_source_key is not null
@@ -1874,7 +2171,7 @@ export class PostgresMediaSyncStore {
       const authorized = await client.query(
         `select 1 from media_sync_ingests ingest
          join media_sync_bindings binding on binding.id=ingest.binding_id
-           and binding.disabled_at is null
+           and binding.disabled_at is null and binding.paused_at is null
          join access_principals principal on principal.profile_name=binding.profile_name
            and principal.principal_type='group' and principal.principal_id=binding.group_id
            and principal.disabled_at is null and principal.execution_generation=binding.admission_generation
@@ -2018,6 +2315,8 @@ function timestamp(value: Date | string): string {
 
 function mapBinding(row: BindingRow): MediaSyncBinding {
   return {
+    version: row.version,
+    ...(row.paused_at ? { pausedAt: timestamp(row.paused_at) } : {}),
     id: row.id,
     profileName: row.profile_name,
     groupId: row.group_id,
@@ -2086,4 +2385,13 @@ function mapPublication(row: PublicationRow): MediaSyncPublication {
     ...(row.manual_domain ? { manualDomain: row.manual_domain } : {}),
     ...(row.manual_title ? { manualTitle: row.manual_title } : {})
   };
+}
+
+async function hasUnsettledPublication(client: PoolClient, collectionId: string): Promise<boolean> {
+  const result = await client.query(
+    `select 1 from media_sync_ingests ingest join media_sync_publications publication using(source_key)
+    where ingest.collection_id=$1 and publication.attempt_id is not null and publication.attempt_completed_at is null limit 1`,
+    [collectionId]
+  );
+  return Boolean(result.rowCount);
 }
