@@ -29,6 +29,11 @@ export function nextDelay(scanStatus: string, warm: boolean): number {
 type AssetStageStore = Pick<
   PostgresMediaSyncStore,
   | "claimWork"
+  | "reservePublication"
+  | "settlePublication"
+  | "blockUncertainPublication"
+  | "blockUnavailableWork"
+  | "isBindingAdmitted"
   | "loadClaimedWork"
   | "findActiveBinding"
   | "retryOutbox"
@@ -68,6 +73,7 @@ type MediaSyncSourceStageResult =
 
 export type MediaSyncWorkerResult =
   | { status: "completed" }
+  | { status: "uncertain"; reason: "publication_uncertain" }
   | { status: "missing" }
   | { status: "terminal" }
   | {
@@ -89,7 +95,8 @@ export type MediaSyncWorkerResult =
         | "line_content_empty"
         | "line_content_too_large"
         | "line_content_unavailable"
-        | "binding_inactive"
+        | "unbound_generation"
+        | "admission_revoked"
         | "asset_policy_rejected"
         | "scan_infected"
         | "scan_failed"
@@ -100,6 +107,7 @@ export type MediaSyncWorkerResult =
 export function shouldAcknowledgeMediaSyncResult(result: MediaSyncWorkerResult): boolean {
   return (
     result.status === "completed" ||
+    result.status === "uncertain" ||
     result.status === "missing" ||
     result.status === "terminal" ||
     result.status === "rescheduled" ||
@@ -120,6 +128,7 @@ async function runClaimedSourceStage(
     maxBytes: number;
     signal?: AbortSignal;
     inspect?: (file: MediaContentFile) => Promise<void>;
+    beforeExternal(): Promise<void>;
   },
   now: Date
 ): Promise<MediaSyncSourceStageResult> {
@@ -132,6 +141,7 @@ async function runClaimedSourceStage(
     if (!options.lineContent.getMessageContentTranscodingStatus) {
       return fail("line_content_unavailable", workId, claim.claimedUntil, options.store);
     }
+    await options.beforeExternal();
     const status = await options.lineContent.getMessageContentTranscodingStatus(
       work.ingest.messageId,
       profile
@@ -151,6 +161,7 @@ async function runClaimedSourceStage(
   }
 
   try {
+    await options.beforeExternal();
     const content = await options.lineContent.getMessageContentStream(
       work.ingest.messageId,
       profile
@@ -246,7 +257,12 @@ export async function runMediaSyncWorker(
   });
   if (claim === "missing") return { status: "missing" };
   if (claim === "terminal") return runDeleteWorker(workId, options, now);
-  if (claim === "busy" || !claim.claimedUntil) return { status: "contention" };
+  if (claim === "admission_revoked" || claim === "unbound_generation") {
+    return (await options.store.blockUnavailableWork({ workId, reason: claim }))
+      ? { status: "permanent_failure", reason: claim }
+      : { status: "contention" };
+  }
+  if (typeof claim === "string" || !claim.claimedUntil) return { status: "contention" };
   const loadedWork = await options.store.loadClaimedWork({
     workId,
     operation: "intake",
@@ -254,8 +270,16 @@ export async function runMediaSyncWorker(
   });
   if (!loadedWork) return { status: "contention" };
   let work: MediaSyncWork = loadedWork;
-  if (!(await activeBinding(work, options.store))) {
-    return terminalFailure("binding_inactive", workId, claim.claimedUntil, work, now, options);
+  if (
+    work.publications.some(
+      (publication) => publication.attemptId && !publication.attemptCompletedAt
+    )
+  ) {
+    return blockUncertain(workId, claim.claimedUntil, options.store);
+  }
+  const initialFence = await bindingFence(work, options.store);
+  if (initialFence !== "active") {
+    return terminalFailure(initialFence, workId, claim.claimedUntil, work, now, options);
   }
 
   let asset: AssetRecord;
@@ -264,8 +288,8 @@ export async function runMediaSyncWorker(
       asset = await options.assets.get(work.ingest.assetId, { signal: options.signal });
       const eligibility = await eligibilityAfterExternal(workId, claim.claimedUntil, options.store);
       if (eligibility === "lease_lost") return { status: "contention" };
-      if (eligibility === "binding_inactive") {
-        return terminalFailure("binding_inactive", workId, claim.claimedUntil, work, now, options);
+      if (eligibility === "unbound_generation" || eligibility === "admission_revoked") {
+        return terminalFailure(eligibility, workId, claim.claimedUntil, work, now, options);
       }
       work = eligibility.work;
     } else {
@@ -283,7 +307,9 @@ export async function runMediaSyncWorker(
           lineDownloadTimeoutMs: options.lineDownloadTimeoutMs,
           maxBytes: options.maxBytes,
           signal: options.signal,
+          beforeExternal: () => requireExecutionFence(workId, claim.claimedUntil!, options.store),
           inspect: async (file) => {
+            await requireExecutionFence(workId, claim.claimedUntil!, options.store);
             const created = await options.assets.createUpload(
               {
                 namespace: "line.group.media-sync",
@@ -297,12 +323,7 @@ export async function runMediaSyncWorker(
               },
               { requestId: workId, signal: options.signal }
             );
-            await requireEligibilityOrCompensateAsset(
-              created.asset,
-              workId,
-              claim.claimedUntil!,
-              options
-            );
+            await requireAssetExecutionFence(created.asset, workId, claim.claimedUntil!, options);
             let current = created.asset;
             if (current.uploadStatus !== "completed") {
               if (current.uploadStatus !== "created" || !created.uploadTarget) {
@@ -312,12 +333,7 @@ export async function runMediaSyncWorker(
               await options.assets.uploadFile(created.uploadTarget, file.path, {
                 signal: options.signal
               });
-              await requireEligibilityOrCompensateAsset(
-                current,
-                workId,
-                claim.claimedUntil!,
-                options
-              );
+              await requireAssetExecutionFence(current, workId, claim.claimedUntil!, options);
               current = await options.assets.complete(
                 current.id,
                 {
@@ -332,12 +348,7 @@ export async function runMediaSyncWorker(
                 contentVersion: current.etag,
                 sizeBytes: file.sizeBytes
               });
-              await requireEligibilityOrCompensateAsset(
-                current,
-                workId,
-                claim.claimedUntil!,
-                options
-              );
+              await requireAssetExecutionFence(current, workId, claim.claimedUntil!, options);
             }
             if (current.uploadStatus !== "completed" || !current.etag?.trim()) {
               await compensateOwnedAsset(current, workId, options);
@@ -353,7 +364,11 @@ export async function runMediaSyncWorker(
                 checksumSha256: file.checksumSha256
               }))
             ) {
-              await compensateOwnedAsset(current, workId, options);
+              await options.store.rememberOwnedAsset({
+                workId,
+                assetId: current.id,
+                assetEtag: current.etag
+              });
               throw new LeaseFenceError();
             }
             completedAsset = current;
@@ -461,33 +476,39 @@ export async function runMediaSyncWorker(
           options
         );
       }
-      const mutation = await options.assets.addCollectionItem(
-        work.ingest.collectionId,
-        {
-          assetId: asset.id,
-          remoteItemId: work.ingest.workId,
-          displayName: safeMediaFileName(work.ingest),
-          sourceRevision
-        },
-        idempotencyKey("media-sync-collection", work.ingest.sourceKey),
-        { requestId: workId, signal: options.signal }
-      );
-      const eligibility = await eligibilityAfterExternal(workId, claim.claimedUntil, options.store);
-      const finalized =
-        eligibility !== "lease_lost" &&
-        eligibility !== "binding_inactive" &&
-        (await options.store.finalizeCollectionPublication({
+      await requireExecutionFence(workId, claim.claimedUntil, options.store);
+      const attemptId = await options.store.reservePublication({
+        workId,
+        expectedClaimedUntil: claim.claimedUntil,
+        publicationType: "collection"
+      });
+      if (!attemptId) return { status: "contention" };
+      try {
+        const mutation = await options.assets.addCollectionItem(
+          work.ingest.collectionId,
+          {
+            assetId: asset.id,
+            remoteItemId: work.ingest.workId,
+            displayName: safeMediaFileName(work.ingest),
+            sourceRevision
+          },
+          idempotencyKey("media-sync-collection", work.ingest.sourceKey),
+          { requestId: workId, signal: options.signal }
+        );
+        const settled = await options.store.settlePublication({
           workId,
-          expectedClaimedUntil: claim.claimedUntil,
-          collectionId: work.ingest.collectionId,
-          occurrenceId: mutation.item.id
-        }));
-      if (!finalized) {
-        await compensateOccurrence(workId, work.ingest.collectionId, mutation.item.id, options);
-        return { status: "contention" };
+          publicationType: "collection",
+          attemptId,
+          result: { targetId: mutation.item.id }
+        });
+        if (!settled) return blockUncertain(workId, claim.claimedUntil, options.store);
+        collectionPublished = true;
+        publishedItemId = mutation.item.id;
+        collection.state = "published";
+        collection.targetId = mutation.item.id;
+      } catch {
+        return blockUncertain(workId, claim.claimedUntil, options.store);
       }
-      collectionPublished = true;
-      publishedItemId = mutation.item.id;
     }
     if (collectionPublished) {
       options.onTiming?.("collection_published", workId, {
@@ -495,6 +516,7 @@ export async function runMediaSyncWorker(
         collectionItemId: publishedItemId
       });
     }
+    await requireExecutionFence(workId, claim.claimedUntil, options.store);
     const manual = work.publications.find(
       (publication) => publication.publicationType === "manual"
     );
@@ -588,13 +610,21 @@ async function runDeleteWorker(
     now
   });
   if (claim === "missing" || claim === "terminal") return { status: claim };
-  if (claim === "busy" || !claim.claimedUntil) return { status: "contention" };
+  if (typeof claim === "string" || !claim.claimedUntil) return { status: "contention" };
   const work = await options.store.loadClaimedWork({
     workId,
     operation: "delete",
     expectedClaimedUntil: claim.claimedUntil
   });
   if (!work) return { status: "contention" };
+
+  if (
+    work.publications.some(
+      (publication) => publication.attemptId && !publication.attemptCompletedAt
+    )
+  ) {
+    return retryDelete(work, claim.claimedUntil, now, options);
+  }
 
   for (const publication of work.publications) {
     if (!publication.targetId) continue;
@@ -748,6 +778,7 @@ async function publishManualResource(input: {
     return failManualBranch(input, "manual_publish_unavailable");
   }
 
+  await requireExecutionFence(input.workId, input.expectedClaimedUntil, options.store);
   try {
     await options.assets.grantServiceRead(
       input.asset.id,
@@ -770,7 +801,11 @@ async function publishManualResource(input: {
     input.expectedClaimedUntil,
     options.store
   );
-  if (eligibility === "lease_lost" || eligibility === "binding_inactive") {
+  if (
+    eligibility === "lease_lost" ||
+    eligibility === "unbound_generation" ||
+    eligibility === "admission_revoked"
+  ) {
     return { status: "contention" };
   }
   let binary: Awaited<ReturnType<AssetApiClient["download"]>>;
@@ -792,7 +827,11 @@ async function publishManualResource(input: {
     input.expectedClaimedUntil,
     options.store
   );
-  if (eligibility === "lease_lost" || eligibility === "binding_inactive") {
+  if (
+    eligibility === "lease_lost" ||
+    eligibility === "unbound_generation" ||
+    eligibility === "admission_revoked"
+  ) {
     return { status: "contention" };
   }
   const prepared = prepareResourceBinary({
@@ -813,56 +852,41 @@ async function publishManualResource(input: {
   });
   if (!prepared.ok) return failManualBranch(input, "manual_format_rejected");
 
-  const outcome = await options.publisher.publishVerifiedResource({
-    resource: prepared.resource,
-    scan: { status: "clean", signatureVersion: input.asset.scanSignatureVersion },
-    now: input.now
+  await requireExecutionFence(input.workId, input.expectedClaimedUntil, options.store);
+  const attemptId = await options.store.reservePublication({
+    workId: input.workId,
+    expectedClaimedUntil: input.expectedClaimedUntil,
+    publicationType: "manual"
   });
-  if (outcome.status === "failed") return failManualBranch(input, "manual_publish_failed");
-  if (outcome.status === "duplicate") {
-    const failed = await options.store.failManualPublication({
-      workId: input.workId,
-      expectedClaimedUntil: input.expectedClaimedUntil,
-      destinationId: publication.destinationId,
-      failureCategory: "manual_duplicate"
+  if (!attemptId) return { status: "contention" };
+  let outcome: Awaited<ReturnType<ResourceBinaryPublisher["publishVerifiedResource"]>>;
+  try {
+    outcome = await options.publisher.publishVerifiedResource({
+      resource: prepared.resource,
+      scan: { status: "clean", signatureVersion: input.asset.scanSignatureVersion },
+      now: input.now
     });
-    if (!failed) return { status: "contention" };
+    if (outcome.status === "failed")
+      return blockUncertain(input.workId, input.expectedClaimedUntil, options.store);
+    const settled = await options.store.settlePublication({
+      workId: input.workId,
+      publicationType: "manual",
+      attemptId,
+      result:
+        outcome.status === "duplicate" ? { duplicate: true } : { targetId: outcome.resourceId }
+    });
+    if (!settled) return blockUncertain(input.workId, input.expectedClaimedUntil, options.store);
+  } catch {
+    return blockUncertain(input.workId, input.expectedClaimedUntil, options.store);
+  }
+  if (outcome.status === "duplicate") {
     publication.state = "failed";
     try {
       await options.agentJobStore.complete(publication.jobId, outcome.result, "save_resource");
     } catch {
-      // The durable duplicate disposition is authoritative.
+      /* The durable duplicate disposition is authoritative. */
     }
     return undefined;
-  }
-  eligibility = await eligibilityAfterExternal(
-    input.workId,
-    input.expectedClaimedUntil,
-    options.store
-  );
-  const finalized =
-    eligibility !== "lease_lost" &&
-    eligibility !== "binding_inactive" &&
-    (await options.store.finalizeManualPublication({
-      workId: input.workId,
-      expectedClaimedUntil: input.expectedClaimedUntil,
-      destinationId: publication.destinationId,
-      resourceId: outcome.resourceId
-    }));
-  if (!finalized) {
-    const compensated = await options.publisher.tombstonePublishedResource(
-      outcome.resourceId,
-      input.now
-    );
-    if (!compensated) {
-      await options.store.rememberExternalHandle({
-        workId: input.workId,
-        publicationType: "manual",
-        destinationId: publication.destinationId,
-        targetId: outcome.resourceId
-      });
-    }
-    return { status: "contention" };
   }
   publication.state = "published";
   publication.targetId = outcome.resourceId;
@@ -940,7 +964,8 @@ class LeaseFenceError extends Error {}
 class PermanentMediaSyncError extends Error {
   constructor(
     readonly reason:
-      | "binding_inactive"
+      | "unbound_generation"
+      | "admission_revoked"
       | "asset_policy_rejected"
       | "scan_infected"
       | "scan_failed"
@@ -950,38 +975,70 @@ class PermanentMediaSyncError extends Error {
   }
 }
 
-async function activeBinding(work: MediaSyncWork, store: AssetStageStore): Promise<boolean> {
+async function bindingFence(
+  work: MediaSyncWork,
+  store: AssetStageStore
+): Promise<"active" | "unbound_generation" | "admission_revoked"> {
   const binding = await store.findActiveBinding({
     profileName: work.ingest.profileName,
     groupId: work.ingest.groupId
   });
-  return binding?.collectionId === work.ingest.collectionId;
+  if (
+    !work.ingest.bindingId ||
+    binding?.id !== work.ingest.bindingId ||
+    binding.collectionId !== work.ingest.collectionId
+  )
+    return "unbound_generation";
+  return (await store.isBindingAdmitted(binding.id)) ? "active" : "admission_revoked";
 }
 
 async function eligibilityAfterExternal(
   workId: string,
   expectedClaimedUntil: string,
   store: AssetStageStore
-): Promise<{ work: MediaSyncWork } | "lease_lost" | "binding_inactive"> {
+): Promise<{ work: MediaSyncWork } | "lease_lost" | "unbound_generation" | "admission_revoked"> {
   const work = await store.loadClaimedWork({
     workId,
     operation: "intake",
     expectedClaimedUntil
   });
   if (!work) return "lease_lost";
-  return (await activeBinding(work, store)) ? { work } : "binding_inactive";
+  const fence = await bindingFence(work, store);
+  return fence === "active" ? { work } : fence;
 }
 
-async function requireEligibilityOrCompensateAsset(
+async function requireExecutionFence(
+  workId: string,
+  expectedClaimedUntil: string,
+  store: AssetStageStore
+): Promise<void> {
+  const eligibility = await eligibilityAfterExternal(workId, expectedClaimedUntil, store);
+  if (eligibility === "lease_lost") throw new LeaseFenceError();
+  if (eligibility === "unbound_generation" || eligibility === "admission_revoked")
+    throw new PermanentMediaSyncError(eligibility);
+}
+
+async function requireAssetExecutionFence(
   asset: AssetRecord,
   workId: string,
   expectedClaimedUntil: string,
   options: { store: AssetStageStore; assets: AssetApiClient }
 ): Promise<void> {
   const eligibility = await eligibilityAfterExternal(workId, expectedClaimedUntil, options.store);
-  if (eligibility !== "lease_lost" && eligibility !== "binding_inactive") return;
-  await compensateOwnedAsset(asset, workId, options);
-  if (eligibility === "binding_inactive") throw new PermanentMediaSyncError("binding_inactive");
+  if (
+    eligibility !== "lease_lost" &&
+    eligibility !== "unbound_generation" &&
+    eligibility !== "admission_revoked"
+  )
+    return;
+  // A lost execution fence does not revoke ownership of an already created Asset.
+  await options.store.rememberOwnedAsset({
+    workId,
+    assetId: asset.id,
+    ...(asset.etag ? { assetEtag: asset.etag } : {})
+  });
+  if (eligibility === "unbound_generation" || eligibility === "admission_revoked")
+    throw new PermanentMediaSyncError(eligibility);
   throw new LeaseFenceError();
 }
 
@@ -1045,9 +1102,20 @@ async function retryWorker(
   return released ? { status: "rescheduled", reason } : { status: "contention" };
 }
 
+async function blockUncertain(
+  workId: string,
+  expectedClaimedUntil: string,
+  store: AssetStageStore
+): Promise<MediaSyncWorkerResult> {
+  return (await store.blockUncertainPublication({ workId, expectedClaimedUntil }))
+    ? { status: "uncertain", reason: "publication_uncertain" }
+    : { status: "contention" };
+}
+
 async function terminalFailure(
   reason:
-    | "binding_inactive"
+    | "unbound_generation"
+    | "admission_revoked"
     | "asset_policy_rejected"
     | "scan_infected"
     | "scan_failed"
@@ -1062,6 +1130,11 @@ async function terminalFailure(
     publisher?: ResourceBinaryPublisher;
   }
 ): Promise<MediaSyncWorkerResult> {
+  if (reason === "unbound_generation" || reason === "admission_revoked") {
+    return (await options.store.blockUnavailableWork({ workId, expectedClaimedUntil, reason }))
+      ? { status: "permanent_failure", reason }
+      : { status: "contention" };
+  }
   const current =
     (await options.store.loadClaimedWork({
       workId,
@@ -1138,7 +1211,8 @@ async function compensatePersistedOwners(
 
 async function failWorker(
   reason:
-    | "binding_inactive"
+    | "unbound_generation"
+    | "admission_revoked"
     | "asset_policy_rejected"
     | "scan_infected"
     | "scan_failed"

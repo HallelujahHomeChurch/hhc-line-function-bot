@@ -27,6 +27,7 @@ export type CreateMediaSyncBindingCodeResult =
 export type BeginCollectionDeletionResult = { status: "started" | "replay" | "completed" };
 
 export type BindMediaSyncCodeInput = {
+  expectedCodeId?: string;
   profileName: string;
   code: string;
   groupId: string;
@@ -50,6 +51,7 @@ export type MediaSyncPublicationState = "pending" | "published" | "failed" | "re
 export type MediaSyncOutboxOperation = "intake" | "delete";
 
 export type CreateMediaSyncIngestInput = {
+  bindingId?: string;
   sourceKey: string;
   profileName: string;
   messageId: string;
@@ -84,9 +86,17 @@ export type MediaSyncOutboxItem = {
   lastErrorCategory?: string;
 };
 
-export type MediaSyncWorkClaim = MediaSyncOutboxItem | "busy" | "terminal" | "missing";
+export type MediaSyncWorkClaim =
+  | MediaSyncOutboxItem
+  | "busy"
+  | "terminal"
+  | "missing"
+  | "admission_revoked"
+  | "unbound_generation";
 
 export type MediaSyncPublication = {
+  attemptId?: string;
+  attemptCompletedAt?: string;
   sourceKey: string;
   publicationType: MediaSyncPublicationType;
   destinationId: string;

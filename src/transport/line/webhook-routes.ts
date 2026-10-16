@@ -290,7 +290,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.sessionStore,
         deps.completionObserver,
         deps.accountAdminClient,
-        deps.mediaSyncStore
+        deps.mediaSyncStore,
+        deps.mediaSyncManagementService
       );
     });
   }
@@ -331,7 +332,8 @@ async function handleWebhook(
   sessionStore: SessionStore | undefined,
   completionObserver: FunctionCompletionObserver,
   accountAdminClient: AccountAdminClient,
-  mediaSyncStore: PostgresMediaSyncStore | undefined
+  mediaSyncStore: PostgresMediaSyncStore | undefined,
+  mediaSyncManagementService: MediaSyncManagementService | undefined
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -1188,7 +1190,8 @@ async function handleWebhook(
             ? applyAccountFunctionAuthorization(context, profile, accountState)
             : context;
         },
-        mediaSyncStore
+        mediaSyncStore,
+        mediaSyncManagementService
       });
       if (accessCommandResult) {
         await line.replyText(
