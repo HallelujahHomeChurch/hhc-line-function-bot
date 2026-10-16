@@ -359,6 +359,41 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     ).resolves.toMatchObject({ status: "bound" });
   });
 
+  it("rejects an inspected code mismatch and expiry after waiting for the collection lock", async () => {
+    const before = new Date("2099-01-01T00:00:00.000Z");
+    const issuer = new PostgresMediaSyncStore(left, { codeFactory: () => "FRESH-PROOF" });
+    await issuer.createBindingCode({
+      profileName: "helper",
+      collectionId: "collection-fresh-proof",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+      idempotencyKey: "fresh-proof",
+      now: before
+    });
+    const input = {
+      profileName: "helper",
+      code: "FRESH-PROOF",
+      groupId: "group-fresh-proof",
+      groupDisplayName: "Synthetic group"
+    };
+    const proof = await issuer.inspectBindingCode("helper", input.code);
+    expect(proof).toMatchObject({ collectionId: "collection-fresh-proof" });
+    await expect(
+      issuer.bindWithCode({ ...input, expectedCodeId: randomUUID(), now: before })
+    ).resolves.toEqual({ status: "invalid_code" });
+    const now = vi
+      .fn()
+      .mockReturnValueOnce(before)
+      .mockReturnValue(new Date("2099-01-02T00:00:00.000Z"));
+    const binder = new PostgresMediaSyncStore(right, { now });
+    await expect(binder.bindWithCode({ ...input, expectedCodeId: proof!.id })).resolves.toEqual({
+      status: "invalid_code"
+    });
+    expect(now).toHaveBeenCalledTimes(2);
+    expect(
+      await issuer.findActiveBinding({ profileName: "helper", groupId: input.groupId })
+    ).toBeUndefined();
+  });
+
   it("serializes binding against code rotation", async () => {
     const issuer = new PostgresMediaSyncStore(left, { codeFactory: () => "RACE-OLD" });
     const rotator = new PostgresMediaSyncStore(left, { codeFactory: () => "RACE-NEW" });
@@ -1550,6 +1585,116 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
       })
     ).resolves.toBe(false);
   });
+
+  it.each(["collection", "manual"] as const)(
+    "blocks old binding work without removing a published %s",
+    async (published) => {
+      const store = new PostgresMediaSyncStore(left);
+      const collectionId = `collection-generation-${published}`,
+        groupId = `group-generation-${published}`;
+      const original = await bind(store, collectionId, groupId);
+      if (original.status !== "bound") throw new Error("expected binding");
+      const input = {
+        ...ingest(`generation-${published}`),
+        collectionId,
+        groupId,
+        bindingId: original.binding.id
+      };
+      const created = await store.createIngest(input, {
+        manualIntent: { destinationId: "approved-manual", requesterUserId: "synthetic-requester" }
+      });
+      if (created.tombstoned) throw new Error("unexpected tombstone");
+      expect(created.ingest.bindingId).toBe(original.binding.id);
+      await left.query(
+        `update media_sync_ingests set asset_id='retained-asset', asset_etag='etag' where source_key=$1`,
+        [input.sourceKey]
+      );
+      await left.query(
+        `update media_sync_publications set state='published', target_id='retained-target' where source_key=$1 and publication_type=$2`,
+        [input.sourceKey, published]
+      );
+      await left.query(
+        `update media_sync_outbox set dispatched_at=clock_timestamp(), claimed_until=null where source_key=$1`,
+        [input.sourceKey]
+      );
+      const claim = await store.claimWork({
+        workId: created.ingest.workId,
+        operation: "intake",
+        leaseMs: 60000
+      });
+      if (typeof claim === "string" || !claim.claimedUntil) throw new Error("expected lease");
+      await left.query(`update media_sync_bindings set disabled_at=clock_timestamp() where id=$1`, [
+        original.binding.id
+      ]);
+      const code = await store.createBindingCode({
+        profileName: "helper",
+        collectionId,
+        createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        idempotencyKey: `replacement-${published}`
+      });
+      const replacement = await store.bindWithCode({
+        profileName: "helper",
+        code: issuedCode(code),
+        groupId,
+        groupDisplayName: "Replacement"
+      });
+      expect(replacement.status).toBe("bound");
+      const fence = { workId: created.ingest.workId, expectedClaimedUntil: claim.claimedUntil };
+      expect(
+        await store.finalizeCollectionPublication({
+          ...fence,
+          collectionId,
+          occurrenceId: "stale-occurrence"
+        })
+      ).toBe(false);
+      expect(
+        await store.persistCompletedAsset({
+          ...fence,
+          assetId: "stale-asset",
+          assetEtag: "etag",
+          sizeBytes: 1,
+          checksumSha256: "a".repeat(64)
+        })
+      ).toBe(false);
+      expect(await store.blockUnboundWork(fence)).toBe(true);
+      const rows = await left.query(
+        `select publication_type,state,target_id from media_sync_publications where source_key=$1 order by publication_type`,
+        [input.sourceKey]
+      );
+      expect(rows.rows.find((row) => row.publication_type === published)).toMatchObject({
+        state: "published",
+        target_id: "retained-target"
+      });
+      expect(rows.rows.find((row) => row.publication_type !== published)).toMatchObject({
+        state: published === "manual" ? "revoked" : "pending",
+        target_id: null
+      });
+      expect(
+        (
+          await left.query(
+            `select asset_id,binding_id from media_sync_ingests where source_key=$1`,
+            [input.sourceKey]
+          )
+        ).rows[0]
+      ).toEqual({ asset_id: "retained-asset", binding_id: original.binding.id });
+      await runMediaSyncMigrations(left);
+      expect(
+        (
+          await left.query(`select binding_id from media_sync_ingests where source_key=$1`, [
+            input.sourceKey
+          ])
+        ).rows[0].binding_id
+      ).toBe(original.binding.id);
+      await store.tombstoneSource(input.sourceKey);
+      expect(
+        (
+          await left.query(`select state from media_sync_ingests where source_key=$1`, [
+            input.sourceKey
+          ])
+        ).rows[0].state
+      ).toBe("tombstoned");
+    }
+  );
 
   it("fences Asset persistence and stores only the actual collection occurrence", async () => {
     const store = new PostgresMediaSyncStore(left, { codeFactory: () => "ASSETBIND123" });

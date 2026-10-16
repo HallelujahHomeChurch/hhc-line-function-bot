@@ -27,6 +27,7 @@ export type CreateMediaSyncBindingCodeResult =
 export type BeginCollectionDeletionResult = { status: "started" | "replay" | "completed" };
 
 export type BindMediaSyncCodeInput = {
+  expectedCodeId?: string;
   profileName: string;
   code: string;
   groupId: string;
@@ -50,6 +51,7 @@ export type MediaSyncPublicationState = "pending" | "published" | "failed" | "re
 export type MediaSyncOutboxOperation = "intake" | "delete";
 
 export type CreateMediaSyncIngestInput = {
+  bindingId?: string;
   sourceKey: string;
   profileName: string;
   messageId: string;

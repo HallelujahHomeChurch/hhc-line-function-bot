@@ -101,8 +101,24 @@ const migrations = [
   `,
   `alter table media_sync_ingests add column if not exists work_id uuid default gen_random_uuid()`,
   `alter table media_sync_ingests alter column work_id set not null`,
+  `create index if not exists media_sync_ingests_collection_status_idx
+   on media_sync_ingests (profile_name, collection_id, created_at desc, work_id desc)`,
   `create unique index if not exists media_sync_ingests_work_id_idx on media_sync_ingests(work_id)`,
   `alter table media_sync_ingests add column if not exists asset_etag text`,
+  `do $$ begin
+    lock table media_sync_ingests in access exclusive mode;
+    if not exists (select 1 from pg_attribute where attrelid='media_sync_ingests'::regclass
+                   and attname='binding_id' and not attisdropped) then
+      alter table media_sync_ingests add column binding_id uuid;
+      update media_sync_ingests ingest set binding_id=(
+        select (array_agg(binding.id))[1] from media_sync_bindings binding
+        where binding.profile_name=ingest.profile_name and binding.group_id=ingest.group_id
+          and binding.collection_id=ingest.collection_id and binding.bound_at<=ingest.created_at
+          and (binding.disabled_at is null or ingest.created_at<binding.disabled_at)
+        having count(*)=1
+      );
+    end if;
+  end $$`,
   `alter table media_sync_ingests drop constraint if exists media_sync_ingests_state_check`,
   `
   alter table media_sync_ingests add constraint media_sync_ingests_state_check

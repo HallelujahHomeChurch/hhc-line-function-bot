@@ -35,6 +35,7 @@ export async function prepareMediaSyncIntake(input: {
     messageId: message.id,
     groupId,
     collectionId: binding.collectionId,
+    bindingId: binding.id,
     displayName: displayName(message, input.event.timestamp ?? input.now.getTime()),
     mediaKind: message.type,
     expectedMime: expectedMime(message)

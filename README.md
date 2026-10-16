@@ -450,3 +450,7 @@ Weekly Paper downloads in the main profile honor the Website API public-access s
 ### Account nickname rollout
 
 `main` selects the one-field nickname flow only when the current Account authorization response declares `nickname_write_enabled: true`. Missing/false retains the legacy two-field flow. Every continuation and confirmation rechecks Account authority; a mode change invalidates the old preview. The profile client accepts the exact legacy response or the known additive nickname response, and rejects unrelated identity/private fields. Deploy this consumer before enabling nickname writes in Account; do not infer installed-consumer readiness from local tests.
+
+Collection managers can inspect receipt-window synchronization status through the
+read-only [status API](docs/media-sync-status.md). Counts deduplicate each source
+across automatic/manual publication and never claim a LINE sharing batch total.

@@ -172,7 +172,8 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     textFallbackGenerator: overrides.textFallbackGenerator,
     completionObserver,
     accountAdminClient,
-    mediaSyncStore: overrides.mediaSyncStore
+    mediaSyncStore: overrides.mediaSyncStore,
+    mediaSyncManagementService: overrides.mediaSyncManagementService
   });
 }
 

@@ -112,6 +112,7 @@ function asset(): AssetApiClient {
 
 function store(): PostgresMediaSyncStore {
   return {
+    listCollectionStatus: vi.fn().mockResolvedValue({ items: [], totalReceived: 0 }),
     findActiveBindingByCollection: vi.fn().mockResolvedValue(undefined),
     findPendingBindingCodeByCollection: vi.fn().mockResolvedValue(undefined),
     createBindingCode: vi.fn().mockResolvedValue({
@@ -155,6 +156,10 @@ const trustedHeaders = {
 };
 
 const routeRequests = [
+  {
+    method: "GET",
+    url: "/api/line/media-sync/collections/collection-1/status?from=2026-10-15T00:00:00.000Z&until=2026-10-16T00:00:00.000Z"
+  },
   { method: "GET", url: "/api/line/media-sync/collections" },
   {
     method: "GET",
@@ -1120,4 +1125,28 @@ describe("media sync management HTTP", () => {
       }
     }
   );
+});
+
+it("checks collection management before revealing synchronization status and disables caching", async () => {
+  const { instance, assets, mediaStore } = await app({});
+  const url =
+    "/api/line/media-sync/collections/collection-1/status?from=2026-10-15T00:00:00.000Z&until=2026-10-16T00:00:00.000Z";
+  try {
+    const response = await instance.inject({ method: "GET", url, headers: trustedHeaders });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(assets.getManagedCollection).toHaveBeenCalledWith("collection-1", {
+      requestId: "request-1",
+      actorUserId: userId
+    });
+    expect(mediaStore.listCollectionStatus).toHaveBeenCalledOnce();
+    vi.mocked(mediaStore.listCollectionStatus).mockClear();
+    vi.mocked(assets.getManagedCollection).mockRejectedValue(new Error("asset_api_403"));
+    expect(
+      (await instance.inject({ method: "GET", url, headers: trustedHeaders })).statusCode
+    ).toBe(403);
+    expect(mediaStore.listCollectionStatus).not.toHaveBeenCalled();
+  } finally {
+    await instance.close();
+  }
 });
