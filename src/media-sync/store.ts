@@ -53,6 +53,7 @@ type BindingCodeRow = {
 };
 
 type IngestRow = {
+  binding_id: string | null;
   source_key: string;
   work_id: string;
   profile_name: string;
@@ -691,8 +692,10 @@ export class PostgresMediaSyncStore {
       const inserted = await client.query<IngestRow>(
         `insert into media_sync_ingests
           (source_key, profile_name, message_id, group_id, collection_id, state,
-           display_name, media_kind, expected_mime, size_bytes, checksum_sha256)
-         values ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)
+           display_name, media_kind, expected_mime, size_bytes, checksum_sha256, binding_id)
+         values ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10,
+           coalesce($11::uuid, (select id from media_sync_bindings where profile_name=$2 and group_id=$4
+              and collection_id=$5 and disabled_at is null)))
          on conflict (source_key) do nothing
          returning *`,
         [
@@ -705,7 +708,8 @@ export class PostgresMediaSyncStore {
           input.mediaKind,
           input.expectedMime,
           input.sizeBytes ?? null,
-          input.checksumSha256 ?? null
+          input.checksumSha256 ?? null,
+          input.bindingId ?? null
         ]
       );
       const created = Boolean(inserted.rows[0]);
@@ -1031,6 +1035,56 @@ export class PostgresMediaSyncStore {
     }
   }
 
+  async blockUnboundWork(input: {
+    workId: string;
+    expectedClaimedUntil: string;
+  }): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const owned = await client.query<{ source_key: string }>(
+        `select ingest.source_key from media_sync_ingests ingest
+         join media_sync_outbox outbox using (source_key)
+         where ingest.work_id=$1 and ingest.state<>'tombstoned'
+           and outbox.operation='intake' and outbox.completed_at is null
+           and outbox.claimed_until=$2::timestamptz and outbox.claimed_until>clock_timestamp()
+         for update of ingest, outbox`,
+        [input.workId, input.expectedClaimedUntil]
+      );
+      const sourceKey = owned.rows[0]?.source_key;
+      if (!sourceKey) {
+        await client.query("rollback");
+        return false;
+      }
+      await client.query(
+        `update media_sync_publications set
+           state=case when target_id is not null then 'published'
+             when publication_type='collection' then 'revoked' else state end,
+           failure_category=case when target_id is not null then null
+             when publication_type='collection' then 'unbound_generation' else 'manual_authority_unavailable' end,
+           updated_at=clock_timestamp()
+         where source_key=$1 and state='pending'`,
+        [sourceKey]
+      );
+      await client.query(
+        `update media_sync_ingests set state='failed', updated_at=clock_timestamp() where source_key=$1`,
+        [sourceKey]
+      );
+      await client.query(
+        `update media_sync_outbox set completed_at=clock_timestamp(), claimed_until=null,
+           last_error_category='unbound_generation' where source_key=$1 and operation='intake'`,
+        [sourceKey]
+      );
+      await client.query("commit");
+      return true;
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async tombstoneClaimedWorkForCleanup(input: {
     workId: string;
     expectedClaimedUntil: string;
@@ -1117,7 +1171,8 @@ export class PostgresMediaSyncStore {
            and outbox.claimed_until > clock_timestamp()
            and exists (
              select 1 from media_sync_bindings binding
-             where binding.profile_name=ingest.profile_name
+             where binding.id=ingest.binding_id
+               and binding.profile_name=ingest.profile_name
                and binding.group_id=ingest.group_id
                and binding.collection_id=ingest.collection_id
                and binding.disabled_at is null
@@ -1205,7 +1260,8 @@ export class PostgresMediaSyncStore {
            and outbox.claimed_until > clock_timestamp()
            and exists (
              select 1 from media_sync_bindings binding
-             where binding.profile_name=ingest.profile_name
+             where binding.id=ingest.binding_id
+               and binding.profile_name=ingest.profile_name
                and binding.group_id=ingest.group_id
                and binding.collection_id=ingest.collection_id
                and binding.disabled_at is null
@@ -1243,7 +1299,8 @@ export class PostgresMediaSyncStore {
            and outbox.claimed_until > clock_timestamp()
            and exists (
              select 1 from media_sync_bindings binding
-             where binding.profile_name=ingest.profile_name
+             where binding.id=ingest.binding_id
+               and binding.profile_name=ingest.profile_name
                and binding.group_id=ingest.group_id
                and binding.collection_id=ingest.collection_id
                and binding.disabled_at is null
@@ -1297,7 +1354,8 @@ export class PostgresMediaSyncStore {
            and outbox.claimed_until > clock_timestamp()
            and exists (
              select 1 from media_sync_bindings binding
-             where binding.profile_name=ingest.profile_name
+             where binding.id=ingest.binding_id
+               and binding.profile_name=ingest.profile_name
                and binding.group_id=ingest.group_id
                and binding.collection_id=ingest.collection_id
                and binding.disabled_at is null
@@ -1774,6 +1832,7 @@ function mapIngest(row: IngestRow): MediaSyncIngest {
   return {
     sourceKey: row.source_key,
     workId: row.work_id,
+    ...(row.binding_id ? { bindingId: row.binding_id } : {}),
     profileName: row.profile_name,
     messageId: row.message_id,
     groupId: row.group_id,

@@ -51,6 +51,7 @@ export type MediaSyncPublicationState = "pending" | "published" | "failed" | "re
 export type MediaSyncOutboxOperation = "intake" | "delete";
 
 export type CreateMediaSyncIngestInput = {
+  bindingId?: string;
   sourceKey: string;
   profileName: string;
   messageId: string;
