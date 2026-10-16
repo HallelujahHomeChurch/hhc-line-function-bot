@@ -31,7 +31,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Destructive admin-action confirmation infrastructure through `/confirm <code>`.
 - Function handlers:
   - `find_ppt_slides`: searches a configured presentation folder, fuzzy-matches `.pptx`, `.ppt`, `.key`, and `.odp` names, and returns 24 hour sharing links.
-  - `download_weekly_paper`: resolves the bound Account subject, checks the protected HHC member endpoint, and returns the member Weekly Paper entry.
+  - `download_weekly_paper`: resolves the bound Account subject and fresh member access, offers only authorized general/children content editions, and discovers the latest or specified issue through the protected member endpoint. It returns an exact website entry for available online/PDF formats; membership and policy requirements provide next steps without exposing denied issues.
   - `update_own_profile`: collects first and last name in direct chat, previews them, and updates only the linked caller's HHC Account after explicit confirmation.
   - `query_schedule`: one user-facing service-schedule query that selects configured sources without exposing them.
   - `query_knowledge`: searches admin-registered, profile-shared Notion knowledge with grounded hybrid retrieval.
@@ -177,7 +177,7 @@ Function toggles are profile-scoped:
 
 The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; its command section is source-, registration-, and capability-aware, so group help omits `/whoami` and protected memory commands are hidden unless currently usable. Onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
 
-`main` sets `allowedProviders: []` and uses narrow direct handlers without an agent or provider call. It can execute an explicit `download_weekly_paper` request, while one of the exact `/profile`, `修改個人資料`, `修改姓名`, or `更新姓名` intents may enter the shared first-name/last-name collection and preview flow. The profile update rechecks live Account permission at confirmation and never executes from routing alone. Weekly download uses Dapr to call `hhc-web-api`, accepts only the canonical root-relative asset path or its exact `https://www.alive.org.tw` absolute form, and places the validated URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
+`main` sets `allowedProviders: []` and uses narrow direct handlers without an agent or provider call. It can execute an explicit `download_weekly_paper` request, while one of the exact `/profile`, `修改個人資料`, `修改姓名`, or `更新姓名` intents may enter the shared first-name/last-name collection and preview flow. The profile update rechecks live Account permission at confirmation and never executes from routing alone. Weekly access uses Dapr to call `hhc-web-api` for current member qualification, edition grants and legal acceptance, then discovers one exact authorized edition. Multiple grants prompt an explicit edition choice; interface language never selects content language. The LINE URI action uses the fixed `https://www.alive.org.tw/zh-Hant/literature-ministry` entry with bounded series, content language, issue and mode selectors. No asset URL or content body is returned to the bot. Login continuation retains those selectors; legal confirmation returns to the same edition/issue. Deploy the member-access producer and exact website/Account legal-return support before this consumer; the website reader flag remains independent.
 
 ## Routing
 
@@ -365,6 +365,7 @@ Production enables this dispatcher only through the bot system identity's single
 - `RATE_LIMIT_ENABLED=true`
 - `RATE_LIMIT_WINDOW_MS=60000`
 - `RATE_LIMIT_MAX_REQUESTS=20`
+- `RATE_LIMIT_GROUP_MAX_REQUESTS=100`
 - `LAST_ERRORS_MAX_ENTRIES=20`
 
 Automatic Media Sync intake in registered, bound helper groups does not consume conversation rate-limit quota. Bulk images and files remain silent and use the existing durable sync pipeline. Explicit manual image/file saves retain their conversation rate limit and Account authorization checks.
@@ -450,3 +451,37 @@ Weekly Paper downloads in the main profile honor the Website API public-access s
 ### Account nickname rollout
 
 `main` selects the one-field nickname flow only when the current Account authorization response declares `nickname_write_enabled: true`. Missing/false retains the legacy two-field flow. Every continuation and confirmation rechecks Account authority; a mode change invalidates the old preview. The profile client accepts the exact legacy response or the known additive nickname response, and rejects unrelated identity/private fields. Deploy this consumer before enabling nickname writes in Account; do not infer installed-consumer readiness from local tests.
+
+### Conversational rate limits
+
+Ordinary group conversation is checked for admission before consuming dialogue quota.
+The default requester allowance is 20 admitted turns per 60 seconds, independently
+scoped to profile, chat, and requester. `RATE_LIMIT_GROUP_MAX_REQUESTS` separately
+bounds each group's admitted turns (default 100 per window). Bound automatic media
+sync does not consume either conversational bucket; manual uploads retain their
+existing authorization. Anonymous group registration/binding commands share a
+bounded anonymous bucket and do not open requester conversation state.
+
+Redis atomically creates/repairs bucket expiry and claims at most one warning attempt
+per exhausted bucket/window. Delivery can fail after the claim; the warning is not
+retried. The legacy group key remains the group resource bucket and direct-user keys
+are unchanged, so rolling upgrades preserve their counts until natural expiry.
+Old replicas still use the old group-wide limit and notification behavior until drained;
+requester fairness and notification guarantees apply only after all replicas upgrade.
+The in-memory implementation is for single-process operation and tests.
+
+### Webhook recovery and uncertain operations
+
+Ordinary events use owner-fenced receipts on the existing Redis key namespace.
+A two-minute lease is renewed while the process is alive. Pre-dispatch admission
+failures can be retried; once execution starts, a lost lease is uncertain and cannot
+re-run the handler. Terminal deduplication lasts seven days. Legacy receipts remain
+recognized during rolling deployment; drain in-flight turns before rollback.
+
+Agent and approval turns persist their event-to-job association before dispatch.
+The long-running reply is a result handle, not a durable worker queue. If a process
+crashes after dispatch, the result becomes uncertain when its execution lease ends.
+A handler exception or result-store outage does not prove the write was rolled back.
+The result button asks for operational reconciliation instead of inviting another
+write. Successful business results and LINE delivery are tracked separately; an
+unknown reply result does not retry the action or reuse the reply token.

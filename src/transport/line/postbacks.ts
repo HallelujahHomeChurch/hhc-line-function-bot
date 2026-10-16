@@ -1,3 +1,6 @@
+import type { QuoteContext, QuoteToken } from "../../quotes/types.js";
+import { createHash, randomUUID } from "node:crypto";
+import type { WebhookReceipt } from "./webhook-receipt.js";
 import type { CapabilityName } from "../../capabilities/names.js";
 import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
 import type { AgentJobScope, AgentJobStore } from "../../agent/jobs.js";
@@ -42,7 +45,9 @@ export async function handlePostbackEvent(
   authorizeFunctions?: (
     functionNames: readonly CapabilityName[]
   ) => Promise<readonly CapabilityName[]>,
-  helperReviewHandler?: HelperReviewPostbackHandler
+  helperReviewHandler?: HelperReviewPostbackHandler,
+  isContextCurrent?: (token: QuoteToken) => Promise<boolean>,
+  channelId?: string
 ): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
@@ -59,7 +64,8 @@ export async function handlePostbackEvent(
         event,
         agentJobStore,
         configuredFunctions,
-        authorizeFunctions
+        authorizeFunctions,
+        isContextCurrent
       ),
       completionEligible: false
     };
@@ -78,6 +84,11 @@ export async function handlePostbackEvent(
         result: { ok: true, replyText: messages.postbackUnsupported },
         completionEligible: false
       };
+    }
+    const scope = buildAgentJobScope(profile, event);
+    const job = scope ? await agentJobStore.get(resultJobId, scope) : undefined;
+    if (job?.contextToken && !(await isContextCurrent?.(job.contextToken))) {
+      return { result: invalidatedResult(), completionEligible: false };
     }
     return {
       result: await helperReviewHandler({
@@ -120,6 +131,8 @@ export async function handlePostbackEvent(
       };
   return {
     result: await registration.handle(request, {
+      channelId,
+      isContextCurrent,
       profile: authorizedProfile,
       event,
       requestId,
@@ -132,8 +145,11 @@ export async function handlePostbackEvent(
 }
 
 export async function handleAgentTextTurnWithLongJob(input: {
+  channelId?: string;
   runtime: ProfileRuntime;
   jobStore: AgentJobStore;
+  receipt?: WebhookReceipt;
+  quoteContext?: QuoteContext;
   profile: BotProfileConfig;
   event: LineEvent;
   requestId: string;
@@ -145,80 +161,127 @@ export async function handleAgentTextTurnWithLongJob(input: {
   nicknameWriteEnabled?(): boolean;
   completeResult?(result: FunctionExecutionResult): Promise<FunctionExecutionResult>;
 }): Promise<FunctionExecutionResult | undefined> {
-  const turnPromise = input.runtime
-    .handleTextTurn({
-      profile: input.profile,
-      configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
-      event: input.event,
-      requestId: input.requestId,
-      requesterDisplayName: input.requesterDisplayName,
-      requesterIsAdmin: input.requesterIsAdmin,
-      authorizeFunctions: input.authorizeFunctions
-        ? async (names) => [...(await input.authorizeFunctions!(names))]
-        : undefined,
-      accountAdministrator: input.accountAdministrator,
-      nicknameWriteEnabled: input.nicknameWriteEnabled
-    })
-    .then((result) => (result && input.completeResult ? input.completeResult(result) : result));
   return handleAgentOperationWithLongJob({
     jobStore: input.jobStore,
+    receipt: input.receipt,
+    quoteContext: input.quoteContext,
     profile: input.profile,
     event: input.event,
     requesterDisplayName: input.requesterDisplayName,
-    operation: () => turnPromise
+    operation: async () => {
+      const result = await input.runtime.handleTextTurn({
+        channelId: input.channelId,
+        quoteContext: input.quoteContext,
+        profile: input.profile,
+        configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
+        event: input.event,
+        requestId: input.requestId,
+        requesterDisplayName: input.requesterDisplayName,
+        requesterIsAdmin: input.requesterIsAdmin,
+        authorizeFunctions: input.authorizeFunctions
+          ? async (names) => [...(await input.authorizeFunctions!(names))]
+          : undefined,
+        accountAdministrator: input.accountAdministrator,
+        nicknameWriteEnabled: input.nicknameWriteEnabled
+      });
+      return result && input.completeResult ? input.completeResult(result) : result;
+    }
   });
 }
 
 export async function handleAgentOperationWithLongJob(input: {
   jobStore: AgentJobStore;
+  receipt?: WebhookReceipt;
+  quoteContext?: QuoteContext;
   profile: BotProfileConfig;
   event: LineEvent;
   requesterDisplayName?: string;
   operation(): Promise<FunctionExecutionResult | undefined>;
 }): Promise<FunctionExecutionResult | undefined> {
-  const turnPromise = input.operation();
-  const config = input.profile.longRunningJobs;
-  if (!config?.enabled || config.inlineReplyTimeoutMs <= 0) {
-    return turnPromise;
-  }
   const scope = buildAgentJobScope(input.profile, input.event);
-  if (!scope) {
-    return turnPromise;
+  if (!scope) return undefined;
+  const config = input.profile.longRunningJobs;
+  const eventId = input.event.webhookEventId;
+  const id =
+    input.receipt?.lease.operationId ??
+    (eventId
+      ? createHash("sha256")
+          .update(`${encodeURIComponent(input.profile.name)}:${encodeURIComponent(eventId)}`)
+          .digest("hex")
+      : randomUUID());
+  const job = await input.jobStore.createPending({
+    id,
+    scope,
+    label: "agent-turn",
+    contextToken: input.quoteContext?.token,
+    ttlMs: (config?.resultTtlMinutes ?? 30) * 60_000
+  });
+  // Persist the stable event-to-operation record and start marker before invoking business code.
+  await input.receipt?.start();
+  if (!input.jobStore.markStarted || !(await input.jobStore.markStarted(job.id, 120_000))) {
+    return {
+      ok: true,
+      replyText: "這筆請求已有處理紀錄，請查看結果。",
+      quickReplies: [buildAgentJobQuickReply(job.id)]
+    };
   }
+  const heartbeat = setInterval(() => {
+    void input.jobStore.renewExecution?.(job.id, 120_000).catch(() => undefined);
+  }, 40_000);
+  heartbeat.unref();
+  const turnPromise = (async () => {
+    try {
+      if (input.quoteContext && !(await input.quoteContext.isCurrent())) {
+        await input.jobStore.fail(job.id, "context_invalidated");
+        await input.receipt?.finish(true);
+        return invalidatedResult();
+      }
+      const result = await input.operation();
+      if (input.quoteContext && !(await input.quoteContext.isCurrent())) {
+        await input.jobStore.fail(job.id, "context_invalidated");
+        await input.receipt?.finish(true);
+        return invalidatedResult();
+      }
+      if (result && (result.resultAuthority || result.executedAction)) {
+        const storedResult =
+          result.replayPolicy === "request_again"
+            ? {
+                ok: true,
+                replyText: "這筆結果包含一次性登入資訊，請重新提出需求以取得新的登入連結。",
+                executedAction: result.executedAction,
+                resultAuthority: result.resultAuthority
+              }
+            : result;
+        await input.jobStore.complete(job.id, storedResult, result.executedAction);
+        const persisted = await input.jobStore.get(job.id, scope);
+        if (persisted?.status !== "completed") throw new Error("agent_result_not_persisted");
+      } else {
+        await input.jobStore.fail(job.id, "missing_capability_owner");
+      }
+      await input.receipt?.finish(true);
+      return result;
+    } catch (error) {
+      await input.jobStore.fail(job.id, "execution_uncertain").catch(() => undefined);
+      await input.receipt?.finish(false).catch(() => undefined);
+      throw error;
+    } finally {
+      clearInterval(heartbeat);
+    }
+  })();
+  if (!config?.enabled || config.inlineReplyTimeoutMs <= 0) return turnPromise;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<typeof timeoutSymbol>((resolve) => {
     timer = setTimeout(() => resolve(timeoutSymbol), config.inlineReplyTimeoutMs);
   });
   const first = await Promise.race([turnPromise, timeout]).finally(() => clearTimeout(timer));
-  if (first === timeoutSymbol) {
-    const job = await input.jobStore.createPending({
-      scope,
-      label: "agent-turn",
-      ttlMs: config.resultTtlMinutes * 60_000
-    });
-    turnPromise
-      .then(async (result) => {
-        if (!result || (!result.resultAuthority && !result.executedAction)) {
-          await input.jobStore.fail(job.id, "missing_capability_owner");
-          return;
-        }
-        await input.jobStore.complete(job.id, result, result.executedAction);
-      })
-      .catch(async () => {
-        try {
-          await input.jobStore.fail(job.id, "agent_turn_failed");
-        } catch {
-          // Store outages leave the pending result bounded by its original expiry.
-        }
-      });
-
-    return {
-      ok: true,
-      replyText: waitingForAgentJobReply(input.requesterDisplayName),
-      quickReplies: [buildAgentJobQuickReply(job.id)]
-    };
-  }
-  return first as FunctionExecutionResult | undefined;
+  if (first !== timeoutSymbol) return first as FunctionExecutionResult | undefined;
+  if (input.receipt) input.receipt.deferred = true;
+  void turnPromise.catch(() => undefined);
+  return {
+    ok: true,
+    replyText: waitingForAgentJobReply(input.requesterDisplayName),
+    quickReplies: [buildAgentJobQuickReply(job.id)]
+  };
 }
 
 export function sourceKey(source: LineEvent["source"]): string | undefined {
@@ -251,7 +314,8 @@ async function handleAgentJobResultPostback(
   configuredFunctions: readonly CapabilityName[],
   authorizeFunctions?: (
     functionNames: readonly CapabilityName[]
-  ) => Promise<readonly CapabilityName[]>
+  ) => Promise<readonly CapabilityName[]>,
+  isContextCurrent?: (token: QuoteToken) => Promise<boolean>
 ): Promise<FunctionExecutionResult> {
   const jobId = request.params.jobId;
   const scope = buildAgentJobScope(profile, event);
@@ -262,11 +326,18 @@ async function handleAgentJobResultPostback(
   if (!job) {
     return { ok: true, replyText: "找不到這筆結果，可能已經過期，請再問一次。" };
   }
+  if (job.contextToken && !(await isContextCurrent?.(job.contextToken))) return invalidatedResult();
   if (job.status === "pending") {
     return {
       ok: true,
       replyText: "我還在處理，稍後可以再按一次查看結果。",
       quickReplies: [buildAgentJobQuickReply(job.id)]
+    };
+  }
+  if (job.status === "uncertain") {
+    return {
+      ok: true,
+      replyText: "這筆操作的執行結果尚未確認，請聯絡管理同工協助查核，避免重複操作。"
     };
   }
   if (job.status === "failed") {
@@ -353,3 +424,11 @@ function waitingForAgentJobReply(displayName: string | undefined): string {
 }
 
 const timeoutSymbol = Symbol("agent_turn_timeout");
+
+function invalidatedResult(): FunctionExecutionResult {
+  return {
+    ok: true,
+    replyText: "這段對話已重設、收回或過期，請重新提出需求。",
+    resultAuthority: { kind: "public" }
+  };
+}

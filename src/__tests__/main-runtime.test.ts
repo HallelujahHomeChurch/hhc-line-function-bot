@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { memberBulletinFixture } from "../testing/member-bulletin-fixture.js";
 
 import { buildAgentJobScope, InMemoryAgentJobStore } from "../agent/jobs.js";
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
@@ -43,22 +44,16 @@ function input(text: string, eventSource = source) {
 
 describe("main runtime", () => {
   it.each([
-    ["下載最新週報", "/api/member/bulletins/latest?series=general&locale=zh-Hant", false],
+    [
+      "下載最新週報",
+      "/api/member/bulletins/online?series=general&locales=zh-Hant&offset=0&limit=1"
+    ],
     [
       "下載第 1733 期週報",
-      "/api/member/bulletins?series=general&locale=zh-Hant&issueNumber=1733",
-      true
+      "/api/member/bulletins/online?series=general&locales=zh-Hant&offset=0&limit=1&issueNumber=1733"
     ]
-  ])("routes %s through protected member access", async (text, expectedPath, numbered) => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      Response.json({
-        data: numbered
-          ? { items: [{ issueNumber: 1733, locale: "zh-Hant" }] }
-          : { issueNumber: 1733, locale: "zh-Hant" },
-        meta: {},
-        error: null
-      })
-    );
+  ])("routes %s through protected member access", async (text, expectedPath) => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => memberBulletinFixture(url));
     const runtime = createMainRuntime({
       handlers: {
         download_weekly_paper: (args) =>
@@ -79,11 +74,11 @@ describe("main runtime", () => {
 
     const result = await runtime.handleTextTurn(input(text));
     expect(result).toMatchObject({
-      replyText: "第 1733 期週報可在會員頁面查看或下載。",
+      replyText: expect.stringContaining("第 1733 期週報"),
       agentResult: { status: "success" }
     });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(fetchImpl.mock.calls[0]?.[0]).toEqual(expect.stringContaining(expectedPath));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1]?.[0]).toEqual(expect.stringContaining(expectedPath));
   });
 
   it("serves only its two provider-free capabilities", async () => {
@@ -308,4 +303,63 @@ describe("main runtime", () => {
     expect(weekly).toHaveBeenCalledOnce();
     expect(update).toHaveBeenCalledTimes(2);
   });
+});
+
+it("does not treat a quoted confirmation as approval in the provider-free runtime", async () => {
+  const sessions = new InMemorySessionStore();
+  const handler = vi.fn();
+  const runtime = createMainRuntime({
+    handlers: { update_own_profile: handler },
+    sessions,
+    jobs: new InMemoryAgentJobStore()
+  });
+  const turn = input("確認");
+  turn.event.message!.quotedMessageId = "synthetic-preview";
+  expect((await runtime.handleTextTurn(turn))?.replyText).toContain("引用訊息不會確認");
+  expect(handler).not.toHaveBeenCalled();
+});
+
+it("clears provider-free profile drafts and refuses drafts from an old context generation", async () => {
+  const sessions = new InMemorySessionStore();
+  const handler = vi.fn();
+  const runtime = createMainRuntime({
+    handlers: { update_own_profile: handler },
+    sessions,
+    jobs: new InMemoryAgentJobStore()
+  });
+  const pending = {
+    id: "old-draft",
+    type: "profile_update" as const,
+    profileName: "main",
+    requesterUserId: source.userId,
+    source,
+    arguments: { firstName: "old" },
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    contextToken: {
+      threadId: "thread",
+      generation: "old",
+      chatKey: "chat",
+      sourceKeys: [],
+      eventTimestamp: Date.now()
+    }
+  };
+  await sessions.set(pending);
+  await runtime.handleTextTurn(input("new-answer"));
+  expect(handler).not.toHaveBeenCalled();
+  expect(
+    await sessions.findProfileUpdate({
+      profileName: "main",
+      source,
+      requesterUserId: source.userId
+    })
+  ).toBeUndefined();
+  await sessions.set(pending);
+  await runtime.clearContext!({ profileName: "main", source });
+  expect(
+    await sessions.findProfileUpdate({
+      profileName: "main",
+      source,
+      requesterUserId: source.userId
+    })
+  ).toBeUndefined();
 });

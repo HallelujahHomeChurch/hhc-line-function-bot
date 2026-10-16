@@ -17,7 +17,9 @@ export const REQUIRED_AGENT_EVAL_CASE_IDS = [
   "error/provider-failure-support-id",
   "action/reply-failure-durable-result",
   "web/prompt-injection-contained",
-  "main/provider-free"
+  "main/provider-free",
+  "quote/untrusted-envelope-and-authority",
+  "quote/confirmation-is-not-approval"
 ] as const;
 
 export const AGENT_EVAL_CASES: readonly AgentEvalCase[] = REQUIRED_AGENT_EVAL_CASE_IDS.map(
