@@ -359,6 +359,41 @@ describe.runIf(Boolean(databaseUrl))("Postgres media sync store", () => {
     ).resolves.toMatchObject({ status: "bound" });
   });
 
+  it("rejects an inspected code mismatch and expiry after waiting for the collection lock", async () => {
+    const before = new Date("2099-01-01T00:00:00.000Z");
+    const issuer = new PostgresMediaSyncStore(left, { codeFactory: () => "FRESH-PROOF" });
+    await issuer.createBindingCode({
+      profileName: "helper",
+      collectionId: "collection-fresh-proof",
+      createdByHhcUserId: "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+      idempotencyKey: "fresh-proof",
+      now: before
+    });
+    const input = {
+      profileName: "helper",
+      code: "FRESH-PROOF",
+      groupId: "group-fresh-proof",
+      groupDisplayName: "Synthetic group"
+    };
+    const proof = await issuer.inspectBindingCode("helper", input.code);
+    expect(proof).toMatchObject({ collectionId: "collection-fresh-proof" });
+    await expect(
+      issuer.bindWithCode({ ...input, expectedCodeId: randomUUID(), now: before })
+    ).resolves.toEqual({ status: "invalid_code" });
+    const now = vi
+      .fn()
+      .mockReturnValueOnce(before)
+      .mockReturnValue(new Date("2099-01-02T00:00:00.000Z"));
+    const binder = new PostgresMediaSyncStore(right, { now });
+    await expect(binder.bindWithCode({ ...input, expectedCodeId: proof!.id })).resolves.toEqual({
+      status: "invalid_code"
+    });
+    expect(now).toHaveBeenCalledTimes(2);
+    expect(
+      await issuer.findActiveBinding({ profileName: "helper", groupId: input.groupId })
+    ).toBeUndefined();
+  });
+
   it("serializes binding against code rotation", async () => {
     const issuer = new PostgresMediaSyncStore(left, { codeFactory: () => "RACE-OLD" });
     const rotator = new PostgresMediaSyncStore(left, { codeFactory: () => "RACE-NEW" });

@@ -97,7 +97,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
           baseUrl: config.asset?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
           timeoutMs: config.asset?.timeoutMs ?? 3000
         }),
-        postgres.mediaSyncStore
+        postgres.mediaSyncStore,
+        accountAdminClient
       )
     : undefined;
 

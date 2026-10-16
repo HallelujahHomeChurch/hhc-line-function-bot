@@ -27,6 +27,7 @@ export type CreateMediaSyncBindingCodeResult =
 export type BeginCollectionDeletionResult = { status: "started" | "replay" | "completed" };
 
 export type BindMediaSyncCodeInput = {
+  expectedCodeId?: string;
   profileName: string;
   code: string;
   groupId: string;
