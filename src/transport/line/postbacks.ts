@@ -46,7 +46,8 @@ export async function handlePostbackEvent(
     functionNames: readonly CapabilityName[]
   ) => Promise<readonly CapabilityName[]>,
   helperReviewHandler?: HelperReviewPostbackHandler,
-  isContextCurrent?: (token: QuoteToken) => Promise<boolean>
+  isContextCurrent?: (token: QuoteToken) => Promise<boolean>,
+  channelId?: string
 ): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
@@ -130,6 +131,8 @@ export async function handlePostbackEvent(
       };
   return {
     result: await registration.handle(request, {
+      channelId,
+      isContextCurrent,
       profile: authorizedProfile,
       event,
       requestId,
@@ -142,6 +145,7 @@ export async function handlePostbackEvent(
 }
 
 export async function handleAgentTextTurnWithLongJob(input: {
+  channelId?: string;
   runtime: ProfileRuntime;
   jobStore: AgentJobStore;
   receipt?: WebhookReceipt;
@@ -166,6 +170,7 @@ export async function handleAgentTextTurnWithLongJob(input: {
     requesterDisplayName: input.requesterDisplayName,
     operation: async () => {
       const result = await input.runtime.handleTextTurn({
+        channelId: input.channelId,
         quoteContext: input.quoteContext,
         profile: input.profile,
         configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
@@ -238,7 +243,16 @@ export async function handleAgentOperationWithLongJob(input: {
         return invalidatedResult();
       }
       if (result && (result.resultAuthority || result.executedAction)) {
-        await input.jobStore.complete(job.id, result, result.executedAction);
+        const storedResult =
+          result.replayPolicy === "request_again"
+            ? {
+                ok: true,
+                replyText: "這筆結果包含一次性登入資訊，請重新提出需求以取得新的登入連結。",
+                executedAction: result.executedAction,
+                resultAuthority: result.resultAuthority
+              }
+            : result;
+        await input.jobStore.complete(job.id, storedResult, result.executedAction);
         const persisted = await input.jobStore.get(job.id, scope);
         if (persisted?.status !== "completed") throw new Error("agent_result_not_persisted");
       } else {

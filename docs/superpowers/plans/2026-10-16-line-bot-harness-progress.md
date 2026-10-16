@@ -90,3 +90,58 @@ Deployment must drain old workers before relying on reset/unsend fences: older
 replicas do not understand context tokens. The additive tables can remain on rollback;
 rollback does not provide these new invalidation guarantees. No production actions
 have been performed for this slice.
+
+## P5 Account continuation and member status
+
+P4 is PR #101 at `d434c08`; required CI passed. P1/P2 #99 and P3 #100 also remain
+open with passing CI. These are dependent slices, not merged production behavior.
+
+Companion producer/consumer PRs:
+
+- Account API #169 (`2345332`): exact scoped intent generation, status, cancellation,
+  restart, consent reset, unchanged original expiry and terminal winner. Required CI passed.
+- Gateway #171 (`1d5c0f8`): exact public POST cancel/restart routing, with CSRF and
+  intent proof enforced by Account. Required CI passed.
+- Account FE #112 (`ebb113a`): current intent view, cancellation, restart-before-switch,
+  stale-response guards and terminal states. Required CI passed.
+- Web API #240 (`34c7cf9`): Bot-only current qualification,
+  edition grants and legal acceptance projection. Focused tests/OpenAPI passed;
+  local full race hit a package timeout; CI policy has a scanner finding under
+  investigation, image passed and Go verification is pending.
+
+The Bot recognizes cancelled/superseded status and validates additive Account intent
+correlation. An unbound direct main-profile bulletin request can start Account login
+and retain only its allowlisted selectors, requester/chat/profile/channel, exact
+intent/generation, context token and the earlier of ten minutes or Account expiry.
+The existing session store provides one-use consumption. Browser restart, newer
+intent, cancel, reset, unsend and expiry invalidate continuation. No old workflow,
+generic arguments, login URL or secret is restored from the continuation record.
+
+Completion offers an explicit Continue button only for the matching current intent;
+the original button also permits recovery when the callback reply is lost. Clicking
+checks the exact intent and context again, then resolves the current Account subject
+and uses the existing protected content endpoint. Pending login does not consume or
+extend the request. Callback completion never executes content or write operations.
+Transient login replies are delivered once; persisted job results contain a safe
+request-again message instead of the login URL. If the producer or context fence is
+unavailable, ordinary login remains usable without promising continuation.
+
+Private help/identity responses now distinguish Account roles from qualification,
+edition grants, pending legal acceptance and authority unavailability. They do not
+advertise the bulletin capability as available when member access is denied or unknown.
+Content authorization remains fresh at the protected Web API endpoint.
+
+Validation so far: exact continuation/member-client unit cases; signed ingress through
+the production capability registry, Account challenge finalization and postback;
+one-use parallel clicks, source isolation, generation drift, cancellation, expiry,
+pending login, legacy producer, authority failure and transient credential exclusion.
+The focused regression passed 221 tests (one optional integration skipped); the other
+focused Account/main/result suites also passed. Typecheck, lint, build, format and
+architecture checks passed. Full Bot regression/CI and live native LINE/browser
+acceptance remain pending.
+
+Deploy additive Account/Web API producers first, drain old Account replicas before
+new consumers rely on generation fences, deploy Bot terminal-status support and
+Gateway routes before enabling the Account FE cancellation/restart UI. No merge or
+production rollout is included. P6 edition/discovery/exact website target, P7 binding
+lifecycle and P8 ingest/Admin improvements remain pending.

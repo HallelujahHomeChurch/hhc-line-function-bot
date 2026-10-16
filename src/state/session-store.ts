@@ -1,4 +1,6 @@
 import type { QuoteToken } from "../quotes/types.js";
+import type { LineBindingCorrelation } from "../account/account-admin-client.js";
+import type { DownloadWeeklyPaperArguments } from "../function-arguments.js";
 import type { AgentResourceReference, DriveItem, JsonRecord, LineSource } from "../types.js";
 import { lineSourcesEqual, requesterMatchesForSource } from "./session-safety.js";
 
@@ -134,7 +136,21 @@ export interface ActionReviewSession {
   expiresAt: string;
 }
 
+export interface BulletinContinuationSession {
+  id: string;
+  type: "bulletin_continuation";
+  profileName: string;
+  requesterUserId: string;
+  source: LineSource;
+  channelId: string;
+  correlation: LineBindingCorrelation;
+  arguments: DownloadWeeklyPaperArguments;
+  contextToken: QuoteToken;
+  expiresAt: string;
+}
+
 export type ConversationSession =
+  | BulletinContinuationSession
   | PptSelectionSession
   | SelectionSession
   | ProfileUpdateSession

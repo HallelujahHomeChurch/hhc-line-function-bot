@@ -351,6 +351,8 @@ function applyProfileUpdateAnswer(
 
 function handlerContext(input: ProfileTurnInput): FunctionHandlerContext {
   return {
+    channelId: input.channelId,
+    quoteContext: input.quoteContext,
     profile: input.profile,
     event: input.event,
     requestId: input.requestId,

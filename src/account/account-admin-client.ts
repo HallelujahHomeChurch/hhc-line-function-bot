@@ -2,7 +2,23 @@ import type { CapabilityName } from "../capabilities/names.js";
 import { isCapabilityName } from "../types.js";
 import type { AccountLinkPresentation } from "../types.js";
 
-export type LineBindingTerminalStatus = "completed" | "failed" | "conflict" | "expired";
+export type LineBindingTerminalStatus =
+  "completed" | "failed" | "conflict" | "expired" | "cancelled" | "superseded";
+export type LineBindingStatus =
+  LineBindingTerminalStatus | "created" | "consented" | "awaiting_line";
+
+export interface LineBindingCorrelation {
+  intentId: string;
+  generation: string;
+  expiresAt: string;
+}
+
+export interface InspectLineBindingInput {
+  correlation: LineBindingCorrelation;
+  expectedLineUserId: string;
+  profileName: string;
+  channelId: string;
+}
 
 export interface CreateLineBindingInput {
   expectedLineUserId: string;
@@ -103,8 +119,15 @@ export interface AccountAdminClient {
   resolveLineSubject(input: ResolveLineSubjectInput): Promise<ResolvedLineSubject>;
   verifyFunctionPermissions(input: VerifyLineFunctionPermissionsInput): Promise<CapabilityName[]>;
   updateOwnProfile(input: UpdateOwnProfileInput): Promise<OwnProfileResult>;
-  createBinding(input: CreateLineBindingInput): Promise<{ bindingUrl: string; expiresAt: string }>;
-  finalizeBinding(input: FinalizeLineBindingInput): Promise<{ status: LineBindingTerminalStatus }>;
+  createBinding(
+    input: CreateLineBindingInput
+  ): Promise<{ bindingUrl: string; expiresAt: string; correlation?: LineBindingCorrelation }>;
+  finalizeBinding(
+    input: FinalizeLineBindingInput
+  ): Promise<{ status: LineBindingTerminalStatus; correlation?: LineBindingCorrelation }>;
+  inspectBinding?(
+    input: InspectLineBindingInput
+  ): Promise<{ status: LineBindingStatus; current: boolean; correlation: LineBindingCorrelation }>;
 }
 
 export class AccountApiError extends Error {
@@ -258,7 +281,8 @@ export function createAccountAdminClient(options: {
       }
       return {
         bindingUrl: payload.binding_url,
-        expiresAt: payload.expires_at
+        expiresAt: payload.expires_at,
+        correlation: parseBindingCorrelation(payload)
       };
     },
     async finalizeBinding(input) {
@@ -275,7 +299,39 @@ export function createAccountAdminClient(options: {
       if (!isFinalizeResult(payload)) {
         throw new AccountApiError("account_api_invalid_finalize", false);
       }
-      return payload;
+      return { status: payload.status, correlation: parseBindingCorrelation(payload) };
+    },
+    async inspectBinding(input) {
+      const payload = await post("/priv/account/v1/line/bindings/status", {
+        intent_id: input.correlation.intentId,
+        generation: input.correlation.generation,
+        expected_line_user_id: input.expectedLineUserId,
+        profile_name: input.profileName,
+        channel_id: input.channelId
+      });
+      const correlation = parseBindingCorrelation(payload);
+      if (typeof payload !== "object" || payload === null || !correlation)
+        throw new AccountApiError("account_api_invalid_binding_status", false);
+      const record = payload as Record<string, unknown>;
+      if (
+        typeof record.status !== "string" ||
+        ![
+          "created",
+          "consented",
+          "awaiting_line",
+          "completed",
+          "failed",
+          "conflict",
+          "expired",
+          "cancelled",
+          "superseded"
+        ].includes(record.status) ||
+        typeof record.current !== "boolean" ||
+        correlation.intentId !== input.correlation.intentId ||
+        correlation.generation !== input.correlation.generation
+      )
+        throw new AccountApiError("account_api_invalid_binding_status", false);
+      return { status: record.status as LineBindingStatus, current: record.current, correlation };
     }
   };
 }
@@ -573,7 +629,32 @@ function hasAsciiControl(value: string): boolean {
 
 function isFinalizeResult(value: unknown): value is { status: LineBindingTerminalStatus } {
   if (typeof value !== "object" || value === null) return false;
-  return ["completed", "failed", "conflict", "expired"].includes(
-    String((value as Record<string, unknown>).status)
+  const status = (value as Record<string, unknown>).status;
+  return (
+    typeof status === "string" &&
+    ["completed", "failed", "conflict", "expired", "cancelled", "superseded"].includes(status)
   );
+}
+
+function parseBindingCorrelation(value: unknown): LineBindingCorrelation | undefined {
+  if (typeof value !== "object" || value === null)
+    throw new AccountApiError("account_api_invalid_binding_correlation", false);
+  const record = value as Record<string, unknown>;
+  // Older Account deployments have no intent correlation and cannot resume a saved request.
+  if (record.intent_id === undefined && record.generation === undefined) return undefined;
+  if (
+    typeof record.intent_id !== "string" ||
+    !uuidPattern.test(record.intent_id) ||
+    typeof record.generation !== "string" ||
+    !/^(0|[1-9]\d{0,18})$/u.test(record.generation) ||
+    BigInt(record.generation) > 9223372036854775807n ||
+    typeof record.expires_at !== "string" ||
+    !Number.isFinite(Date.parse(record.expires_at))
+  )
+    throw new AccountApiError("account_api_invalid_binding_correlation", false);
+  return {
+    intentId: record.intent_id,
+    generation: record.generation,
+    expiresAt: record.expires_at
+  };
 }

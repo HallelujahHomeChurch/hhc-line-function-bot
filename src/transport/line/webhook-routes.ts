@@ -1,4 +1,6 @@
 import type { QuoteContext, QuoteStore } from "../../quotes/types.js";
+import { completedBulletinButton } from "../../account/bulletin-continuation.js";
+import type { MemberAccessPresentation } from "../../account/member-access.js";
 import { prepareQuoteContext } from "./quote-context.js";
 import { WebhookReceipt } from "./webhook-receipt.js";
 import type { CapabilityName } from "../../capabilities/names.js";
@@ -28,6 +30,7 @@ import {
   AccountApiError,
   type AccountAdminClient,
   type FinalizeLineBindingInput,
+  type LineBindingCorrelation,
   type LineBindingTerminalStatus,
   type LineFunctionAuthorization
 } from "../../account/account-admin-client.js";
@@ -104,6 +107,11 @@ import { memoryCommandCapabilityName, type MemoryCommandHandler } from "./memory
 import { pendingAttachmentPrompt } from "./attachment-intake.js";
 
 export interface AppDependencies {
+  readMemberAccess?(
+    lineUserId: string,
+    profileName: string,
+    requestId: string
+  ): Promise<MemberAccessPresentation>;
   quoteStore?: QuoteStore;
   adminActionRegistry: AdminActionRegistry;
   adminActionRouter?: AdminActionRouterPort;
@@ -295,7 +303,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.completionObserver,
         deps.accountAdminClient,
         deps.mediaSyncStore,
-        deps.quoteStore
+        deps.quoteStore,
+        deps.readMemberAccess
       );
     });
   }
@@ -337,7 +346,8 @@ async function handleWebhook(
   completionObserver: FunctionCompletionObserver,
   accountAdminClient: AccountAdminClient,
   mediaSyncStore: PostgresMediaSyncStore | undefined,
-  quoteStore: QuoteStore | undefined
+  quoteStore: QuoteStore | undefined,
+  readMemberAccess: AppDependencies["readMemberAccess"]
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -404,8 +414,9 @@ async function handleWebhook(
     const requestId = requestIdFactory();
     const startedAt = Date.now();
     let status: LineBindingTerminalStatus;
+    let correlation: LineBindingCorrelation | undefined;
     try {
-      status = (await accountAdminClient.finalizeBinding(input)).status;
+      ({ status, correlation } = await accountAdminClient.finalizeBinding(input));
     } catch (error) {
       const retryable = !(error instanceof AccountApiError) || error.retryable;
       if (retryable) {
@@ -461,12 +472,29 @@ async function handleWebhook(
     });
     if (input.result === "ok" && event.replyToken) {
       const line = createReplyClient(profile);
+      const continuation =
+        status === "completed" && event.source?.type === "user"
+          ? await completedBulletinButton({
+              sessions: sessionStore,
+              account: accountAdminClient,
+              correlation,
+              profileName: profile.name,
+              lineUserId: event.source.userId,
+              channelId: payload.destination,
+              isContextCurrent: quoteStore ? (token) => quoteStore.isCurrent(token) : undefined
+            })
+          : undefined;
       await replyTextBestEffort(
         line,
         event.replyToken,
         status === "completed"
           ? "已完成 HHC 帳戶登入／綁定。"
-          : "目前無法完成 HHC 帳戶登入／綁定，請重新操作。"
+          : status === "cancelled"
+            ? "這次登入要求已取消，既有帳號連結不受影響。"
+            : status === "superseded"
+              ? "已有較新的登入要求，請使用 LINE 中最新的登入連結。"
+              : "目前無法完成 HHC 帳戶登入／綁定，請重新操作。",
+        continuation ? { quickReplies: [continuation] } : undefined
       );
     }
     incrementIgnored(ignoredCounts, `account_link_${status}`);
@@ -511,17 +539,16 @@ async function handleWebhook(
 
     const startedAt = Date.now();
     let status: LineBindingTerminalStatus;
+    let correlation: LineBindingCorrelation | undefined;
     try {
-      status = (
-        await accountAdminClient.finalizeBinding({
-          nonce,
-          result: "ok",
-          actualLineUserId: event.source.userId,
-          profileName: profile.name,
-          channelId: payload.destination,
-          webhookEventId: event.webhookEventId
-        })
-      ).status;
+      ({ status, correlation } = await accountAdminClient.finalizeBinding({
+        nonce,
+        result: "ok",
+        actualLineUserId: event.source.userId,
+        profileName: profile.name,
+        channelId: payload.destination,
+        webhookEventId: event.webhookEventId
+      }));
     } catch (error) {
       const retryable = !(error instanceof AccountApiError) || error.retryable;
       if (retryable) {
@@ -551,12 +578,29 @@ async function handleWebhook(
       durationMs: elapsedMs(startedAt)
     });
     if (event.replyToken) {
+      const continuation =
+        status === "completed"
+          ? await completedBulletinButton({
+              sessions: sessionStore,
+              account: accountAdminClient,
+              correlation,
+              profileName: profile.name,
+              lineUserId: event.source.userId,
+              channelId: payload.destination,
+              isContextCurrent: quoteStore ? (token) => quoteStore.isCurrent(token) : undefined
+            })
+          : undefined;
       await replyTextBestEffort(
         createReplyClient(profile),
         event.replyToken,
         status === "completed"
           ? "已完成 HHC 帳戶登入／連結。"
-          : "目前無法完成 HHC 帳戶登入／連結，請重新操作。"
+          : status === "cancelled"
+            ? "這次登入要求已取消，既有帳號連結不受影響。"
+            : status === "superseded"
+              ? "已有較新的登入要求，請使用 LINE 中最新的登入連結。"
+              : "目前無法完成 HHC 帳戶登入／連結，請重新操作。",
+        continuation ? { quickReplies: [continuation] } : undefined
       );
     }
     incrementIgnored(ignoredCounts, `account_link_${status}`);
@@ -799,6 +843,21 @@ async function handleWebhook(
         let bindingAttempted = false;
         let bindingStarted = false;
         const startedAt = Date.now();
+        const accountPresentation =
+          event.source.type === "user"
+            ? accountSurfacePresentation(profile, accountState)
+            : undefined;
+        if (
+          accountPresentation?.status === "active" &&
+          event.source.userId &&
+          (localAction === "show_help" || localAction === "show_account")
+        ) {
+          accountPresentation.membership = readMemberAccess
+            ? await readMemberAccess(event.source.userId, profile.name, requestId).catch(
+                () => "unavailable" as const
+              )
+            : "unavailable";
+        }
         const result = await handlePublicAccessCommand({
           text: event.message?.text ?? "",
           profile,
@@ -813,10 +872,7 @@ async function handleWebhook(
             hmacKey: config.observability?.hmacKey
           },
           requesterIsAdmin,
-          account:
-            event.source.type === "user"
-              ? accountSurfacePresentation(profile, accountState)
-              : undefined,
+          account: accountPresentation,
           accountAllowedFunctions: accountState.authorization.allowedFunctions,
           startAccountLogin: async () => {
             bindingAttempted = true;
@@ -1010,6 +1066,7 @@ async function handleWebhook(
       await receipt?.start();
 
       const profileTurnInput = {
+        channelId: payload.destination,
         quoteContext,
         profile: effectiveProfile,
         event,
@@ -1130,7 +1187,8 @@ async function handleWebhook(
                   }
                 })) ?? { ok: true, replyText: messages.postbackUnsupported }
             : undefined,
-          quoteStore ? (token) => quoteStore.isCurrent(token) : undefined
+          quoteStore ? (token) => quoteStore.isCurrent(token) : undefined,
+          payload.destination
         );
         const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
         const postbackCapabilityName = completionEligible ? capability : undefined;

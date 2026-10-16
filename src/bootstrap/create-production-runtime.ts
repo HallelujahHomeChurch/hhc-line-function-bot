@@ -1,4 +1,5 @@
 import { PostgresQuoteStore } from "../quotes/postgres-store.js";
+import { readMemberAccess } from "../account/member-access.js";
 import { createMeetingOccurrenceReader } from "../clients/meeting-occurrences.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
@@ -315,11 +316,14 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const helperProfile = config.profiles.find(
     (profile) => profile.name === "helper" && profile.agent
   );
+  const quoteProfile =
+    helperProfile ??
+    config.profiles.find((profile) => profile.name === "main" && profile.accountLink);
   const quoteStore =
-    postgres?.pool && helperProfile
+    postgres?.pool && quoteProfile
       ? new PostgresQuoteStore(
           postgres.pool,
-          config.observability?.hmacKey ?? helperProfile.channelSecret
+          config.observability?.hmacKey ?? quoteProfile.channelSecret
         )
       : undefined;
   await quoteStore?.setup();
@@ -397,6 +401,11 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   }
   const profileRuntime = createProfileRuntimeDispatcher(runtimes);
   const app = createApp(config, {
+    async readMemberAccess(lineUserId, profileName, requestId) {
+      const subject = await accountAdminClient.resolveLineSubject({ lineUserId, profileName });
+      if (!subject.bound || !subject.active) return "unavailable";
+      return readMemberAccess(fetch, subject.subjectId, requestId);
+    },
     adminActionRegistry: knowledgeAdminActionRegistry,
     adminActionRouter,
     postbackHandlers: registries.postbacks,

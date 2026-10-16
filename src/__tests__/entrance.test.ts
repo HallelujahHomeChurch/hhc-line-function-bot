@@ -4403,6 +4403,11 @@ describe("LINE entrance", () => {
       const authorizeFunctions = vi.fn().mockResolvedValue(authorization);
       const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
       const app = createApp(config, {
+        readMemberAccess: vi.fn(async () => ({
+          qualified: true,
+          editions: [{ series: "general" as const, locale: "zh-Hant" as const }],
+          legal: "allowed" as const
+        })),
         accountAdminClient: {
           authorizeAdministrator: vi.fn(),
           authorizeFunctions,

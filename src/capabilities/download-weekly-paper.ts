@@ -10,6 +10,7 @@ const MAX_ISSUE_NUMBER = 2_147_483_647;
 const MEMBER_ENTRY_URI = `${PUBLIC_ORIGIN}/zh-Hant/literature-ministry`;
 
 type MemberAccess = {
+  startBinding?(args: JsonRecord): Promise<FunctionExecutionResult>;
   lineUserId: string;
   profileName: string;
   requestId?: string;
@@ -59,7 +60,10 @@ export async function downloadWeeklyPaper(
   } catch {
     return unavailableResult();
   }
-  if (!subject.bound) return unboundResult();
+  if (!subject.bound)
+    return memberAccess.startBinding
+      ? memberAccess.startBinding(parsedArguments.data)
+      : unboundResult();
   if (!subject.active) return inactiveResult();
   const path = issueNumber
     ? `/api/member/bulletins?series=general&locale=zh-Hant&issueNumber=${issueNumber}&page=1&pageSize=1`

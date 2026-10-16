@@ -4,6 +4,7 @@ import type { FunctionExecutionResult } from "../application/contracts/function-
 import type { BotProfileConfig, LineEvent } from "../types.js";
 
 export interface ProfileTurnInput {
+  channelId?: string;
   quoteContext?: QuoteContext;
   profile: BotProfileConfig;
   event: LineEvent;
