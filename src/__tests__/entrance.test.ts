@@ -332,6 +332,7 @@ describe("LINE entrance", () => {
       Response.json({
         data: {
           issueNumber: 1733,
+          series: "general",
           locale: "zh-Hant"
         },
         error: null,
@@ -694,7 +695,7 @@ describe("LINE entrance", () => {
     expect(router.route).not.toHaveBeenCalled();
   });
 
-  it("rejects unrelated managed helper group chatter after common dedupe and rate gates", async () => {
+  it("rejects unrelated managed helper group chatter before conversational quota", async () => {
     const rateCheck = vi.fn().mockResolvedValue({
       allowed: true,
       remaining: 19,
@@ -737,7 +738,7 @@ describe("LINE entrance", () => {
       reason: "wake_word_missing"
     });
     expect(dedupe).toHaveBeenCalledOnce();
-    expect(rateCheck).toHaveBeenCalledOnce();
+    expect(rateCheck).not.toHaveBeenCalled();
     expect(authorizeAdministrator).not.toHaveBeenCalled();
     expect(createLineIdentityClient).not.toHaveBeenCalled();
     expect(getUserDisplayName).not.toHaveBeenCalled();
@@ -748,7 +749,7 @@ describe("LINE entrance", () => {
     ["duplicate", "duplicate", true],
     ["rate limited", "started", false]
   ] as const)(
-    "gates a %s helper group continuation before stateful admission",
+    "gates a %s helper group continuation before execution",
     async (_label, dedupeResult, rateAllowed) => {
       const config = testConfig();
       config.profiles[0] = {
@@ -785,7 +786,7 @@ describe("LINE entrance", () => {
         webhookEventId: `helper-${_label}`,
         replyToken: "reply-token",
         source: { type: "group", groupId: "Cmain", userId: "U1" },
-        message: { type: "text", text: "奇異恩典" }
+        message: { type: "text", text: "小哈 奇異恩典" }
       });
 
       const response = await app.inject({
@@ -798,7 +799,7 @@ describe("LINE entrance", () => {
       expect(response.statusCode).toBe(200);
       expect(dedupe).toHaveBeenCalledOnce();
       expect(rateCheck).toHaveBeenCalledTimes(dedupeResult === "duplicate" ? 0 : 1);
-      expect(accessRead).not.toHaveBeenCalled();
+      expect(accessRead).toHaveBeenCalledTimes(dedupeResult === "duplicate" ? 0 : 1);
       expect(conversationRead).not.toHaveBeenCalled();
       expect(authorizeAdministrator).not.toHaveBeenCalled();
     }
@@ -2769,6 +2770,65 @@ describe("LINE entrance", () => {
     expect(replyText.mock.calls[0]?.[1]).not.toContain("Amazing Grace");
   });
 
+  it("keeps 63 ambient messages from three requesters outside dialogue quota", async () => {
+    const config = testConfig();
+    config.rateLimit = { enabled: true, windowMs: 60_000, maxRequests: 1 };
+    const limiter = new InMemoryRateLimiter(config.rateLimit);
+    const check = vi.spyOn(limiter, "check");
+    const route = vi.fn<FunctionRouterPort["route"]>().mockResolvedValue({
+      type: "deny",
+      reason: "not_matched",
+      provider: "deepseek"
+    });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      rateLimiter: limiter,
+      router: { route },
+      createLineReplyClient: () => ({ replyText })
+    });
+    for (let i = 0; i < 63; i++) {
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `ambient-${i}`,
+        replyToken: `reply-${i}`,
+        source: { type: "group", groupId: "Cmain", userId: `U${i % 3}` },
+        message: { type: "text", text: "晚安" }
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/line/webhook/main",
+            headers: signedHeaders(body, "main-secret"),
+            payload: body
+          })
+        ).statusCode
+      ).toBe(200);
+    }
+    expect(check).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(replyText).not.toHaveBeenCalled();
+    for (let i = 0; i < 10; i++) {
+      const body = lineBody({
+        type: "message",
+        webhookEventId: `addressed-${i}`,
+        replyToken: `bot-reply-${i}`,
+        source: { type: "group", groupId: "Cmain", userId: "U0" },
+        message: { type: "text", text: "小哈 不支援" }
+      });
+      await app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+    }
+    expect(route).toHaveBeenCalledOnce();
+    expect(
+      replyText.mock.calls.filter((call) => call[1] === "你傳得太快了，請稍後再試。")
+    ).toHaveLength(1);
+  });
+
   it("rate limits repeated events for the same profile and source before routing", async () => {
     const config = testConfig();
     config.rateLimit = { enabled: true, windowMs: 60_000, maxRequests: 1 };
@@ -4187,9 +4247,7 @@ describe("LINE entrance", () => {
         main_weekly_paper: createDownloadWeeklyPaperTextMessageHandler(
           vi.fn().mockResolvedValue(
             Response.json({
-              data: {
-                items: [{ issueNumber: 1733, locale: "zh-Hant" }]
-              },
+              data: [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }],
               error: null,
               meta: {}
             })

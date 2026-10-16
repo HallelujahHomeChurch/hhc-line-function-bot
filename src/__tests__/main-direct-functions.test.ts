@@ -48,9 +48,7 @@ describe("main provider-free direct functions", () => {
   it("handles Weekly Paper without the semantic agent router", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       Response.json({
-        data: {
-          items: [{ issueNumber: 1733, locale: "zh-Hant" }]
-        },
+        data: [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }],
         error: null,
         meta: {}
       })

@@ -50,6 +50,7 @@ describe("kernel Redis integration environment", () => {
     const results = await runRedisIntegrationMatrix(environment);
 
     expect(results.map((result) => result.caseId)).toEqual([
+      "redis/rate-limit/atomic-window-notification",
       "redis/selection/atomic-consume",
       "redis/job/scope-restart",
       "redis/webhook/cross-replica-deduplication",

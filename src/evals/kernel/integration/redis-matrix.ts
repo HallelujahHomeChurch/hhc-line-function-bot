@@ -1,3 +1,4 @@
+import { createRateLimiter } from "../../../rate-limit.js";
 import type { KernelBoundary } from "../contracts.js";
 import { RedisConfirmationStore } from "../../../actions/confirmation-store.js";
 import { RedisAgentJobStore } from "../../../agent/jobs.js";
@@ -46,6 +47,11 @@ export async function runRedisIntegrationMatrix(
     boundary: KernelBoundary;
     run: () => Promise<void>;
   }> = [
+    {
+      caseId: "redis/rate-limit/atomic-window-notification",
+      boundary: "entrance_access",
+      run: async () => rateLimitAtomicWindow(environment)
+    },
     {
       caseId: "redis/selection/atomic-consume",
       boundary: "slot_ambiguity_resolution",
@@ -529,4 +535,54 @@ async function atomicInteractiveReplacement(environment: KernelRedisEnvironment)
 
 function assert(condition: boolean): asserts condition {
   if (!condition) throw new Error("redis_contract_failed");
+}
+
+async function rateLimitAtomicWindow(environment: KernelRedisEnvironment): Promise<void> {
+  const keyPrefix = `${environment.keyPrefix}:rate-case`;
+  const limiters = environment.clients.map((client) =>
+    createRateLimiter({
+      config: { enabled: true, windowMs: 60_000, maxRequests: 20, groupMaxRequests: 100 },
+      redis: { client, keyPrefix }
+    })
+  );
+  const input = { profileName: "helper", source: { type: "group", groupId: "G1", userId: "U1" } };
+  const results = await Promise.all(
+    Array.from({ length: 60 }, (_, i) => limiters[i % 2]!.check(input))
+  );
+  assert(results.filter((result) => result.allowed).length === 20);
+  assert(results.filter((result) => result.shouldNotify).length === 1);
+  assert(
+    (await limiters[1]!.check({ ...input, source: { ...input.source, userId: "U2" } })).allowed
+  );
+  const client = environment.clients[0];
+  const key = `${keyPrefix}:rate-limit:helper:user:legacy`;
+  // A legacy INCR whose separate EXPIRE never ran must heal without a key flush.
+  await client.set(key, "20");
+  const healed = await limiters[0]!.check({
+    profileName: "helper",
+    source: { type: "user", userId: "legacy" }
+  });
+  assert(!healed.allowed && healed.shouldNotify === true);
+  assert((await client.pTTL(key)) > 0);
+  await client.pExpire(key, 5000);
+  const before = Date.now();
+  const next = await limiters[1]!.check({
+    profileName: "helper",
+    source: { type: "user", userId: "legacy" }
+  });
+  assert(next.shouldNotify === false);
+  assert(Date.parse(next.resetAt) <= before + 5100);
+  assert(Date.parse(next.resetAt) >= before + 4000);
+  const groupKey = `${keyPrefix}:rate-limit:helper:group:legacy`;
+  await client.set(groupKey, "100", { PX: 60_000 });
+  const groupResults = await Promise.all(
+    Array.from({ length: 20 }, (_, i) =>
+      limiters[i % 2]!.check({
+        profileName: "helper",
+        source: { type: "group", groupId: "legacy", userId: `U${i}` }
+      })
+    )
+  );
+  assert(groupResults.every((result) => !result.allowed));
+  assert(groupResults.filter((result) => result.shouldNotify).length === 1);
 }
