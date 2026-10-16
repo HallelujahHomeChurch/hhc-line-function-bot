@@ -49,6 +49,7 @@ export function applyResultGuidance(input: {
   supportsViewFull?: boolean;
   staleAt?: string;
 }): FunctionExecutionResult {
+  if (input.result.replayPolicy === "request_again") return input.result;
   switch (input.state) {
     case "permission_denied":
       return {

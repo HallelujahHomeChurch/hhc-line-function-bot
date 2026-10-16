@@ -176,3 +176,24 @@ describe("LINE content streaming", () => {
     expect(stream.destroyed).toBe(true);
   });
 });
+
+it("maps multiple sent message IDs in order without returning quote tokens", async () => {
+  const sdk = vi
+    .spyOn(messagingApi.MessagingApiClient.prototype, "replyMessage")
+    .mockResolvedValue({
+      sentMessages: [
+        { id: "one", quoteToken: "synthetic-secret-one" },
+        { id: "two", quoteToken: "synthetic-secret-two" }
+      ]
+    });
+  const receipt = await createLineSdkReplyClient({
+    channelAccessToken: "synthetic"
+  } as BotProfileConfig).replyText("synthetic", "a".repeat(6000));
+  const messages = sdk.mock.calls[0]![0].messages;
+  expect(messages).toHaveLength(2);
+  expect(receipt?.sentMessages.map(({ id }) => id)).toEqual(["one", "two"]);
+  expect(receipt?.sentMessages.map(({ text }) => text)).toEqual(
+    messages.map((message) => (message.type === "text" ? message.text : ""))
+  );
+  expect(JSON.stringify(receipt)).not.toContain("synthetic-secret");
+});

@@ -27,6 +27,7 @@ export interface HelperAgentState {
     threadId: string;
     policyKey: string;
     source: LineSource;
+    isCurrent?: () => Promise<boolean>;
     task: (snapshot: HelperAgentRunSnapshot) => Promise<T>;
   }): Promise<T>;
   reset(threadId: string, clearScopedSessions?: () => Promise<void>): Promise<void>;
@@ -61,6 +62,7 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
     threadId: createThreadId(options.hmacKey),
     run: (input) =>
       withMemoryThreadLock(locks, input.threadId, async () => {
+        if (input.isCurrent && !(await input.isCurrent())) throw new Error("context_invalidated");
         const observedAt = now().getTime();
         const expired = (expiresAt.get(input.threadId) ?? Number.POSITIVE_INFINITY) <= observedAt;
         const policyChanged =
@@ -72,14 +74,16 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
         }
         expiresAt.set(input.threadId, observedAt + helperThreadIdleTtlMs(input.source));
         policyKeys.set(input.threadId, input.policyKey);
-        // A provider or domain failure does not invalidate the scoped checkpoint.
-        const result = await input.task({
-          markExternalResearch: async () => {
-            policyKeys.set(input.threadId, "research-in-progress");
-          },
-          externalSheetMusicQuery: externalSearchQueries.get(input.threadId),
-          externalSheetMusicAllowed: (externalSearchExpiresAt.get(input.threadId) ?? 0) > observedAt
-        });
+        const result = await guardedTask(input, options.checkpointer, async () =>
+          input.task({
+            markExternalResearch: async () => {
+              policyKeys.set(input.threadId, "research-in-progress");
+            },
+            externalSheetMusicQuery: externalSearchQueries.get(input.threadId),
+            externalSheetMusicAllowed:
+              (externalSearchExpiresAt.get(input.threadId) ?? 0) > observedAt
+          })
+        );
         policyKeys.set(input.threadId, input.policyKey);
         expiresAt.set(input.threadId, now().getTime() + helperThreadIdleTtlMs(input.source));
         return result;
@@ -128,6 +132,7 @@ export function createPostgresHelperAgentState(
     },
     async run(input) {
       const outcome = await withPgThreadLock(options.lockPool, input.threadId, async () => {
+        if (input.isCurrent && !(await input.isCurrent())) throw new Error("context_invalidated");
         const observedAt = now();
         const current = await options.pool.query<{
           expires_at: Date;
@@ -165,17 +170,19 @@ export function createPostgresHelperAgentState(
           );
         }
         try {
-          const result = await input.task({
-            markExternalResearch: async () => {
-              await options.pool.query(
-                "update agent_sdk_threads set policy_key = $2 where thread_id = $1",
-                [input.threadId, "research-in-progress"]
-              );
-            },
-            externalSheetMusicQuery: metadata?.external_search_query ?? undefined,
-            externalSheetMusicAllowed:
-              (metadata?.external_search_expires_at?.getTime() ?? 0) > observedAt.getTime()
-          });
+          const result = await guardedTask(input, options.checkpointer, async () =>
+            input.task({
+              markExternalResearch: async () => {
+                await options.pool.query(
+                  "update agent_sdk_threads set policy_key = $2 where thread_id = $1",
+                  [input.threadId, "research-in-progress"]
+                );
+              },
+              externalSheetMusicQuery: metadata?.external_search_query ?? undefined,
+              externalSheetMusicAllowed:
+                (metadata?.external_search_expires_at?.getTime() ?? 0) > observedAt.getTime()
+            })
+          );
           await options.pool.query(
             `insert into agent_sdk_threads (thread_id, expires_at, policy_key)
              values ($1, $2, $3)
@@ -320,5 +327,21 @@ async function withPgThreadLock<T>(
     throw error;
   } finally {
     client.release();
+  }
+}
+
+async function guardedTask<T>(
+  input: { threadId: string; isCurrent?: () => Promise<boolean> },
+  checkpointer: SdkCheckpointer,
+  task: () => Promise<T>
+): Promise<T> {
+  try {
+    const result = await task();
+    if (input.isCurrent && !(await input.isCurrent())) throw new Error("context_invalidated");
+    return result;
+  } catch (error) {
+    if (input.isCurrent && !(await input.isCurrent()))
+      await checkpointer.deleteThread(input.threadId);
+    throw error;
   }
 }

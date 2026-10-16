@@ -53,8 +53,8 @@ describe("main runtime", () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       Response.json({
         data: numbered
-          ? { items: [{ issueNumber: 1733, locale: "zh-Hant" }] }
-          : { issueNumber: 1733, locale: "zh-Hant" },
+          ? [{ issueNumber: 1733, series: "general", locale: "zh-Hant" }]
+          : { issueNumber: 1733, series: "general", locale: "zh-Hant" },
         meta: {},
         error: null
       })
@@ -308,4 +308,63 @@ describe("main runtime", () => {
     expect(weekly).toHaveBeenCalledOnce();
     expect(update).toHaveBeenCalledTimes(2);
   });
+});
+
+it("does not treat a quoted confirmation as approval in the provider-free runtime", async () => {
+  const sessions = new InMemorySessionStore();
+  const handler = vi.fn();
+  const runtime = createMainRuntime({
+    handlers: { update_own_profile: handler },
+    sessions,
+    jobs: new InMemoryAgentJobStore()
+  });
+  const turn = input("確認");
+  turn.event.message!.quotedMessageId = "synthetic-preview";
+  expect((await runtime.handleTextTurn(turn))?.replyText).toContain("引用訊息不會確認");
+  expect(handler).not.toHaveBeenCalled();
+});
+
+it("clears provider-free profile drafts and refuses drafts from an old context generation", async () => {
+  const sessions = new InMemorySessionStore();
+  const handler = vi.fn();
+  const runtime = createMainRuntime({
+    handlers: { update_own_profile: handler },
+    sessions,
+    jobs: new InMemoryAgentJobStore()
+  });
+  const pending = {
+    id: "old-draft",
+    type: "profile_update" as const,
+    profileName: "main",
+    requesterUserId: source.userId,
+    source,
+    arguments: { firstName: "old" },
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    contextToken: {
+      threadId: "thread",
+      generation: "old",
+      chatKey: "chat",
+      sourceKeys: [],
+      eventTimestamp: Date.now()
+    }
+  };
+  await sessions.set(pending);
+  await runtime.handleTextTurn(input("new-answer"));
+  expect(handler).not.toHaveBeenCalled();
+  expect(
+    await sessions.findProfileUpdate({
+      profileName: "main",
+      source,
+      requesterUserId: source.userId
+    })
+  ).toBeUndefined();
+  await sessions.set(pending);
+  await runtime.clearContext!({ profileName: "main", source });
+  expect(
+    await sessions.findProfileUpdate({
+      profileName: "main",
+      source,
+      requesterUserId: source.userId
+    })
+  ).toBeUndefined();
 });
