@@ -610,6 +610,11 @@ async function handleWebhook(
   let admittedEvents = mediaSyncOnlyEvents.length;
   let rejectedAfterStructuralGate = false;
   for (const event of allowedEvents) {
+    const sourceCommand = parseAdminCommand(event.message?.text)?.command;
+    if (!event.source.userId && sourceCommand !== "media-sync" && sourceCommand !== "registry") {
+      incrementIgnored(ignoredCounts, "missing_requester");
+      continue;
+    }
     if (
       event.webhookEventId &&
       (await webhookEventStore.tryStart(
@@ -624,11 +629,31 @@ async function handleWebhook(
       );
       continue;
     }
+    // Read-only admission precedes conversational quota; ambient group chat is free.
+    if (event.source.type === "group" && event.message?.type === "text") {
+      const systemAction = matchNaturalLanguageSystemActionHint(event.message.text ?? "");
+      if (!systemAction) {
+        const admission = await allowEvent(
+          profile,
+          event,
+          textMessageHandlers,
+          accessStore,
+          conversationWindowStore,
+          false,
+          sessionStore
+        );
+        if (!admission.allowed) {
+          rejectedAfterStructuralGate = true;
+          incrementIgnored(ignoredCounts, admission.reason);
+          continue;
+        }
+      }
+    }
     const requestId = requestIdFactory();
     const rateLimit = await rateLimiter.check({ profileName: profile.name, source: event.source });
     if (!rateLimit.allowed) {
-      if (event.replyToken) {
-        await line.replyText(event.replyToken, "你傳得太快了，請稍後再試。", undefined);
+      if (event.replyToken && rateLimit.shouldNotify === true) {
+        await replyTextBestEffort(line, event.replyToken, "你傳得太快了，請稍後再試。");
       }
       await emitRouteEvent(routeObserver, {
         kind: "rate_limited",

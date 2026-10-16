@@ -60,7 +60,7 @@ export async function downloadWeeklyPaper(
     return unavailableResult();
   }
   if (!subject.bound) return unboundResult();
-  if (!subject.active) return deniedResult();
+  if (!subject.active) return inactiveResult();
   const path = issueNumber
     ? `/api/member/bulletins?series=general&locale=zh-Hant&issueNumber=${issueNumber}&page=1&pageSize=1`
     : "/api/member/bulletins/latest?series=general&locale=zh-Hant";
@@ -78,9 +78,20 @@ export async function downloadWeeklyPaper(
       signal: controller.signal
     });
     if (response.status === 404) return notFoundResult();
+    if (response.status === 403 || response.status === 428) {
+      const failure: unknown = await response.json().catch(() => undefined);
+      if (isRecord(failure) && isRecord(failure.error)) {
+        if (response.status === 403 && failure.error.code === "access_required")
+          return accessRequiredResult(false);
+        if (response.status === 428 && failure.error.code === "policy_acceptance_required")
+          return accessRequiredResult(true);
+      }
+      return unavailableResult();
+    }
     if (!response.ok) return unavailableResult();
     const value = await response.json().catch(() => undefined);
     const authorizedIssue = parseAuthorizedIssueNumber(value, issueNumber);
+    if (authorizedIssue === null) return notFoundResult();
     return authorizedIssue ? memberEntryResult(authorizedIssue) : unavailableResult();
   } catch {
     return unavailableResult();
@@ -182,8 +193,8 @@ function unboundResult(): FunctionExecutionResult {
   };
 }
 
-function deniedResult(): FunctionExecutionResult {
-  const replyText = "此帳號目前沒有會員週報存取權。";
+function inactiveResult(): FunctionExecutionResult {
+  const replyText = "此 HHC 帳號目前無法使用，請聯絡管理同工協助。";
   return {
     ok: true,
     replyText,
@@ -192,21 +203,44 @@ function deniedResult(): FunctionExecutionResult {
   };
 }
 
+function accessRequiredResult(policyRequired: boolean): FunctionExecutionResult {
+  const replyText = policyRequired
+    ? "請先確認最新的會員條款，再回來查看週報。"
+    : "此帳號目前不符合會員週報存取資格，請至會員頁面確認，或聯絡管理同工。";
+  const label = policyRequired ? "確認會員條款" : "查看會員頁面";
+  const uri = policyRequired
+    ? `https://account.alive.org.tw/legal?return_to=${encodeURIComponent(MEMBER_ENTRY_URI)}`
+    : MEMBER_ENTRY_URI;
+  return {
+    ok: true,
+    replyText,
+    executedAction: "download_weekly_paper",
+    agentResult: { status: "unavailable", replyText },
+    quickReplies: [{ label, action: { type: "uri", label, uri } }]
+  };
+}
+
 function parseAuthorizedIssueNumber(
   value: unknown,
   requestedIssueNumber: number | undefined
-): number | undefined {
-  if (!isRecord(value) || !isRecord(value.meta) || value.error !== null || !isRecord(value.data)) {
+): number | null | undefined {
+  if (!isRecord(value) || !isRecord(value.meta) || value.error !== null) {
     return undefined;
   }
   if (requestedIssueNumber === undefined) {
-    return positiveInt(value.data.issueNumber) && value.data.locale === "zh-Hant"
+    return isRecord(value.data) &&
+      positiveInt(value.data.issueNumber) &&
+      value.data.series === "general" &&
+      value.data.locale === "zh-Hant"
       ? value.data.issueNumber
       : undefined;
   }
-  const items = value.data.items;
+  const items = value.data;
+  if (Array.isArray(items) && items.length === 0) return null;
   if (!Array.isArray(items) || items.length !== 1 || !isRecord(items[0])) return undefined;
-  return items[0].issueNumber === requestedIssueNumber && items[0].locale === "zh-Hant"
+  return items[0].issueNumber === requestedIssueNumber &&
+    items[0].series === "general" &&
+    items[0].locale === "zh-Hant"
     ? requestedIssueNumber
     : undefined;
 }
