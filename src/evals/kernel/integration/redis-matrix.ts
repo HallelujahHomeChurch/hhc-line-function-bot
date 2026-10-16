@@ -53,6 +53,16 @@ export async function runRedisIntegrationMatrix(
       run: async () => rateLimitAtomicWindow(environment)
     },
     {
+      caseId: "redis/webhook/lease-owner-and-uncertain",
+      boundary: "entrance_access",
+      run: async () => webhookReceiptOwnership(environment)
+    },
+    {
+      caseId: "redis/job/pre-dispatch-operation",
+      boundary: "write_workflow",
+      run: async () => jobExecutionClaim(environment)
+    },
+    {
       caseId: "redis/selection/atomic-consume",
       boundary: "slot_ambiguity_resolution",
       run: async () => selectionAtomicConsume(environment)
@@ -585,4 +595,74 @@ async function rateLimitAtomicWindow(environment: KernelRedisEnvironment): Promi
   );
   assert(groupResults.every((result) => !result.allowed));
   assert(groupResults.filter((result) => result.shouldNotify).length === 1);
+}
+
+async function webhookReceiptOwnership(environment: KernelRedisEnvironment): Promise<void> {
+  const prefix = `${environment.keyPrefix}:receipt-case`;
+  const stores = environment.clients.map((client) => new RedisWebhookEventStore(client, prefix));
+  const ttl = 7 * 24 * 60 * 60_000;
+  const claims = await Promise.all(stores.map((store) => store.claim("helper", "race", ttl, 1000)));
+  assert(claims.filter((claim) => claim.status === "claimed").length === 1);
+  const first = claims.find((claim) => claim.status === "claimed")!;
+  assert(first.status === "claimed");
+  // Simulate process death by expiring only the lease, never the terminal dedupe key.
+  const key = `${prefix}:webhook-event:v1:helper:race`;
+  const record = JSON.parse((await environment.clients[0].get(key))!);
+  record.leaseUntil = 0;
+  await environment.clients[0].set(key, JSON.stringify(record), { PX: ttl });
+  const next = await stores[1]!.claim("helper", "race", ttl, 60_000);
+  assert(next.status === "claimed" && next.lease.operationId === first.lease.operationId);
+  assert(!(await stores[0]!.transition(first.lease, "complete")));
+  assert(!(await stores[0]!.transition(first.lease, "renew")));
+  assert(await stores[1]!.transition(next.lease, "start"));
+  assert(!(await stores[1]!.transition(next.lease, "release")));
+  const started = JSON.parse((await environment.clients[0].get(key))!);
+  started.leaseUntil = 0;
+  await environment.clients[0].set(key, JSON.stringify(started), { PX: ttl });
+  assert((await stores[0]!.claim("helper", "race", ttl, 60_000)).status === "uncertain");
+  assert(!(await stores[1]!.transition(next.lease, "complete")));
+  assert((await stores[0]!.tryStart("helper", "race", ttl)) === "duplicate");
+  await stores[0]!.tryStart("helper", "legacy", ttl);
+  assert((await stores[1]!.claim("helper", "legacy", ttl, 1000)).status === "duplicate");
+  const terminal = await stores[0]!.claim("helper", "done", ttl, 60_000);
+  assert(terminal.status === "claimed");
+  assert(await stores[0]!.transition(terminal.lease, "complete"));
+  const deliveries = await Promise.all(
+    stores.map((store) => store.delivery(terminal.lease, "attempted"))
+  );
+  assert(deliveries.filter(Boolean).length === 1);
+  assert(await stores[0]!.delivery(terminal.lease, "unknown"));
+  assert(!(await stores[1]!.delivery(terminal.lease, "attempted")));
+
+  assert((await stores[1]!.claim("helper", "done", ttl, 1000)).status === "duplicate");
+  assert(
+    (await environment.clients[0].pTTL(`${prefix}:webhook-event:v1:helper:done`)) > ttl - 5000
+  );
+}
+
+async function jobExecutionClaim(environment: KernelRedisEnvironment): Promise<void> {
+  const stores = environment.clients.map(
+    (client) =>
+      new RedisAgentJobStore({ client, keyPrefix: `${environment.keyPrefix}:execution-case` })
+  );
+  const scope = { profileName: "helper", sourceKey: "user:U1", requesterUserId: "U1" };
+  const jobs = await Promise.all(
+    stores.map((store) =>
+      store.createPending({ id: "event-operation", scope, label: "operation", ttlMs: 60_000 })
+    )
+  );
+  assert(jobs[0]!.id === jobs[1]!.id);
+  const starts = await Promise.all(stores.map((store) => store.markStarted(jobs[0]!.id, 60_000)));
+  assert(starts.filter(Boolean).length === 1);
+  await stores[0]!.fail(jobs[0]!.id, "execution_uncertain");
+  assert((await stores[1]!.get(jobs[0]!.id, scope))?.status === "uncertain");
+  assert(!(await stores[1]!.markStarted(jobs[0]!.id, 60_000)));
+  // A known result may reconcile uncertainty, but a later result cannot overwrite it.
+  await stores[0]!.complete(jobs[0]!.id, {
+    ok: true,
+    replyText: "known result",
+    resultAuthority: { kind: "public" }
+  });
+  await stores[1]!.complete(jobs[0]!.id, { ok: true, replyText: "late overwrite" });
+  assert((await stores[0]!.get(jobs[0]!.id, scope))?.result?.replyText === "known result");
 }

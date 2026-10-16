@@ -2829,6 +2829,58 @@ describe("LINE entrance", () => {
     ).toHaveLength(1);
   });
 
+  it("recovers only pre-dispatch failures inside a mixed webhook envelope", async () => {
+    const accessStore = defaultAccessStore();
+    await accessStore.addPrincipal({
+      profileName: "main",
+      type: "group",
+      principalId: "Csecond",
+      createdBy: "test"
+    });
+    const original = accessStore.hasActivePrincipal.bind(accessStore);
+    let unavailable = true;
+    vi.spyOn(accessStore, "hasActivePrincipal").mockImplementation(async (profile, type, id) => {
+      if (id === "Csecond" && unavailable) {
+        unavailable = false;
+        throw new Error("admission storage unavailable");
+      }
+      return original(profile, type, id);
+    });
+    const route = vi
+      .fn<FunctionRouterPort["route"]>()
+      .mockResolvedValue({ type: "deny", reason: "not_matched", provider: "deepseek" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(testConfig(), {
+      accessStore,
+      router: { route },
+      createLineReplyClient: () => ({ replyText })
+    });
+    const body = JSON.stringify({
+      destination: "bot",
+      events: ["Cmain", "Csecond"].map((groupId) => ({
+        type: "message",
+        webhookEventId: `recover-${groupId}`,
+        replyToken: `reply-${groupId}`,
+        source: { type: "group", groupId, userId: "U1" },
+        message: { type: "text", text: "小哈 不支援" }
+      }))
+    });
+    const inject = () =>
+      app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+    expect((await inject()).statusCode).toBe(500);
+    expect(route).toHaveBeenCalledOnce();
+    expect((await inject()).statusCode).toBe(200);
+    expect(route).toHaveBeenCalledTimes(2);
+    expect(replyText).toHaveBeenCalledTimes(2);
+    expect((await inject()).statusCode).toBe(200);
+    expect(route).toHaveBeenCalledTimes(2);
+  });
+
   it("rate limits repeated events for the same profile and source before routing", async () => {
     const config = testConfig();
     config.rateLimit = { enabled: true, windowMs: 60_000, maxRequests: 1 };

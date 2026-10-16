@@ -469,3 +469,19 @@ are unchanged, so rolling upgrades preserve their counts until natural expiry.
 Old replicas still use the old group-wide limit and notification behavior until drained;
 requester fairness and notification guarantees apply only after all replicas upgrade.
 The in-memory implementation is for single-process operation and tests.
+
+### Webhook recovery and uncertain operations
+
+Ordinary events use owner-fenced receipts on the existing Redis key namespace.
+A two-minute lease is renewed while the process is alive. Pre-dispatch admission
+failures can be retried; once execution starts, a lost lease is uncertain and cannot
+re-run the handler. Terminal deduplication lasts seven days. Legacy receipts remain
+recognized during rolling deployment; drain in-flight turns before rollback.
+
+Agent and approval turns persist their event-to-job association before dispatch.
+The long-running reply is a result handle, not a durable worker queue. If a process
+crashes after dispatch, the result becomes uncertain when its execution lease ends.
+A handler exception or result-store outage does not prove the write was rolled back.
+The result button asks for operational reconciliation instead of inviting another
+write. Successful business results and LINE delivery are tracked separately; an
+unknown reply result does not retry the action or reuse the reply token.

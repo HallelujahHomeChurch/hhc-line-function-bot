@@ -51,6 +51,8 @@ describe("kernel Redis integration environment", () => {
 
     expect(results.map((result) => result.caseId)).toEqual([
       "redis/rate-limit/atomic-window-notification",
+      "redis/webhook/lease-owner-and-uncertain",
+      "redis/job/pre-dispatch-operation",
       "redis/selection/atomic-consume",
       "redis/job/scope-restart",
       "redis/webhook/cross-replica-deduplication",
