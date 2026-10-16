@@ -1,3 +1,4 @@
+import type { QuoteToken } from "../quotes/types.js";
 import type { CapabilityName } from "../capabilities/names.js";
 import { randomUUID } from "node:crypto";
 
@@ -13,6 +14,7 @@ export interface AgentJobScope {
 export type AgentJobStatus = "pending" | "completed" | "failed" | "uncertain";
 
 export interface AgentJobRecord {
+  contextToken?: QuoteToken;
   id: string;
   scope: AgentJobScope;
   capability?: CapabilityName;
@@ -27,6 +29,7 @@ export interface AgentJobRecord {
 }
 
 export interface CreatePendingAgentJobInput {
+  contextToken?: QuoteToken;
   id?: string;
   scope: AgentJobScope;
   capability?: CapabilityName;
@@ -78,6 +81,7 @@ export class InMemoryAgentJobStore implements AgentJobStore {
     const record: AgentJobRecord = {
       id: input.id ?? randomUUID(),
       scope: { ...input.scope },
+      contextToken: input.contextToken,
       capability: input.capability,
       label: input.label,
       status: "pending",
@@ -189,6 +193,7 @@ export class RedisAgentJobStore implements AgentJobStore {
     const record: AgentJobRecord = {
       id: input.id ?? this.idFactory(),
       scope: { ...input.scope },
+      contextToken: input.contextToken,
       capability: input.capability,
       label: input.label,
       status: "pending",

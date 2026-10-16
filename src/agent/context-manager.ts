@@ -18,6 +18,7 @@ interface ConversationWindowRecord {
 }
 
 export interface ConversationWindowStore {
+  clear?(scope: ConversationWindowScope): Promise<void>;
   isActive(scope: ConversationWindowScope): Promise<boolean>;
   recordTurn(input: {
     scope: ConversationWindowScope;
@@ -39,6 +40,10 @@ export class InMemoryConversationWindowStore implements ConversationWindowStore 
 
   constructor(options: { now?: () => Date } = {}) {
     this.now = options.now ?? (() => new Date());
+  }
+
+  async clear(scope: ConversationWindowScope): Promise<void> {
+    this.records.delete(conversationScopeKey(scope));
   }
 
   async isActive(scope: ConversationWindowScope): Promise<boolean> {
@@ -82,6 +87,14 @@ export class RedisConversationWindowStore implements ConversationWindowStore {
     }
   ) {
     this.now = options.now ?? (() => new Date());
+  }
+
+  async clear(scope: ConversationWindowScope): Promise<void> {
+    await this.options.client.setEx(
+      this.key(scope),
+      1,
+      JSON.stringify({ expiresAt: this.now().toISOString(), turns: [] })
+    );
   }
 
   async isActive(scope: ConversationWindowScope): Promise<boolean> {

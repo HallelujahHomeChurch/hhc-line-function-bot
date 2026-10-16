@@ -446,3 +446,50 @@ function jobProfile(): BotProfileConfig {
     longRunningJobs: { enabled: true, inlineReplyTimeoutMs: 1000, resultTtlMinutes: 30 }
   };
 }
+
+it("invalidates both result retrieval and review buttons when their source context is reset", async () => {
+  const store = new InMemoryAgentJobStore();
+  const token = {
+    threadId: "thread",
+    generation: "old",
+    chatKey: "chat",
+    sourceKeys: ["source"],
+    eventTimestamp: Date.now()
+  };
+  const job = await store.createPending({
+    scope,
+    label: "quote-result",
+    ttlMs: 60_000,
+    contextToken: token
+  });
+  await store.complete(job.id, {
+    ok: true,
+    replyText: "old private result",
+    resultAuthority: { kind: "public" }
+  });
+  const review = vi.fn();
+  for (const data of [
+    `action=agent_job_result&jobId=${job.id}`,
+    `action=helper_action_review&reviewId=review&resultJobId=${job.id}&decision=approve`
+  ]) {
+    const result = await handlePostbackEvent(
+      {
+        type: "postback",
+        source: { type: "group", groupId: "g1", userId: "u1" },
+        postback: { data }
+      },
+      jobProfile(),
+      {},
+      "request",
+      undefined,
+      store,
+      [],
+      undefined,
+      review,
+      async () => false
+    );
+    expect(result.result.replyText).toContain("重設");
+    expect(result.result.replyText).not.toContain("old private");
+  }
+  expect(review).not.toHaveBeenCalled();
+});

@@ -1,3 +1,4 @@
+import type { QuoteToken } from "../quotes/types.js";
 import type { AgentResourceReference, DriveItem, JsonRecord, LineSource } from "../types.js";
 import { lineSourcesEqual, requesterMatchesForSource } from "./session-safety.js";
 
@@ -29,6 +30,7 @@ export interface SelectionSession {
 }
 
 export interface ProfileUpdateSession {
+  contextToken?: QuoteToken;
   id: string;
   type: "profile_update";
   nicknameWriteEnabled?: boolean;

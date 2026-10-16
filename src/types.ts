@@ -521,6 +521,7 @@ export interface LineSource {
 }
 
 export interface LineMessage {
+  quotedMessageId?: string;
   type: string;
   id?: string;
   text?: string;
@@ -570,8 +571,16 @@ export interface TextGenerationProvider {
   completeText(request: TextGenerationRequest): Promise<string>;
 }
 
+export interface LineReplyReceipt {
+  sentMessages: Array<{ id: string; text: string }>;
+}
+
 export interface LineReplyClient {
-  replyText(replyToken: string, text: string, options?: LineReplyOptions): Promise<void>;
+  replyText(
+    replyToken: string,
+    text: string,
+    options?: LineReplyOptions
+  ): Promise<LineReplyReceipt | void>;
 }
 
 export interface LineAccountLinkClient {

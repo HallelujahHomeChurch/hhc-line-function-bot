@@ -58,4 +58,35 @@ Rollout preserves `webhook-event:v1` keys. Legacy `1` receipts remain terminal; 
 replicas see new JSON receipts as existing and do not run them. Recovery is available
 only on upgraded replicas. Drain in-flight turns before rollback; retaining keys is
 mandatory. No production redelivery setting or device behavior has been verified.
-P4–P8 remain unimplemented.
+P4 is implemented in the following slice. P5–P8 remain pending.
+
+## P4 quoted context
+
+P3 is PR #100 at `d478c09`, with required CI passed. This slice builds on P1–P3;
+merge dependencies first and refresh each dependent PR before delivery.
+
+The LINE adapter returns ordered sent-message IDs without quote tokens. A PostgreSQL
+index accepts only admitted requester messages and matching Bot replies, partitioned
+by profile/chat/requester. Bot entries retain the originating safe request as a
+server-owned reference, never literal tool output or sharing links. A quote of a
+known Bot reply may wake a registered group; foreign/unknown content asks the user
+to restate the request. No ambient group conversation is collected.
+
+Quote text is explicitly untrusted model input. Existing live tool authorization
+and write review gates remain authoritative; quoted confirmation cannot approve.
+Group/direct content TTL is 15/30 minutes. Seven-day metadata tombstones reject
+unsend-before-original and events older than retention. Reset/unsend bump a generation
+before checkpoint cleanup; pending cleanup survives failures. Checkpoint guards and
+reply indexing reject stale generations, and job-result/review buttons validate the
+original context. A LINE message already accepted cannot be recalled by this fence.
+Wake-window storage now keeps activity markers instead of unused conversation text.
+
+Verification includes ordered receipts, actual signed ingress, cross-requester/profile/
+chat isolation, sensitive-text exclusion, stale replies, tombstones, retryable cleanup,
+late real PostgreSQL LangGraph checkpoint deletion and offline prompt/authority cases.
+Native LINE device quotes, live model behavior and production migration are pending.
+
+Deployment must drain old workers before relying on reset/unsend fences: older
+replicas do not understand context tokens. The additive tables can remain on rollback;
+rollback does not provide these new invalidation guarantees. No production actions
+have been performed for this slice.

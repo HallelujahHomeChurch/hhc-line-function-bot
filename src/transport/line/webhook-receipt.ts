@@ -55,13 +55,15 @@ export class WebhookReceipt {
       replyText: async (token, text, options) => {
         // Claim before delivery. A transport error cannot turn a completed business action into a retry.
         if (!(await this.store.delivery!(this.lease, "attempted"))) return;
+        let result;
         try {
-          await client.replyText(token, text, options);
+          result = await client.replyText(token, text, options);
         } catch {
           await this.store.delivery!(this.lease, "unknown");
           return;
         }
         await this.store.delivery!(this.lease, "accepted");
+        return result;
       }
     };
   }

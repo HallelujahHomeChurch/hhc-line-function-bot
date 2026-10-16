@@ -1,3 +1,5 @@
+import type { QuoteContext, QuoteStore } from "../../quotes/types.js";
+import { prepareQuoteContext } from "./quote-context.js";
 import { WebhookReceipt } from "./webhook-receipt.js";
 import type { CapabilityName } from "../../capabilities/names.js";
 import fastify from "fastify";
@@ -102,6 +104,7 @@ import { memoryCommandCapabilityName, type MemoryCommandHandler } from "./memory
 import { pendingAttachmentPrompt } from "./attachment-intake.js";
 
 export interface AppDependencies {
+  quoteStore?: QuoteStore;
   adminActionRegistry: AdminActionRegistry;
   adminActionRouter?: AdminActionRouterPort;
   postbackHandlers: PostbackHandlerRegistry;
@@ -291,7 +294,8 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.sessionStore,
         deps.completionObserver,
         deps.accountAdminClient,
-        deps.mediaSyncStore
+        deps.mediaSyncStore,
+        deps.quoteStore
       );
     });
   }
@@ -332,7 +336,8 @@ async function handleWebhook(
   sessionStore: SessionStore | undefined,
   completionObserver: FunctionCompletionObserver,
   accountAdminClient: AccountAdminClient,
-  mediaSyncStore: PostgresMediaSyncStore | undefined
+  mediaSyncStore: PostgresMediaSyncStore | undefined,
+  quoteStore: QuoteStore | undefined
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -353,9 +358,32 @@ async function handleWebhook(
   const handledLifecycleEvents = new Set<LineEvent>();
   for (const event of payload.events) {
     if (!isOrdinaryLineEvent(event)) continue;
+    if (quoteStore && event.type === "unsend" && event.unsend?.messageId) {
+      try {
+        const scopes = await quoteStore.unsend(
+          { profileName: profile.name, source: event.source },
+          event.unsend.messageId
+        );
+        for (const scope of scopes) {
+          await profileRuntime.clearContext?.(scope);
+          const key = sourceKey(scope.source);
+          if (key)
+            await conversationWindowStore.clear?.({
+              profileName: scope.profileName,
+              sourceKey: key,
+              requesterUserId: scope.source.userId
+            });
+        }
+      } catch {
+        return reply.code(503).send({ ok: false, error: "quote_lifecycle_unavailable" });
+      }
+      handledLifecycleEvents.add(event);
+      incrementIgnored(ignoredCounts, "quote_unsend");
+    }
     const action = mediaSyncLifecycleAction(profile, event);
     if (!action) continue;
     if (!mediaSyncStore) {
+      if (quoteStore && !config.mediaSync) continue;
       return reply.code(503).send({ ok: false, error: "media_sync_lifecycle_unavailable" });
     }
     try {
@@ -642,9 +670,43 @@ async function handleWebhook(
       }
       if ("lease" in claimed) receipt = new WebhookReceipt(webhookEventStore, claimed.lease);
     }
-    const line = receipt ? receipt.lineClient(transportLine) : transportLine;
+    let line = receipt ? receipt.lineClient(transportLine) : transportLine;
+    let quoteContext: QuoteContext | undefined;
+    const attachQuoteContext = async (): Promise<boolean> => {
+      if (!quoteStore || !event.source.userId) return true;
+      {
+        const prepared = await prepareQuoteContext({
+          store: quoteStore,
+          runtime: profileRuntime,
+          scope: { profileName: profile.name, source: event.source },
+          clearConversation: async () => {
+            const scope = buildConversationWindowScope(profile, event);
+            if (scope) await conversationWindowStore.clear?.(scope);
+          },
+          event,
+          line
+        });
+        if (!prepared) {
+          incrementIgnored(ignoredCounts, "stale_quote_context");
+          return false;
+        }
+        quoteContext = prepared.context;
+        line = prepared.line;
+      }
+      return true;
+    };
     let eventSucceeded = true;
     try {
+      const knownBotQuote = Boolean(
+        quoteStore &&
+        event.message?.quotedMessageId &&
+        (
+          await quoteStore.inspect(
+            { profileName: profile.name, source: event.source },
+            event.message.quotedMessageId
+          )
+        ).bot
+      );
       // Read-only admission precedes conversational quota; ambient group chat is free.
       if (event.source.type === "group" && event.message?.type === "text") {
         const systemAction = matchNaturalLanguageSystemActionHint(event.message.text ?? "");
@@ -656,7 +718,8 @@ async function handleWebhook(
             accessStore,
             conversationWindowStore,
             false,
-            sessionStore
+            sessionStore,
+            knownBotQuote
           );
           if (!admission.allowed) {
             rejectedAfterStructuralGate = true;
@@ -697,7 +760,6 @@ async function handleWebhook(
         localAction === "show_account" ||
         localAction === "account_login"
       ) {
-        await receipt?.start();
         const policy = await evaluateActionPolicy({
           action: localAction,
           profile,
@@ -707,6 +769,8 @@ async function handleWebhook(
           incrementIgnored(ignoredCounts, policy.allowed ? "missing_reply_token" : policy.reason);
           continue;
         }
+        if (!(await attachQuoteContext())) continue;
+        await receipt?.start();
         const requestedFunctions =
           localAction === "account_login"
             ? []
@@ -897,7 +961,8 @@ async function handleWebhook(
         accessStore,
         conversationWindowStore,
         accountAuthorization.allowed,
-        sessionStore
+        sessionStore,
+        knownBotQuote
       );
       if (
         !allow.allowed &&
@@ -917,7 +982,8 @@ async function handleWebhook(
             accessStore,
             conversationWindowStore,
             true,
-            sessionStore
+            sessionStore,
+            knownBotQuote
           );
         }
       }
@@ -940,7 +1006,57 @@ async function handleWebhook(
       const effectiveProfile = effectiveAccess.profile;
       const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
       const requesterDisplayName = await resolveRequesterDisplayName(getLineIdentity(), event);
+      if (!(await attachQuoteContext())) continue;
       await receipt?.start();
+
+      const profileTurnInput = {
+        quoteContext,
+        profile: effectiveProfile,
+        event,
+        requestId,
+        requesterDisplayName,
+        requesterIsAdmin,
+        configuredFunctions: [...profile.enabledFunctions],
+        authorizeFunctions: async (names: CapabilityName[]) => [
+          ...(await turnAccountAuthorization.allowedFunctions(names))
+        ],
+        nicknameWriteEnabled: turnAccountAuthorization.nicknameWriteEnabled,
+        accountAdministrator: turnAccountAuthorization.administrator
+      };
+      if (
+        event.message?.quotedMessageId &&
+        event.message.type === "text" &&
+        event.replyToken &&
+        !/^(?:\/reset|忘記這段對話)$/u.test(event.message.text?.trim() ?? "")
+      ) {
+        const result = /^(確認|取消)$/u.test(event.message.text?.trim() ?? "")
+          ? {
+              ok: true,
+              replyText: "引用訊息不會確認或取消操作；請使用原預覽的按鈕，或重新提出需求。"
+            }
+          : quoteContext?.quoted?.status === "resolved"
+            ? await handleAgentTextTurnWithLongJob({
+                runtime: profileRuntime,
+                jobStore: agentJobStore,
+                receipt,
+                ...profileTurnInput
+              })
+            : {
+                ok: true,
+                replyText:
+                  "我無法取得這則引用的內容。請在這段對話重新描述需求；若涉及其他人的內容，請由原發話者提出。"
+              };
+        if (result) {
+          await line.replyText(
+            event.replyToken,
+            result.replyText,
+            result.quickReplies ? { quickReplies: result.quickReplies } : undefined
+          );
+          if (!quoteContext || (await quoteContext.isCurrent()))
+            await recordConversationReply(conversationWindowStore, effectiveProfile, event, result);
+        }
+        continue;
+      }
 
       if (event.type === "postback") {
         if (!event.replyToken) {
@@ -965,12 +1081,14 @@ async function handleWebhook(
             ? async (review) =>
                 (await handleAgentOperationWithLongJob({
                   jobStore: agentJobStore,
+                  quoteContext,
                   receipt,
                   profile: review.profile,
                   event: review.event,
                   requesterDisplayName: review.requesterDisplayName,
                   operation: async () => {
                     const reviewOutcome = await profileRuntime.handleActionReview!({
+                      quoteContext,
                       profile: review.profile,
                       event: review.event,
                       requestId: review.requestId,
@@ -1011,7 +1129,8 @@ async function handleWebhook(
                     return reviewResult;
                   }
                 })) ?? { ok: true, replyText: messages.postbackUnsupported }
-            : undefined
+            : undefined,
+          quoteStore ? (token) => quoteStore.isCurrent(token) : undefined
         );
         const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
         const postbackCapabilityName = completionEligible ? capability : undefined;
@@ -1486,19 +1605,6 @@ async function handleWebhook(
         continue;
       }
 
-      const profileTurnInput = {
-        profile: effectiveProfile,
-        event,
-        requestId,
-        requesterDisplayName,
-        requesterIsAdmin,
-        configuredFunctions: [...profile.enabledFunctions],
-        authorizeFunctions: async (names: CapabilityName[]) => [
-          ...(await turnAccountAuthorization.allowedFunctions(names))
-        ],
-        nicknameWriteEnabled: turnAccountAuthorization.nicknameWriteEnabled,
-        accountAdministrator: turnAccountAuthorization.administrator
-      };
       const researchOutcome = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
       if (researchOutcome?.kind === "handled") {
         await line.replyText(
@@ -2065,7 +2171,8 @@ async function allowEvent(
   accessStore: AccessStore,
   conversationWindowStore: ConversationWindowStore,
   requesterIsAdmin: boolean,
-  sessionStore?: SessionStore
+  sessionStore?: SessionStore,
+  knownBotQuote = false
 ): Promise<AllowResult> {
   const eventType = event.type?.trim().toLowerCase();
   const sourceType = event.source?.type?.trim().toLowerCase();
@@ -2109,6 +2216,7 @@ async function allowEvent(
       if (command) {
         return { allowed: true, reason: "group_admin_command_allowed" };
       }
+      if (knownBotQuote) return { allowed: true, reason: "group_bot_quote" };
       const engagement = classifyGroupEngagement(profile, event.message);
       if (!profile.groupRequireWakeWord || groupEngagementAllowsReply(engagement)) {
         return { allowed: true, reason: `group_${engagement.kind}_matched` };
@@ -2277,8 +2385,8 @@ async function recordConversationReply(
   if (!ttlMs || !scope || !userText || !result.replyText) {
     return;
   }
-  await store.recordTurn({ scope, role: "user", text: userText, ttlMs });
-  await store.recordTurn({ scope, role: "assistant", text: result.replyText, ttlMs });
+  await store.recordTurn({ scope, role: "user", text: "[admitted turn]", ttlMs });
+  await store.recordTurn({ scope, role: "assistant", text: "[reply]", ttlMs });
 }
 
 function buildConversationWindowScope(

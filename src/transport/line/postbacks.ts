@@ -1,3 +1,4 @@
+import type { QuoteContext, QuoteToken } from "../../quotes/types.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { WebhookReceipt } from "./webhook-receipt.js";
 import type { CapabilityName } from "../../capabilities/names.js";
@@ -44,7 +45,8 @@ export async function handlePostbackEvent(
   authorizeFunctions?: (
     functionNames: readonly CapabilityName[]
   ) => Promise<readonly CapabilityName[]>,
-  helperReviewHandler?: HelperReviewPostbackHandler
+  helperReviewHandler?: HelperReviewPostbackHandler,
+  isContextCurrent?: (token: QuoteToken) => Promise<boolean>
 ): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
@@ -61,7 +63,8 @@ export async function handlePostbackEvent(
         event,
         agentJobStore,
         configuredFunctions,
-        authorizeFunctions
+        authorizeFunctions,
+        isContextCurrent
       ),
       completionEligible: false
     };
@@ -80,6 +83,11 @@ export async function handlePostbackEvent(
         result: { ok: true, replyText: messages.postbackUnsupported },
         completionEligible: false
       };
+    }
+    const scope = buildAgentJobScope(profile, event);
+    const job = scope ? await agentJobStore.get(resultJobId, scope) : undefined;
+    if (job?.contextToken && !(await isContextCurrent?.(job.contextToken))) {
+      return { result: invalidatedResult(), completionEligible: false };
     }
     return {
       result: await helperReviewHandler({
@@ -137,6 +145,7 @@ export async function handleAgentTextTurnWithLongJob(input: {
   runtime: ProfileRuntime;
   jobStore: AgentJobStore;
   receipt?: WebhookReceipt;
+  quoteContext?: QuoteContext;
   profile: BotProfileConfig;
   event: LineEvent;
   requestId: string;
@@ -151,11 +160,13 @@ export async function handleAgentTextTurnWithLongJob(input: {
   return handleAgentOperationWithLongJob({
     jobStore: input.jobStore,
     receipt: input.receipt,
+    quoteContext: input.quoteContext,
     profile: input.profile,
     event: input.event,
     requesterDisplayName: input.requesterDisplayName,
     operation: async () => {
       const result = await input.runtime.handleTextTurn({
+        quoteContext: input.quoteContext,
         profile: input.profile,
         configuredFunctions: input.configuredFunctions ? [...input.configuredFunctions] : undefined,
         event: input.event,
@@ -176,6 +187,7 @@ export async function handleAgentTextTurnWithLongJob(input: {
 export async function handleAgentOperationWithLongJob(input: {
   jobStore: AgentJobStore;
   receipt?: WebhookReceipt;
+  quoteContext?: QuoteContext;
   profile: BotProfileConfig;
   event: LineEvent;
   requesterDisplayName?: string;
@@ -196,6 +208,7 @@ export async function handleAgentOperationWithLongJob(input: {
     id,
     scope,
     label: "agent-turn",
+    contextToken: input.quoteContext?.token,
     ttlMs: (config?.resultTtlMinutes ?? 30) * 60_000
   });
   // Persist the stable event-to-operation record and start marker before invoking business code.
@@ -213,7 +226,17 @@ export async function handleAgentOperationWithLongJob(input: {
   heartbeat.unref();
   const turnPromise = (async () => {
     try {
+      if (input.quoteContext && !(await input.quoteContext.isCurrent())) {
+        await input.jobStore.fail(job.id, "context_invalidated");
+        await input.receipt?.finish(true);
+        return invalidatedResult();
+      }
       const result = await input.operation();
+      if (input.quoteContext && !(await input.quoteContext.isCurrent())) {
+        await input.jobStore.fail(job.id, "context_invalidated");
+        await input.receipt?.finish(true);
+        return invalidatedResult();
+      }
       if (result && (result.resultAuthority || result.executedAction)) {
         await input.jobStore.complete(job.id, result, result.executedAction);
         const persisted = await input.jobStore.get(job.id, scope);
@@ -277,7 +300,8 @@ async function handleAgentJobResultPostback(
   configuredFunctions: readonly CapabilityName[],
   authorizeFunctions?: (
     functionNames: readonly CapabilityName[]
-  ) => Promise<readonly CapabilityName[]>
+  ) => Promise<readonly CapabilityName[]>,
+  isContextCurrent?: (token: QuoteToken) => Promise<boolean>
 ): Promise<FunctionExecutionResult> {
   const jobId = request.params.jobId;
   const scope = buildAgentJobScope(profile, event);
@@ -288,6 +312,7 @@ async function handleAgentJobResultPostback(
   if (!job) {
     return { ok: true, replyText: "找不到這筆結果，可能已經過期，請再問一次。" };
   }
+  if (job.contextToken && !(await isContextCurrent?.(job.contextToken))) return invalidatedResult();
   if (job.status === "pending") {
     return {
       ok: true,
@@ -385,3 +410,11 @@ function waitingForAgentJobReply(displayName: string | undefined): string {
 }
 
 const timeoutSymbol = Symbol("agent_turn_timeout");
+
+function invalidatedResult(): FunctionExecutionResult {
+  return {
+    ok: true,
+    replyText: "這段對話已重設、收回或過期，請重新提出需求。",
+    resultAuthority: { kind: "public" }
+  };
+}

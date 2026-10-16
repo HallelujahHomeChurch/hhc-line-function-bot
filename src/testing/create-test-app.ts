@@ -172,6 +172,7 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     textFallbackGenerator: overrides.textFallbackGenerator,
     completionObserver,
     accountAdminClient,
+    quoteStore: overrides.quoteStore,
     mediaSyncStore: overrides.mediaSyncStore
   });
 }

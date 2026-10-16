@@ -1,3 +1,5 @@
+import type { ProfileTurnInput } from "../runtime/profile-runtime.js";
+import type { QuoteStore } from "../quotes/types.js";
 import { randomUUID } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
@@ -7740,3 +7742,102 @@ function accountLinkBody(event: Record<string, unknown>): string {
     events: [{ type: "accountLink", webhookEventId: "account-link-event", ...event }]
   });
 }
+
+it("wakes on known bot quotes, rejects foreign quote text, and does not index ambient chat", async () => {
+  const token = {
+    threadId: "thread",
+    generation: "current",
+    chatKey: "chat",
+    sourceKeys: [],
+    eventTimestamp: Date.now()
+  };
+  const store: QuoteStore = {
+    inspect: vi.fn(async (_scope, id) => ({ bot: id === "bot-known" })),
+    begin: vi.fn(async (input) => ({
+      token,
+      clearCheckpoint: false,
+      quoted:
+        input.source.userId === "other"
+          ? { status: "other_requester" as const }
+          : {
+              status: "resolved" as const,
+              author: "bot" as const,
+              kind: "reply_to_request" as const,
+              text: "下週服事表"
+            }
+    })),
+    recordReply: vi.fn(async () => undefined),
+    isCurrent: vi.fn(async () => true),
+    reset: vi.fn(async () => undefined),
+    unsend: vi.fn(async () => []),
+    acknowledgeClear: vi.fn(async () => undefined)
+  };
+  const handleTextTurn = vi.fn(async (input: ProfileTurnInput) => ({
+    ok: true,
+    replyText: input.quoteContext ? "resolved answer" : "missing quote",
+    resultAuthority: { kind: "public" as const }
+  }));
+  const replies: string[] = [];
+  const app = createApp(testConfig(), {
+    accessStore: defaultAccessStore(),
+    quoteStore: store,
+    profileRuntime: { handleTextTurn },
+    createLineReplyClient: () => ({
+      replyText: async (_token, text) => {
+        replies.push(text);
+        return { sentMessages: [{ id: "new-bot", text }] };
+      }
+    }),
+    createLineIdentityClient: () => ({
+      getUserDisplayName: async () => undefined,
+      getGroupDisplayName: async () => undefined
+    })
+  });
+  try {
+    const send = async (
+      text: string,
+      quotedMessageId?: string,
+      userId = "Uallowed",
+      groupId = "Cmain"
+    ) => {
+      const body = JSON.stringify({
+        events: [
+          {
+            type: "message",
+            source: { type: "group", groupId, userId },
+            timestamp: Date.now(),
+            replyToken: "synthetic",
+            message: {
+              id: randomUUID(),
+              type: "text",
+              text,
+              ...(quotedMessageId ? { quotedMessageId } : {})
+            }
+          }
+        ]
+      });
+      return app.inject({
+        method: "POST",
+        url: "/api/line/webhook/main",
+        headers: signedHeaders(body, "main-secret"),
+        payload: body
+      });
+    };
+    expect((await send("大家午安")).statusCode).toBe(200);
+    expect(store.begin).not.toHaveBeenCalled();
+    const quotedResponse = await send("再查下一週", "bot-known");
+    expect(quotedResponse.statusCode, quotedResponse.body).toBe(200);
+    expect(handleTextTurn).toHaveBeenCalledTimes(1);
+    expect(handleTextTurn.mock.calls[0]?.[0]).toMatchObject({
+      quoteContext: { quoted: { kind: "reply_to_request", text: "下週服事表" } }
+    });
+    await send("再查下一週", "bot-known", "other");
+    expect(replies.at(-1)).toContain("重新描述需求");
+    expect(handleTextTurn).toHaveBeenCalledTimes(1);
+    await send("再查下一週", "bot-known", "Uallowed", "unregistered");
+    expect(handleTextTurn).toHaveBeenCalledTimes(1);
+    expect(store.recordReply).toHaveBeenCalled();
+  } finally {
+    await app.close();
+  }
+});
