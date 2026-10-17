@@ -38,6 +38,7 @@ export interface CreatePendingAgentJobInput {
 }
 
 export interface AgentJobStore {
+  latest?(scope: AgentJobScope, excludingId?: string): Promise<AgentJobRecord | undefined>;
   createPending(input: CreatePendingAgentJobInput): Promise<AgentJobRecord>;
   markStarted?(id: string, leaseMs: number): Promise<boolean>;
   renewExecution?(id: string, leaseMs: number): Promise<boolean>;
@@ -71,6 +72,21 @@ export class InMemoryAgentJobStore implements AgentJobStore {
 
   constructor(options: { now?: () => Date } = {}) {
     this.now = options.now ?? (() => new Date());
+  }
+
+  async latest(scope: AgentJobScope, excludingId?: string): Promise<AgentJobRecord | undefined> {
+    const candidates = [...this.jobs.values()]
+      .reverse()
+      .filter(
+        (job) =>
+          job.id !== excludingId &&
+          scopeMatches(job.scope, scope) &&
+          Date.parse(job.expiresAt) > this.now().getTime()
+      );
+    const job = candidates
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+      .at(0);
+    return job ? projectJob(job, this.now()) : undefined;
   }
 
   async createPending(input: CreatePendingAgentJobInput): Promise<AgentJobRecord> {
@@ -200,10 +216,10 @@ export class RedisAgentJobStore implements AgentJobStore {
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + input.ttlMs).toISOString()
     };
-    if (input.id) {
+    if (input.id || this.options.client.eval) {
       if (!this.options.client.eval) throw new Error("agent_job_atomic_store_required");
       const raw = await this.options.client.eval(CREATE_JOB, {
-        keys: [this.key(record.id)],
+        keys: [this.key(record.id), this.recentKey(input.scope)],
         arguments: [JSON.stringify(record), String(input.ttlMs)]
       });
       if (typeof raw !== "string") throw new Error("agent_job_invalid_record");
@@ -217,6 +233,23 @@ export class RedisAgentJobStore implements AgentJobStore {
 
   async markStarted(id: string, leaseMs: number): Promise<boolean> {
     return this.executionTransition(id, leaseMs, "start");
+  }
+
+  async latest(scope: AgentJobScope, excludingId?: string): Promise<AgentJobRecord | undefined> {
+    const raw = await this.options.client.get(this.recentKey(scope));
+    if (!raw) return undefined;
+    const ids: unknown = JSON.parse(raw);
+    if (!Array.isArray(ids)) return undefined;
+    for (const id of ids.slice(0, 8)) {
+      if (typeof id !== "string" || id === excludingId) continue;
+      const job = await this.get(id, scope);
+      if (job) return job;
+    }
+    return undefined;
+  }
+
+  private recentKey(scope: AgentJobScope): string {
+    return `${this.options.keyPrefix}:agent-job-recent:${Buffer.from(JSON.stringify([scope.profileName, scope.sourceKey, scope.requesterUserId ?? ""])).toString("base64url")}`;
   }
   async renewExecution(id: string, leaseMs: number): Promise<boolean> {
     return this.executionTransition(id, leaseMs, "renew");
@@ -371,6 +404,13 @@ const CREATE_JOB = `
 local value = redis.call('GET', KEYS[1])
 if value then return value end
 redis.call('PSETEX', KEYS[1], ARGV[2], ARGV[1])
+if KEYS[2] then
+  local ids = cjson.decode(redis.call('GET', KEYS[2]) or '[]')
+  table.insert(ids, 1, cjson.decode(ARGV[1]).id)
+  while #ids > 8 do table.remove(ids) end
+  local ttl = math.max(tonumber(ARGV[2]),redis.call('PTTL',KEYS[2]))
+  redis.call('PSETEX', KEYS[2], ttl, cjson.encode(ids))
+end
 return ARGV[1]
 `;
 const EXECUTION_JOB = `

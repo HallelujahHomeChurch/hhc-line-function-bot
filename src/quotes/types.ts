@@ -1,4 +1,14 @@
-import type { LineSource } from "../types.js";
+import type { JsonRecord, LineSource } from "../types.js";
+import type { CapabilityName } from "../capabilities/names.js";
+
+export interface ConversationReadReference {
+  capability: CapabilityName;
+  arguments: JsonRecord;
+}
+export interface QuoteReplyProjection {
+  kind: "conversation" | "read" | "preview" | "commit" | "status";
+  publicRead?: ConversationReadReference;
+}
 
 export interface QuoteScope {
   profileName: string;
@@ -10,13 +20,15 @@ export interface QuoteToken {
   chatKey: string;
   sourceKeys: string[];
   eventTimestamp: number;
+  turnId?: string;
 }
 export type QuotedText =
   | {
       status: "resolved";
       author: "user" | "bot";
-      kind: "message_text" | "reply_to_request";
+      kind: "message_text" | "reply_to_request" | "public_lookup";
       text: string;
+      lookup?: ConversationReadReference;
     }
   | { status: "unavailable" | "other_requester" };
 export interface QuoteTurn {
@@ -28,6 +40,8 @@ export interface QuoteTurn {
 export interface QuoteContext {
   token: QuoteToken;
   quoted?: QuotedText;
+  cleared?: boolean;
+  replyProjection?: QuoteReplyProjection;
   isCurrent(): Promise<boolean>;
 }
 export interface QuoteStore {
@@ -40,7 +54,11 @@ export interface QuoteStore {
       timestamp?: number;
     }
   ): Promise<QuoteTurn | undefined>;
-  recordReply(turn: QuoteTurn, messages: Array<{ id: string; text: string }>): Promise<void>;
+  recordReply(
+    turn: QuoteTurn,
+    messages: Array<{ id: string; text: string }>,
+    projection?: QuoteReplyProjection
+  ): Promise<void>;
   isCurrent(token: QuoteToken): Promise<boolean>;
   acknowledgeClear(token: QuoteToken): Promise<void>;
   reset(scope: QuoteScope): Promise<void>;

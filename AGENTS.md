@@ -6,7 +6,7 @@
 - `helper` uses one LangChain/LangGraph agent with DeepSeek and server-owned tools.
 - `main` is a deterministic provider-free runtime for public and self-service functions.
 - Runtime behavior is controlled by bot profiles, capability toggles, access policy, and state stores.
-- Group context is requester-scoped and short-lived; never feed raw whole-group chat into the model.
+- Group context is requester-scoped and short-lived; never feed raw whole-group chat into the model. Explicit public group read references carry only a server-produced safe locator and require a fresh read under the current requester; never share checkpoints, saved notes, drafts or approvals.
 - Public `/healthz` is minimal liveness. Public `/readyz` checks only Postgres and Redis. Detailed dependency status belongs in admin-only direct-chat `/diag`.
 - Keep public repo safety in mind: never commit real `.env` files, tokens, IDs, or secrets.
 
@@ -237,3 +237,14 @@ Testing map:
 - Project lawful schedule identifiers from the profile domain registry into the owning read/write tool schemas. Unknown or unavailable domains cannot silently become a custom schedule.
 - A multi-month replacement uses one complete approval and `saveScheduleMemories` to atomically replace only included canonical months. PostgreSQL conflicts reject the whole batch; never partially publish or silently retry an uncertain commit.
 - Recoverable preparation releases an unsuccessful turn reservation; successful previews remain limited to one. Invalid edits revoke approval through the same guarded write lane while preserving original arguments. Structured draft field edits must preserve untouched server-owned entries.
+
+## Conversation delivery and lifecycle
+
+- Retain safe accepted LINE receipt text as delivered history; generated results
+  remain pending until accepted. Receipt-index failure must never resend a reply.
+- Quote dependency metadata is normalized independently of bounded token lineage;
+  do not reintroduce a 64-message generation reset or drop withdrawal edges.
+- Historical tool payloads are not current evidence. Keep current factual failures
+  and scoped job/media state server-owned rather than model-declared success.
+- Accepted supplements are separate serialized turns, not a generic inbox/task
+  engine. Never infer group-wide intake or durable memory from a wake window.

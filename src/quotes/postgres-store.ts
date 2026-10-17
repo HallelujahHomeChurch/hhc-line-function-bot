@@ -2,10 +2,20 @@ import { createHmac, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { createActorFingerprint } from "../observability/opaque-identifiers.js";
 import type { LineSource } from "../types.js";
-import type { QuoteScope, QuoteStore, QuoteToken, QuoteTurn, QuotedText } from "./types.js";
+import type {
+  QuoteScope,
+  QuoteStore,
+  QuoteToken,
+  QuoteTurn,
+  QuotedText,
+  QuoteReplyProjection,
+  ConversationReadReference
+} from "./types.js";
+import { deliveredContextText, safeQuoteText } from "./reply-projection.js";
+export { safeQuoteText } from "./reply-projection.js";
 
 const RETENTION_MS = 7 * 24 * 60 * 60_000;
-const MAX_LINEAGE = 64;
+const MAX_TOKEN_LINEAGE = 64;
 interface ThreadRow {
   thread_id: string;
   generation: string;
@@ -15,6 +25,7 @@ interface ThreadRow {
   clear_pending: boolean;
 }
 interface MessageRow {
+  public_reference: ConversationReadReference | null;
   thread_id: string;
   generation: string;
   author: "user" | "bot";
@@ -38,6 +49,7 @@ export class PostgresQuoteStore implements QuoteStore {
         expires_at timestamptz not null, gc_after timestamptz not null, clear_pending boolean not null default false
       );
       alter table line_quote_threads add column if not exists clear_pending boolean not null default false;
+      alter table line_quote_threads add column if not exists cleared_by text;
       create index if not exists line_quote_threads_chat on line_quote_threads(chat_key);
       create index if not exists line_quote_threads_lineage on line_quote_threads using gin(lineage);
       create table if not exists line_quote_messages (
@@ -47,7 +59,21 @@ export class PostgresQuoteStore implements QuoteStore {
         safe_text text, reference boolean not null default false, lineage text[] not null, expires_at timestamptz not null
       );
       alter table line_quote_messages add column if not exists reference boolean not null default false;
+      alter table line_quote_messages add column if not exists public_reference jsonb;
       create index if not exists line_quote_messages_expiry on line_quote_messages(expires_at);
+      create table if not exists line_quote_dependencies (
+        thread_id text not null references line_quote_threads(thread_id) on delete cascade,
+        generation text not null, message_key text not null, owned boolean not null default false,
+        primary key(thread_id, generation, message_key)
+      );
+      alter table line_quote_dependencies add column if not exists owned boolean not null default false;
+      create index if not exists line_quote_dependencies_message on line_quote_dependencies(message_key);
+      insert into line_quote_dependencies(thread_id,generation,message_key)
+        select thread_id,generation,unnest(lineage) from line_quote_threads
+        on conflict do nothing;
+      update line_quote_dependencies d set owned=true from line_quote_messages m
+        where d.thread_id=m.thread_id and d.generation=m.generation and d.message_key=m.message_key
+          and not d.owned;
       create table if not exists line_quote_tombstones (
         message_key text primary key, expires_at timestamptz not null
       );
@@ -89,9 +115,10 @@ export class PostgresQuoteStore implements QuoteStore {
         )
       ).rows[0];
       const expired = Boolean(thread && thread.expires_at <= now);
-      let clearCheckpoint = Boolean(thread?.clear_pending || expired);
+      const clearCheckpoint = Boolean(thread?.clear_pending || expired);
       if (!thread || expired) {
         await client.query("delete from line_quote_messages where thread_id=$1", [threadId]);
+        await client.query("delete from line_quote_dependencies where thread_id=$1", [threadId]);
         thread = {
           thread_id: threadId,
           generation: randomUUID(),
@@ -111,31 +138,38 @@ export class PostgresQuoteStore implements QuoteStore {
         quoted = !reference
           ? { status: "unavailable" }
           : reference.thread_id !== threadId
-            ? { status: "other_requester" }
+            ? input.source.type === "group" &&
+              reference.author === "bot" &&
+              reference.public_reference
+              ? {
+                  status: "resolved",
+                  author: "bot",
+                  kind: "public_lookup",
+                  text: "群組先前的公開查詢；必須以目前身分重新查詢。",
+                  lookup: reference.public_reference
+                }
+              : { status: "other_requester" }
             : reference.generation !== thread.generation || !reference.safe_text
               ? { status: "unavailable" }
               : {
                   status: "resolved",
                   author: reference.author,
                   kind: reference.reference ? "reply_to_request" : "message_text",
-                  text: reference.safe_text
+                  text: reference.safe_text,
+                  ...(reference.public_reference ? { lookup: reference.public_reference } : {})
                 };
       }
-      let lineage = [
+      const dependencies = [
         ...new Set([
           ...thread.lineage,
           ...(ownKey ? [ownKey] : []),
-          ...(reference && quotedKey ? [quotedKey, ...reference.lineage] : [])
+          ...(reference && quotedKey && quoted?.status === "resolved"
+            ? [quotedKey, ...reference.lineage]
+            : [])
         ])
       ];
-      if (lineage.length > MAX_LINEAGE) {
-        clearCheckpoint = true;
-        thread.generation = randomUUID();
-        lineage = ownKey ? [ownKey] : [];
-        if (quoted) quoted = { status: "unavailable" };
-        await client.query("delete from line_quote_messages where thread_id=$1", [threadId]);
-      }
-      if (await this.tombstoned(client, lineage)) return undefined;
+      if (await this.tombstoned(client, dependencies)) return undefined;
+      const lineage = dependencies.slice(-MAX_TOKEN_LINEAGE);
       const expiresAt = new Date(now.getTime() + ttl(input.source));
       await client.query(
         `insert into line_quote_threads(thread_id,chat_key,generation,scope,lineage,expires_at,gc_after,clear_pending)
@@ -152,6 +186,16 @@ export class PostgresQuoteStore implements QuoteStore {
           clearCheckpoint
         ]
       );
+      await client.query(
+        `insert into line_quote_dependencies(thread_id,generation,message_key)
+         select $1,$2,unnest($3::text[]) on conflict do nothing`,
+        [threadId, thread.generation, dependencies]
+      );
+      if (ownKey)
+        await client.query(
+          "update line_quote_dependencies set owned=true where thread_id=$1 and generation=$2 and message_key=$3",
+          [threadId, thread.generation, ownKey]
+        );
       if (ownKey)
         await this.saveMessage(client, {
           key: ownKey,
@@ -169,7 +213,8 @@ export class PostgresQuoteStore implements QuoteStore {
           generation: thread.generation,
           chatKey: chat,
           sourceKeys: lineage,
-          eventTimestamp: input.timestamp!
+          eventTimestamp: input.timestamp!,
+          turnId: ownKey ?? randomUUID()
         },
         quoted,
         clearCheckpoint,
@@ -178,7 +223,11 @@ export class PostgresQuoteStore implements QuoteStore {
     });
   }
 
-  async recordReply(turn: QuoteTurn, messages: Array<{ id: string; text: string }>): Promise<void> {
+  async recordReply(
+    turn: QuoteTurn,
+    messages: Array<{ id: string; text: string }>,
+    projection?: QuoteReplyProjection
+  ): Promise<void> {
     if (!this.fresh(turn.token.eventTimestamp)) return;
     await this.transaction(turn.token.chatKey, async (client) => {
       const thread = (
@@ -197,14 +246,25 @@ export class PostgresQuoteStore implements QuoteStore {
         if (!opaque(message.id)) continue;
         const key = this.key(turn.token.chatKey, message.id);
         if (await this.tombstoned(client, [key])) continue;
+        await client.query(
+          `insert into line_quote_dependencies(thread_id,generation,message_key,owned)
+           values($1,$2,$3,true) on conflict(thread_id,generation,message_key) do update set owned=true`,
+          [thread.thread_id, thread.generation, key]
+        );
         await this.saveMessage(client, {
           key,
           chat: turn.token.chatKey,
           threadId: thread.thread_id,
           generation: thread.generation,
           author: "bot",
-          text: turn.requestText ?? null,
-          reference: true,
+          text: projection
+            ? deliveredContextText(message.text, projection)
+            : (turn.requestText ?? null),
+          reference: !projection,
+          publicReference:
+            thread.scope.source.type === "group" && projection?.kind === "read"
+              ? projection.publicRead
+              : undefined,
           lineage: thread.lineage,
           expiresAt
         });
@@ -226,7 +286,7 @@ export class PostgresQuoteStore implements QuoteStore {
 
   async acknowledgeClear(token: QuoteToken): Promise<void> {
     await this.pool.query(
-      "update line_quote_threads set clear_pending=false where thread_id=$1 and generation=$2",
+      "update line_quote_threads set clear_pending=false, cleared_by=null where thread_id=$1 and generation=$2",
       [token.threadId, token.generation]
     );
   }
@@ -241,7 +301,7 @@ export class PostgresQuoteStore implements QuoteStore {
       await client.query(
         `insert into line_quote_threads(thread_id,chat_key,generation,scope,lineage,expires_at,gc_after,clear_pending)
         values($1,$2,$3,$4,'{}',$5,$6,true) on conflict(thread_id) do update
-        set generation=excluded.generation, lineage='{}', expires_at=excluded.expires_at, gc_after=excluded.gc_after, clear_pending=true`,
+        set generation=excluded.generation, lineage='{}', expires_at=excluded.expires_at, gc_after=excluded.gc_after, clear_pending=true, cleared_by=null`,
         [
           threadId,
           chat,
@@ -252,6 +312,7 @@ export class PostgresQuoteStore implements QuoteStore {
         ]
       );
       await client.query("delete from line_quote_messages where thread_id=$1", [threadId]);
+      await client.query("delete from line_quote_dependencies where thread_id=$1", [threadId]);
     });
   }
 
@@ -266,17 +327,32 @@ export class PostgresQuoteStore implements QuoteStore {
         [key, new Date(this.now().getTime() + RETENTION_MS)]
       );
       const affected = await client.query<ThreadRow>(
-        `select * from line_quote_threads where chat_key=$1 and
-        ($2=any(lineage) or clear_pending or thread_id in (select thread_id from line_quote_messages where message_key=$2)) for update`,
+        `with recursive affected(thread_id) as (
+          select t.thread_id from line_quote_threads t
+          where t.chat_key=$1 and ((t.clear_pending and t.cleared_by=$2) or exists(
+            select 1 from line_quote_dependencies d where d.thread_id=t.thread_id
+              and d.generation=t.generation and d.message_key=$2))
+          union
+          select child.thread_id from affected parent
+          join line_quote_threads origin on origin.thread_id=parent.thread_id
+          join line_quote_dependencies owned on owned.thread_id=origin.thread_id and owned.generation=origin.generation and owned.owned
+          join line_quote_dependencies d on d.message_key=owned.message_key
+          join line_quote_threads child on child.thread_id=d.thread_id
+            and child.generation=d.generation and child.chat_key=$1
+        ) select * from line_quote_threads where thread_id in(select thread_id from affected)
+        for update`,
         [chat, key]
       );
       const ids = affected.rows.map((row) => row.thread_id);
       if (ids.length) {
         await client.query(
-          "update line_quote_threads set generation=$2, lineage='{}', clear_pending=true where thread_id=any($1::text[])",
-          [ids, randomUUID()]
+          "update line_quote_threads set generation=$2, lineage='{}', clear_pending=true, cleared_by=$3 where thread_id=any($1::text[])",
+          [ids, randomUUID(), key]
         );
         await client.query("delete from line_quote_messages where thread_id=any($1::text[])", [
+          ids
+        ]);
+        await client.query("delete from line_quote_dependencies where thread_id=any($1::text[])", [
           ids
         ]);
       }
@@ -325,13 +401,14 @@ export class PostgresQuoteStore implements QuoteStore {
       author: string;
       text: string | null;
       reference?: boolean;
+      publicReference?: ConversationReadReference;
       lineage: string[];
       expiresAt: Date;
     }
   ): Promise<void> {
     await client.query(
-      `insert into line_quote_messages(message_key,chat_key,thread_id,generation,author,safe_text,lineage,expires_at,reference)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict(message_key) do nothing`,
+      `insert into line_quote_messages(message_key,chat_key,thread_id,generation,author,safe_text,lineage,expires_at,reference,public_reference)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(message_key) do nothing`,
       [
         input.key,
         input.chat,
@@ -341,7 +418,8 @@ export class PostgresQuoteStore implements QuoteStore {
         input.text,
         input.lineage,
         input.expiresAt,
-        input.reference ?? false
+        input.reference ?? false,
+        input.publicReference ? JSON.stringify(input.publicReference) : null
       ]
     );
   }
@@ -422,17 +500,6 @@ function opaque(value: unknown): value is string {
     value.length <= 255 &&
     !/[\s\p{Cc}]/u.test(value)
   );
-}
-export function safeQuoteText(value: string): string | null {
-  // Credential links, commands and approval drafts are reference-only. Never retain their secrets.
-  if (
-    /https?:\/\/|(?:^|\s)\/[a-z]|(?:token|nonce|secret|password|api\s*key|access\s*key|密碼|私鑰|金鑰|驗證碼|邀請碼|綁定碼|確認碼)\s*[:：=]?|action=|Bearer\s/iu.test(
-      value
-    )
-  )
-    return null;
-  const text = value.replace(/[\p{Cc}\p{Cf}]/gu, " ").trim();
-  return text ? text.slice(0, 1000) : null;
 }
 
 function minimalScope(scope: QuoteScope): QuoteScope {

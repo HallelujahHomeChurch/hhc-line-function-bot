@@ -378,6 +378,125 @@ function requiredEnvironment(
 }
 
 describe("LINE quote context in real PostgreSQL", () => {
+  it("keeps long conversations and exact public replies while isolating withdrawal dependencies", async () => {
+    const { PostgresQuoteStore } = await import("../quotes/postgres-store.js");
+    const environment = await createKernelPostgresEnvironment();
+    let now = new Date("2026-10-17T00:00:00Z");
+    const store = new PostgresQuoteStore(environment.pools[0]!, "synthetic-continuity", () => now);
+    const source = { type: "group", groupId: "synthetic-group", userId: "synthetic-a" };
+    const begin = (messageId: string, userId = "synthetic-a", quotedMessageId?: string) =>
+      store.begin({
+        profileName: "helper",
+        source: { ...source, userId },
+        messageId,
+        text: "合成查詢",
+        quotedMessageId,
+        timestamp: now.getTime()
+      });
+    try {
+      await store.setup();
+      const first = (await begin("original"))!;
+      await store.recordReply(
+        first,
+        [{ id: "bot-visible", text: "1. 合成甲\n2. 合成乙\nhttps://example.test/synthetic" }],
+        {
+          kind: "read",
+          publicRead: { capability: "query_schedule", arguments: { query: "合成查詢" } }
+        }
+      );
+      const own = await begin("own-quote", "synthetic-a", "bot-visible");
+      expect(own?.quoted).toMatchObject({
+        status: "resolved",
+        kind: "message_text",
+        text: expect.stringContaining("2. 合成乙")
+      });
+      expect(JSON.stringify(own?.quoted)).not.toContain("https://");
+      const shared = (await begin("shared", "synthetic-b", "bot-visible"))!;
+      expect(shared.quoted).toMatchObject({
+        status: "resolved",
+        kind: "public_lookup",
+        lookup: { capability: "query_schedule" }
+      });
+      expect(JSON.stringify(shared.quoted)).not.toContain("合成乙");
+      expect((await begin("private", "synthetic-b", "original"))?.quoted).toEqual({
+        status: "other_requester"
+      });
+      for (let n = 0; n < 100; n++) {
+        const next = (await begin(`long-${n}`))!;
+        expect(next.token.generation).toBe(first.token.generation);
+        expect(next.clearCheckpoint).toBe(false);
+        expect(next.token.sourceKeys.length).toBeLessThanOrEqual(64);
+      }
+      const afterLong = (await begin("after-long"))!;
+      await store.recordReply(afterLong, [{ id: "late-reply", text: "較新的合成結果" }], {
+        kind: "read",
+        publicRead: { capability: "query_schedule", arguments: { query: "合成" } }
+      });
+      await begin("late-dependent", "synthetic-d", "late-reply");
+      now = new Date(now.getTime() + 14 * 60_000);
+      await begin("keep-a");
+      await begin("keep-b", "synthetic-b");
+      await begin("keep-d", "synthetic-d");
+      now = new Date(now.getTime() + 2 * 60_000);
+      await store.cleanupExpired();
+      const unrelated = { profileName: "helper", source: { ...source, userId: "synthetic-c" } };
+      await store.reset(unrelated);
+      const affected = await store.unsend({ profileName: "helper", source }, "original");
+      expect(affected.map((item) => item.source.userId).sort()).toEqual([
+        "synthetic-a",
+        "synthetic-b",
+        "synthetic-d"
+      ]);
+      expect(await store.isCurrent(first.token)).toBe(false);
+      expect(await store.isCurrent(shared.token)).toBe(false);
+      expect(
+        (await store.unsend({ profileName: "helper", source }, "original"))
+          .map((item) => item.source.userId)
+          .sort()
+      ).toEqual(["synthetic-a", "synthetic-b", "synthetic-d"]);
+    } finally {
+      await environment.cleanup();
+    }
+  });
+
+  it("withdraws dependents without clearing the requester they quoted", async () => {
+    const { PostgresQuoteStore } = await import("../quotes/postgres-store.js");
+    const environment = await createKernelPostgresEnvironment();
+    const store = new PostgresQuoteStore(environment.pools[0]!, "synthetic-directed");
+    const scope = {
+      profileName: "helper",
+      source: { type: "group", groupId: "directed", userId: "a" }
+    };
+    try {
+      await store.setup();
+      const a = (await store.begin({
+        ...scope,
+        messageId: "a-request",
+        text: "合成問題",
+        timestamp: Date.now()
+      }))!;
+      await store.recordReply(a, [{ id: "a-reply", text: "合成結果" }], {
+        kind: "read",
+        publicRead: { capability: "query_schedule", arguments: { query: "合成" } }
+      });
+      const bScope = { ...scope, source: { ...scope.source, userId: "b" } };
+      const b = (await store.begin({
+        ...bScope,
+        messageId: "b-request",
+        quotedMessageId: "a-reply",
+        text: "合成追問",
+        timestamp: Date.now()
+      }))!;
+      expect((await store.unsend(bScope, "b-request")).map((item) => item.source.userId)).toEqual([
+        "b"
+      ]);
+      expect(await store.isCurrent(a.token)).toBe(true);
+      expect(await store.isCurrent(b.token)).toBe(false);
+    } finally {
+      await environment.cleanup();
+    }
+  });
+
   it("isolates quotes and fences delayed replies, reset, unsend and expired lineage", async () => {
     const { PostgresQuoteStore } = await import("../quotes/postgres-store.js");
     const environment = await createKernelPostgresEnvironment();

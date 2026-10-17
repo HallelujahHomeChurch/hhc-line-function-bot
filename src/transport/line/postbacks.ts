@@ -168,8 +168,9 @@ export async function handleAgentTextTurnWithLongJob(input: {
     profile: input.profile,
     event: input.event,
     requesterDisplayName: input.requesterDisplayName,
-    operation: async () => {
+    operation: async (operationId) => {
       const result = await input.runtime.handleTextTurn({
+        operationId,
         channelId: input.channelId,
         quoteContext: input.quoteContext,
         profile: input.profile,
@@ -196,7 +197,7 @@ export async function handleAgentOperationWithLongJob(input: {
   profile: BotProfileConfig;
   event: LineEvent;
   requesterDisplayName?: string;
-  operation(): Promise<FunctionExecutionResult | undefined>;
+  operation(operationId?: string): Promise<FunctionExecutionResult | undefined>;
 }): Promise<FunctionExecutionResult | undefined> {
   const scope = buildAgentJobScope(input.profile, input.event);
   if (!scope) return undefined;
@@ -236,7 +237,7 @@ export async function handleAgentOperationWithLongJob(input: {
         await input.receipt?.finish(true);
         return invalidatedResult();
       }
-      const result = await input.operation();
+      const result = await input.operation(job.id);
       if (input.quoteContext && !(await input.quoteContext.isCurrent())) {
         await input.jobStore.fail(job.id, "context_invalidated");
         await input.receipt?.finish(true);

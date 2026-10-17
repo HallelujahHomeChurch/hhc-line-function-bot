@@ -31,6 +31,8 @@ export async function prepareQuoteContext(input: {
   const context: QuoteContext = {
     token: turn.token,
     quoted: turn.quoted,
+    replyProjection: { kind: "conversation" },
+    cleared: turn.clearCheckpoint && !reset,
     isCurrent: () => store.isCurrent(turn.token)
   };
   return {
@@ -40,7 +42,23 @@ export async function prepareQuoteContext(input: {
         if (!(await context.isCurrent())) return;
         const result = await input.line.replyText(...args);
         // LINE has accepted the reply; an index failure must never resend it.
-        if (result) await store.recordReply(turn, result.sentMessages).catch(() => undefined);
+        if (result) {
+          await (
+            context.replyProjection
+              ? store.recordReply(turn, result.sentMessages, context.replyProjection)
+              : store.recordReply(turn, result.sentMessages)
+          ).catch(() => undefined);
+          // A running agent may hold the thread lock beyond LINE's inline reply budget.
+          void Promise.resolve()
+            .then(() =>
+              runtime.recordDeliveredReply?.({
+                scope,
+                quoteContext: context,
+                messages: result.sentMessages
+              })
+            )
+            .catch(() => undefined);
+        }
         return result;
       }
     }

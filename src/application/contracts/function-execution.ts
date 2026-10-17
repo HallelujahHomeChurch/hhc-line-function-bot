@@ -1,5 +1,5 @@
 import type { CapabilityName } from "../../capabilities/names.js";
-import type { QuoteContext, QuoteToken } from "../../quotes/types.js";
+import type { ConversationReadReference, QuoteContext, QuoteToken } from "../../quotes/types.js";
 import type { AgentReplyData, AgentResultEnvelope } from "../../agent/result-envelope.js";
 import type { RetrievalDiagnostics } from "../../observability/retrieval-diagnostics.js";
 import type { BotProfileConfig, JsonRecord, LineEvent, ModelProviderName } from "../../types.js";
@@ -29,6 +29,8 @@ export interface AgentResourceReference {
 }
 
 export interface FunctionExecutionResult {
+  /** Historical read locator only; never grants authority or records a write approval. */
+  contextReference?: ConversationReadReference;
   /** Transient credentials may be delivered once but must never enter stored job results. */
   replayPolicy?: "request_again";
   ok: boolean;

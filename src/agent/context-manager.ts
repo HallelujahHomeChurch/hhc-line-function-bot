@@ -32,6 +32,7 @@ export interface ConversationWindowStore {
 export interface RedisConversationWindowClient {
   get(key: string): Promise<string | null>;
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
+  eval?(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 }
 
 export class InMemoryConversationWindowStore implements ConversationWindowStore {
@@ -110,8 +111,17 @@ export class RedisConversationWindowStore implements ConversationWindowStore {
     const now = this.now();
     const record: ConversationWindowRecord = {
       expiresAt: new Date(now.getTime() + input.ttlMs).toISOString(),
-      turns: appendTurn(await this.liveRecord(input.scope), input.role, input.text, now)
+      turns: appendTurn(undefined, input.role, input.text, now)
     };
+    if (this.options.client.eval) {
+      await this.options.client.eval(RECORD_CONVERSATION_TURN, {
+        keys: [this.key(input.scope)],
+        arguments: [JSON.stringify(record), String(input.ttlMs), now.toISOString()]
+      });
+      return;
+    }
+    // Single-process test adapters may omit eval; production Redis uses the atomic path.
+    record.turns = appendTurn(await this.liveRecord(input.scope), input.role, input.text, now);
     await this.options.client.setEx(
       this.key(input.scope),
       Math.max(1, Math.ceil(input.ttlMs / 1000)),
@@ -136,6 +146,24 @@ export class RedisConversationWindowStore implements ConversationWindowStore {
     return `${this.options.keyPrefix}:conversation-window:${conversationScopeKey(scope)}`;
   }
 }
+
+const RECORD_CONVERSATION_TURN = `
+local record=cjson.decode(ARGV[1])
+local ttl=tonumber(ARGV[2])
+local raw=redis.call('GET',KEYS[1])
+if raw then
+  local current=cjson.decode(raw)
+  if current.expiresAt > ARGV[3] then
+    if current.expiresAt > record.expiresAt then record.expiresAt=current.expiresAt end
+    ttl=math.max(ttl,redis.call('PTTL',KEYS[1]))
+    table.insert(current.turns,record.turns[1])
+    while #current.turns > 8 do table.remove(current.turns,1) end
+    record.turns=current.turns
+  end
+end
+redis.call('PSETEX',KEYS[1],math.max(1,ttl),cjson.encode(record))
+return 1
+`;
 
 function appendTurn(
   record: ConversationWindowRecord | undefined,

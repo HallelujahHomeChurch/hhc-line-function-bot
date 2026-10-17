@@ -386,6 +386,25 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     });
     runtimes.helper = createHelperRuntime({
       ...helperModels,
+      async readMediaState(input) {
+        if (
+          input.event.source.type !== "group" ||
+          !input.event.source.groupId ||
+          !input.event.source.userId ||
+          !mediaSyncManagementService
+        )
+          return undefined;
+        const subject = await accountAdminClient.resolveLineSubject({
+          lineUserId: input.event.source.userId,
+          profileName: input.profile.name
+        });
+        if (!subject.bound || !subject.active) return { state: "unavailable" };
+        return mediaSyncManagementService.readConversationStatus(
+          input.event.source.groupId,
+          input.requestId,
+          subject.subjectId
+        );
+      },
       state: helperState,
       handlers: registries.functions,
       attachmentDraftHandler: createPendingAttachmentDraftHandler({ sessionStore, catalog }),

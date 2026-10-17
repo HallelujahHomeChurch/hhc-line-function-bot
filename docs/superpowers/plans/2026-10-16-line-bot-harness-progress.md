@@ -100,3 +100,12 @@ has been merged or deployed; final head checks are recorded on the linked PRs.
   acceptance remain pending after an authorized deployment.
 - Preserve unmerged task worktrees. Merge, CD release, health smoke and real-user
   acceptance remain separate gates; earlier burst-fix CD investigation stays closed.
+
+## Conversation continuity follow-up (2026-10-17)
+
+The integrated Bot PR #109 also contains the focused context follow-up. See
+[the continuity plan](2026-10-17-line-context-continuity.md) for the two completed
+independent reviews (Codex and official agy Gemini), accepted fixes, current
+verification, migration boundary and remaining real-device acceptance. These Bot
+changes require no additional Account, Gateway, Admin or Presenter edits. Earlier
+cross-repository dependency and merge gates remain in force.

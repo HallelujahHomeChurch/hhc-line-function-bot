@@ -10,12 +10,75 @@ import { RedisAgentJobStore } from "../agent/jobs.js";
 import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { RedisFirstSuccessStore } from "../observability/first-success-store.js";
 import { RedisSessionStore } from "../state/redis-session-store.js";
+import { RedisConversationWindowStore } from "../agent/context-manager.js";
 
 describe("kernel Redis integration environment", () => {
   let environment: KernelRedisEnvironment | undefined;
 
   afterAll(async () => {
     await environment?.cleanup();
+  });
+
+  it("indexes scoped recent jobs atomically across clients and excludes the querying turn", async () => {
+    environment ??= await createKernelRedisEnvironment();
+    const stores = environment.clients.map(
+      (client) => new RedisAgentJobStore({ client, keyPrefix: environment!.keyPrefix })
+    );
+    const scope = {
+      profileName: "helper",
+      sourceKey: "group:continuity",
+      requesterUserId: "synthetic-a"
+    };
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        stores[index % 2]!.createPending({
+          id: `continuity-${index}`,
+          scope,
+          label: "synthetic",
+          ttlMs: 60_000
+        })
+      )
+    );
+    const first = await stores[0]!.latest(scope);
+    expect(first).toBeDefined();
+    const previous = await stores[1]!.latest(scope, first!.id);
+    expect(previous).toBeDefined();
+    expect(previous!.id).not.toBe(first!.id);
+    await stores[0]!.fail(previous!.id, "execution_uncertain");
+    expect(await stores[1]!.get(previous!.id, scope)).toMatchObject({ status: "uncertain" });
+    expect(await stores[1]!.latest({ ...scope, requesterUserId: "synthetic-b" })).toBeUndefined();
+    expect(await stores[1]!.latest({ ...scope, sourceKey: "group:other" })).toBeUndefined();
+  });
+
+  it("records concurrent requester-window turns without shortening an active clarification window", async () => {
+    environment ??= await createKernelRedisEnvironment();
+    const stores = environment.clients.map(
+      (client) => new RedisConversationWindowStore({ client, keyPrefix: environment!.keyPrefix })
+    );
+    const scope = {
+      profileName: "helper",
+      sourceKey: "group:window",
+      requesterUserId: "synthetic-a"
+    };
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        stores[index % 2]!.recordTurn({
+          scope,
+          role: "user",
+          text: `synthetic-${index}`,
+          ttlMs: index === 0 ? 120_000 : 60_000
+        })
+      )
+    );
+    const turns = await stores[0]!.recentTurns(scope, 8);
+    expect(turns).toHaveLength(8);
+    for (let index = 0; index < 8; index++) expect(turns).toContain(`user: synthetic-${index}`);
+    expect(await stores[1]!.isActive({ ...scope, requesterUserId: "synthetic-b" })).toBe(false);
+    const keys = await environment.clients[0].keys(
+      `${environment.keyPrefix}:conversation-window:*`
+    );
+    expect(keys).toHaveLength(1);
+    expect(await environment.clients[0].pTTL(keys[0]!)).toBeGreaterThan(110_000);
   });
 
   it("requires an explicit real Redis URL", async () => {
@@ -35,7 +98,7 @@ describe("kernel Redis integration environment", () => {
   });
 
   it("owns two real clients under a random per-run namespace", async () => {
-    environment = await createKernelRedisEnvironment();
+    environment ??= await createKernelRedisEnvironment();
 
     expect(environment.keyPrefix).toMatch(
       /^kernel-v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u

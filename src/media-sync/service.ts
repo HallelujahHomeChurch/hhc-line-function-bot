@@ -133,6 +133,39 @@ export class MediaSyncManagementService {
     return this.store.bindingStatus(collectionId);
   }
 
+  async readConversationStatus(
+    groupId: string,
+    requestId: string,
+    actorUserId: string,
+    now = new Date()
+  ) {
+    const binding = await this.store.findActiveBinding({ profileName: "helper", groupId });
+    if (!binding || !(await this.store.isBindingAdmitted(binding.id)))
+      return { state: "unbound" as const };
+    const from = new Date(now.getTime() - 15 * 60_000).toISOString();
+    const until = now.toISOString();
+    const page = await this.listCollectionStatus(
+      binding.collectionId,
+      { from, until, limit: 1 },
+      requestId,
+      actorUserId
+    );
+    const current = await this.store.findActiveBinding({ profileName: "helper", groupId });
+    if (
+      current?.id !== binding.id ||
+      current.version !== binding.version ||
+      !(await this.store.isBindingAdmitted(binding.id))
+    )
+      return { state: "unavailable" as const };
+    return {
+      state: binding.pausedAt ? ("paused" as const) : ("active" as const),
+      from,
+      until,
+      totalReceived: page.totalReceived,
+      counts: page.counts
+    };
+  }
+
   async mutateBinding(
     collectionId: string,
     mutation: MediaSyncBindingMutation,

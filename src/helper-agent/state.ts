@@ -15,12 +15,18 @@ interface HelperAgentStateOptions {
 }
 
 export interface HelperAgentRunSnapshot {
+  contextReset?: "expired" | "policy_changed";
   externalSheetMusicAllowed: boolean;
   externalSheetMusicQuery?: string;
   markExternalResearch?(): Promise<void>;
 }
 
 export interface HelperAgentState {
+  recordReply?(input: {
+    threadId: string;
+    isCurrent(): Promise<boolean>;
+    task(): Promise<void>;
+  }): Promise<void>;
   checkpointer: SdkCheckpointer;
   threadId(input: { profileName: string; source: LineSource }): string | undefined;
   run<T>(input: {
@@ -60,6 +66,12 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
   return {
     checkpointer: options.checkpointer,
     threadId: createThreadId(options.hmacKey),
+    recordReply: (input) =>
+      withMemoryThreadLock(locks, input.threadId, async () => {
+        if (!expiresAt.has(input.threadId) || expiresAt.get(input.threadId)! <= now().getTime())
+          return;
+        if (await input.isCurrent()) await guardedTask(input, options.checkpointer, input.task);
+      }),
     run: (input) =>
       withMemoryThreadLock(locks, input.threadId, async () => {
         if (input.isCurrent && !(await input.isCurrent())) throw new Error("context_invalidated");
@@ -76,6 +88,7 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
         policyKeys.set(input.threadId, input.policyKey);
         const result = await guardedTask(input, options.checkpointer, async () =>
           input.task({
+            contextReset: expired ? "expired" : policyChanged ? "policy_changed" : undefined,
             markExternalResearch: async () => {
               policyKeys.set(input.threadId, "research-in-progress");
             },
@@ -118,6 +131,15 @@ export function createPostgresHelperAgentState(
   return {
     checkpointer: options.checkpointer,
     threadId: createThreadId(options.hmacKey),
+    recordReply: (input) =>
+      withPgThreadLock(options.lockPool, input.threadId, async () => {
+        const current = await options.pool.query(
+          "select 1 from agent_sdk_threads where thread_id=$1 and expires_at>$2",
+          [input.threadId, now()]
+        );
+        if (current.rowCount && (await input.isCurrent()))
+          await guardedTask(input, options.checkpointer, input.task);
+      }),
     async setup() {
       await options.pool.query(`
         create table if not exists agent_sdk_threads (
@@ -145,6 +167,13 @@ export function createPostgresHelperAgentState(
           [input.threadId]
         );
         let metadata: (typeof current.rows)[number] | undefined = current.rows[0];
+        const contextReset = metadata
+          ? metadata.expires_at.getTime() <= observedAt.getTime()
+            ? "expired"
+            : metadata.policy_key !== null && metadata.policy_key !== input.policyKey
+              ? "policy_changed"
+              : undefined
+          : undefined;
         if (
           metadata &&
           (metadata.expires_at.getTime() <= observedAt.getTime() ||
@@ -172,6 +201,7 @@ export function createPostgresHelperAgentState(
         try {
           const result = await guardedTask(input, options.checkpointer, async () =>
             input.task({
+              contextReset,
               markExternalResearch: async () => {
                 await options.pool.query(
                   "update agent_sdk_threads set policy_key = $2 where thread_id = $1",

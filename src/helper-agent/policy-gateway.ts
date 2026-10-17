@@ -14,6 +14,7 @@ import type {
 } from "../types.js";
 
 export interface HelperToolGatewayOptions {
+  onToolOutcome?: (outcome: HelperToolResult) => void;
   context: FunctionHandlerContext;
   handlers: FunctionRegistry;
   timeoutMs?: number;
@@ -28,6 +29,10 @@ export interface HelperToolGatewayOptions {
 
 export function createHelperToolGateway(options: HelperToolGatewayOptions) {
   let nextInvocationOrder = 0;
+  const settle = (outcome: HelperToolResult) => {
+    options.onToolOutcome?.(outcome);
+    return outcome;
+  };
   return {
     async execute(
       name: CapabilityName,
@@ -47,21 +52,21 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
         !parsedArgs ||
         (definition.sideEffectLevel !== "read" && hasModelReviewArgument(args))
       ) {
-        return denied(sourceType);
+        return settle(denied(sourceType));
       }
       const requiresAccount =
         definition.sideEffectLevel !== "read" ||
         options.context.profile.permissionRequiredFunctions.includes(name);
-      if (requiresAccount && !options.authorize) return denied(sourceType);
+      if (requiresAccount && !options.authorize) return settle(denied(sourceType));
       if (options.authorize) {
         try {
-          if (!(await options.authorize(name))) return denied(sourceType);
+          if (!(await options.authorize(name))) return settle(denied(sourceType));
         } catch {
-          return unavailable(sourceType);
+          return settle(unavailable(sourceType));
         }
       }
       const handler = options.handlers[name];
-      if (!handler) return unavailable(sourceType);
+      if (!handler) return settle(unavailable(sourceType));
       let result: FunctionExecutionResult;
       try {
         result = await withDeadline(
@@ -69,10 +74,10 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
           options.timeoutMs ?? 10_000
         );
       } catch {
-        return unavailable(sourceType);
+        return settle(unavailable(sourceType));
       }
       options.onDomainResult?.(name, parsedArgs, result, invocationOrder);
-      return projectToolResult(result, sourceType);
+      return settle(projectToolResult(result, sourceType));
     }
   };
 }

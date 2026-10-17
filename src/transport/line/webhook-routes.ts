@@ -647,6 +647,15 @@ async function handleWebhook(
             incrementIgnored(ignoredCounts, "duplicate_webhook_event");
             continue;
           }
+          const mediaScope = buildConversationWindowScope(profile, event);
+          const mediaTtl = conversationWindowTtlMs(profile);
+          if (mediaScope && mediaTtl)
+            await conversationWindowStore.recordTurn({
+              scope: mediaScope,
+              role: "user",
+              text: "[media received]",
+              ttlMs: mediaTtl
+            });
           mediaSyncOnlyEvents.push({ event, manual: Boolean(intake.manual) });
           continue;
         }
@@ -1065,6 +1074,17 @@ async function handleWebhook(
       const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
       const requesterDisplayName = await resolveRequesterDisplayName(getLineIdentity(), event);
       if (!(await attachQuoteContext())) continue;
+      // Accept same-requester supplements while the first answer is still running.
+      const admittedScope = buildConversationWindowScope(effectiveProfile, event);
+      const admittedTtl = conversationWindowTtlMs(effectiveProfile);
+      if (event.message?.type === "text" && admittedScope && admittedTtl) {
+        await conversationWindowStore.recordTurn({
+          scope: admittedScope,
+          role: "user",
+          text: "[admitted turn]",
+          ttlMs: admittedTtl
+        });
+      }
       await receipt?.start();
 
       const profileTurnInput = {
@@ -1112,7 +1132,13 @@ async function handleWebhook(
             result.quickReplies ? { quickReplies: result.quickReplies } : undefined
           );
           if (!quoteContext || (await quoteContext.isCurrent()))
-            await recordConversationReply(conversationWindowStore, effectiveProfile, event, result);
+            await recordConversationReply(
+              conversationWindowStore,
+              effectiveProfile,
+              event,
+              result,
+              quoteContext?.isCurrent
+            );
         }
         continue;
       }
@@ -1224,14 +1250,8 @@ async function handleWebhook(
         ) {
           await profileRuntime.recordExternalResult?.(
             {
-              profile: postbackProfile,
-              event,
-              requestId,
-              requesterDisplayName,
-              configuredFunctions: [...profile.enabledFunctions],
-              authorizeFunctions: async (names) => [
-                ...(await turnAccountAuthorization.allowedFunctions(names))
-              ]
+              ...profileTurnInput,
+              profile: postbackProfile
             },
             completedResult
           );
@@ -1618,7 +1638,13 @@ async function handleWebhook(
           intro?.quickReplies ? { quickReplies: intro.quickReplies } : undefined
         );
         if (intro) {
-          await recordConversationReply(conversationWindowStore, effectiveProfile, event, intro);
+          await recordConversationReply(
+            conversationWindowStore,
+            effectiveProfile,
+            event,
+            intro,
+            quoteContext?.isCurrent
+          );
         }
         continue;
       }
@@ -1645,7 +1671,13 @@ async function handleWebhook(
           smallTalkCategory: groupEngagement.smallTalkCategory
         });
         await line.replyText(event.replyToken, result.replyText, undefined);
-        await recordConversationReply(conversationWindowStore, effectiveProfile, event, result);
+        await recordConversationReply(
+          conversationWindowStore,
+          effectiveProfile,
+          event,
+          result,
+          quoteContext?.isCurrent
+        );
         continue;
       }
 
@@ -1662,7 +1694,13 @@ async function handleWebhook(
           intro.replyText,
           intro.quickReplies ? { quickReplies: intro.quickReplies } : undefined
         );
-        await recordConversationReply(conversationWindowStore, effectiveProfile, event, intro);
+        await recordConversationReply(
+          conversationWindowStore,
+          effectiveProfile,
+          event,
+          intro,
+          quoteContext?.isCurrent
+        );
         continue;
       }
 
@@ -1679,7 +1717,8 @@ async function handleWebhook(
           conversationWindowStore,
           effectiveProfile,
           event,
-          researchOutcome.result
+          researchOutcome.result,
+          quoteContext?.isCurrent
         );
         continue;
       }
@@ -1725,7 +1764,8 @@ async function handleWebhook(
             conversationWindowStore,
             effectiveProfile,
             event,
-            attachmentResult
+            attachmentResult,
+            quoteContext?.isCurrent
           );
           continue;
         }
@@ -1764,7 +1804,8 @@ async function handleWebhook(
             conversationWindowStore,
             effectiveProfile,
             event,
-            continuation.result
+            continuation.result,
+            quoteContext?.isCurrent
           );
         }
         continue;
@@ -1813,7 +1854,8 @@ async function handleWebhook(
           conversationWindowStore,
           effectiveProfile,
           event,
-          agentTurnResult
+          agentTurnResult,
+          quoteContext?.isCurrent
         );
       }
     } catch (error) {
@@ -2427,8 +2469,10 @@ async function recordConversationReply(
   store: ConversationWindowStore,
   profile: BotProfileConfig,
   event: LineEvent,
-  result: FunctionExecutionResult
+  result: FunctionExecutionResult,
+  isCurrent?: () => Promise<boolean>
 ): Promise<void> {
+  if (isCurrent && !(await isCurrent())) return;
   const normalTtlMs = conversationWindowTtlMs(profile);
   const awaitingClarification =
     result.agentResult?.status === "ambiguous" ||

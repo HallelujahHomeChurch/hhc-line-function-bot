@@ -199,11 +199,11 @@ Helper side effects are proposal tools. The SDK agent prepares a validated scope
 
 Pasted schedules can contain several months, emoji, reminders and unrelated announcements. The helper organizes structured `entries` while retaining `content` for comparison. Schedule tool identifiers come from the current profile registry; assignee names do not select the domain. The full preview includes every included month, and one approval publishes those monthly records atomically. Other months remain unchanged. Recoverable preparation results allow another authorized attempt within the existing turn budget. Exact structured draft edits preserve untouched entries; invalid edits revoke the old approval without discarding the draft.
 
-Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same DeepSeek provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
+Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same DeepSeek provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
 
 A local sheet-music miss may create requester-scoped consent. Only after atomic consent does the helper receive `search_sheet_music_web` and `read_sheet_music_page`; a per-turn gate separates external research from draft mutation, and research-derived messages are removed before later turns. Search returns opaque invocation-local refs, the reader treats bounded public page text as untrusted, and only detected direct PDF/JPEG/PNG candidates can enter the existing import review. The agent and bot process never download the binary. `src/transport/line/attachment-intake.ts`, the durable outbox, finite worker, Asset scan, clean-only publication, and catalog upsert remain the sole attachment path.
 
-`pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` run the same 17-case deterministic fake-model evaluator. `pnpm eval:sdk-agent --live` is the manual ten-case bounded DeepSeek suite and prints only aggregate case/call/token/latency fields. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies checkpoint restart, expiry, and cleanup.
+`pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` run the same 19-case deterministic fake-model evaluator. `pnpm eval:sdk-agent --live` is the manual ten-case bounded DeepSeek suite and prints only aggregate case/call/token/latency fields. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies checkpoint restart, expiry, and cleanup.
 
 ## Time Zone
 
@@ -489,3 +489,19 @@ A handler exception or result-store outage does not prove the write was rolled b
 The result button asks for operational reconciliation instead of inviting another
 write. Successful business results and LINE delivery are tracked separately; an
 unknown reply result does not retry the action or reuse the reply token.
+
+### Conversation continuity
+
+Admitted requester supplements can continue before the first answer. Text, buttons,
+accepted replies and explicit quotes share generation fences; active conversations
+do not reset at 64 messages. Separate accepted messages are processed sequentially
+and may receive separate replies. Short-term context still expires after 15/30
+minutes in groups/direct chat, with explicit lifecycle context on reuse.
+
+Checkpoints retain safe delivered reply text rather than an unselected model
+answer. An explicit public group read quote can trigger a fresh authorized lookup
+for another requester; private history, notes and approvals stay isolated.
+`get_conversation_state` reports current scoped work and finite media counts; an
+unknown outcome is never reported as completed. See the
+[implementation plan](docs/superpowers/plans/2026-10-17-line-context-continuity.md)
+for advisor findings, tests and acceptance limits.

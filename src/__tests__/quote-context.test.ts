@@ -63,14 +63,50 @@ describe("quote context boundary", () => {
     });
     await prepared!.line.replyText("synthetic", "result");
     expect(replyText).toHaveBeenCalledTimes(1);
-    expect(store.recordReply).toHaveBeenCalledWith(turn, [
-      { id: "reply-one", text: "result" },
-      { id: "reply-two", text: "part two" }
-    ]);
+    expect(store.recordReply).toHaveBeenCalledWith(
+      turn,
+      [
+        { id: "reply-one", text: "result" },
+        { id: "reply-two", text: "part two" }
+      ],
+      { kind: "conversation" }
+    );
     vi.mocked(store.isCurrent).mockResolvedValue(false);
     await prepared!.line.replyText("synthetic", "stale");
     expect(replyText).toHaveBeenCalledTimes(1);
   });
+  it("does not delay an accepted waiting reply behind the running agent checkpoint lock", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const recordDeliveredReply = vi.fn(async () => gate);
+    const replyText = vi.fn(async () => ({ sentMessages: [{ id: "waiting", text: "處理中" }] }));
+    const prepared = await prepareQuoteContext({
+      store: fakeStore(),
+      scope,
+      runtime: { handleTextTurn: async () => undefined, recordDeliveredReply },
+      event: {
+        type: "message",
+        source: scope.source,
+        timestamp: Date.now(),
+        message: { type: "text", text: "查詢" }
+      },
+      line: { replyText }
+    });
+    try {
+      const outcome = await Promise.race([
+        prepared!.line.replyText("synthetic", "處理中").then(() => "accepted"),
+        new Promise<string>((resolve) => setImmediate(() => resolve("blocked")))
+      ]);
+      expect(outcome).toBe("accepted");
+      expect(recordDeliveredReply).toHaveBeenCalledTimes(1);
+      expect(replyText).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+    }
+  });
+
   it("persists reset before clearing and does not acknowledge a failed clear", async () => {
     const order: string[] = [];
     const store = fakeStore();

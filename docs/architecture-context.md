@@ -170,11 +170,30 @@ Structured helper group clarification extends addressed requester continuation t
 
 ### LINE quoted context
 
-`src/quotes/postgres-store.ts` owns the bounded requester quote index and generation
+`src/quotes/postgres-store.ts` owns the requester quote index and generation
 fences. `src/transport/line/quote-context.ts` connects admitted events and ordered
 LINE reply receipts. Only known Bot references can wake a registered group without
-a wake word. Other requesters' content is never loaded into the caller's checkpoint.
-Bot references retain the originating safe request, not protected tool results;
-resource tools must recheck current authorization. Group/direct text expires after
-15/30 minutes. Reset and unsend invalidate checkpoints, previews and job retrieval.
-Unknown quotes ask for restatement. Native quote behavior requires device acceptance.
+a wake word. Requester checkpoints and approvals remain private. An explicitly
+quoted public group read may carry only a server-produced safe capability locator;
+the new requester reruns that read under current authorization. Private notes,
+credentials, drafts, original reply bodies and whole-group transcripts are never
+shared through this path.
+
+Accepted receipts retain safe actual reply text (with omitted links and marked
+truncation), while approval previews retain status only. Pending generated replies
+are marked as not yet delivered. A normalized dependency table prevents active
+conversations from resetting at 64 messages and preserves withdrawal propagation
+past text expiry. Group/direct text expires after 15/30 minutes; reset, unsend and
+policy changes invalidate stale state and callbacks. Unknown quotes ask for
+restatement. Native quote behavior requires device acceptance.
+
+Admission opens the requester continuation marker before a first reply, including
+eligible media intake. Accepted events remain separate sequential turns under the
+existing thread lock; there is no debounce or whole-group ingestion. Historical
+tool payloads become non-authoritative markers before later turns. Current formal
+questions require fresh successful tool evidence; tool failures cannot become
+model-declared success. `get_conversation_state` reads only scoped draft,
+attachment and recent task status, with fresh-authorized finite media counts.
+
+Implementation and consultant dispositions:
+[conversation continuity plan](superpowers/plans/2026-10-17-line-context-continuity.md).
