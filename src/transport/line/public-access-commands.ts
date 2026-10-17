@@ -1,3 +1,4 @@
+import type { MediaSyncManagementService } from "../../media-sync/service.js";
 import type { RegistrationInviteCodeStore } from "../../access/registration-invite-code-store.js";
 import type { AccessStore } from "../../access/types.js";
 import type { PostgresMediaSyncStore } from "../../media-sync/store.js";
@@ -73,7 +74,8 @@ export async function handlePublicAccessCommand(input: {
   startAccountLogin?(): Promise<{ bindingUrl: string }>;
   policies: PublicAccessCommandPolicies;
   resolveCurrentAccess(): Promise<EffectiveAccessContext>;
-  mediaSyncStore?: Pick<PostgresMediaSyncStore, "findActiveBinding" | "bindWithCode">;
+  mediaSyncStore?: Pick<PostgresMediaSyncStore, "findActiveBinding">;
+  mediaSyncManagementService?: Pick<MediaSyncManagementService, "bindWithCode">;
 }): Promise<FunctionExecutionResult | undefined> {
   const parsed = input.policies.parseCommand(input.text);
   const systemAction = matchNaturalLanguageSystemActionHint(input.text);
@@ -149,15 +151,26 @@ async function handleMediaSyncCommand(
   }
   if (!groupDisplayName?.trim())
     return { ok: false, replyText: "目前無法取得群組名稱，請稍後再試。" };
-  const result = await input.mediaSyncStore.bindWithCode({
-    profileName: input.profile.name,
-    code: args[0].trim(),
-    groupId,
-    groupDisplayName: groupDisplayName.trim(),
-    boundByLineUserId: userId,
-    requestId: input.productContext.requestId
-  });
-  if (result.status === "bound") return { ok: true, replyText: "已綁定這個群組的媒體資料夾。" };
+  if (!input.mediaSyncManagementService)
+    return { ok: false, replyText: "目前無法驗證綁定權限，請稍後再試。" };
+  let result: Awaited<ReturnType<MediaSyncManagementService["bindWithCode"]>>;
+  try {
+    result = await input.mediaSyncManagementService.bindWithCode({
+      profileName: input.profile.name,
+      code: args[0].trim(),
+      groupId,
+      groupDisplayName: groupDisplayName.trim(),
+      boundByLineUserId: userId,
+      requestId: input.productContext.requestId
+    });
+  } catch {
+    return { ok: false, replyText: "目前無法驗證綁定權限，請稍後再試。" };
+  }
+  if (result.status === "bound")
+    return {
+      ok: true,
+      replyText: `已將「${groupDisplayName.trim()}」綁定至「${result.collectionName ?? "媒體資料夾"}」。`
+    };
   if (result.status === "group_already_bound")
     return { ok: true, replyText: GROUP_ALREADY_BOUND_REPLY };
   if (result.status === "collection_already_bound")

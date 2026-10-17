@@ -1,3 +1,4 @@
+import type { QuoteToken } from "../quotes/types.js";
 import type { CapabilityName } from "../capabilities/names.js";
 import { randomUUID } from "node:crypto";
 
@@ -10,9 +11,10 @@ export interface AgentJobScope {
   requesterUserId?: string;
 }
 
-export type AgentJobStatus = "pending" | "completed" | "failed";
+export type AgentJobStatus = "pending" | "completed" | "failed" | "uncertain";
 
 export interface AgentJobRecord {
+  contextToken?: QuoteToken;
   id: string;
   scope: AgentJobScope;
   capability?: CapabilityName;
@@ -20,11 +22,15 @@ export interface AgentJobRecord {
   status: AgentJobStatus;
   result?: FunctionExecutionResult;
   error?: string;
+  executionStartedAt?: string;
+  executionLeaseUntil?: string;
   createdAt: string;
   expiresAt: string;
 }
 
 export interface CreatePendingAgentJobInput {
+  contextToken?: QuoteToken;
+  id?: string;
   scope: AgentJobScope;
   capability?: CapabilityName;
   label: string;
@@ -32,7 +38,10 @@ export interface CreatePendingAgentJobInput {
 }
 
 export interface AgentJobStore {
+  latest?(scope: AgentJobScope, excludingId?: string): Promise<AgentJobRecord | undefined>;
   createPending(input: CreatePendingAgentJobInput): Promise<AgentJobRecord>;
+  markStarted?(id: string, leaseMs: number): Promise<boolean>;
+  renewExecution?(id: string, leaseMs: number): Promise<boolean>;
   complete(id: string, result: FunctionExecutionResult, capability?: CapabilityName): Promise<void>;
   fail(id: string, error: string): Promise<void>;
   get(id: string, scope: AgentJobScope): Promise<AgentJobRecord | undefined>;
@@ -51,7 +60,7 @@ local record = cjson.decode(value)
 if record.status ~= 'pending' then return 0 end
 local ttl = redis.call('PTTL', KEYS[1])
 if ttl <= 0 then return 0 end
-record.status = 'failed'
+record.status = ARGV[1] == 'execution_uncertain' and 'uncertain' or 'failed'
 record.error = ARGV[1]
 redis.call('PSETEX', KEYS[1], ttl, cjson.encode(record))
 return 1
@@ -65,19 +74,71 @@ export class InMemoryAgentJobStore implements AgentJobStore {
     this.now = options.now ?? (() => new Date());
   }
 
+  async latest(scope: AgentJobScope, excludingId?: string): Promise<AgentJobRecord | undefined> {
+    const candidates = [...this.jobs.values()]
+      .reverse()
+      .filter(
+        (job) =>
+          job.id !== excludingId &&
+          scopeMatches(job.scope, scope) &&
+          Date.parse(job.expiresAt) > this.now().getTime()
+      );
+    const job = candidates
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+      .at(0);
+    return job ? projectJob(job, this.now()) : undefined;
+  }
+
   async createPending(input: CreatePendingAgentJobInput): Promise<AgentJobRecord> {
     const now = this.now();
+    for (const [id, job] of this.jobs) {
+      if (Date.parse(job.expiresAt) <= now.getTime()) this.jobs.delete(id);
+    }
     const record: AgentJobRecord = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       scope: { ...input.scope },
+      contextToken: input.contextToken,
       capability: input.capability,
       label: input.label,
       status: "pending",
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + input.ttlMs).toISOString()
     };
+    const existing = this.jobs.get(record.id);
+    if (existing && Date.parse(existing.expiresAt) > now.getTime()) {
+      if (!scopeMatches(existing.scope, input.scope)) throw new Error("agent_job_scope_conflict");
+      return { ...existing };
+    }
     this.jobs.set(record.id, record);
     return { ...record };
+  }
+
+  async markStarted(id: string, leaseMs: number): Promise<boolean> {
+    const job = this.jobs.get(id);
+    const now = this.now().getTime();
+    if (
+      !job ||
+      job.status !== "pending" ||
+      job.executionStartedAt ||
+      Date.parse(job.expiresAt) <= now
+    )
+      return false;
+    job.executionStartedAt = new Date(now).toISOString();
+    job.executionLeaseUntil = new Date(now + leaseMs).toISOString();
+    return true;
+  }
+  async renewExecution(id: string, leaseMs: number): Promise<boolean> {
+    const job = this.jobs.get(id);
+    const now = this.now().getTime();
+    if (
+      !job ||
+      job.status !== "pending" ||
+      !job.executionLeaseUntil ||
+      Date.parse(job.executionLeaseUntil) <= now
+    )
+      return false;
+    job.executionLeaseUntil = new Date(now + leaseMs).toISOString();
+    return true;
   }
 
   async complete(
@@ -86,7 +147,12 @@ export class InMemoryAgentJobStore implements AgentJobStore {
     capability?: CapabilityName
   ): Promise<void> {
     const job = this.jobs.get(id);
-    if (!job || Date.parse(job.expiresAt) <= this.now().getTime()) {
+    if (
+      !job ||
+      job.status === "completed" ||
+      job.status === "failed" ||
+      Date.parse(job.expiresAt) <= this.now().getTime()
+    ) {
       return;
     }
     this.jobs.set(id, {
@@ -102,7 +168,11 @@ export class InMemoryAgentJobStore implements AgentJobStore {
     if (!job || job.status !== "pending") {
       return;
     }
-    this.jobs.set(id, { ...job, status: "failed", error });
+    this.jobs.set(id, {
+      ...job,
+      status: error === "execution_uncertain" ? "uncertain" : "failed",
+      error
+    });
   }
 
   async get(id: string, scope: AgentJobScope): Promise<AgentJobRecord | undefined> {
@@ -114,7 +184,7 @@ export class InMemoryAgentJobStore implements AgentJobStore {
       this.jobs.delete(id);
       return undefined;
     }
-    return { ...job };
+    return projectJob(job, this.now());
   }
 }
 
@@ -137,16 +207,62 @@ export class RedisAgentJobStore implements AgentJobStore {
   async createPending(input: CreatePendingAgentJobInput): Promise<AgentJobRecord> {
     const now = this.now();
     const record: AgentJobRecord = {
-      id: this.idFactory(),
+      id: input.id ?? this.idFactory(),
       scope: { ...input.scope },
+      contextToken: input.contextToken,
       capability: input.capability,
       label: input.label,
       status: "pending",
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + input.ttlMs).toISOString()
     };
+    if (input.id || this.options.client.eval) {
+      if (!this.options.client.eval) throw new Error("agent_job_atomic_store_required");
+      const raw = await this.options.client.eval(CREATE_JOB, {
+        keys: [this.key(record.id), this.recentKey(input.scope)],
+        arguments: [JSON.stringify(record), String(input.ttlMs)]
+      });
+      if (typeof raw !== "string") throw new Error("agent_job_invalid_record");
+      const existing = JSON.parse(raw) as AgentJobRecord;
+      if (!scopeMatches(existing.scope, input.scope)) throw new Error("agent_job_scope_conflict");
+      return existing;
+    }
     await this.write(record);
     return { ...record };
+  }
+
+  async markStarted(id: string, leaseMs: number): Promise<boolean> {
+    return this.executionTransition(id, leaseMs, "start");
+  }
+
+  async latest(scope: AgentJobScope, excludingId?: string): Promise<AgentJobRecord | undefined> {
+    const raw = await this.options.client.get(this.recentKey(scope));
+    if (!raw) return undefined;
+    const ids: unknown = JSON.parse(raw);
+    if (!Array.isArray(ids)) return undefined;
+    for (const id of ids.slice(0, 8)) {
+      if (typeof id !== "string" || id === excludingId) continue;
+      const job = await this.get(id, scope);
+      if (job) return job;
+    }
+    return undefined;
+  }
+
+  private recentKey(scope: AgentJobScope): string {
+    return `${this.options.keyPrefix}:agent-job-recent:${Buffer.from(JSON.stringify([scope.profileName, scope.sourceKey, scope.requesterUserId ?? ""])).toString("base64url")}`;
+  }
+  async renewExecution(id: string, leaseMs: number): Promise<boolean> {
+    return this.executionTransition(id, leaseMs, "renew");
+  }
+  private async executionTransition(id: string, leaseMs: number, action: string): Promise<boolean> {
+    if (!this.options.client.eval) throw new Error("agent_job_atomic_store_required");
+    const now = this.now().getTime();
+    return (
+      (await this.options.client.eval(EXECUTION_JOB, {
+        keys: [this.key(id)],
+        arguments: [action, new Date(now).toISOString(), new Date(now + leaseMs).toISOString()]
+      })) === 1
+    );
   }
 
   async complete(
@@ -155,15 +271,29 @@ export class RedisAgentJobStore implements AgentJobStore {
     capability?: CapabilityName
   ): Promise<void> {
     const record = await this.readById(id);
-    if (!record || Date.parse(record.expiresAt) <= this.now().getTime()) {
+    if (
+      !record ||
+      record.status === "completed" ||
+      record.status === "failed" ||
+      Date.parse(record.expiresAt) <= this.now().getTime()
+    ) {
       return;
     }
-    await this.write({
+    const completed = {
       ...record,
       capability: capability ?? record.capability,
-      status: "completed",
+      status: "completed" as const,
       result
-    });
+    };
+    if (this.options.client.eval) {
+      await this.options.client.eval(COMPLETE_JOB, {
+        keys: [this.key(id)],
+        arguments: [JSON.stringify(completed)]
+      });
+    } else {
+      if (record.executionStartedAt) throw new Error("agent_job_atomic_store_required");
+      await this.write(completed);
+    }
   }
 
   async fail(id: string, error: string): Promise<void> {
@@ -182,7 +312,7 @@ export class RedisAgentJobStore implements AgentJobStore {
     if (new Date(record.expiresAt).getTime() <= this.now().getTime()) {
       return undefined;
     }
-    return { ...record };
+    return projectJob(record, this.now());
   }
 
   private async readById(id: string): Promise<AgentJobRecord | undefined> {
@@ -262,3 +392,49 @@ function sourceKeyForJob(source: LineSource): string | undefined {
       return undefined;
   }
 }
+
+function projectJob(job: AgentJobRecord, now: Date): AgentJobRecord {
+  return job.status === "pending" &&
+    job.executionLeaseUntil &&
+    Date.parse(job.executionLeaseUntil) <= now.getTime()
+    ? { ...job, status: "uncertain", error: "execution_uncertain" }
+    : { ...job };
+}
+const CREATE_JOB = `
+local value = redis.call('GET', KEYS[1])
+if value then return value end
+redis.call('PSETEX', KEYS[1], ARGV[2], ARGV[1])
+if KEYS[2] then
+  local ids = cjson.decode(redis.call('GET', KEYS[2]) or '[]')
+  table.insert(ids, 1, cjson.decode(ARGV[1]).id)
+  while #ids > 8 do table.remove(ids) end
+  local ttl = math.max(tonumber(ARGV[2]),redis.call('PTTL',KEYS[2]))
+  redis.call('PSETEX', KEYS[2], ttl, cjson.encode(ids))
+end
+return ARGV[1]
+`;
+const EXECUTION_JOB = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local job = cjson.decode(raw)
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 or job.status ~= 'pending' then return 0 end
+if ARGV[1] == 'start' then
+  if job.executionStartedAt then return 0 end
+  job.executionStartedAt = ARGV[2]
+else
+  if not job.executionLeaseUntil or job.executionLeaseUntil <= ARGV[2] then return 0 end
+end
+job.executionLeaseUntil = ARGV[3]
+redis.call('PSETEX', KEYS[1], ttl, cjson.encode(job))
+return 1
+`;
+const COMPLETE_JOB = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local job = cjson.decode(raw)
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 or job.status == 'completed' or job.status == 'failed' then return 0 end
+redis.call('PSETEX', KEYS[1], ttl, ARGV[1])
+return 1
+`;

@@ -1,3 +1,5 @@
+import { PostgresQuoteStore } from "../quotes/postgres-store.js";
+import { readMemberAccess } from "../account/member-access.js";
 import { createMeetingOccurrenceReader } from "../clients/meeting-occurrences.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
@@ -97,7 +99,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
           baseUrl: config.asset?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
           timeoutMs: config.asset?.timeoutMs ?? 3000
         }),
-        postgres.mediaSyncStore
+        postgres.mediaSyncStore,
+        accountAdminClient
       )
     : undefined;
 
@@ -314,6 +317,22 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const helperProfile = config.profiles.find(
     (profile) => profile.name === "helper" && profile.agent
   );
+  const quoteProfile =
+    helperProfile ??
+    config.profiles.find((profile) => profile.name === "main" && profile.accountLink);
+  const quoteStore =
+    postgres?.pool && quoteProfile
+      ? new PostgresQuoteStore(
+          postgres.pool,
+          config.observability?.hmacKey ?? quoteProfile.channelSecret
+        )
+      : undefined;
+  await quoteStore?.setup();
+  await quoteStore?.cleanupExpired();
+  const quoteCleanupTimer = quoteStore
+    ? setInterval(() => void quoteStore.cleanupExpired().catch(() => undefined), 300_000)
+    : undefined;
+  quoteCleanupTimer?.unref();
   let stopSdkStateCleanup: (() => void) | undefined;
   let helperStateLockPool: ReturnType<typeof createPostgresPool> | undefined;
   const runtimes: Partial<Record<string, ProfileRuntime>> = {};
@@ -367,6 +386,25 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     });
     runtimes.helper = createHelperRuntime({
       ...helperModels,
+      async readMediaState(input) {
+        if (
+          input.event.source.type !== "group" ||
+          !input.event.source.groupId ||
+          !input.event.source.userId ||
+          !mediaSyncManagementService
+        )
+          return undefined;
+        const subject = await accountAdminClient.resolveLineSubject({
+          lineUserId: input.event.source.userId,
+          profileName: input.profile.name
+        });
+        if (!subject.bound || !subject.active) return { state: "unavailable" };
+        return mediaSyncManagementService.readConversationStatus(
+          input.event.source.groupId,
+          input.requestId,
+          subject.subjectId
+        );
+      },
       state: helperState,
       handlers: registries.functions,
       attachmentDraftHandler: createPendingAttachmentDraftHandler({ sessionStore, catalog }),
@@ -383,6 +421,11 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   }
   const profileRuntime = createProfileRuntimeDispatcher(runtimes);
   const app = createApp(config, {
+    async readMemberAccess(lineUserId, profileName, requestId) {
+      const subject = await accountAdminClient.resolveLineSubject({ lineUserId, profileName });
+      if (!subject.bound || !subject.active) return "unavailable";
+      return readMemberAccess(fetch, subject.subjectId, requestId);
+    },
     adminActionRegistry: knowledgeAdminActionRegistry,
     adminActionRouter,
     postbackHandlers: registries.postbacks,
@@ -407,6 +450,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     memoryCommands,
     resourceMemory,
     profileRuntime,
+    quoteStore,
     diagnostics: createDependencyDiagnostics({
       config,
       postgres: postgres?.pool,
@@ -425,6 +469,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       clearInterval(memoryPurgeTimer);
       clearInterval(knowledgePurgeTimer);
       stopSdkStateCleanup?.();
+      clearInterval(quoteCleanupTimer);
       stopAttachmentScanOutbox?.();
       stopMediaSyncOutbox?.();
       stopAuditOutbox?.();

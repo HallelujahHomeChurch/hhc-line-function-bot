@@ -26,19 +26,29 @@ export async function prepareMediaSyncIntake(input: {
     profileName: input.profile.name,
     groupId
   });
-  if (!binding) return { eligible: false };
+  if (!binding || !(await input.store.isBindingAdmitted(binding.id))) return { eligible: false };
+
+  if (binding.pausedAt) return { eligible: true, manual: false };
 
   const sourceKey = mediaSyncSourceKey(input.profile.name, message.id);
-  const result = await input.store.createIngest({
-    sourceKey,
-    profileName: input.profile.name,
-    messageId: message.id,
-    groupId,
-    collectionId: binding.collectionId,
-    displayName: displayName(message, input.event.timestamp ?? input.now.getTime()),
-    mediaKind: message.type,
-    expectedMime: expectedMime(message)
-  });
+  let result: Awaited<ReturnType<PostgresMediaSyncStore["createIngest"]>>;
+  try {
+    result = await input.store.createIngest({
+      sourceKey,
+      profileName: input.profile.name,
+      messageId: message.id,
+      groupId,
+      collectionId: binding.collectionId,
+      bindingId: binding.id,
+      displayName: displayName(message, input.event.timestamp ?? input.now.getTime()),
+      mediaKind: message.type,
+      expectedMime: expectedMime(message)
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "media_sync_binding_unavailable")
+      return { eligible: true, manual: false };
+    throw error;
+  }
   if (result.tombstoned) {
     return { eligible: true, manual: false, sourceKey };
   }

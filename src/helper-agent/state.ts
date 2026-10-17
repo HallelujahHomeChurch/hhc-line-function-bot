@@ -15,18 +15,25 @@ interface HelperAgentStateOptions {
 }
 
 export interface HelperAgentRunSnapshot {
+  contextReset?: "expired" | "policy_changed";
   externalSheetMusicAllowed: boolean;
   externalSheetMusicQuery?: string;
   markExternalResearch?(): Promise<void>;
 }
 
 export interface HelperAgentState {
+  recordReply?(input: {
+    threadId: string;
+    isCurrent(): Promise<boolean>;
+    task(): Promise<void>;
+  }): Promise<void>;
   checkpointer: SdkCheckpointer;
   threadId(input: { profileName: string; source: LineSource }): string | undefined;
   run<T>(input: {
     threadId: string;
     policyKey: string;
     source: LineSource;
+    isCurrent?: () => Promise<boolean>;
     task: (snapshot: HelperAgentRunSnapshot) => Promise<T>;
   }): Promise<T>;
   reset(threadId: string, clearScopedSessions?: () => Promise<void>): Promise<void>;
@@ -59,8 +66,15 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
   return {
     checkpointer: options.checkpointer,
     threadId: createThreadId(options.hmacKey),
+    recordReply: (input) =>
+      withMemoryThreadLock(locks, input.threadId, async () => {
+        if (!expiresAt.has(input.threadId) || expiresAt.get(input.threadId)! <= now().getTime())
+          return;
+        if (await input.isCurrent()) await guardedTask(input, options.checkpointer, input.task);
+      }),
     run: (input) =>
       withMemoryThreadLock(locks, input.threadId, async () => {
+        if (input.isCurrent && !(await input.isCurrent())) throw new Error("context_invalidated");
         const observedAt = now().getTime();
         const expired = (expiresAt.get(input.threadId) ?? Number.POSITIVE_INFINITY) <= observedAt;
         const policyChanged =
@@ -72,14 +86,17 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
         }
         expiresAt.set(input.threadId, observedAt + helperThreadIdleTtlMs(input.source));
         policyKeys.set(input.threadId, input.policyKey);
-        // A provider or domain failure does not invalidate the scoped checkpoint.
-        const result = await input.task({
-          markExternalResearch: async () => {
-            policyKeys.set(input.threadId, "research-in-progress");
-          },
-          externalSheetMusicQuery: externalSearchQueries.get(input.threadId),
-          externalSheetMusicAllowed: (externalSearchExpiresAt.get(input.threadId) ?? 0) > observedAt
-        });
+        const result = await guardedTask(input, options.checkpointer, async () =>
+          input.task({
+            contextReset: expired ? "expired" : policyChanged ? "policy_changed" : undefined,
+            markExternalResearch: async () => {
+              policyKeys.set(input.threadId, "research-in-progress");
+            },
+            externalSheetMusicQuery: externalSearchQueries.get(input.threadId),
+            externalSheetMusicAllowed:
+              (externalSearchExpiresAt.get(input.threadId) ?? 0) > observedAt
+          })
+        );
         policyKeys.set(input.threadId, input.policyKey);
         expiresAt.set(input.threadId, now().getTime() + helperThreadIdleTtlMs(input.source));
         return result;
@@ -114,6 +131,15 @@ export function createPostgresHelperAgentState(
   return {
     checkpointer: options.checkpointer,
     threadId: createThreadId(options.hmacKey),
+    recordReply: (input) =>
+      withPgThreadLock(options.lockPool, input.threadId, async () => {
+        const current = await options.pool.query(
+          "select 1 from agent_sdk_threads where thread_id=$1 and expires_at>$2",
+          [input.threadId, now()]
+        );
+        if (current.rowCount && (await input.isCurrent()))
+          await guardedTask(input, options.checkpointer, input.task);
+      }),
     async setup() {
       await options.pool.query(`
         create table if not exists agent_sdk_threads (
@@ -128,6 +154,7 @@ export function createPostgresHelperAgentState(
     },
     async run(input) {
       const outcome = await withPgThreadLock(options.lockPool, input.threadId, async () => {
+        if (input.isCurrent && !(await input.isCurrent())) throw new Error("context_invalidated");
         const observedAt = now();
         const current = await options.pool.query<{
           expires_at: Date;
@@ -140,6 +167,13 @@ export function createPostgresHelperAgentState(
           [input.threadId]
         );
         let metadata: (typeof current.rows)[number] | undefined = current.rows[0];
+        const contextReset = metadata
+          ? metadata.expires_at.getTime() <= observedAt.getTime()
+            ? "expired"
+            : metadata.policy_key !== null && metadata.policy_key !== input.policyKey
+              ? "policy_changed"
+              : undefined
+          : undefined;
         if (
           metadata &&
           (metadata.expires_at.getTime() <= observedAt.getTime() ||
@@ -165,17 +199,20 @@ export function createPostgresHelperAgentState(
           );
         }
         try {
-          const result = await input.task({
-            markExternalResearch: async () => {
-              await options.pool.query(
-                "update agent_sdk_threads set policy_key = $2 where thread_id = $1",
-                [input.threadId, "research-in-progress"]
-              );
-            },
-            externalSheetMusicQuery: metadata?.external_search_query ?? undefined,
-            externalSheetMusicAllowed:
-              (metadata?.external_search_expires_at?.getTime() ?? 0) > observedAt.getTime()
-          });
+          const result = await guardedTask(input, options.checkpointer, async () =>
+            input.task({
+              contextReset,
+              markExternalResearch: async () => {
+                await options.pool.query(
+                  "update agent_sdk_threads set policy_key = $2 where thread_id = $1",
+                  [input.threadId, "research-in-progress"]
+                );
+              },
+              externalSheetMusicQuery: metadata?.external_search_query ?? undefined,
+              externalSheetMusicAllowed:
+                (metadata?.external_search_expires_at?.getTime() ?? 0) > observedAt.getTime()
+            })
+          );
           await options.pool.query(
             `insert into agent_sdk_threads (thread_id, expires_at, policy_key)
              values ($1, $2, $3)
@@ -320,5 +357,21 @@ async function withPgThreadLock<T>(
     throw error;
   } finally {
     client.release();
+  }
+}
+
+async function guardedTask<T>(
+  input: { threadId: string; isCurrent?: () => Promise<boolean> },
+  checkpointer: SdkCheckpointer,
+  task: () => Promise<T>
+): Promise<T> {
+  try {
+    const result = await task();
+    if (input.isCurrent && !(await input.isCurrent())) throw new Error("context_invalidated");
+    return result;
+  } catch (error) {
+    if (input.isCurrent && !(await input.isCurrent()))
+      await checkpointer.deleteThread(input.threadId);
+    throw error;
   }
 }

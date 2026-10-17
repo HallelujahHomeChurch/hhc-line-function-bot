@@ -15,7 +15,9 @@ const dateKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const monthKeySchema = z.string().regex(/^\d{4}-\d{2}$/);
 export const downloadWeeklyPaperArgumentsSchema = z
   .object({
-    issueNumber: z.number().int().min(1).max(2_147_483_647).optional()
+    issueNumber: z.number().int().min(1).max(2_147_483_647).optional(),
+    series: z.enum(["general", "children"]).optional(),
+    locale: z.enum(["zh-Hant", "zh-Hans", "en"]).optional()
   })
   .strip();
 

@@ -167,3 +167,37 @@ R5.0 describes the prior controlled-agent release. The helper SDK redesign requi
 Helper explicitly enables a four-second agent-operation inline budget and thirty-minute result TTL. Text and review operations share the waiting reply plus requester-scoped “查看結果” postback. Stored generated answers carry server-owned capability provenance; retrieval rechecks every dependency. Empty-tool conversation results use explicit public provenance. Expired approval previews cannot be replayed as current. Pending jobs expire; in-process execution is not restartable merely because results use Redis. The four seconds excludes preauthorization, prior webhook batch events, and LINE network delivery.
 
 Structured helper group clarification extends addressed requester continuation to two minutes; ordinary conversation retains its configured sixty-second wake window. A longer checkpoint TTL is not permission to ingest unaddressed whole-group chat. Read/selection completion can append bounded source-typed context without another model call; failure to synchronize must not suppress a completed result.
+
+### LINE quoted context
+
+`src/quotes/postgres-store.ts` owns the requester quote index and generation
+fences. `src/transport/line/quote-context.ts` connects admitted events and ordered
+LINE reply receipts. Only known Bot references can wake a registered group without
+a wake word. Requester checkpoints and approvals remain private. An explicitly
+quoted public group read may carry only a server-produced safe capability locator;
+the new requester reruns that read under current authorization. Only the explicitly
+quoted public Bot reply's safe excerpt accompanies the locator, so old list ordinals
+can be matched by name after a fresh lookup. Private notes, credentials, drafts,
+checkpoints and whole-group transcripts are never shared through this path. An
+explicitly quoted safe member message already admitted by the Bot can supply only
+that message in the same group; it never loads the member's surrounding history
+or approval. Unobserved, expired, withdrawn or unsafe messages require restatement.
+
+Accepted receipts retain safe actual reply text (with omitted links and marked
+truncation), while approval previews retain status only. Pending generated replies
+are marked as not yet delivered. A normalized dependency table prevents active
+conversations from resetting at 64 messages and preserves withdrawal propagation
+past text expiry. Group/direct text expires after 15/30 minutes; reset, unsend and
+policy changes invalidate stale state and callbacks. Unknown quotes ask for
+restatement. Native quote behavior requires device acceptance.
+
+Admission opens the requester continuation marker before a first reply, including
+eligible media intake. Accepted events remain separate sequential turns under the
+existing thread lock; there is no debounce or whole-group ingestion. Historical
+tool payloads become non-authoritative markers before later turns. Current formal
+questions require fresh successful tool evidence; tool failures cannot become
+model-declared success. `get_conversation_state` reads only scoped draft,
+attachment and recent task status, with fresh-authorized finite media counts.
+
+Implementation and consultant dispositions:
+[conversation continuity plan](superpowers/plans/2026-10-17-line-context-continuity.md).

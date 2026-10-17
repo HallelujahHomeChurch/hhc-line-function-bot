@@ -7,9 +7,21 @@ import type {
 } from "../clients/asset-api.js";
 import type { PostgresMediaSyncStore } from "./store.js";
 
+import type { AccountAdminClient } from "../account/account-admin-client.js";
+import type {
+  BindMediaSyncCodeInput,
+  BindMediaSyncCodeResult,
+  MediaSyncBindingMutation
+} from "./types.js";
+import type { MediaSyncStatusQuery } from "./status.js";
+
 export class MediaSyncManagementError extends Error {
   constructor(
-    readonly code: "collection_deleted" | "collection_bound" | "binding_code_already_issued"
+    readonly code:
+      | "collection_deleted"
+      | "collection_bound"
+      | "binding_code_already_issued"
+      | "collection_settling"
   ) {
     super(code);
   }
@@ -18,8 +30,34 @@ export class MediaSyncManagementError extends Error {
 export class MediaSyncManagementService {
   constructor(
     private readonly assets: AssetApiClient,
-    private readonly store: PostgresMediaSyncStore
+    private readonly store: PostgresMediaSyncStore,
+    private readonly account?: Pick<AccountAdminClient, "verifyPermission">
   ) {}
+
+  async bindWithCode(
+    input: BindMediaSyncCodeInput
+  ): Promise<BindMediaSyncCodeResult & { collectionName?: string }> {
+    if (!this.account) throw new Error("binding_authority_unavailable");
+    const candidate = await this.store.inspectBindingCode(input.profileName, input.code);
+    if (!candidate) return { status: "invalid_code" };
+    if (
+      !(await this.account.verifyPermission({
+        userId: candidate.createdByHhcUserId,
+        requestId: input.requestId
+      }))
+    )
+      return { status: "invalid_code" };
+    const managed = await this.assets.getManagedCollection(candidate.collectionId, {
+      requestId: input.requestId,
+      actorUserId: candidate.createdByHhcUserId
+    });
+    if (managed.collection.deletedAt) return { status: "invalid_code" };
+    // Authority is checked before consume; no remote request runs under the database lock.
+    const result = await this.store.bindWithCode({ ...input, expectedCodeId: candidate.id });
+    return result.status === "bound"
+      ? { ...result, collectionName: managed.collection.name }
+      : result;
+  }
 
   async listCollections(
     input: { cursor?: string; limit?: number },
@@ -63,6 +101,104 @@ export class MediaSyncManagementService {
       ...(page.cursor ? { cursor: page.cursor } : {}),
       hasMore: page.hasMore
     };
+  }
+
+  async retryWork(
+    collectionId: string,
+    workId: string,
+    idempotencyKey: string,
+    requestId: string,
+    actorUserId: string
+  ) {
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
+    if (managed.collection.deletedAt) throw new MediaSyncManagementError("collection_deleted");
+    return this.store.retryWork({
+      collectionId,
+      workId,
+      idempotencyKey,
+      requestId,
+      actorId: actorUserId
+    });
+  }
+
+  async bindingStatus(collectionId: string, requestId: string, actorUserId: string) {
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
+    if (managed.collection.deletedAt) throw new MediaSyncManagementError("collection_deleted");
+    return this.store.bindingStatus(collectionId);
+  }
+
+  async readConversationStatus(
+    groupId: string,
+    requestId: string,
+    actorUserId: string,
+    now = new Date()
+  ) {
+    const binding = await this.store.findActiveBinding({ profileName: "helper", groupId });
+    if (!binding || !(await this.store.isBindingAdmitted(binding.id)))
+      return { state: "unbound" as const };
+    const from = new Date(now.getTime() - 15 * 60_000).toISOString();
+    const until = now.toISOString();
+    const page = await this.listCollectionStatus(
+      binding.collectionId,
+      { from, until, limit: 1 },
+      requestId,
+      actorUserId
+    );
+    const current = await this.store.findActiveBinding({ profileName: "helper", groupId });
+    if (
+      current?.id !== binding.id ||
+      current.version !== binding.version ||
+      !(await this.store.isBindingAdmitted(binding.id))
+    )
+      return { state: "unavailable" as const };
+    return {
+      state: binding.pausedAt ? ("paused" as const) : ("active" as const),
+      from,
+      until,
+      totalReceived: page.totalReceived,
+      counts: page.counts
+    };
+  }
+
+  async mutateBinding(
+    collectionId: string,
+    mutation: MediaSyncBindingMutation,
+    idempotencyKey: string,
+    requestId: string,
+    actorUserId: string
+  ) {
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
+    if (managed.collection.deletedAt) throw new MediaSyncManagementError("collection_deleted");
+    return this.store.mutateBinding({
+      collectionId,
+      mutation,
+      idempotencyKey,
+      requestId,
+      actorId: actorUserId
+    });
+  }
+
+  async listCollectionStatus(
+    collectionId: string,
+    query: MediaSyncStatusQuery,
+    requestId: string,
+    actorUserId: string
+  ) {
+    const managed = await this.assets.getManagedCollection(collectionId, {
+      requestId,
+      actorUserId
+    });
+    if (managed.collection.deletedAt) throw new MediaSyncManagementError("collection_deleted");
+    return this.store.listCollectionStatus(collectionId, query);
   }
 
   createCollection(name: string, idempotencyKey: string, requestId: string, actorUserId: string) {
@@ -242,6 +378,8 @@ export class MediaSyncManagementService {
     if (issued.status === "already_issued") {
       throw new MediaSyncManagementError("binding_code_already_issued");
     }
+    if (issued.status === "collection_settling")
+      throw new MediaSyncManagementError("collection_settling");
     if (issued.status === "collection_bound") {
       throw new MediaSyncManagementError("collection_bound");
     }

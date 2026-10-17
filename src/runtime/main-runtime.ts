@@ -1,3 +1,5 @@
+import type { QuoteScope, QuoteToken } from "../quotes/types.js";
+import { matchesWeeklyPaper } from "../capabilities/weekly-paper-request.js";
 import { createHash, randomUUID } from "node:crypto";
 
 import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
@@ -61,6 +63,8 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
       return reviewResult({ ok: true, replyText: "請選擇確認或取消。" });
     }
     const job = await options.jobs.get(input.resultJobId, scope);
+    if (job?.contextToken && job.contextToken.generation !== input.quoteContext?.token.generation)
+      return reviewResult(unavailableReview());
     if (job?.status === "completed" && job.result) return reviewResult(job.result);
     if (job?.status !== "pending") return reviewResult(unavailableReview());
     const review = await options.sessions.takeActionReview({
@@ -103,17 +107,37 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
   };
 
   return {
+    async clearContext(scope) {
+      if (scope.source.userId) await abandonOwnProfileUpdate(scope, scope.source.userId);
+    },
     async handleTextTurn(input) {
       if (input.profile.name !== "main" || input.event.source.type !== "user") return undefined;
       const text = input.event.message?.text?.trim() ?? "";
       if (!text) return undefined;
       const requesterUserId = input.event.source.userId;
       if (!requesterUserId) return undefined;
+      if (/^(?:\/reset|忘記這段對話)$/u.test(text)) {
+        await abandonOwnProfileUpdate(
+          { profileName: input.profile.name, source: input.event.source },
+          requesterUserId
+        );
+        return { ok: true, replyText: "這段短期對話已清除。", resultAuthority: { kind: "public" } };
+      }
+      if (input.event.message?.quotedMessageId) {
+        return {
+          ok: true,
+          replyText: "請直接輸入完整需求；引用訊息不會確認操作，請使用原預覽的按鈕。",
+          resultAuthority: { kind: "public" }
+        };
+      }
       if (
         input.profile.enabledFunctions.includes("download_weekly_paper") &&
         matchesWeeklyPaper(text)
       ) {
-        await abandonOwnProfileUpdate(input, requesterUserId);
+        await abandonOwnProfileUpdate(
+          { profileName: input.profile.name, source: input.event.source },
+          requesterUserId
+        );
         return options.handlers.download_weekly_paper?.(
           normalizeFunctionArguments("download_weekly_paper", {}, { text }),
           handlerContext(input)
@@ -134,11 +158,18 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
           })
         )?.result;
       }
-      const pending = await options.sessions.findProfileUpdate({
+      let pending = await options.sessions.findProfileUpdate({
         profileName: "main",
         source: input.event.source,
         requesterUserId
       });
+      if (
+        pending?.contextToken &&
+        pending.contextToken.generation !== input.quoteContext?.token.generation
+      ) {
+        await options.sessions.delete(pending.id);
+        pending = undefined;
+      }
       if (!pending && !matchesOwnProfileUpdate(text)) {
         return { ok: true, replyText: messages.unsupported };
       }
@@ -167,7 +198,12 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
       );
       if (pending) await options.sessions.delete(pending.id);
       const context = handlerContext(authorizedInput);
-      const clarification = await collectProfileUpdateSlot(args, context, nicknameEnabled);
+      const clarification = await collectProfileUpdateSlot(
+        args,
+        context,
+        nicknameEnabled,
+        input.quoteContext?.token
+      );
       if (clarification) return clarification;
       return createUpdateReview(authorizedInput, args, context);
     },
@@ -190,6 +226,7 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
       scope,
       capability: "update_own_profile",
       label: "action-review",
+      contextToken: input.quoteContext?.token,
       ttlMs: RESULT_TTL_MS
     });
     const reviewId = idFactory();
@@ -235,17 +272,17 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
     };
   }
 
-  async function abandonOwnProfileUpdate(input: ProfileTurnInput, requesterUserId: string) {
+  async function abandonOwnProfileUpdate(input: QuoteScope, requesterUserId: string) {
     const review = await options.sessions.findActionReview({
       profileName: "main",
-      source: input.event.source,
+      source: input.source,
       requesterUserId
     });
     if (review) {
       const taken = await options.sessions.takeActionReview({
         id: review.id,
         profileName: "main",
-        source: input.event.source,
+        source: input.source,
         requesterUserId
       });
       if (taken) {
@@ -255,7 +292,7 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
     }
     const pending = await options.sessions.findProfileUpdate({
       profileName: "main",
-      source: input.event.source,
+      source: input.source,
       requesterUserId
     });
     if (pending) await options.sessions.delete(pending.id);
@@ -264,7 +301,8 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
   async function collectProfileUpdateSlot(
     args: JsonRecord,
     context: FunctionHandlerContext,
-    nicknameEnabled: boolean
+    nicknameEnabled: boolean,
+    contextToken?: QuoteToken
   ): Promise<FunctionExecutionResult | undefined> {
     const missing = nicknameEnabled
       ? typeof args.nickname !== "string"
@@ -279,6 +317,7 @@ export function createMainRuntime(options: MainRuntimeOptions): ProfileRuntime {
     await options.sessions.set({
       id: `${context.requestId ?? idFactory()}:profile-update`,
       type: "profile_update",
+      contextToken,
       nicknameWriteEnabled: nicknameEnabled,
       profileName: "main",
       requesterUserId: context.event.source.userId,
@@ -313,6 +352,8 @@ function applyProfileUpdateAnswer(
 
 function handlerContext(input: ProfileTurnInput): FunctionHandlerContext {
   return {
+    channelId: input.channelId,
+    quoteContext: input.quoteContext,
     profile: input.profile,
     event: input.event,
     requestId: input.requestId,
@@ -322,6 +363,7 @@ function handlerContext(input: ProfileTurnInput): FunctionHandlerContext {
 }
 
 async function authorized(input: ProfileTurnInput): Promise<boolean> {
+  if (input.quoteContext && !(await input.quoteContext.isCurrent())) return false;
   try {
     return (
       (await input.authorizeFunctions?.(["update_own_profile"]))?.includes("update_own_profile") ===
@@ -354,15 +396,6 @@ function withUpdateCapability<T extends ProfileTurnInput>(input: T): T {
           enabledFunctions: [...input.profile.enabledFunctions, "update_own_profile"]
         }
       };
-}
-
-function matchesWeeklyPaper(text: string): boolean {
-  return (
-    !/(?:不要|不用|取消)/u.test(text) &&
-    /(?:下載|最新|第\s*\d+\s*期).*週報|週報.*(?:下載|最新|第\s*\d+\s*期)/u.test(
-      text.normalize("NFKC")
-    )
-  );
 }
 
 function matchesOwnProfileUpdate(text: string): boolean {

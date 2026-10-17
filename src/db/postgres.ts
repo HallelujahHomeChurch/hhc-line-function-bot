@@ -1,4 +1,5 @@
 import pg from "pg";
+import { runAccessMigrations } from "../access/migrations.js";
 
 import { runMediaSyncMigrations } from "../media-sync/migrations.js";
 import { PostgresMediaSyncStore } from "../media-sync/store.js";
@@ -28,6 +29,7 @@ export async function createPostgresRuntime(
 
   try {
     await pool.query("select 1");
+    await runAccessMigrations(pool);
     await runMediaSyncMigrations(pool);
     return { pool, mediaSyncStore: new PostgresMediaSyncStore(pool) };
   } catch (error) {

@@ -88,8 +88,9 @@ describe("helper agent state", () => {
 
     await state.run(input);
     now = new Date("2026-09-04T00:16:00.000Z");
-    await state.run(input);
+    const reset = await state.run({ ...input, task: async (snapshot) => snapshot.contextReset });
 
+    expect(reset).toBe("expired");
     expect(deleteThread).toHaveBeenCalledWith("helper-expiring");
   });
 
@@ -109,7 +110,9 @@ describe("helper agent state", () => {
       threadId: "helper-policy",
       policyKey: "one",
       source,
-      task: async () => undefined
+      task: async (snapshot) => {
+        expect(snapshot.contextReset).toBe("policy_changed");
+      }
     });
 
     expect(deleteThread).toHaveBeenCalledWith("helper-policy");

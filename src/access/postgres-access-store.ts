@@ -99,7 +99,7 @@ export class PostgresAccessStore implements AccessStore {
     const result = await this.db.query(
       `
       update access_principals
-      set disabled_at = now(), disabled_by = $4
+      set disabled_at = now(), disabled_by = $4, execution_generation = gen_random_uuid()
       where profile_name = $1
         and principal_type = $2
         and principal_id = $3

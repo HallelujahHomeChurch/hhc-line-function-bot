@@ -184,6 +184,7 @@ describe("config", () => {
         timeoutMs: 3000
       },
       mediaSync: {
+        lifecycleEnabled: false,
         gatewayCallerAppId: "api-gateway",
         appApiToken: "runtime-token"
       }
@@ -1323,7 +1324,8 @@ describe("config", () => {
     expect(config.rateLimit).toEqual({
       enabled: true,
       windowMs: 30_000,
-      maxRequests: 5
+      maxRequests: 5,
+      groupMaxRequests: 100
     });
     expect(config.lastErrors).toEqual({
       maxEntries: 7

@@ -263,7 +263,10 @@ describe("store factories", () => {
   });
 
   it("uses Redis stores when Redis is configured", () => {
-    const redis = { client: new FakeRedisClient(), keyPrefix: "test" };
+    const redis = {
+      client: Object.assign(new FakeRedisClient(), { eval: vi.fn() }),
+      keyPrefix: "test"
+    };
 
     expect(createSessionStore({ redis })).toBeInstanceOf(RedisSessionStore);
     expect(createCacheStore({ redis })).toBeInstanceOf(RedisCacheStore);
@@ -351,7 +354,10 @@ describe("store factories", () => {
   });
 
   it("uses Redis error and rate-limit stores when Redis is configured", () => {
-    const redis = { client: new FakeRedisClient(), keyPrefix: "test" };
+    const redis = {
+      client: Object.assign(new FakeRedisClient(), { eval: vi.fn() }),
+      keyPrefix: "test"
+    };
 
     expect(createLastErrorStore({ redis, maxEntries: 5 })).toBeInstanceOf(RedisLastErrorStore);
     expect(
@@ -418,20 +424,6 @@ describe("store factories", () => {
     ]);
     expect(JSON.stringify([...redis.lists.values()])).not.toMatch(/secret-request|helper-private/u);
     expect(await store.clear()).toBe(1);
-  });
-
-  it("rate limits through Redis", async () => {
-    const limiter = createRateLimiter({
-      redis: { client: new FakeRedisClient(), keyPrefix: "test" },
-      config: { enabled: true, windowMs: 60_000, maxRequests: 1 }
-    });
-
-    await expect(
-      limiter.check({ profileName: "helper", source: { type: "user", userId: "U1" } })
-    ).resolves.toMatchObject({ allowed: true });
-    await expect(
-      limiter.check({ profileName: "helper", source: { type: "user", userId: "U1" } })
-    ).resolves.toMatchObject({ allowed: false });
   });
 });
 

@@ -1,3 +1,4 @@
+import type { QuoteToken } from "../quotes/types.js";
 import { helperThreadIdleTtlMs } from "./state.js";
 import { randomUUID } from "node:crypto";
 
@@ -29,6 +30,7 @@ export type ReviewResult =
   | { status: "denied" };
 
 export interface CreateActionReviewInput {
+  contextToken?: QuoteToken;
   proposal: { toolName: HelperWriteToolName; args: JsonRecord; operationId: string };
   sessions: SessionStore;
   jobs: AgentJobStore;
@@ -55,6 +57,7 @@ export async function createActionReview(input: CreateActionReviewInput): Promis
     scope,
     capability,
     label: "action-review",
+    contextToken: input.contextToken,
     ttlMs: Math.max(input.resultTtlMs ?? 0, DEFAULT_RESULT_TTL_MS)
   });
   const id = (input.idFactory ?? randomUUID)();
