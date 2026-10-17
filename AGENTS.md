@@ -6,7 +6,7 @@
 - `helper` uses one LangChain/LangGraph agent with DeepSeek and server-owned tools.
 - `main` is a deterministic provider-free runtime for public and self-service functions.
 - Runtime behavior is controlled by bot profiles, capability toggles, access policy, and state stores.
-- Group context is requester-scoped and short-lived; never feed raw whole-group chat into the model. Explicit public group read references carry only a server-produced safe locator and require a fresh read under the current requester; never share checkpoints, saved notes, drafts or approvals.
+- Group context is requester-scoped and short-lived; never feed raw whole-group chat into the model. Explicit public group read references carry a server-produced safe locator plus only the explicitly quoted public Bot reply's safe excerpt and require a fresh read under the current requester; never share checkpoints, saved notes, drafts or approvals. An explicitly quoted, already-admitted safe member message may supply only that message in the same group; it must not wake the Bot by itself or grant authority.
 - Public `/healthz` is minimal liveness. Public `/readyz` checks only Postgres and Redis. Detailed dependency status belongs in admin-only direct-chat `/diag`.
 - Keep public repo safety in mind: never commit real `.env` files, tokens, IDs, or secrets.
 

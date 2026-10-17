@@ -38,7 +38,8 @@ The user explicitly authorized the second consultant through the official agy CL
       gates; record failures and retests. Require green PR CI before handoff.
 
 Use existing boundaries. Do not add a second agent, generic task engine or whole-
-group transcript. Group sharing contains only scoped safe public read references.
+group transcript. Group context sharing is limited to explicitly quoted safe public
+messages and scoped public read locators; it never loads another requester checkpoint.
 
 ## Decisions and consultant findings
 
@@ -55,13 +56,18 @@ being mistaken for current facts. These are fixed in the existing runtime/store.
   checkpoint write failure after acceptance never retries the LINE send. Receipt
   checkpoint synchronization is asynchronous so the running agent thread lock
   cannot delay an accepted waiting reply or defeat the inline budget.
-- A normalized dependency table retains directed ownership/withdrawal edges while quote tokens stay
-  bounded. Gemini's FIFO suggestion was rejected because it loses old withdrawal
+- A normalized dependency table retains directed ownership/withdrawal edges while
+  quote tokens stay bounded. Gemini's FIFO suggestion was rejected because it loses old withdrawal
   dependencies. Reset/withdrawal rotate generations and fence stale callbacks.
 - Another group requester may quote a server-produced unrestricted public read
   locator. The current requester runs that capability again with fresh policy,
   budget and authorization. They never receive the original requester checkpoint,
-  saved notes, approval, URLs, draft or delivered answer body.
+  saved notes, approval, URLs, draft or surrounding conversation. Only the explicitly
+  quoted public Bot read reply's safe excerpt is supplied, so a reference to the
+  original second item is not silently applied to a reordered fresh list. An
+  explicitly quoted safe member message already admitted by the Bot supplies only
+  that message within the same group, marked as another member rather than the
+  current requester. It does not wake the Bot by itself, transfer consent, or recover unknown/expired/withdrawn/unsafe messages.
 - Historical tool payloads are invalidated before a later turn. Formal capability
   questions without current evidence fail closed; failures/not-found are rendered
   from current domain results. Ordinary conversation still uses the model.
@@ -92,7 +98,7 @@ release and acceptance are complete.
 
 ## Verification
 
-- Continuity plus receipt/quote boundary: 19 tests pass, including accepted receipt
+- Continuity plus receipt/quote boundary: 21 tests pass, including accepted receipt
   replacement/redaction and a pending checkpoint lock that must not delay delivery.
 - Scoped state/media and lifecycle tests pass, including fresh ACL denial and
   concurrent binding change. Current status includes cancelled/withdrawn counts.
@@ -109,6 +115,9 @@ release and acceptance are complete.
 - Typecheck, lint, build, formatting, architecture (388 TS files), profile config,
   OpenAPI publication and five OpenAPI contract cases pass. Local shell/contract
   subprocesses use the existing corepack pnpm shim.
-- Required PR CI is the authoritative final default-timeout suite check:
+- CI at `b2c6872` passed all default gates, including the full suite and real
+  dependencies. The explicit public-quote follow-up adds two further regression
+  cases and receives a new required CI run. Required PR CI is the authoritative
+  final default-timeout suite check:
   [Bot PR #109 checks](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/pull/109/checks).
   No merge, deployment, live DeepSeek or real LINE acceptance is included.

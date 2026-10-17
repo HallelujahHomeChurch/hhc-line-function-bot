@@ -175,9 +175,13 @@ fences. `src/transport/line/quote-context.ts` connects admitted events and order
 LINE reply receipts. Only known Bot references can wake a registered group without
 a wake word. Requester checkpoints and approvals remain private. An explicitly
 quoted public group read may carry only a server-produced safe capability locator;
-the new requester reruns that read under current authorization. Private notes,
-credentials, drafts, original reply bodies and whole-group transcripts are never
-shared through this path.
+the new requester reruns that read under current authorization. Only the explicitly
+quoted public Bot reply's safe excerpt accompanies the locator, so old list ordinals
+can be matched by name after a fresh lookup. Private notes, credentials, drafts,
+checkpoints and whole-group transcripts are never shared through this path. An
+explicitly quoted safe member message already admitted by the Bot can supply only
+that message in the same group; it never loads the member's surrounding history
+or approval. Unobserved, expired, withdrawn or unsafe messages require restatement.
 
 Accepted receipts retain safe actual reply text (with omitted links and marked
 truncation), while approval previews retain status only. Pending generated replies

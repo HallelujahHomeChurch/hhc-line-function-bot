@@ -61,19 +61,19 @@ export function conversationStateReply(
   if (snapshot.draft)
     lines.push(
       snapshot.draft.status === "approval_expired"
-        ? "目前草稿的確認已過期，需重新預覽；尚未保存。"
-        : "目前有一份待確認草稿，尚未保存。"
+        ? "你目前草稿的確認已過期，需重新預覽；尚未保存。"
+        : "你目前有一份待確認草稿，尚未保存。"
     );
   if (snapshot.attachment)
     lines.push(
-      `目前有附件待處理：${({ awaiting_opt_in: "等待同意保存", awaiting_purpose: "等待選擇用途", awaiting_title: "等待輸入名稱", awaiting_confirmation: "等待確認保存" } as Record<string, string>)[snapshot.attachment.stage] ?? "尚未完成"}；草稿不代表已發布。`
+      `你目前有附件待處理：${({ awaiting_opt_in: "等待同意保存", awaiting_purpose: "等待選擇用途", awaiting_title: "等待輸入名稱", awaiting_confirmation: "等待確認保存" } as Record<string, string>)[snapshot.attachment.stage] ?? "尚未完成"}；草稿不代表已發布。`
     );
   if (snapshot.task) {
     const labels = {
-      pending: "最近一次任務仍在處理。",
-      completed: "最近一次任務已完成；這不代表其他附件或批次都已完成。",
-      failed: "最近一次任務未完成。",
-      uncertain: "最近一次任務的執行結果尚未確認，請勿重複提交。",
+      pending: "你在這段對話的最近一次任務仍在處理。",
+      completed: "你在這段對話的最近一次任務已完成；這不代表其他附件或批次都已完成。",
+      failed: "你在這段對話的最近一次任務未完成。",
+      uncertain: "你在這段對話的最近一次任務的執行結果尚未確認，請勿重複提交。",
       context_invalidated: "較早任務的上下文已失效，不能直接恢復舊結果。"
     };
     lines.push(labels[snapshot.task.status]);
@@ -95,6 +95,7 @@ export function conversationStateReply(
   return {
     ok: true,
     replyText:
-      lines.join("\n") || "目前沒有可查詢的草稿、附件或最近任務紀錄；這不代表先前的操作已完成。"
+      lines.join("\n") ||
+      "你在這段對話目前沒有可查詢的草稿、附件或最近任務紀錄；這不代表先前的操作已完成。"
   };
 }

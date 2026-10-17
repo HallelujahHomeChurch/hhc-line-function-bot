@@ -120,7 +120,7 @@ export class RedisConversationWindowStore implements ConversationWindowStore {
       });
       return;
     }
-    // Single-process test adapters may omit eval; production Redis uses the atomic path.
+    // shortcut: eval-less test adapters are single-process; production clients must provide eval.
     record.turns = appendTurn(await this.liveRecord(input.scope), input.role, input.text, now);
     await this.options.client.setEx(
       this.key(input.scope),

@@ -26,6 +26,7 @@ export type QuotedText =
   | {
       status: "resolved";
       author: "user" | "bot";
+      otherMember?: true;
       kind: "message_text" | "reply_to_request" | "public_lookup";
       text: string;
       lookup?: ConversationReadReference;

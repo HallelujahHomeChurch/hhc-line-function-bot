@@ -404,6 +404,13 @@ describe("LINE quote context in real PostgreSQL", () => {
           publicRead: { capability: "query_schedule", arguments: { query: "合成查詢" } }
         }
       );
+      await store.recordReply(first, [{ id: "unsafe-bot", text: "token=synthetic" }], {
+        kind: "read",
+        publicRead: { capability: "query_schedule", arguments: { query: "合成" } }
+      });
+      expect((await begin("unsafe-quote", "synthetic-b", "unsafe-bot"))?.quoted).toEqual({
+        status: "other_requester"
+      });
       const own = await begin("own-quote", "synthetic-a", "bot-visible");
       expect(own?.quoted).toMatchObject({
         status: "resolved",
@@ -417,10 +424,36 @@ describe("LINE quote context in real PostgreSQL", () => {
         kind: "public_lookup",
         lookup: { capability: "query_schedule" }
       });
-      expect(JSON.stringify(shared.quoted)).not.toContain("合成乙");
-      expect((await begin("private", "synthetic-b", "original"))?.quoted).toEqual({
+      expect(shared.quoted).toMatchObject({ text: expect.stringContaining("2. 合成乙") });
+      expect(JSON.stringify(shared.quoted)).not.toContain("https://");
+      expect((await begin("member-quote", "synthetic-b", "original"))?.quoted).toEqual({
+        status: "resolved",
+        author: "user",
+        otherMember: true,
+        kind: "message_text",
+        text: "合成查詢"
+      });
+      await store.begin({
+        profileName: "helper",
+        source,
+        messageId: "secret-member",
+        text: "password=synthetic",
+        timestamp: now.getTime()
+      });
+      expect((await begin("denied-secret", "synthetic-b", "secret-member"))?.quoted).toEqual({
         status: "other_requester"
       });
+      expect(
+        (
+          await store.begin({
+            profileName: "helper",
+            source: { type: "user", userId: "synthetic-b" },
+            messageId: "direct-probe",
+            quotedMessageId: "original",
+            timestamp: now.getTime()
+          })
+        )?.quoted
+      ).toEqual({ status: "unavailable" });
       for (let n = 0; n < 100; n++) {
         const next = (await begin(`long-${n}`))!;
         expect(next.token.generation).toBe(first.token.generation);

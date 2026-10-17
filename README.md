@@ -500,7 +500,8 @@ minutes in groups/direct chat, with explicit lifecycle context on reuse.
 
 Checkpoints retain safe delivered reply text rather than an unselected model
 answer. An explicit public group read quote can trigger a fresh authorized lookup
-for another requester; private history, notes and approvals stay isolated.
+for another requester, with only the explicitly quoted public reply's safe excerpt
+to identify old list items; private history, notes and approvals stay isolated.
 `get_conversation_state` reports current scoped work and finite media counts; an
 unknown outcome is never reported as completed. See the
 [implementation plan](docs/superpowers/plans/2026-10-17-line-context-continuity.md)

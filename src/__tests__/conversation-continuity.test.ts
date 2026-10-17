@@ -305,7 +305,7 @@ describe("conversation continuity across real runtime boundaries", () => {
     expect(JSON.stringify(oldTools)).not.toContain("OLD_EVIDENCE_MARKER");
   });
 
-  it("rechecks a public group lookup under the new requester instead of importing the old answer", async () => {
+  it("rechecks a public group lookup under the new requester instead of treating the old answer as current", async () => {
     const lookup = vi.fn(async () => ({
       ok: true,
       replyText: "目前是合成乙。",
@@ -361,6 +361,51 @@ describe("conversation continuity across real runtime boundaries", () => {
     });
     expect(result?.replyText).toContain("尚未確認");
     expect(result?.replyText).not.toContain("已全部完成");
+  });
+
+  it("keeps the explicitly quoted public list distinct from a fresh reordered list", async () => {
+    const lookup = vi.fn(async () => ({
+      ok: true,
+      replyText: "1. 合成乙\n2. 合成甲",
+      agentResult: {
+        status: "success" as const,
+        replyData: { kind: "schedule", fields: { description: "CURRENT_ORDER: 合成乙、合成甲" } }
+      }
+    }));
+    const app = fixture([new AIMessage("你引用的第二個是合成乙，重新查詢後仍可取得。")], {
+      query_schedule: lookup
+    });
+    const turn = app.turn("第二個現在還有嗎？");
+    turn.quoteContext.quoted = {
+      status: "resolved",
+      author: "bot",
+      kind: "public_lookup",
+      text: "ORIGINAL_ORDER: 1. 合成甲、2. 合成乙",
+      lookup: { capability: "query_schedule", arguments: { query: "合成清單" } }
+    };
+    await app.runtime.handleTextTurn(turn);
+    const input = app.inputs[0]!.map((message) => message.text).join("\n");
+    expect(input).toContain("ORIGINAL_ORDER: 1. 合成甲、2. 合成乙");
+    expect(input).toContain("CURRENT_ORDER: 合成乙、合成甲");
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not endorse a quoted member's factual claim without a current read", async () => {
+    const app = fixture([new AIMessage("對，合成甲這週帶敬拜。")]);
+    const turn = app.turn("他說的對嗎？");
+    turn.quoteContext.quoted = {
+      status: "resolved",
+      author: "user",
+      otherMember: true,
+      kind: "message_text",
+      text: "本週服事表：合成甲帶敬拜。"
+    };
+    const result = await app.runtime.handleTextTurn(turn);
+    expect(result?.ok).toBe(false);
+    expect(result?.replyText).not.toContain("合成甲");
+    expect(app.inputs[0]!.map((message) => message.text).join("\n")).toContain(
+      '"otherMember":true'
+    );
   });
 
   it("does not index another requester's latest job", async () => {

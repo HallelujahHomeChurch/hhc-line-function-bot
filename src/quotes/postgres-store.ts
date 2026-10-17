@@ -135,29 +135,40 @@ export class PostgresQuoteStore implements QuoteStore {
       const reference = quotedKey ? await this.message(client, chat, quotedKey) : undefined;
       let quoted: QuotedText | undefined;
       if (input.quotedMessageId) {
-        quoted = !reference
-          ? { status: "unavailable" }
-          : reference.thread_id !== threadId
-            ? input.source.type === "group" &&
-              reference.author === "bot" &&
-              reference.public_reference
-              ? {
-                  status: "resolved",
-                  author: "bot",
-                  kind: "public_lookup",
-                  text: "群組先前的公開查詢；必須以目前身分重新查詢。",
-                  lookup: reference.public_reference
-                }
-              : { status: "other_requester" }
-            : reference.generation !== thread.generation || !reference.safe_text
-              ? { status: "unavailable" }
-              : {
-                  status: "resolved",
-                  author: reference.author,
-                  kind: reference.reference ? "reply_to_request" : "message_text",
-                  text: reference.safe_text,
-                  ...(reference.public_reference ? { lookup: reference.public_reference } : {})
-                };
+        if (!reference) quoted = { status: "unavailable" };
+        else if (reference.thread_id !== threadId) {
+          if (input.source.type === "group" && reference.author === "user" && reference.safe_text)
+            quoted = {
+              status: "resolved",
+              author: "user",
+              otherMember: true,
+              kind: "message_text",
+              text: reference.safe_text
+            };
+          else if (
+            input.source.type === "group" &&
+            reference.author === "bot" &&
+            reference.public_reference &&
+            reference.safe_text
+          )
+            quoted = {
+              status: "resolved",
+              author: "bot",
+              kind: "public_lookup",
+              text: reference.safe_text,
+              lookup: reference.public_reference
+            };
+          else quoted = { status: "other_requester" };
+        } else if (reference.generation !== thread.generation || !reference.safe_text)
+          quoted = { status: "unavailable" };
+        else
+          quoted = {
+            status: "resolved",
+            author: reference.author,
+            kind: reference.reference ? "reply_to_request" : "message_text",
+            text: reference.safe_text,
+            ...(reference.public_reference ? { lookup: reference.public_reference } : {})
+          };
       }
       const dependencies = [
         ...new Set([
