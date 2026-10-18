@@ -20,6 +20,8 @@ properties:
       - name: hhc-line-function-bot
         image: PLACEHOLDER_BOT_IMAGE
         env:
+          - name: LINE_RUNTIME_STATE_CONTRACT
+            value: "2"
           - name: SERVICE_NAME
             value: hhc-line-function-bot
           - name: HOST

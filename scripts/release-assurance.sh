@@ -21,6 +21,7 @@ RELEASE_ATTACHMENT_APP_MUTATED="${RELEASE_ATTACHMENT_APP_MUTATED:-false}"
 RELEASE_PROBE_JOB_MUTATED="${RELEASE_PROBE_JOB_MUTATED:-false}"
 RELEASE_PERIODIC_JOB_MUTATED="${RELEASE_PERIODIC_JOB_MUTATED:-false}"
 RELEASE_SEARXNG_MUTATED="${RELEASE_SEARXNG_MUTATED:-false}"
+RELEASE_STATE_DOWNGRADE_BLOCKED="${RELEASE_STATE_DOWNGRADE_BLOCKED:-false}"
 RELEASE_PROVIDER_CONTRACT_VERIFIED=false
 RELEASE_CLEANUP_FILES=()
 
@@ -1259,7 +1260,30 @@ PY
   record_release_check release_probe passed none
 }
 
+# The first journal/receipt migration is forward-only; legacy workers cannot read its state.
+classify_runtime_state_rollback() {
+  local contract
+  contract="$(BOT_ENV_JSON="${bot_env_json}" python3 - <<'PYTHON'
+import json, os
+values = {item.get("name"): item.get("value") for item in json.loads(os.environ["BOT_ENV_JSON"])}
+print(values.get("LINE_RUNTIME_STATE_CONTRACT", "legacy"))
+PYTHON
+)" || return 1
+  if [[ "${contract}" != "2" ]] \
+    || [[ "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]] \
+    || [[ "${RELEASE_KNOWN_GOOD_WARMER_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]] \
+    || [[ "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]]; then
+    RELEASE_STATE_DOWNGRADE_BLOCKED=true
+    echo "Runtime state migration: automatic downgrade is blocked; recovery requires a compatible forward release" >&2
+  fi
+}
+
 restore_known_good_revision() {
+  if [[ "${RELEASE_STATE_DOWNGRADE_BLOCKED}" == "true" ]]; then
+    RELEASE_ROLLBACK_STATUS=failed
+    echo "Refusing runtime state downgrade; retain current workloads and deploy a compatible forward fix" >&2
+    return 1
+  fi
   local rollback_revision
   local rollback_ok=true
   local rollback_verified=false

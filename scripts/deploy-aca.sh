@@ -339,6 +339,7 @@ fi
 # production write. Compatible secret/storage reconciliation is inside the
 # same failure boundary even though rollback ownership is workload-scoped.
 capture_known_good_state
+classify_runtime_state_rollback
 mark_release_mutated
 
 azure_openai_embedding_key="$(az cognitiveservices account keys list \

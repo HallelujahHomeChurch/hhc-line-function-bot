@@ -37,6 +37,13 @@ Explicit unsend and collection deletion retain their separate cleanup semantics.
 4. After worker compatibility and acceptance checks, enable the flag through the
    normal reviewed configuration release. No flag was changed by this work.
 
+The first state-contract v2 release is forward-only. The deployment snapshots
+the prior contract and exact worker digests before mutation; if they are legacy
+or mixed, automatic rollback refuses before any restore write. A failed release
+retains its current workloads and requires a compatible forward fix. Subsequent
+releases may use automatic rollback only to a matching v2 runtime/worker set.
+Do not clear this fence or return to a legacy image merely to get a green report.
+
 Do not roll workers back to versions that ignore paused bindings or publication
 attempts. Keep controls disabled until compatible workers are restored. No live
 LINE, production account or device acceptance is implied by local/CI tests.

@@ -408,6 +408,25 @@ describe("conversation continuity across real runtime boundaries", () => {
     );
   });
 
+  it("does not report a durably stored failed result as successful completion", async () => {
+    const app = fixture([toolCall("get_conversation_state"), new AIMessage("已完成")]);
+    const scope = buildAgentJobScope("helper", source)!;
+    const previous = await app.jobs.createPending({ scope, label: "synthetic", ttlMs: 60_000 });
+    await app.jobs.complete(previous.id, {
+      ok: false,
+      replyText: "目前無法查詢",
+      resultAuthority: { kind: "public" }
+    });
+    const current = await app.jobs.createPending({ scope, label: "current", ttlMs: 60_000 });
+    const result = await app.runtime.handleTextTurn({
+      ...app.turn("剛剛處理好了嗎？"),
+      operationId: current.id
+    });
+    expect(result?.replyText).toContain("最近一次任務未完成");
+    expect(result?.replyText).not.toContain("任務已完成");
+    expect((await app.jobs.get(previous.id, scope))?.status).toBe("completed");
+  });
+
   it("does not index another requester's latest job", async () => {
     const jobs = new InMemoryAgentJobStore();
     const scope = buildAgentJobScope("helper", source)!;

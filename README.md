@@ -506,3 +506,13 @@ to identify old list items; private history, notes and approvals stay isolated.
 unknown outcome is never reported as completed. See the
 [implementation plan](docs/superpowers/plans/2026-10-17-line-context-continuity.md)
 for advisor findings, tests and acceptance limits.
+
+### Runtime state migration recovery
+
+The receipt/publication-journal v2 rollout must not automatically downgrade to a
+legacy runtime or mixed worker set. Release snapshots compare the prior
+`LINE_RUNTIME_STATE_CONTRACT` and worker digests before production mutation. A
+failed first migration retains the current workloads and reports rollback failed;
+recovery requires a compatible forward release. Once a healthy matching v2 set is
+established, normal reviewed digest rollback remains available. Keep lifecycle
+controls disabled until older worker revisions and finite executions are drained.

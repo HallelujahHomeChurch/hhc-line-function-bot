@@ -611,7 +611,9 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                           input.quoteContext &&
                           job.contextToken.generation !== input.quoteContext.token.generation
                             ? "context_invalidated"
-                            : job.status,
+                            : job.status === "completed" && job.result?.ok === false
+                              ? "failed"
+                              : job.status,
                         createdAt: job.createdAt
                       }
                     : null,
