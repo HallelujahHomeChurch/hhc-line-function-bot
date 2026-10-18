@@ -46,7 +46,7 @@ describe("release assurance shell transaction", () => {
     ["legacy", "same", true],
     ["2", "same", false],
     ["2", "different", true]
-  ])("classifies state contract %s with worker %s", (contract, worker, blocked) => {
+  ])("classifies ready revision contract %s with worker %s", (contract, worker, blocked) => {
     const result = spawnSync(
       "bash",
       [
@@ -54,12 +54,26 @@ describe("release assurance shell transaction", () => {
         `
       set -euo pipefail
       source scripts/release-assurance.sh
-      bot_env_json='[{"name":"LINE_RUNTIME_STATE_CONTRACT","value":"${contract}"}]'
+      bot_env_json='[{"name":"LINE_RUNTIME_STATE_CONTRACT","value":"2"}]'
+      RESOURCE_GROUP=fixture-rg
+      CONTAINER_APP_NAME=fixture-bot
+      RELEASE_KNOWN_GOOD_REVISION=bot--known-good
+      az() {
+        if [[ "$*" != 'containerapp revision show --resource-group fixture-rg --name fixture-bot --revision bot--known-good --query properties.template.containers[0].env --output json --only-show-errors' ]]; then
+          echo unsafe-azure-call >&2
+          return 97
+        fi
+        printf '%s' '${contract === "legacy" ? "[]" : `[{"name":"LINE_RUNTIME_STATE_CONTRACT","value":"${contract}"}]`}'
+      }
       RELEASE_KNOWN_GOOD_IMAGE=same
       RELEASE_KNOWN_GOOD_SCAN_IMAGE=same
       RELEASE_KNOWN_GOOD_WARMER_IMAGE=same
       RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE=${worker}
       classify_runtime_state_rollback
+      if [[ "$RELEASE_STATE_DOWNGRADE_BLOCKED" == true ]]; then
+        if restore_known_good_revision; then exit 98; fi
+        [[ "$RELEASE_ROLLBACK_STATUS" == failed ]]
+      fi
       printf '%s' "$RELEASE_STATE_DOWNGRADE_BLOCKED"
     `
       ],
@@ -67,7 +81,33 @@ describe("release assurance shell transaction", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(String(blocked));
+    expect(result.stderr).not.toContain("unsafe-azure-call");
   });
+
+  it.each(["unavailable", "malformed"])(
+    "aborts before mutation when ready revision contract is %s",
+    (scenario) => {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+      set -euo pipefail
+      source scripts/release-assurance.sh
+      RESOURCE_GROUP=fixture-rg
+      CONTAINER_APP_NAME=fixture-bot
+      RELEASE_KNOWN_GOOD_REVISION=bot--known-good
+      az() { ${scenario === "unavailable" ? "return 97" : "printf 'invalid-json'"}; }
+      classify_runtime_state_rollback
+      echo unsafe-mutation-reached
+    `
+        ],
+        { cwd: ROOT, encoding: "utf8" }
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("unsafe-mutation-reached");
+    }
+  );
 
   it.each(["missing_manifest", "known_good_capture_failure"])(
     "writes an allowlisted report without rollback for deploy-time %s",

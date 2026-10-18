@@ -1262,8 +1262,17 @@ PY
 
 # The first journal/receipt migration is forward-only; legacy workers cannot read its state.
 classify_runtime_state_rollback() {
+  local known_good_env_json
   local contract
-  contract="$(BOT_ENV_JSON="${bot_env_json}" python3 - <<'PYTHON'
+  # The latest template may be unready; only the captured rollback revision attests compatibility.
+  known_good_env_json="$(az containerapp revision show \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${CONTAINER_APP_NAME}" \
+    --revision "${RELEASE_KNOWN_GOOD_REVISION}" \
+    --query "properties.template.containers[0].env" \
+    --output json \
+    --only-show-errors)" || return 1
+  contract="$(BOT_ENV_JSON="${known_good_env_json}" python3 - <<'PYTHON'
 import json, os
 values = {item.get("name"): item.get("value") for item in json.loads(os.environ["BOT_ENV_JSON"])}
 print(values.get("LINE_RUNTIME_STATE_CONTRACT", "legacy"))
