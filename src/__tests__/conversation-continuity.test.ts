@@ -3,6 +3,7 @@ import { AIMessage, FakeToolCallingModel, ToolMessage, type BaseMessage } from "
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryAgentJobStore, buildAgentJobScope } from "../agent/jobs.js";
 import { createHelperRuntime } from "../helper-agent/runtime.js";
+import { conversationStateReply } from "../helper-agent/conversation-tools.js";
 import { createHelperAgentState } from "../helper-agent/state.js";
 import type { QuoteContext } from "../quotes/types.js";
 import type { AppConfig, BotProfileConfig, FunctionRegistry, LineSource } from "../types.js";
@@ -425,6 +426,17 @@ describe("conversation continuity across real runtime boundaries", () => {
     expect(result?.replyText).toContain("最近一次任務未完成");
     expect(result?.replyText).not.toContain("任務已完成");
     expect((await app.jobs.get(previous.id, scope))?.status).toBe("completed");
+  });
+
+  it("does not confuse a completed preview turn with a saved draft", () => {
+    const result = conversationStateReply({
+      asOf: new Date().toISOString(),
+      draft: { status: "awaiting_confirmation", action: "propose_save_memory" },
+      attachment: null,
+      task: { status: "completed", createdAt: new Date().toISOString() }
+    });
+    expect(result.replyText).toContain("尚未保存");
+    expect(result.replyText).not.toContain("任務已完成");
   });
 
   it("does not index another requester's latest job", async () => {

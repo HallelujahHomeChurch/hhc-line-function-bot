@@ -71,7 +71,7 @@ export function conversationStateReply(
   if (snapshot.task) {
     const labels = {
       pending: "你在這段對話的最近一次任務仍在處理。",
-      completed: "你在這段對話的最近一次任務已完成；這不代表其他附件或批次都已完成。",
+      completed: "你在這段對話的最近一次處理已結束；這不代表草稿已保存，或附件與批次都已完成。",
       failed: "你在這段對話的最近一次任務未完成。",
       uncertain: "你在這段對話的最近一次任務的執行結果尚未確認，請勿重複提交。",
       context_invalidated: "較早任務的上下文已失效，不能直接恢復舊結果。"
