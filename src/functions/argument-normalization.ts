@@ -1,4 +1,5 @@
 import type { CapabilityName } from "../capabilities/names.js";
+import { weeklyPaperArguments } from "../capabilities/weekly-paper-request.js";
 import { extractPptSlideQuery } from "../ppt-query.js";
 import { extractScheduleRoleFocus, refineScheduleQuery } from "./schedule-query-refinement.js";
 import { getFunctionDefinition } from "../capabilities/catalog.js";
@@ -105,7 +106,7 @@ export function normalizeFunctionArguments(
 
   switch (action) {
     case "download_weekly_paper":
-      return normalizeWeeklyPaperArguments(input.text);
+      return weeklyPaperArguments(input.text);
     case "find_ppt_slides":
       return normalizePptSlideArguments(args, input);
     case "find_sheet_music":
@@ -128,16 +129,6 @@ export function normalizeFunctionArguments(
     default:
       return args;
   }
-}
-
-function normalizeWeeklyPaperArguments(text: string): JsonRecord {
-  const normalized = text.normalize("NFKC");
-  if (!/(?:週報|weekly\s+paper)/iu.test(normalized)) return {};
-  const rawIssueNumber =
-    normalized.match(/(?:第\s*)?(?<![\d.+-])(\d+)(?![\d.])\s*(?:期)?\s*週報/u)?.[1] ??
-    normalized.match(/週報\s*(?:第\s*)?(?<![\d.+-])(\d+)(?![\d.])\s*期/u)?.[1];
-  if (!rawIssueNumber) return {};
-  return { issueNumber: Number(rawIssueNumber) };
 }
 
 function normalizeSaveResourceArguments(args: JsonRecord): JsonRecord {

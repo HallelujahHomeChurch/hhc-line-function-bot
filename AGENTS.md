@@ -6,7 +6,7 @@
 - `helper` uses one LangChain/LangGraph agent with DeepSeek and server-owned tools.
 - `main` is a deterministic provider-free runtime for public and self-service functions.
 - Runtime behavior is controlled by bot profiles, capability toggles, access policy, and state stores.
-- Group context is requester-scoped and short-lived; never feed raw whole-group chat into the model.
+- Group context is requester-scoped and short-lived; never feed raw whole-group chat into the model. Explicit public group read references carry a server-produced safe locator plus only the explicitly quoted public Bot reply's safe excerpt and require a fresh read under the current requester; never share checkpoints, saved notes, drafts or approvals. An explicitly quoted, already-admitted safe member message may supply only that message in the same group; it must not wake the Bot by itself or grant authority.
 - Public `/healthz` is minimal liveness. Public `/readyz` checks only Postgres and Redis. Detailed dependency status belongs in admin-only direct-chat `/diag`.
 - Keep public repo safety in mind: never commit real `.env` files, tokens, IDs, or secrets.
 
@@ -28,7 +28,7 @@ Read these first when starting work:
 - Each profile has its own LINE credential references, access policy, wake-word behavior, and enabled functions.
 - The intended split is:
   - `helper`: managed direct users/groups, registration enabled, DeepSeek SDK agent.
-  - `main`: public direct users, groups blocked, registration disabled, provider-free, with public Weekly Paper download and Account-authorized own-profile updates.
+  - `main`: public direct users, groups blocked, registration disabled, provider-free, with protected member Weekly Paper access and Account-authorized own-profile updates.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
 - Administrator authority comes from a current linked Account administrator role and is rechecked for each protected operation. Legacy bootstrap or allowlist fields should not be reintroduced.
 - Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv` and `channelAccessTokenEnv`; do not put real LINE credentials or user IDs in the file.
@@ -237,3 +237,14 @@ Testing map:
 - Project lawful schedule identifiers from the profile domain registry into the owning read/write tool schemas. Unknown or unavailable domains cannot silently become a custom schedule.
 - A multi-month replacement uses one complete approval and `saveScheduleMemories` to atomically replace only included canonical months. PostgreSQL conflicts reject the whole batch; never partially publish or silently retry an uncertain commit.
 - Recoverable preparation releases an unsuccessful turn reservation; successful previews remain limited to one. Invalid edits revoke approval through the same guarded write lane while preserving original arguments. Structured draft field edits must preserve untouched server-owned entries.
+
+## Conversation delivery and lifecycle
+
+- Retain safe accepted LINE receipt text as delivered history; generated results
+  remain pending until accepted. Receipt-index failure must never resend a reply.
+- Quote dependency metadata is normalized independently of bounded token lineage;
+  do not reintroduce a 64-message generation reset or drop withdrawal edges.
+- Historical tool payloads are not current evidence. Keep current factual failures
+  and scoped job/media state server-owned rather than model-declared success.
+- Accepted supplements are separate serialized turns, not a generic inbox/task
+  engine. Never infer group-wide intake or durable memory from a wake window.

@@ -17,6 +17,7 @@ import type {
   LineContentClient,
   LineIdentityClient,
   LineReplyClient,
+  LineReplyReceipt,
   LineReplyOptions
 } from "../types.js";
 
@@ -42,11 +43,19 @@ export function createLineSdkReplyClient(profile: BotProfileConfig): LineReplyCl
   });
 
   return {
-    async replyText(replyToken: string, text: string, options?: LineReplyOptions): Promise<void> {
-      await client.replyMessage({
-        replyToken,
-        messages: buildLineTextMessages(text, options?.quickReplies)
-      });
+    async replyText(
+      replyToken: string,
+      text: string,
+      options?: LineReplyOptions
+    ): Promise<LineReplyReceipt> {
+      const messages = buildLineTextMessages(text, options?.quickReplies);
+      const receipt = await client.replyMessage({ replyToken, messages });
+      return {
+        sentMessages: messages.flatMap((message, index) => {
+          const id = receipt?.sentMessages?.[index]?.id;
+          return typeof id === "string" && id.length > 0 ? [{ id, text: message.text }] : [];
+        })
+      };
     }
   };
 }

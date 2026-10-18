@@ -112,6 +112,15 @@ function asset(): AssetApiClient {
 
 function store(): PostgresMediaSyncStore {
   return {
+    retryWork: vi.fn().mockResolvedValue(true),
+    bindingStatus: vi.fn().mockResolvedValue({
+      binding: null,
+      pendingCode: null,
+      settling: { inFlight: 0, uncertain: 0 },
+      blockedManualCount: 0
+    }),
+    mutateBinding: vi.fn().mockResolvedValue({ status: "updated", version: 2 }),
+    listCollectionStatus: vi.fn().mockResolvedValue({ items: [], totalReceived: 0 }),
     findActiveBindingByCollection: vi.fn().mockResolvedValue(undefined),
     findPendingBindingCodeByCollection: vi.fn().mockResolvedValue(undefined),
     createBindingCode: vi.fn().mockResolvedValue({
@@ -129,6 +138,7 @@ async function app(input: {
   assets?: AssetApiClient;
   store?: PostgresMediaSyncStore;
   token?: string;
+  lifecycleEnabled?: boolean;
 }) {
   const instance = fastify({ logger: false, bodyLimit: 262_144 });
   instance.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) =>
@@ -138,6 +148,7 @@ async function app(input: {
   const assets = input.assets ?? asset();
   const mediaStore = input.store ?? store();
   registerMediaSyncRoutes(instance, {
+    lifecycleEnabled: input.lifecycleEnabled,
     gatewayCallerAppId: "api-gateway",
     appApiToken: input.token ?? "app-token",
     requestIdFactory: () => "generated-request",
@@ -155,6 +166,26 @@ const trustedHeaders = {
 };
 
 const routeRequests = [
+  {
+    method: "POST",
+    url: "/api/line/media-sync/collections/collection-1/work/550e8400-e29b-41d4-a716-446655440000/retry",
+    payload: {}
+  },
+  { method: "GET", url: "/api/line/media-sync/collections/collection-1/binding" },
+  ...["pause", "resume", "unbind"].map((action) => ({
+    method: "POST" as const,
+    url: `/api/line/media-sync/collections/collection-1/binding/${action}`,
+    payload: { bindingId: "550e8400-e29b-41d4-a716-446655440000", expectedVersion: 1 }
+  })),
+  {
+    method: "DELETE",
+    url: "/api/line/media-sync/collections/collection-1/binding-code",
+    payload: { codeId: "550e8400-e29b-41d4-a716-446655440000" }
+  },
+  {
+    method: "GET",
+    url: "/api/line/media-sync/collections/collection-1/status?from=2026-10-15T00:00:00.000Z&until=2026-10-16T00:00:00.000Z"
+  },
   { method: "GET", url: "/api/line/media-sync/collections" },
   {
     method: "GET",
@@ -301,7 +332,7 @@ describe("media sync management HTTP", () => {
   });
 
   it("requires an idempotency key on every idempotent mutation route", async () => {
-    const { instance } = await app({});
+    const { instance } = await app({ lifecycleEnabled: true });
     for (const request of routeRequests.filter(
       (request) => request.method !== "GET" && !request.url.endsWith("/content-tickets")
     )) {
@@ -1120,4 +1151,146 @@ describe("media sync management HTTP", () => {
       }
     }
   );
+});
+
+it("checks collection management before revealing synchronization status and disables caching", async () => {
+  const { instance, assets, mediaStore } = await app({});
+  const url =
+    "/api/line/media-sync/collections/collection-1/status?from=2026-10-15T00:00:00.000Z&until=2026-10-16T00:00:00.000Z";
+  try {
+    const response = await instance.inject({ method: "GET", url, headers: trustedHeaders });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(assets.getManagedCollection).toHaveBeenCalledWith("collection-1", {
+      requestId: "request-1",
+      actorUserId: userId
+    });
+    expect(mediaStore.listCollectionStatus).toHaveBeenCalledOnce();
+    vi.mocked(mediaStore.listCollectionStatus).mockClear();
+    vi.mocked(assets.getManagedCollection).mockRejectedValue(new Error("asset_api_403"));
+    expect(
+      (await instance.inject({ method: "GET", url, headers: trustedHeaders })).statusCode
+    ).toBe(403);
+    expect(mediaStore.listCollectionStatus).not.toHaveBeenCalled();
+  } finally {
+    await instance.close();
+  }
+});
+
+describe("media binding lifecycle routes", () => {
+  const bindingId = "550e8400-e29b-41d4-a716-446655440000";
+  it("advertises disabled controls and rejects mutations until workers are ready", async () => {
+    const { instance, mediaStore } = await app({});
+    const state = await instance.inject({
+      method: "GET",
+      url: "/api/line/media-sync/collections/collection-1/binding",
+      headers: trustedHeaders
+    });
+    expect(state.statusCode).toBe(200);
+    expect(state.json().controlsEnabled).toBe(false);
+    expect(state.headers["cache-control"]).toBe("private, no-store");
+    const changed = await instance.inject({
+      method: "POST",
+      url: "/api/line/media-sync/collections/collection-1/binding/pause",
+      headers: { ...trustedHeaders, "idempotency-key": "pause-one" },
+      payload: { bindingId, expectedVersion: 1 }
+    });
+    expect(changed.statusCode).toBe(404);
+    expect(mediaStore.mutateBinding).not.toHaveBeenCalled();
+    await instance.close();
+  });
+  it.each(["pause", "resume", "unbind"])(
+    "freshly authorizes %s and passes the exact version and idempotency identity",
+    async (action) => {
+      const { instance, assets, accountClient, mediaStore } = await app({ lifecycleEnabled: true });
+      const options = {
+        method: "POST" as const,
+        url: `/api/line/media-sync/collections/collection-1/binding/${action}`,
+        headers: { ...trustedHeaders, "idempotency-key": "mutation-one" },
+        payload: { bindingId, expectedVersion: 1 }
+      };
+      expect((await instance.inject(options)).statusCode).toBe(200);
+      expect((await instance.inject(options)).statusCode).toBe(200);
+      expect(accountClient.verifyPermission).toHaveBeenCalledTimes(2);
+      expect(assets.getManagedCollection).toHaveBeenCalledTimes(2);
+      expect(mediaStore.mutateBinding).toHaveBeenCalledWith({
+        collectionId: "collection-1",
+        actorId: userId,
+        requestId: "request-1",
+        idempotencyKey: "mutation-one",
+        mutation: { action, bindingId, expectedVersion: 1 }
+      });
+      vi.mocked(assets.getManagedCollection).mockRejectedValue(new Error("asset_api_403"));
+      expect((await instance.inject(options)).statusCode).toBe(403);
+      expect(mediaStore.mutateBinding).toHaveBeenCalledTimes(2);
+      expect(assets.deleteCollection).not.toHaveBeenCalled();
+      await instance.close();
+    }
+  );
+  it.each([
+    { bindingId, expectedVersion: 0 },
+    { bindingId, expectedVersion: 1.5 },
+    { bindingId, expectedVersion: "1" },
+    { bindingId, expectedVersion: 1, extra: true },
+    { bindingId: "wrong", expectedVersion: 1 }
+  ])("rejects invalid mutation %j", async (payload) => {
+    const { instance, mediaStore } = await app({ lifecycleEnabled: true });
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/line/media-sync/collections/collection-1/binding/pause",
+      headers: { ...trustedHeaders, "idempotency-key": "mutation" },
+      payload
+    });
+    expect(response.statusCode).toBe(400);
+    expect(mediaStore.mutateBinding).not.toHaveBeenCalled();
+    await instance.close();
+  });
+  it("returns a version conflict without reporting success", async () => {
+    const { instance, mediaStore } = await app({ lifecycleEnabled: true });
+    vi.mocked(mediaStore.mutateBinding).mockResolvedValue({ status: "conflict" });
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/line/media-sync/collections/collection-1/binding/unbind",
+      headers: { ...trustedHeaders, "idempotency-key": "mutation" },
+      payload: { bindingId, expectedVersion: 1 }
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ status: "conflict" });
+    await instance.close();
+  });
+  it("revokes only the exact unused code with fresh collection access", async () => {
+    const { instance, mediaStore, assets } = await app({ lifecycleEnabled: true });
+    const response = await instance.inject({
+      method: "DELETE",
+      url: "/api/line/media-sync/collections/collection-1/binding-code",
+      headers: { ...trustedHeaders, "idempotency-key": "revoke" },
+      payload: { codeId: bindingId }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(assets.getManagedCollection).toHaveBeenCalled();
+    expect(mediaStore.mutateBinding).toHaveBeenCalledWith(
+      expect.objectContaining({ mutation: { action: "revoke_code", codeId: bindingId } })
+    );
+    await instance.close();
+  });
+});
+
+it("authorizes every retry including idempotent replays and rejects unsafe work", async () => {
+  const { instance, mediaStore, assets, accountClient } = await app({ lifecycleEnabled: true });
+  const request = {
+    method: "POST" as const,
+    url: "/api/line/media-sync/collections/collection-1/work/550e8400-e29b-41d4-a716-446655440000/retry",
+    headers: { ...trustedHeaders, "idempotency-key": "retry-work" },
+    payload: {}
+  };
+  expect((await instance.inject(request)).statusCode).toBe(200);
+  expect((await instance.inject(request)).statusCode).toBe(200);
+  expect(accountClient.verifyPermission).toHaveBeenCalledTimes(2);
+  expect(assets.getManagedCollection).toHaveBeenCalledTimes(2);
+  vi.mocked(mediaStore.retryWork).mockResolvedValue(false);
+  expect((await instance.inject(request)).statusCode).toBe(409);
+  vi.mocked(assets.getManagedCollection).mockRejectedValue(new Error("asset_api_403"));
+  expect((await instance.inject(request)).statusCode).toBe(403);
+  expect(mediaStore.retryWork).toHaveBeenCalledTimes(3);
+  await instance.close();
 });

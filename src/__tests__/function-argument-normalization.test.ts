@@ -6,6 +6,25 @@ import {
 } from "../functions/argument-normalization.js";
 
 describe("function argument normalization", () => {
+  it("keeps explicit bulletin selectors without inferring an edition from UI language", () => {
+    expect(
+      normalizeFunctionArguments(
+        "download_weekly_paper",
+        {},
+        { text: "查看第１７３３期兒童英文週報" }
+      )
+    ).toEqual({ issueNumber: 1733, series: "children", locale: "en" });
+    expect(
+      normalizeFunctionArguments("download_weekly_paper", {}, { text: "查看最新一般簡體週報" })
+    ).toEqual({ series: "general", locale: "zh-Hans" });
+    expect(
+      normalizeFunctionArguments(
+        "download_weekly_paper",
+        { series: "general", locale: "zh-Hant" },
+        { text: "查看最新週報" }
+      )
+    ).toEqual({});
+  });
   it("extracts a bounded issue number only from explicit Weekly Paper intent", () => {
     expect(
       normalizeFunctionArguments(

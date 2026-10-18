@@ -49,6 +49,7 @@ export function applyResultGuidance(input: {
   supportsViewFull?: boolean;
   staleAt?: string;
 }): FunctionExecutionResult {
+  if (input.result.replayPolicy === "request_again") return input.result;
   switch (input.state) {
     case "permission_denied":
       return {
@@ -220,6 +221,7 @@ function guideFunctionResult(
   result: FunctionExecutionResult,
   action: CapabilityName
 ): FunctionExecutionResult {
+  if (action === "download_weekly_paper" && result.quickReplies?.length) return result;
   const definition = getFunctionDefinition(action);
   return applyResultGuidance({
     state: functionResultState(result),

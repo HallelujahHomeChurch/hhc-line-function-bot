@@ -386,7 +386,8 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     rateLimit: {
       enabled: readBool(env.RATE_LIMIT_ENABLED, true),
       windowMs: readInt(env.RATE_LIMIT_WINDOW_MS, 60_000),
-      maxRequests: readInt(env.RATE_LIMIT_MAX_REQUESTS, 20)
+      maxRequests: readInt(env.RATE_LIMIT_MAX_REQUESTS, 20),
+      groupMaxRequests: readInt(env.RATE_LIMIT_GROUP_MAX_REQUESTS, 100)
     },
     lastErrors: {
       maxEntries: readInt(env.LAST_ERRORS_MAX_ENTRIES, 20)
@@ -403,6 +404,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       timeoutMs: readInt(env.ASSET_API_TIMEOUT_MS, 3000)
     },
     mediaSync: {
+      lifecycleEnabled: readBool(env.MEDIA_SYNC_LIFECYCLE_ENABLED, false),
       gatewayCallerAppId: readDaprAppId(
         env.MEDIA_SYNC_GATEWAY_CALLER_APP_ID,
         "api-gateway",

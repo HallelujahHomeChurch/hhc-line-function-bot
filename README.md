@@ -31,7 +31,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Destructive admin-action confirmation infrastructure through `/confirm <code>`.
 - Function handlers:
   - `find_ppt_slides`: searches a configured presentation folder, fuzzy-matches `.pptx`, `.ppt`, `.key`, and `.odp` names, and returns 24 hour sharing links.
-  - `download_weekly_paper`: resolves the bound Account subject, checks the protected HHC member endpoint, and returns the member Weekly Paper entry.
+  - `download_weekly_paper`: resolves the bound Account subject and fresh member access, offers only authorized general/children content editions, and discovers the latest or specified issue through the protected member endpoint. It returns an exact website entry for available online/PDF formats; membership and policy requirements provide next steps without exposing denied issues.
   - `update_own_profile`: collects first and last name in direct chat, previews them, and updates only the linked caller's HHC Account after explicit confirmation.
   - `query_schedule`: one user-facing service-schedule query that selects configured sources without exposing them.
   - `query_knowledge`: searches admin-registered, profile-shared Notion knowledge with grounded hybrid retrieval.
@@ -177,7 +177,7 @@ Function toggles are profile-scoped:
 
 The application resolves this authority once and projects the exact effective capability set plus direct-only public account login into `/help`, natural-language capability introduction, and Quick Replies. `/help` lists every currently effective read and write; its command section is source-, registration-, and capability-aware, so group help omits `/whoami` and protected memory commands are hidden unless currently usable. Onboarding Quick Replies are capped at three. Ordinary users never see internal function names or implementation services, and a write is omitted unless it is effective for that requester in that LINE source. Identity-only introduction uses the current profile's configured identity line; helper remains `我是小哈，家教會的小幫手。`
 
-`main` sets `allowedProviders: []` and uses narrow direct handlers without an agent or provider call. It can execute an explicit `download_weekly_paper` request, while one of the exact `/profile`, `修改個人資料`, `修改姓名`, or `更新姓名` intents may enter the shared first-name/last-name collection and preview flow. The profile update rechecks live Account permission at confirmation and never executes from routing alone. Weekly download uses Dapr to call `hhc-web-api`, accepts only the canonical root-relative asset path or its exact `https://www.alive.org.tw` absolute form, and places the validated URL only in a LINE URI action; it is never stored in task state, memory, resource metadata, or reply text.
+`main` sets `allowedProviders: []` and uses narrow direct handlers without an agent or provider call. It can execute an explicit `download_weekly_paper` request, while one of the exact `/profile`, `修改個人資料`, `修改姓名`, or `更新姓名` intents may enter the shared first-name/last-name collection and preview flow. The profile update rechecks live Account permission at confirmation and never executes from routing alone. Weekly access uses Dapr to call `hhc-web-api` for current member qualification, edition grants and legal acceptance, then discovers one exact authorized edition. Multiple grants prompt an explicit edition choice; interface language never selects content language. The LINE URI action uses the fixed `https://www.alive.org.tw/zh-Hant/literature-ministry` entry with bounded series, content language, issue and mode selectors. No asset URL or content body is returned to the bot. Login continuation retains those selectors; legal confirmation returns to the same edition/issue. Deploy the member-access producer and exact website/Account legal-return support before this consumer; the website reader flag remains independent.
 
 ## Routing
 
@@ -199,11 +199,11 @@ Helper side effects are proposal tools. The SDK agent prepares a validated scope
 
 Pasted schedules can contain several months, emoji, reminders and unrelated announcements. The helper organizes structured `entries` while retaining `content` for comparison. Schedule tool identifiers come from the current profile registry; assignee names do not select the domain. The full preview includes every included month, and one approval publishes those monthly records atomically. Other months remain unchanged. Recoverable preparation results allow another authorized attempt within the existing turn budget. Exact structured draft edits preserve untouched entries; invalid edits revoke the old approval without discarding the draft.
 
-Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same DeepSeek provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
+Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same DeepSeek provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
 
 A local sheet-music miss may create requester-scoped consent. Only after atomic consent does the helper receive `search_sheet_music_web` and `read_sheet_music_page`; a per-turn gate separates external research from draft mutation, and research-derived messages are removed before later turns. Search returns opaque invocation-local refs, the reader treats bounded public page text as untrusted, and only detected direct PDF/JPEG/PNG candidates can enter the existing import review. The agent and bot process never download the binary. `src/transport/line/attachment-intake.ts`, the durable outbox, finite worker, Asset scan, clean-only publication, and catalog upsert remain the sole attachment path.
 
-`pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` run the same 17-case deterministic fake-model evaluator. `pnpm eval:sdk-agent --live` is the manual ten-case bounded DeepSeek suite and prints only aggregate case/call/token/latency fields. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies checkpoint restart, expiry, and cleanup.
+`pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` run the same 19-case deterministic fake-model evaluator. `pnpm eval:sdk-agent --live` is the manual ten-case bounded DeepSeek suite and prints only aggregate case/call/token/latency fields. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies checkpoint restart, expiry, and cleanup.
 
 ## Time Zone
 
@@ -365,6 +365,7 @@ Production enables this dispatcher only through the bot system identity's single
 - `RATE_LIMIT_ENABLED=true`
 - `RATE_LIMIT_WINDOW_MS=60000`
 - `RATE_LIMIT_MAX_REQUESTS=20`
+- `RATE_LIMIT_GROUP_MAX_REQUESTS=100`
 - `LAST_ERRORS_MAX_ENTRIES=20`
 
 Automatic Media Sync intake in registered, bound helper groups does not consume conversation rate-limit quota. Bulk images and files remain silent and use the existing durable sync pipeline. Explicit manual image/file saves retain their conversation rate limit and Account authorization checks.
@@ -450,3 +451,68 @@ Weekly Paper downloads in the main profile honor the Website API public-access s
 ### Account nickname rollout
 
 `main` selects the one-field nickname flow only when the current Account authorization response declares `nickname_write_enabled: true`. Missing/false retains the legacy two-field flow. Every continuation and confirmation rechecks Account authority; a mode change invalidates the old preview. The profile client accepts the exact legacy response or the known additive nickname response, and rejects unrelated identity/private fields. Deploy this consumer before enabling nickname writes in Account; do not infer installed-consumer readiness from local tests.
+
+Collection managers can inspect receipt-window synchronization status through the
+read-only [status API](docs/media-sync-status.md). Counts deduplicate each source
+across automatic/manual publication and never claim a LINE sharing batch total.
+
+### Conversational rate limits
+
+Ordinary group conversation is checked for admission before consuming dialogue quota.
+The default requester allowance is 20 admitted turns per 60 seconds, independently
+scoped to profile, chat, and requester. `RATE_LIMIT_GROUP_MAX_REQUESTS` separately
+bounds each group's admitted turns (default 100 per window). Bound automatic media
+sync does not consume either conversational bucket; manual uploads retain their
+existing authorization. Anonymous group registration/binding commands share a
+bounded anonymous bucket and do not open requester conversation state.
+
+Redis atomically creates/repairs bucket expiry and claims at most one warning attempt
+per exhausted bucket/window. Delivery can fail after the claim; the warning is not
+retried. The legacy group key remains the group resource bucket and direct-user keys
+are unchanged, so rolling upgrades preserve their counts until natural expiry.
+Old replicas still use the old group-wide limit and notification behavior until drained;
+requester fairness and notification guarantees apply only after all replicas upgrade.
+The in-memory implementation is for single-process operation and tests.
+
+### Webhook recovery and uncertain operations
+
+Ordinary events use owner-fenced receipts on the existing Redis key namespace.
+A two-minute lease is renewed while the process is alive. Pre-dispatch admission
+failures can be retried; once execution starts, a lost lease is uncertain and cannot
+re-run the handler. Terminal deduplication lasts seven days. Legacy receipts remain
+recognized during rolling deployment; drain in-flight turns before rollback.
+
+Agent and approval turns persist their event-to-job association before dispatch.
+The long-running reply is a result handle, not a durable worker queue. If a process
+crashes after dispatch, the result becomes uncertain when its execution lease ends.
+A handler exception or result-store outage does not prove the write was rolled back.
+The result button asks for operational reconciliation instead of inviting another
+write. Successful business results and LINE delivery are tracked separately; an
+unknown reply result does not retry the action or reuse the reply token.
+
+### Conversation continuity
+
+Admitted requester supplements can continue before the first answer. Text, buttons,
+accepted replies and explicit quotes share generation fences; active conversations
+do not reset at 64 messages. Separate accepted messages are processed sequentially
+and may receive separate replies. Short-term context still expires after 15/30
+minutes in groups/direct chat, with explicit lifecycle context on reuse.
+
+Checkpoints retain safe delivered reply text rather than an unselected model
+answer. An explicit public group read quote can trigger a fresh authorized lookup
+for another requester, with only the explicitly quoted public reply's safe excerpt
+to identify old list items; private history, notes and approvals stay isolated.
+`get_conversation_state` reports current scoped work and finite media counts; an
+unknown outcome is never reported as completed. See the
+[implementation plan](docs/superpowers/plans/2026-10-17-line-context-continuity.md)
+for advisor findings, tests and acceptance limits.
+
+### Runtime state migration recovery
+
+The receipt/publication-journal v2 rollout must not automatically downgrade to a
+legacy runtime or mixed worker set. Release snapshots compare the prior
+`LINE_RUNTIME_STATE_CONTRACT` and worker digests before production mutation. A
+failed first migration retains the current workloads and reports rollback failed;
+recovery requires a compatible forward release. Once a healthy matching v2 set is
+established, normal reviewed digest rollback remains available. Keep lifecycle
+controls disabled until older worker revisions and finite executions are drained.

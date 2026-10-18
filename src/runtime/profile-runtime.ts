@@ -1,8 +1,12 @@
+import type { QuoteContext, QuoteScope } from "../quotes/types.js";
 import type { CapabilityName } from "../capabilities/names.js";
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
 import type { BotProfileConfig, LineEvent } from "../types.js";
 
 export interface ProfileTurnInput {
+  operationId?: string;
+  channelId?: string;
+  quoteContext?: QuoteContext;
   profile: BotProfileConfig;
   event: LineEvent;
   requestId: string;
@@ -29,7 +33,13 @@ export type ProfileSheetMusicResearchOutcome =
   { kind: "accepted" } | { kind: "handled"; result: FunctionExecutionResult };
 
 export interface ProfileRuntime {
+  recordDeliveredReply?(input: {
+    scope: QuoteScope;
+    quoteContext: QuoteContext;
+    messages: Array<{ id: string; text: string }>;
+  }): Promise<void>;
   readonly observesCompletion?: boolean;
+  clearContext?(scope: QuoteScope): Promise<void>;
   recordExternalResult?(input: ProfileTurnInput, result: FunctionExecutionResult): Promise<void>;
   acceptSheetMusicResearch?(
     input: ProfileTurnInput
@@ -44,6 +54,12 @@ export function createProfileRuntimeDispatcher(
   runtimes: Partial<Record<string, ProfileRuntime>>
 ): ProfileRuntime {
   return {
+    recordDeliveredReply(input) {
+      return runtimes[input.scope.profileName]?.recordDeliveredReply?.(input) ?? Promise.resolve();
+    },
+    clearContext(scope) {
+      return runtimes[scope.profileName]?.clearContext?.(scope) ?? Promise.resolve();
+    },
     recordExternalResult(input, result) {
       return (
         runtimes[input.profile.name]?.recordExternalResult?.(input, result) ?? Promise.resolve()

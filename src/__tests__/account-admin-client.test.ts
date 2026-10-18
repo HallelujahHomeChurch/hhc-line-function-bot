@@ -821,3 +821,100 @@ describe("account admin client", () => {
     });
   });
 });
+
+describe("binding continuation contract", () => {
+  const correlation = {
+    intentId: "018f0c1f-18d0-7e81-9f6f-69c456db7901",
+    generation: "2",
+    expiresAt: "2026-10-17T12:00:00Z"
+  };
+  const wire = {
+    intent_id: correlation.intentId,
+    generation: correlation.generation,
+    expires_at: correlation.expiresAt
+  };
+
+  it.each(["cancelled", "superseded"])(
+    "retains exact correlation for %s callbacks",
+    async (status) => {
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(JSON.stringify({ ...wire, status }), { status: 200 }));
+      const client = createAccountAdminClient({
+        baseUrl: "http://account-api",
+        timeoutMs: 1000,
+        fetchImpl
+      });
+      await expect(client.finalizeBinding(finalizeInput)).resolves.toEqual({ status, correlation });
+    }
+  );
+
+  it("checks the original requester scope and exact current intent", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ ...wire, status: "completed", current: false }), {
+        status: 200
+      })
+    );
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+    await expect(
+      client.inspectBinding!({
+        correlation,
+        expectedLineUserId: lineUserId,
+        profileName: "helper",
+        channelId: "channel-destination"
+      })
+    ).resolves.toEqual({ status: "completed", current: false, correlation });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
+      intent_id: correlation.intentId,
+      generation: "2",
+      expected_line_user_id: lineUserId,
+      profile_name: "helper",
+      channel_id: "channel-destination"
+    });
+  });
+
+  it.each([
+    { ...wire, generation: 2 },
+    { ...wire, generation: "9223372036854775808" },
+    { ...wire, intent_id: undefined },
+    { ...wire, expires_at: "invalid" }
+  ])(
+    "rejects malformed or partial correlation instead of treating it as legacy",
+    async (invalid) => {
+      const client = createAccountAdminClient({
+        baseUrl: "http://account-api",
+        timeoutMs: 1000,
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ ...invalid, status: "completed" }), { status: 200 })
+      });
+      await expect(client.finalizeBinding(finalizeInput)).rejects.toMatchObject({
+        message: "account_api_invalid_binding_correlation",
+        retryable: false
+      });
+    }
+  );
+
+  it("rejects status for a different intent generation", async () => {
+    const client = createAccountAdminClient({
+      baseUrl: "http://account-api",
+      timeoutMs: 1000,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({ ...wire, generation: "3", status: "completed", current: true }),
+          { status: 200 }
+        )
+    });
+    await expect(
+      client.inspectBinding!({
+        correlation,
+        expectedLineUserId: lineUserId,
+        profileName: "helper",
+        channelId: "channel-destination"
+      })
+    ).rejects.toMatchObject({ message: "account_api_invalid_binding_status" });
+  });
+});
