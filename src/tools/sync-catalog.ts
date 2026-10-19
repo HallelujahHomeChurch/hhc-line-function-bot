@@ -13,15 +13,15 @@ import { syncScheduledKnowledgeSources } from "../knowledge/scheduled-sync.js";
 
 const config = loadCatalogSyncConfigFromEnv(process.env);
 const postgres = await createPostgresRuntime(config.database);
-const catalog = await createCatalogStore({ db: postgres?.pool });
-await seedCatalogSources({
-  catalog,
-  sources: buildCatalogSourceSeedsForProfiles(process.env, config.profiles)
-});
-const schedules = await createScheduleStore({ db: postgres?.pool });
-const knowledge = await createKnowledgeStore({ db: postgres?.pool });
 
 try {
+  const catalog = await createCatalogStore({ db: postgres?.pool });
+  await seedCatalogSources({
+    catalog,
+    sources: buildCatalogSourceSeedsForProfiles(process.env, config.profiles)
+  });
+  const schedules = await createScheduleStore({ db: postgres?.pool });
+  const knowledge = await createKnowledgeStore({ db: postgres?.pool });
   const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
   const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
   const sourceKeys = (process.env.CATALOG_SYNC_SOURCE_KEYS ?? "")
