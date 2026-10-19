@@ -129,8 +129,15 @@ describe("production profile configuration deployment contract", () => {
             timeoutSeconds: 2`);
     expect(manifest).toContain(`scale:
       minReplicas: 1
-      # Two PostgreSQL pools use at most two connections each; recalculate the shared DB budget before raising this.
-      maxReplicas: 3`);
+      # Two pools use at most four connections per replica: 32 across eight replicas.
+      maxReplicas: 8`);
+    expect(manifest).toContain(`rules:
+        - name: cpu-scaler
+          custom:
+            type: cpu
+            metadata:
+              type: Utilization
+              value: "70"`);
     expect(manifest).toContain("resources:");
     expect(manifest).toContain("cpu:");
     expect(manifest).toContain("memory:");
