@@ -250,6 +250,7 @@ Testing map:
   engine. Never infer group-wide intake or durable memory from a wake window.
 
 <!-- BEGIN HHC DELIVERY V1 -->
+
 ## HHC delivery coordination
 
 Before retained implementation, use `.agents/skills/hhc-delivery/SKILL.md` and read the [pinned shared workflow](https://github.com/HallelujahHomeChurch/hhc-planning/blob/18710ef91f084b78a7d876a6ab37e35c2641b277/workflow/v1/WORKFLOW.md).
