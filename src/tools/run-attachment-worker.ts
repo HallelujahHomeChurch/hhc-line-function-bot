@@ -178,26 +178,27 @@ export async function runAttachmentWorkerLoop(
   options: { signal?: AbortSignal; sleep?: (milliseconds: number) => Promise<void> } = {}
 ): Promise<void> {
   const runtime = await createAttachmentWorkerRuntime(env);
-  const meetingUrl = requiredHttpsUrl(env, "MEETING_API_BASE_URL");
-  const meetingAudience = requiredAudience(env, "MEETING_API_AUDIENCE");
-  const warmQueueUrl = requiredHttpsUrl(env, "MEDIA_SYNC_WARM_QUEUE_URL");
-  const warmQueue = new QueueClient(warmQueueUrl, runtime.credential);
-  const meetings = new MeetingWindowClient({
-    baseUrl: meetingUrl,
-    getAccessToken: async () => {
-      const token = await runtime.credential.getToken(meetingAccessTokenScope(meetingAudience));
-      if (!token?.token) throw new Error("meeting_api_token_unavailable");
-      return token.token;
-    }
-  });
-  const sleep =
-    options.sleep ??
-    ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-  const stopMediaSyncOutbox = startWarmMediaSyncOutboxDispatcher({
-    store: runtime.mediaSyncStore,
-    queue: new AzureAttachmentScanQueue(runtime.queue)
-  });
+  let stopMediaSyncOutbox: (() => void) | undefined;
   try {
+    const meetingUrl = requiredHttpsUrl(env, "MEETING_API_BASE_URL");
+    const meetingAudience = requiredAudience(env, "MEETING_API_AUDIENCE");
+    const warmQueueUrl = requiredHttpsUrl(env, "MEDIA_SYNC_WARM_QUEUE_URL");
+    const warmQueue = new QueueClient(warmQueueUrl, runtime.credential);
+    const meetings = new MeetingWindowClient({
+      baseUrl: meetingUrl,
+      getAccessToken: async () => {
+        const token = await runtime.credential.getToken(meetingAccessTokenScope(meetingAudience));
+        if (!token?.token) throw new Error("meeting_api_token_unavailable");
+        return token.token;
+      }
+    });
+    const sleep =
+      options.sleep ??
+      ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+    stopMediaSyncOutbox = startWarmMediaSyncOutboxDispatcher({
+      store: runtime.mediaSyncStore,
+      queue: new AzureAttachmentScanQueue(runtime.queue)
+    });
     while (!options.signal?.aborted) {
       await consumeWarmPulse(warmQueue);
       const lease = await receiveAttachmentScanWork(runtime.queue);
@@ -209,7 +210,7 @@ export async function runAttachmentWorkerLoop(
       await runtime.run(lease, warm);
     }
   } finally {
-    stopMediaSyncOutbox();
+    stopMediaSyncOutbox?.();
     await runtime.close();
   }
 }

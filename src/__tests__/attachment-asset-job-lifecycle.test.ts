@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   postgresEnd: vi.fn(),
   receiveMessages: vi.fn(),
   redisQuit: vi.fn(),
+  startOutbox: vi.fn(),
+  stopOutbox: vi.fn(),
   runMediaSyncWorker: vi.fn()
 }));
 
@@ -81,14 +83,18 @@ vi.mock("../redis.js", () => ({
     keyPrefix: "test"
   }))
 }));
-import { runAttachmentWorker } from "../tools/run-attachment-worker.js";
+vi.mock("../attachments/scan-outbox.js", () => ({
+  startWarmMediaSyncOutboxDispatcher: mocks.startOutbox
+}));
+import { runAttachmentWorker, runAttachmentWorkerLoop } from "../tools/run-attachment-worker.js";
 
 describe("attachment asset job lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.startOutbox.mockReturnValue(mocks.stopOutbox);
     mocks.createAssetApiClient.mockReturnValue({});
     mocks.complete.mockResolvedValue(undefined);
-    mocks.postgresEnd.mockResolvedValue(undefined);
+    mocks.postgresEnd.mockReset().mockResolvedValue(undefined);
     mocks.receiveMessages.mockResolvedValue({
       receivedMessageItems: [
         {
@@ -159,5 +165,73 @@ describe("attachment asset job lifecycle", () => {
       expect(serialized).not.toContain(fixture);
     }
     write.mockRestore();
+  });
+
+  const loopEnvironment = {
+    ASSET_API_AUDIENCE: "api://asset-api",
+    ASSET_API_URL: "https://asset-api.internal.example",
+    ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/media-sync",
+    AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
+    MEETING_API_BASE_URL: "https://meeting.internal.example",
+    MEETING_API_AUDIENCE: "api://meeting-api",
+    MEDIA_SYNC_WARM_QUEUE_URL: "https://assetscan.queue.core.windows.net/warm"
+  };
+
+  it.each([
+    "MEETING_API_BASE_URL",
+    "MEETING_API_AUDIENCE",
+    "MEDIA_SYNC_WARM_QUEUE_URL",
+    "dispatcher"
+  ])("awaits pool cleanup when loop initialization fails at %s", async (stage) => {
+    const env = { ...loopEnvironment };
+    if (stage === "dispatcher")
+      mocks.startOutbox.mockImplementationOnce(() => {
+        throw new Error("dispatcher failed");
+      });
+    else Object.assign(env, { [stage]: "" });
+    let releaseClose!: () => void;
+    let closingStarted!: () => void;
+    const closing = new Promise<void>((resolve) => {
+      closingStarted = resolve;
+    });
+    mocks.postgresEnd.mockImplementationOnce(() => {
+      closingStarted();
+      return new Promise<void>((resolve) => {
+        releaseClose = resolve;
+      });
+    });
+    let settled = false;
+    let failure: unknown;
+    const running = runAttachmentWorkerLoop(env)
+      .catch((error: unknown) => {
+        failure = error;
+      })
+      .then(() => {
+        settled = true;
+      });
+    try {
+      expect(
+        await Promise.race([closing.then(() => "closing"), running.then(() => "settled")])
+      ).toBe("closing");
+      expect(settled).toBe(false);
+      expect(mocks.redisQuit).toHaveBeenCalledTimes(1);
+      expect(mocks.postgresEnd).toHaveBeenCalledTimes(1);
+      expect(mocks.stopOutbox).not.toHaveBeenCalled();
+    } finally {
+      releaseClose?.();
+      await running;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(
+      stage === "dispatcher" ? "dispatcher failed" : stage
+    );
+  });
+
+  it("closes the loop runtime after an already-canceled signal without receiving work", async () => {
+    await runAttachmentWorkerLoop(loopEnvironment, { signal: AbortSignal.abort() });
+    expect(mocks.stopOutbox).toHaveBeenCalledTimes(1);
+    expect(mocks.redisQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.postgresEnd).toHaveBeenCalledTimes(1);
+    expect(mocks.receiveMessages).not.toHaveBeenCalled();
   });
 });
