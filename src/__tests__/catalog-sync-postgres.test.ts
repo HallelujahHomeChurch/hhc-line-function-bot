@@ -76,6 +76,39 @@ describe("catalog-owned PG lifecycle", () => {
     await owner.close();
     expect(state.connectTimeouts).toEqual([540_000, 420_000]);
   });
+  it("keeps the job statement budget authoritative over DSN and startup options", async () => {
+    const dsn = new URL(config.url);
+    dsn.searchParams.set("statement_timeout", "0");
+    dsn.searchParams.set("options", "-c application_name=catalog-test -c statement_timeout=0");
+    const owner = createCatalogSyncPostgres(
+      { ...config, url: dsn.toString() },
+      {
+        signal: new AbortController().signal,
+        deadline: 540_000
+      }
+    );
+    state.pool.makeClient();
+    await vi.advanceTimersByTimeAsync(120_000);
+    state.pool.makeClient();
+    await vi.advanceTimersByTimeAsync(500_000);
+    state.pool.makeClient();
+    await owner.close();
+    const settings = state.clients.map(({ options }) => {
+      const parsed = new URL(String(options.connectionString));
+      return {
+        constructor: options.statement_timeout,
+        dsn: parsed.searchParams.get("statement_timeout"),
+        startup: parsed.searchParams.get("options")
+      };
+    });
+    expect(settings).toEqual(
+      [540_000, 420_000, 1].map((budget) => ({
+        constructor: budget,
+        dsn: String(budget),
+        startup: `-c application_name=catalog-test -c statement_timeout=0 -c statement_timeout=${budget}`
+      }))
+    );
+  });
   it("starts terminal close on abort and joins actual physical client end as well as pool end once", async () => {
     const controller = new AbortController();
     const owner = createCatalogSyncPostgres(config, {

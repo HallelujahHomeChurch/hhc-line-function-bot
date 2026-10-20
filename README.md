@@ -260,6 +260,16 @@ active queries through public client shutdown; each client and queued acquisitio
 uses the remaining native connection timeout. Finalization waits for actual work,
 provider bodies, physical client end events and the idempotent pool close.
 
+Each catalog-owned PG client also sets a positive server `statement_timeout` at
+startup, using the remaining work budget at client birth (at most 540 seconds).
+The job setting overrides DSN/startup options for this parameter while preserving
+other options; shared pool defaults and global PG settings are unchanged. A stuck
+server statement therefore has a server-side timeout even after local socket close.
+This is per statement from server receipt, not an absolute job/transaction deadline:
+later statements restart the timer, and a multi-statement batch has no single total
+budget. Long-running SQL can now fail with statement timeout; failed transactions
+still need rollback, and a lost COMMIT acknowledgement remains uncertain.
+
 Owner abort does not become delta reset, embedding_pending, failure bookkeeping
 or another source attempt. Completed snapshots/cursors and revision fences remain
 authoritative; cancellation during COMMIT is not proof of rollback. The catalog
@@ -272,12 +282,14 @@ MSAL token acquisition can still ignore caller cancellation; PG shutdown can sta
 independently while the command continues awaiting that real auth result. Driver,
 OS and remote provider teardown are separate phases. No invocation/admission
 ceiling is inferred from the pool size, schedule or per-execution parallelism.
-In particular, local socket shutdown can return while PostgreSQL still waits on
-a lock; remote backend exit can require that server-side wait to resolve.
-The CI test preserves this negative invariant before unlocking its fixture; the
-later backend exit proves eventual disconnect only. C2/C4 finite-backend and a
-global PG maximum of eight are not certified; idle/startup, retry and manual/CI
-overlap cannot be assumed to contribute zero connections.
+Historical CI39364412921 proved that local close alone left a server backend
+waiting on a held lock; the original failure and CI39365416308 negative invariant
+remain evidence, not cancellation certificates. The server-timeout tests keep the
+fixture lock held through actual backend exit and separately observe server timeout
+SQLSTATE 57014, aborted transaction state, rollback, local close and backend exit.
+These observations do not certify C2/C4 finite-backend or a global PG maximum of
+eight. Startup, idle-session lifetime, OS/driver teardown, retry and manual/CI overlap
+still have no proven overall bound and cannot be assumed to contribute zero connections.
 
 ## Agent Runtime And Memory
 

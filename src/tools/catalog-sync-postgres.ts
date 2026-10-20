@@ -11,7 +11,19 @@ export function createCatalogSyncPostgres(
   const clients = new Map<pg.Client, Promise<void>>();
   class CatalogClient extends pg.Client {
     constructor(options?: pg.ClientConfig) {
-      super({ ...options, connectionTimeoutMillis: remaining() });
+      const budget = remaining();
+      const dsn = new URL(options?.connectionString ?? config.url);
+      const startup =
+        dsn.searchParams.get("options") ?? options?.options ?? process.env.PGOPTIONS ?? "";
+      // pg gives DSN fields precedence; the final startup option also wins over existing -c settings.
+      dsn.searchParams.set("statement_timeout", String(budget));
+      dsn.searchParams.set("options", `${startup} -c statement_timeout=${budget}`.trim());
+      super({
+        ...options,
+        connectionString: dsn.toString(),
+        connectionTimeoutMillis: budget,
+        statement_timeout: budget
+      });
       const ended = new Promise<void>((resolve) => this.once("end", resolve));
       clients.set(this, ended);
       this.once("end", () => clients.delete(this));
