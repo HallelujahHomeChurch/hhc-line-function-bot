@@ -5,6 +5,7 @@ identity:
   type: UserAssigned
   userAssignedIdentities:
     PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID: {}
+    PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID: {}
 properties:
   environmentId: PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID
   configuration:
