@@ -12,6 +12,7 @@ export interface SyncNotionScheduleSourceOptions {
   databaseId: string;
   properties: NotionConfig["properties"];
   now?: () => Date;
+  signal?: AbortSignal;
 }
 
 export interface SyncNotionScheduleSourceResult {
@@ -24,7 +25,9 @@ export interface SyncNotionScheduleSourceResult {
 export async function syncNotionScheduleSource(
   options: SyncNotionScheduleSourceOptions
 ): Promise<SyncNotionScheduleSourceResult> {
+  options.signal?.throwIfAborted();
   const pages = await options.notion.queryDatabase(options.databaseId);
+  options.signal?.throwIfAborted();
   const snapshotItems: ScheduleItemInput[] = [];
   let skipped = 0;
   let malformed = 0;
@@ -64,6 +67,7 @@ export async function syncNotionScheduleSource(
     }
   }
 
+  options.signal?.throwIfAborted();
   const publishedAt = (options.now ?? (() => new Date()))().toISOString();
   const publication = await options.schedules.publishSnapshot({
     profileName: options.source.profileName,
@@ -74,6 +78,7 @@ export async function syncNotionScheduleSource(
     publishedAt
   });
 
+  options.signal?.throwIfAborted();
   return {
     upserted: publication.published,
     skipped,

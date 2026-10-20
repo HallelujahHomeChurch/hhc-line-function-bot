@@ -15,6 +15,44 @@ function projectFileExists(path: string): boolean {
 }
 
 describe("production profile configuration deployment contract", () => {
+  it("preserves existing job identities and typed queue activation settings", () => {
+    for (const path of ["aca.attachment-worker-job.yaml", "aca.periodic-assurance-job.yaml"]) {
+      const identity =
+        readProjectFile(path).match(/^ {2}userAssignedIdentities:\n((?: {4}.*\n)+)/m)?.[1] ?? "";
+      expect(
+        [...identity.matchAll(/^ {4}([^:\n]+): \{\}$/gm)].map((entry) => entry[1]).sort()
+      ).toEqual([
+        "PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID",
+        "PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID"
+      ]);
+    }
+    const scale =
+      readProjectFile("aca.attachment-worker-app.yaml").match(
+        / {4}scale:\n([\s\S]*?)(?= {4}containers:)/
+      )?.[1] ?? "";
+    for (const setting of [
+      "minReplicas: 0",
+      "maxReplicas: 1",
+      "pollingInterval: 1",
+      "cooldownPeriod: 120"
+    ]) {
+      expect(scale).toContain(setting);
+    }
+    for (const [name, queue] of [
+      ["attachment-work", "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME"],
+      ["media-sync-warm", "PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME"]
+    ]) {
+      const rule =
+        scale.match(new RegExp(`- name: ${name}\\n([\\s\\S]*?)(?=        - name:|$)`))?.[1] ?? "";
+      expect(rule).toMatch(/^ {10}azureQueue:$/m);
+      expect(rule).not.toContain("custom:");
+      expect(rule).toContain("accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME");
+      expect(rule).toContain(`queueName: ${queue}`);
+      expect(rule).toMatch(/^ {12}queueLength: 1$/m);
+      expect(rule).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
+    }
+  });
+
   it("pins media-sync management to the exact production Dapr app IDs", () => {
     const manifest = readProjectFile("aca.containerapp.yaml");
 
@@ -129,8 +167,15 @@ describe("production profile configuration deployment contract", () => {
             timeoutSeconds: 2`);
     expect(manifest).toContain(`scale:
       minReplicas: 1
-      # Two PostgreSQL pools use at most two connections each; recalculate the shared DB budget before raising this.
-      maxReplicas: 3`);
+      # Two pools use at most four connections per replica: 32 across eight replicas.
+      maxReplicas: 8`);
+    expect(manifest).toContain(`rules:
+        - name: cpu-scaler
+          custom:
+            type: cpu
+            metadata:
+              type: Utilization
+              value: "70"`);
     expect(manifest).toContain("resources:");
     expect(manifest).toContain("cpu:");
     expect(manifest).toContain("memory:");

@@ -251,6 +251,46 @@ node dist/tools/sync-catalog.js
 
 The webhook service should stay on `node dist/index.js`; do not run recurring sync work inside the long-lived LINE webhook process.
 
+The catalog command owns a cooperative 540-second work deadline starting before
+PostgreSQL bootstrap. Only its Graph/Notion instances disable SDK retries and use
+job cancellation; existing API, admin, worker and other tool defaults are unchanged.
+Notion uses a streaming fetch owner that joins actual headers/body cancellation,
+including late requests hidden by the SDK timeout. On stop, the job pool ends
+active queries through public client shutdown; each client and queued acquisition
+uses the remaining native connection timeout. Finalization waits for actual work,
+provider bodies, physical client end events and the idempotent pool close.
+
+Each catalog-owned PG client also sets a positive server `statement_timeout` at
+startup, using the remaining work budget at client birth (at most 540 seconds).
+The job setting overrides DSN/startup options for this parameter while preserving
+other options; shared pool defaults and global PG settings are unchanged. A stuck
+server statement therefore has a server-side timeout even after local socket close.
+This is per statement from server receipt, not an absolute job/transaction deadline:
+later statements restart the timer, and a multi-statement batch has no single total
+budget. Long-running SQL can now fail with statement timeout; failed transactions
+still need rollback, and a lost COMMIT acknowledgement remains uncertain.
+
+Owner abort does not become delta reset, embedding_pending, failure bookkeeping
+or another source attempt. Completed snapshots/cursors and revision fences remain
+authoritative; cancellation during COMMIT is not proof of rollback. The catalog
+command creates no Redis client. Knowledge transaction failures preserve the original
+error; if rollback also fails, both are reported in AggregateError (including for
+API callers), while single-error identity and SQL/release behavior stay unchanged.
+
+The work deadline is not a hard 540/600-second process or backend-zero guarantee.
+MSAL token acquisition can still ignore caller cancellation; PG shutdown can start
+independently while the command continues awaiting that real auth result. Driver,
+OS and remote provider teardown are separate phases. No invocation/admission
+ceiling is inferred from the pool size, schedule or per-execution parallelism.
+Historical CI39364412921 proved that local close alone left a server backend
+waiting on a held lock; the original failure and CI39365416308 negative invariant
+remain evidence, not cancellation certificates. The server-timeout tests keep the
+fixture lock held through actual backend exit and separately observe server timeout
+SQLSTATE 57014, aborted transaction state, rollback, local close and backend exit.
+These observations do not certify C2/C4 finite-backend or a global PG maximum of
+eight. Startup, idle-session lifetime, OS/driver teardown, retry and manual/CI overlap
+still have no proven overall bound and cannot be assumed to contribute zero connections.
+
 ## Agent Runtime And Memory
 
 `src/helper-agent/runtime.ts` is the only helper runtime. It projects the effective capabilities before entering `src/helper-agent/state.ts`, then builds authority-specific reads, proposal-only writes, or the isolated consented sheet-music research tools. Every protected tool call asks Account again; checkpoint content never grants permission or source freshness.

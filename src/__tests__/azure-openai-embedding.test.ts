@@ -184,4 +184,36 @@ describe("Azure OpenAI embedding client", () => {
 
     await expect(client.embed(["first"])).rejects.toThrow("embedding_dimension_mismatch");
   });
+  it("keeps owner abort distinct and waits for an ignored response body to actually return", async () => {
+    const controller = new AbortController();
+    const reason = new Error("catalog_job_stopped");
+    const body = Promise.withResolvers<unknown>();
+    const response = new Response("");
+    const json = vi.fn(() => body.promise);
+    Object.defineProperty(response, "json", { value: json });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response);
+    const client = createAzureOpenAiEmbeddingClient({
+      ...options(fetcher),
+      signal: controller.signal
+    });
+    let settled = false;
+    const work = client.embed(["fixture"]).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error) => {
+        settled = true;
+        return error;
+      }
+    );
+    await vi.waitFor(() => expect(json).toHaveBeenCalledOnce());
+    controller.abort(reason);
+    await Promise.resolve();
+    const early = settled;
+    body.resolve({ data: [{ index: 0, embedding: vector(1) }] });
+    expect(await work).toBe(reason);
+    expect(early).toBe(false);
+    expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  });
 });
