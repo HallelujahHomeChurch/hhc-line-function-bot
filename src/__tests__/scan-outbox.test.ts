@@ -61,6 +61,89 @@ describe("attachment scan durable outbox", () => {
     vi.useRealTimers();
   });
 
+  it("joins every overlapping flush on idempotent stop without starting more ticks", async () => {
+    vi.useFakeTimers();
+    const first = Promise.withResolvers<never[]>();
+    const second = Promise.withResolvers<never[]>();
+    const store = {
+      claimOutboxForDispatch: vi
+        .fn()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise),
+      markOutboxDispatched: vi.fn()
+    };
+    const stop = scanOutbox.startWarmMediaSyncOutboxDispatcher({
+      store,
+      queue: { enqueue: vi.fn() }
+    });
+    let joined = false;
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(store.claimOutboxForDispatch).toHaveBeenCalledTimes(2);
+      expect(store.claimOutboxForDispatch).toHaveBeenCalledWith({ limit: 20, leaseMs: 30_000 });
+      const stopped = stop();
+      const sameJoin = stop();
+      const observed = Promise.resolve(stopped).then(() => {
+        joined = true;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(store.claimOutboxForDispatch).toHaveBeenCalledTimes(2);
+      const earlyJoin = joined;
+      first.reject(new Error("claim_failed"));
+      await vi.advanceTimersByTimeAsync(0);
+      const joinedBeforeSecond = joined;
+      second.resolve([]);
+      await observed;
+      expect(stopped).toBeInstanceOf(Promise);
+      expect(sameJoin).toBe(stopped);
+      expect(earlyJoin).toBe(false);
+      expect(joinedBeforeSecond).toBe(false);
+    } finally {
+      first.resolve([]);
+      second.resolve([]);
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("joins an active send and failed mark without inventing a dispatched receipt", async () => {
+    vi.useFakeTimers();
+    const sent = Promise.withResolvers<void>();
+    const claimedUntil = "2099-01-01T00:00:30.000Z";
+    const store = {
+      claimOutboxForDispatch: vi
+        .fn()
+        .mockResolvedValue([{ workId: "opaque-work", operation: "intake", claimedUntil }]),
+      markOutboxDispatched: vi.fn().mockImplementation(async () => {
+        throw new Error("pg_unavailable");
+      })
+    };
+    const queue = { enqueue: vi.fn().mockReturnValue(sent.promise) };
+    const stop = scanOutbox.startMediaSyncOutboxDispatcher({ store: store as never, queue });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(queue.enqueue).toHaveBeenCalledWith("opaque-work", "media-sync");
+      let joined = false;
+      const joinedPromise = Promise.resolve(stop()).then(() => {
+        joined = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const earlyJoin = joined;
+      sent.resolve();
+      await joinedPromise;
+      expect(earlyJoin).toBe(false);
+      expect(store.markOutboxDispatched).toHaveBeenCalledWith({
+        workId: "opaque-work",
+        operation: "intake",
+        expectedClaimedUntil: claimedUntil
+      });
+    } finally {
+      sent.resolve();
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("dispatches committed media-sync operations by opaque ID and exact reservation lease", async () => {
     const claimedUntil = "2099-01-01T00:00:30.000Z";
     const store = {
