@@ -505,7 +505,11 @@ describe("LINE entrance", () => {
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const app = createTestApp(testConfig(), {
       router: { route },
-      createLineReplyClient: () => ({ replyText })
+      createLineReplyClient: () => ({ replyText }),
+      createLineIdentityClient: () => ({
+        getUserDisplayName: vi.fn().mockResolvedValue(undefined),
+        getGroupDisplayName: vi.fn().mockResolvedValue(undefined)
+      })
     });
 
     const body = lineBody({

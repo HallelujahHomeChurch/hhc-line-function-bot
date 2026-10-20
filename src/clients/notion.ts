@@ -20,13 +20,22 @@ interface NotionQueryClient {
   };
 }
 
-export function createNotionDatabaseClient(config: NotionConfig): NotionDatabaseClient {
-  const client = new Client({ auth: config.token, logLevel: LogLevel.ERROR });
+export function createNotionDatabaseClient(
+  config: NotionConfig,
+  options: { signal?: AbortSignal; fetch?: typeof fetch; noRetry?: boolean } = {}
+): NotionDatabaseClient {
+  const client = new Client({
+    auth: config.token,
+    logLevel: LogLevel.ERROR,
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.noRetry ? { retry: false } : {})
+  });
   const notion = client as unknown as NotionQueryClient;
   const dataSourceIds = new Map<string, Promise<string>>();
 
   return {
     async queryDatabase(databaseId: string, query = {}): Promise<NotionPage[]> {
+      options.signal?.throwIfAborted();
       const commonQuery = {
         page_size: 25,
         sorts: [
@@ -37,15 +46,23 @@ export function createNotionDatabaseClient(config: NotionConfig): NotionDatabase
         ],
         ...query
       };
-      const dataSourceId = await resolveDataSourceId(notion, dataSourceIds, databaseId);
+      const dataSourceId = await resolveDataSourceId(
+        notion,
+        dataSourceIds,
+        databaseId,
+        options.signal
+      );
+      options.signal?.throwIfAborted();
       const results: unknown[] = [];
       let startCursor: string | undefined;
       do {
+        options.signal?.throwIfAborted();
         const response = await notion.dataSources?.query?.({
           data_source_id: dataSourceId,
           ...commonQuery,
           ...(startCursor ? { start_cursor: startCursor } : {})
         });
+        options.signal?.throwIfAborted();
         results.push(...(response?.results ?? []));
         if (response?.has_more && !response.next_cursor) {
           throw new Error("notion_pagination_cursor_missing");
@@ -64,27 +81,34 @@ export function createNotionDatabaseClient(config: NotionConfig): NotionDatabase
 async function resolveDataSourceId(
   notion: NotionQueryClient,
   cache: Map<string, Promise<string>>,
-  databaseOrDataSourceId: string
+  databaseOrDataSourceId: string,
+  signal?: AbortSignal
 ): Promise<string> {
+  signal?.throwIfAborted();
   const cached = cache.get(databaseOrDataSourceId);
   if (cached) {
     return cached;
   }
 
-  const resolved = resolveDataSourceIdUncached(notion, databaseOrDataSourceId);
+  const resolved = resolveDataSourceIdUncached(notion, databaseOrDataSourceId, signal);
   cache.set(databaseOrDataSourceId, resolved);
   return resolved;
 }
 
 async function resolveDataSourceIdUncached(
   notion: NotionQueryClient,
-  databaseOrDataSourceId: string
+  databaseOrDataSourceId: string,
+  signal?: AbortSignal
 ): Promise<string> {
+  signal?.throwIfAborted();
   try {
     await notion.dataSources?.retrieve?.({ data_source_id: databaseOrDataSourceId });
+    signal?.throwIfAborted();
     return databaseOrDataSourceId;
   } catch {
+    signal?.throwIfAborted();
     const database = await notion.databases?.retrieve?.({ database_id: databaseOrDataSourceId });
+    signal?.throwIfAborted();
     const dataSourceId = database?.data_sources?.find((source) => source.id)?.id;
     if (!dataSourceId) {
       throw new Error("Notion database has no queryable data source");

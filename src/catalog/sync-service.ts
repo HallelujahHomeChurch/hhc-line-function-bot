@@ -13,6 +13,7 @@ export interface SyncCatalogSourcesOptions {
   profileName?: string;
   sourceKeys?: string[];
   now?: () => Date;
+  signal?: AbortSignal;
   logger?: (event: Record<string, unknown>) => void;
 }
 
@@ -31,10 +32,12 @@ export interface SyncCatalogSourcesResult {
 export async function syncCatalogSources(
   options: SyncCatalogSourcesOptions
 ): Promise<SyncCatalogSourcesResult> {
+  options.signal?.throwIfAborted();
   const sources = await options.catalog.listSources({
     profileName: options.profileName,
     sourceKeys: options.sourceKeys
   });
+  options.signal?.throwIfAborted();
   options.logger?.({
     event: "catalog_sync_start",
     sources: sources.length,
@@ -54,6 +57,7 @@ export async function syncCatalogSources(
   };
 
   for (const source of sources) {
+    options.signal?.throwIfAborted();
     const startedAt = Date.now();
     const baseLog = {
       sourceKey: source.sourceKey,
@@ -87,8 +91,10 @@ export async function syncCatalogSources(
           source,
           databaseId,
           properties: options.notionProperties,
-          now: options.now
+          now: options.now,
+          signal: options.signal
         });
+        options.signal?.throwIfAborted();
         const publishedAt = (options.now ?? (() => new Date()))().toISOString();
         const promoted = await options.catalog.publishSourceSnapshot({
           sourceId: source.id,
@@ -96,9 +102,11 @@ export async function syncCatalogSources(
           items: [],
           publishedAt
         });
+        options.signal?.throwIfAborted();
         if (!promoted) {
           throw new Error(`catalog_publication_revision_conflict:${source.sourceKey}`);
         }
+        options.signal?.throwIfAborted();
         result.synced += 1;
         result.scheduleUpserted += sync.upserted;
         result.scheduleSkipped += sync.skipped;
@@ -131,8 +139,10 @@ export async function syncCatalogSources(
         catalog: options.catalog,
         graph: options.graph,
         source,
-        now: options.now
+        now: options.now,
+        signal: options.signal
       });
+      options.signal?.throwIfAborted();
       result.synced += 1;
       result.upserted += sync.upserted;
       result.itemSkipped += sync.skipped;
@@ -146,12 +156,21 @@ export async function syncCatalogSources(
         ...baseLog
       });
     } catch (error) {
-      await options.catalog.markSourceSyncFailure({
-        sourceId: source.id,
-        expectedRevision: source.revision,
-        failedAt: (options.now ?? (() => new Date()))().toISOString(),
-        errorCode: catalogSyncErrorCode(error)
-      });
+      options.signal?.throwIfAborted();
+      try {
+        await options.catalog.markSourceSyncFailure({
+          sourceId: source.id,
+          expectedRevision: source.revision,
+          failedAt: (options.now ?? (() => new Date()))().toISOString(),
+          errorCode: catalogSyncErrorCode(error)
+        });
+      } catch (cleanupError) {
+        if (!options.signal) throw cleanupError;
+        throw new AggregateError([error, cleanupError], "catalog_sync_failure_record_failed", {
+          cause: error
+        });
+      }
+      options.signal?.throwIfAborted();
       options.logger?.({
         event: "catalog_source_sync_failed",
         elapsedMs: Date.now() - startedAt,
@@ -162,6 +181,7 @@ export async function syncCatalogSources(
     }
   }
 
+  options.signal?.throwIfAborted();
   options.logger?.({ event: "catalog_sync_done", ...result });
   return result;
 }

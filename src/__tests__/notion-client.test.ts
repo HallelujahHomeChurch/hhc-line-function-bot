@@ -2,11 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const notion = vi.hoisted(() => ({
   retrieve: vi.fn(),
+  options: vi.fn(),
   query: vi.fn()
 }));
 
 vi.mock("@notionhq/client", () => ({
   Client: class {
+    constructor(options: unknown) {
+      notion.options(options);
+    }
     dataSources = {
       retrieve: notion.retrieve,
       query: notion.query
@@ -74,5 +78,42 @@ describe("Notion database client", () => {
     await expect(client.queryDatabase("database-1")).rejects.toThrow(
       "notion_pagination_cursor_missing"
     );
+  });
+});
+
+describe("job-only Notion options", () => {
+  it("keeps API defaults but opts job instances into fetch ownership and no retries", () => {
+    const config = {
+      token: "fixture",
+      databaseId: "database",
+      properties: { date: "date", meeting: "meeting", role: "role", person: "person" }
+    };
+    notion.options.mockClear();
+    createNotionDatabaseClient(config);
+    expect(notion.options.mock.calls[0]?.[0]).not.toHaveProperty("retry");
+    expect(notion.options.mock.calls[0]?.[0]).not.toHaveProperty("fetch");
+    const fetcher = vi.fn<typeof fetch>();
+    const signal = new AbortController().signal;
+    createNotionDatabaseClient(config, { signal, fetch: fetcher, noRetry: true });
+    expect(notion.options.mock.calls[1]?.[0]).toMatchObject({ fetch: fetcher, retry: false });
+  });
+  it("does not use data-source fallback after owner cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("job_stopped");
+    notion.retrieve.mockReset().mockImplementation(async () => {
+      controller.abort(reason);
+      throw reason;
+    });
+    notion.query.mockClear();
+    const client = createNotionDatabaseClient(
+      {
+        token: "fixture",
+        databaseId: "database",
+        properties: { date: "date", meeting: "meeting", role: "role", person: "person" }
+      },
+      { signal: controller.signal }
+    );
+    await expect(client.queryDatabase("database")).rejects.toBe(reason);
+    expect(notion.query).not.toHaveBeenCalled();
   });
 });

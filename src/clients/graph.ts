@@ -28,6 +28,7 @@ interface GraphPage {
 
 export interface CreateGraphDriveClientOptions {
   noRetry?: boolean;
+  signal?: AbortSignal;
 }
 
 export function createGraphDriveClient(
@@ -42,7 +43,13 @@ export function createGraphDriveClient(
   const client = Client.initWithMiddleware({
     authProvider: {
       getAccessToken: async () => {
-        const token = await credential.getToken("https://graph.microsoft.com/.default");
+        options.signal?.throwIfAborted();
+        const token = options.signal
+          ? await credential.getToken("https://graph.microsoft.com/.default", {
+              abortSignal: options.signal
+            })
+          : await credential.getToken("https://graph.microsoft.com/.default");
+        options.signal?.throwIfAborted();
         if (!token?.token) {
           throw new Error("graph_access_token_empty");
         }
@@ -52,7 +59,9 @@ export function createGraphDriveClient(
   });
   const retryOptions = options.noRetry ? [new RetryHandlerOptions(0, 0)] : undefined;
   const request = (path: string) => {
+    options.signal?.throwIfAborted();
     const graphRequest = client.api(path);
+    if (options.signal) graphRequest.option("signal", options.signal);
     return retryOptions ? graphRequest.middlewareOptions(retryOptions) : graphRequest;
   };
 
@@ -64,7 +73,9 @@ export function createGraphDriveClient(
     let path = `/drives/${driveId}/items/${folderItemId}/children?$top=200&$select=id,name,webUrl,file,folder,remoteItem,parentReference`;
 
     while (path) {
+      options.signal?.throwIfAborted();
       const page = (await request(path).get()) as GraphPage;
+      options.signal?.throwIfAborted();
       for (const item of page.value ?? []) {
         if (item.id && item.name) {
           items.push(graphItemToDriveItem(item, driveId));
@@ -90,7 +101,9 @@ export function createGraphDriveClient(
         : `/drives/${driveId}/items/${folderItemId}/delta?$select=id,name,webUrl,file,folder,deleted,remoteItem,parentReference`;
       let nextDeltaLink = "";
       while (path) {
+        options.signal?.throwIfAborted();
         const page = (await request(path).get()) as GraphPage;
+        options.signal?.throwIfAborted();
         for (const item of page.value ?? []) {
           if (!item.id) {
             continue;
@@ -149,8 +162,11 @@ export function createGraphDriveClient(
         }
         visited.add(key);
 
+        options.signal?.throwIfAborted();
         const children = await listFolderChildren(currentDriveId, currentItemId);
+        options.signal?.throwIfAborted();
         for (const child of children) {
+          options.signal?.throwIfAborted();
           const childPath = [prefix, child.name].filter(Boolean).join("/");
           if (child.isFolder) {
             const target = resolveDriveItemTraversalTarget(child, currentDriveId);

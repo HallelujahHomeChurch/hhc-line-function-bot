@@ -556,7 +556,15 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
       await db.query("commit");
       return result;
     } catch (error) {
-      if (began) await db.query("rollback");
+      if (began) {
+        try {
+          await db.query("rollback");
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], "knowledge_rollback_failed", {
+            cause: error
+          });
+        }
+      }
       throw error;
     } finally {
       client?.release();
