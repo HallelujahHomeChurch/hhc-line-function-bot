@@ -113,6 +113,54 @@ describe("production media dispatcher close ordering", () => {
     }
   );
 
+  it("preserves all close errors and first cause while awaiting media and PG", async () => {
+    const media = Promise.withResolvers<void>();
+    const pg = Promise.withResolvers<void>();
+    const httpError = new Error("http_close_failed");
+    const mediaError = new Error("media_join_failed");
+    const redisError = new Error("redis_close_failed");
+    const pgError = new Error("pg_close_failed");
+    mocks.appClose.mockRejectedValue(httpError);
+    mocks.stopMedia.mockReturnValue(media.promise);
+    mocks.redisClose.mockRejectedValue(redisError);
+    mocks.pgEnd.mockReturnValue(pg.promise);
+    const runtime = await createProductionRuntime(config);
+    let settled = false;
+    const closing = runtime.close().then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error) => {
+        settled = true;
+        return error;
+      }
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const redisBeforeMedia = mocks.redisClose.mock.calls.length;
+    const pgBeforeMedia = mocks.pgEnd.mock.calls.length;
+    const settledBeforeMedia = settled;
+    media.reject(mediaError);
+    await vi.advanceTimersByTimeAsync(0);
+    const pgStarted = mocks.pgEnd.mock.calls.length;
+    const settledBeforePg = settled;
+    pg.reject(pgError);
+    const result = await closing;
+    expect(redisBeforeMedia).toBe(0);
+    expect(pgBeforeMedia).toBe(0);
+    expect(settledBeforeMedia).toBe(false);
+    expect(pgStarted).toBe(1);
+    expect(settledBeforePg).toBe(false);
+    expect(mocks.redisClose).toHaveBeenCalledOnce();
+    expect(result).toBeInstanceOf(AggregateError);
+    const aggregate = result as AggregateError;
+    expect(aggregate.cause).toBe(httpError);
+    expect(aggregate.errors).toHaveLength(4);
+    for (const [index, error] of [httpError, mediaError, redisError, pgError].entries()) {
+      expect(aggregate.errors[index]).toBe(error);
+    }
+  });
+
   it("still closes PG if Redis close fails after media join", async () => {
     const error = new Error("redis_close_failed");
     mocks.redisClose.mockRejectedValue(error);

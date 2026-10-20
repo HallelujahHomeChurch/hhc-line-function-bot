@@ -477,20 +477,24 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
         Promise.resolve().then(() => app.close()),
         mediaOutboxJoin
       ]);
-      try {
-        for (const result of intakeAndMedia) {
-          if (result.status === "rejected") throw result.reason;
-        }
-      } finally {
+      const errors: unknown[] = [];
+      for (const result of intakeAndMedia) {
+        if (result.status === "rejected") errors.push(result.reason);
+      }
+      for (const close of [
+        () => redis?.close(),
+        () => helperStateLockPool?.end(),
+        () => postgres?.pool.end()
+      ]) {
         try {
-          await redis?.close();
-        } finally {
-          try {
-            await helperStateLockPool?.end();
-          } finally {
-            await postgres?.pool.end();
-          }
+          await close();
+        } catch (error) {
+          errors.push(error);
         }
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "runtime_close_failed", { cause: errors[0] });
       }
     }
   };
