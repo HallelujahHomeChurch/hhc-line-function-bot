@@ -193,5 +193,14 @@ properties:
     volumes: []
     scale:
       minReplicas: 1
-      # Two PostgreSQL pools use at most two connections each; recalculate the shared DB budget before raising this.
-      maxReplicas: 3
+      # Two pools use at most four connections per replica: 32 across eight replicas.
+      maxReplicas: 8
+      cooldownPeriod: 300
+      pollingInterval: 30
+      rules:
+        - name: cpu-scaler
+          custom:
+            type: cpu
+            metadata:
+              type: Utilization
+              value: "70"

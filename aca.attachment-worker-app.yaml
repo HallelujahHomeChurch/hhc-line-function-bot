@@ -29,20 +29,16 @@ properties:
       cooldownPeriod: 120
       rules:
         - name: attachment-work
-          custom:
-            type: azure-queue
-            metadata:
-              accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
-              queueName: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
-              queueLength: "1"
+          azureQueue:
+            accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
+            queueName: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
+            queueLength: 1
             identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
         - name: media-sync-warm
-          custom:
-            type: azure-queue
-            metadata:
-              accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
-              queueName: PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME
-              queueLength: "1"
+          azureQueue:
+            accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
+            queueName: PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME
+            queueLength: 1
             identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
     containers:
       - name: attachment-worker
