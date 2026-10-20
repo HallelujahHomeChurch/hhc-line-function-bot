@@ -104,22 +104,33 @@ export function startMediaSyncOutboxDispatcher(options: {
   intervalMs?: number;
   batchSize?: number;
   leaseMs?: number;
-}): () => void {
-  const flush = () =>
-    flushMediaSyncOutbox({
+}): () => Promise<void> {
+  let stopped = false;
+  let joined: Promise<void> | undefined;
+  const active = new Set<Promise<unknown>>();
+  const flush = () => {
+    if (stopped) return;
+    const pending = flushMediaSyncOutbox({
       store: options.store,
       queue: options.queue,
       limit: options.batchSize ?? 20,
       leaseMs: options.leaseMs ?? 30_000
     }).catch(() => undefined);
-  void flush();
+    active.add(pending);
+    void pending.then(() => active.delete(pending));
+  };
+  flush();
   const timer = setInterval(flush, options.intervalMs ?? 5_000);
   timer.unref();
-  return () => clearInterval(timer);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    return (joined ??= Promise.all(active).then(() => undefined));
+  };
 }
 
 export function startWarmMediaSyncOutboxDispatcher(
   options: Pick<Parameters<typeof startMediaSyncOutboxDispatcher>[0], "store" | "queue">
-): () => void {
+): () => Promise<void> {
   return startMediaSyncOutboxDispatcher({ ...options, intervalMs: 1_000 });
 }
