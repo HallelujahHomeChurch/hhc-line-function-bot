@@ -13,6 +13,7 @@ export interface OneDriveCatalogSyncOptions {
   graph: GraphDriveClient;
   source: CatalogSourceRecord;
   now?: () => Date;
+  signal?: AbortSignal;
 }
 
 export interface OneDriveCatalogSyncResult {
@@ -24,11 +25,13 @@ export interface OneDriveCatalogSyncResult {
 export async function syncOneDriveCatalogSource(
   options: OneDriveCatalogSyncOptions
 ): Promise<OneDriveCatalogSyncResult> {
+  options.signal?.throwIfAborted();
   const { catalog, graph } = options;
   const source =
     (await catalog.listSources({ profileName: options.source.profileName })).find(
       (candidate) => candidate.id === options.source.id
     ) ?? options.source;
+  options.signal?.throwIfAborted();
   options = { ...options, source };
   if (!source.enabled || source.adapterType !== "onedrive") {
     return { upserted: 0, skipped: 0, tombstoned: 0 };
@@ -44,8 +47,10 @@ export async function syncOneDriveCatalogSource(
     try {
       return await syncOneDriveDelta({ ...options, driveId, folderItemId });
     } catch (error) {
+      options.signal?.throwIfAborted();
       if (isDeltaResetError(error) && source.syncCursor) {
         await catalog.updateSourceSyncCursor(source.id, undefined);
+        options.signal?.throwIfAborted();
         return syncOneDriveDelta({
           ...options,
           source: { ...source, syncCursor: undefined },
@@ -63,8 +68,10 @@ export async function syncOneDriveCatalogSource(
     ? await graph.listFolderFilesRecursive(driveId, folderItemId)
     : await graph.listFolderChildren(driveId, folderItemId);
 
+  options.signal?.throwIfAborted();
   let skipped = 0;
   const snapshotItems: CatalogItemInput[] = [];
+  options.signal?.throwIfAborted();
   const allowedExtensions = new Set(
     source.syncPolicy.allowedExtensions?.map((extension) => extension.toLowerCase()) ?? []
   );
@@ -96,6 +103,7 @@ export async function syncOneDriveCatalogSource(
     });
   }
 
+  options.signal?.throwIfAborted();
   const publishedAt = (options.now ?? (() => new Date()))().toISOString();
   const published = await catalog.publishSourceSnapshot({
     sourceId: source.id,
@@ -103,6 +111,7 @@ export async function syncOneDriveCatalogSource(
     items: snapshotItems,
     publishedAt
   });
+  options.signal?.throwIfAborted();
   if (!published) throw new Error(`catalog_publication_revision_conflict:${source.sourceKey}`);
 
   return {
@@ -119,7 +128,9 @@ async function syncOneDriveDelta(
   if (!graph.listFolderDelta) {
     throw new Error("graph_delta_unavailable");
   }
+  options.signal?.throwIfAborted();
   const delta = await graph.listFolderDelta(driveId, folderItemId, source.syncCursor);
+  options.signal?.throwIfAborted();
   const allowedExtensions = new Set(
     source.syncPolicy.allowedExtensions?.map((extension) => extension.toLowerCase()) ?? []
   );
@@ -157,6 +168,7 @@ async function syncOneDriveDelta(
       storageRef
     });
   }
+  options.signal?.throwIfAborted();
   const publishedAt = (options.now ?? (() => new Date()))().toISOString();
   const published = source.syncCursor
     ? await catalog.publishSourceDelta({
@@ -174,6 +186,7 @@ async function syncOneDriveDelta(
         syncCursor: delta.deltaLink,
         publishedAt
       });
+  options.signal?.throwIfAborted();
   if (!published) throw new Error(`catalog_publication_revision_conflict:${source.sourceKey}`);
   return { upserted: upserts.length, skipped, tombstoned: deletedStorageIdentities.length };
 }

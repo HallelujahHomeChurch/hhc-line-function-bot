@@ -14,7 +14,12 @@ vi.mock("../config.js", () => ({
 }));
 vi.mock("pg", () => ({
   default: {
+    Client: class Client {},
     Pool: class Pool {
+      constructor(public options: Record<string, unknown>) {}
+      connect() {
+        throw new Error("fixture_connect_unexpected");
+      }
       query(sql: string, values?: unknown[]) {
         return fixtures.query(sql, values);
       }
@@ -40,6 +45,7 @@ describe("catalog sync job PostgreSQL lifecycle", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it.each([
@@ -75,18 +81,20 @@ describe("catalog sync job PostgreSQL lifecycle", () => {
         return close.promise;
       });
       let settled = false;
-      const running = import("../tools/sync-catalog.js").then(
-        () => {
-          settled = true;
-          progress.resolve("settled");
-          return undefined;
-        },
-        (error: unknown) => {
-          settled = true;
-          progress.resolve("settled");
-          return error;
-        }
-      );
+      const running = import("../tools/sync-catalog.js")
+        .then(({ runCatalogSync }) => runCatalogSync(process.env))
+        .then(
+          () => {
+            settled = true;
+            progress.resolve("settled");
+            return undefined;
+          },
+          (error: unknown) => {
+            settled = true;
+            progress.resolve("settled");
+            return error;
+          }
+        );
 
       try {
         expect(await progress.promise).toBe("closing");
@@ -103,4 +111,60 @@ describe("catalog sync job PostgreSQL lifecycle", () => {
     },
     15_000
   );
+  it("starts its 540s budget before bootstrap and joins late query/close without more SQL", async () => {
+    vi.useFakeTimers();
+    const bootstrap = Promise.withResolvers<{ rows: never[] }>();
+    const close = Promise.withResolvers<void>();
+    fixtures.query.mockReturnValue(bootstrap.promise);
+    fixtures.end.mockReturnValue(close.promise);
+    const { runCatalogSync } = await import("../tools/sync-catalog.js");
+    let settled = false;
+    const running = runCatalogSync(process.env).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error) => {
+        settled = true;
+        return error;
+      }
+    );
+    await vi.advanceTimersByTimeAsync(539_999);
+    expect(fixtures.end).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixtures.end).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    bootstrap.resolve({ rows: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    const early = settled;
+    close.resolve();
+    const result = await running;
+    expect(early).toBe(false);
+    expect(result.name).toBe("TimeoutError");
+    expect(fixtures.query).toHaveBeenCalledOnce();
+    expect(fixtures.end).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the work error and closing error rather than masking either", async () => {
+    const primary = new Error("bootstrap_failed");
+    const cleanup = new Error("close_failed");
+    fixtures.query.mockRejectedValue(primary);
+    fixtures.end.mockRejectedValue(cleanup);
+    const { runCatalogSync } = await import("../tools/sync-catalog.js");
+    const result = await runCatalogSync(process.env).catch((error) => error);
+    expect(result).toBeInstanceOf(AggregateError);
+    expect(result.cause).toBe(primary);
+    expect(result.errors).toEqual([primary, cleanup]);
+    expect(fixtures.end).toHaveBeenCalledOnce();
+  });
+
+  it("does not bootstrap an already stopped job", async () => {
+    const reason = new Error("already_stopped");
+    const { runCatalogSync } = await import("../tools/sync-catalog.js");
+    await expect(runCatalogSync(process.env, { signal: AbortSignal.abort(reason) })).rejects.toBe(
+      reason
+    );
+    expect(fixtures.query).not.toHaveBeenCalled();
+    expect(fixtures.end).not.toHaveBeenCalled();
+  });
 });

@@ -14,6 +14,7 @@ export interface AzureOpenAiEmbeddingOptions {
   dimensions: number;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }
 
 export function createAzureOpenAiEmbeddingClient(
@@ -42,6 +43,7 @@ export function createAzureOpenAiEmbeddingClient(
     model: options.model,
     dimensions: options.dimensions,
     async embed(input): Promise<number[][]> {
+      options.signal?.throwIfAborted();
       if (input.length === 0) return [];
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
@@ -52,14 +54,18 @@ export function createAzureOpenAiEmbeddingClient(
             "content-type": "application/json",
             "api-key": options.apiKey!
           },
-          signal: controller.signal,
+          signal: options.signal
+            ? AbortSignal.any([options.signal, controller.signal])
+            : controller.signal,
           body: JSON.stringify({
             input,
             encoding_format: "float"
           })
         });
+        options.signal?.throwIfAborted();
         if (!response.ok) throw new Error(`embedding_http_${response.status}`);
         const payload = (await response.json()) as { data?: unknown };
+        options.signal?.throwIfAborted();
         if (!Array.isArray(payload.data) || payload.data.length !== input.length) {
           throw new Error("embedding_response_invalid");
         }
@@ -82,6 +88,7 @@ export function createAzureOpenAiEmbeddingClient(
         if (vectors.some((vector) => !vector)) throw new Error("embedding_response_invalid");
         return vectors as number[][];
       } catch (error) {
+        options.signal?.throwIfAborted();
         if (error instanceof Error && error.name === "AbortError") {
           throw new Error("embedding_timeout");
         }

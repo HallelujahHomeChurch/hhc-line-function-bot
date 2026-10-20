@@ -30,10 +30,13 @@ export async function syncKnowledgeSource(input: {
   notion: NotionKnowledgeClient;
   embedding?: EmbeddingClient;
   batchSize?: number;
+  signal?: AbortSignal;
   now?: () => Date;
 }): Promise<KnowledgeSyncResult> {
+  input.signal?.throwIfAborted();
   const now = input.now ?? (() => new Date());
   const documents = await input.notion.fetchRoot(input.source.stagedExternalRootId);
+  input.signal?.throwIfAborted();
   const preparedDocuments = documents.map((document) => ({
     externalId: document.externalId,
     title: document.title,
@@ -54,8 +57,10 @@ export async function syncKnowledgeSource(input: {
     const batchSize = input.batchSize ?? 16;
     try {
       for (let offset = 0; offset < preparedChunks.length; offset += batchSize) {
+        input.signal?.throwIfAborted();
         const batch = preparedChunks.slice(offset, offset + batchSize);
         const vectors = await input.embedding.embed(batch.map(({ chunk }) => chunk.content));
+        input.signal?.throwIfAborted();
         for (let index = 0; index < batch.length; index += 1) {
           const prepared = batch[index]!;
           embeddings.push({
@@ -70,11 +75,13 @@ export async function syncKnowledgeSource(input: {
         }
       }
     } catch {
+      input.signal?.throwIfAborted();
       status = "embedding_pending";
       embeddings.length = 0;
       embedded = 0;
     }
   }
+  input.signal?.throwIfAborted();
   await input.store.publishSourceSnapshot({
     sourceId: input.source.id,
     expectedStagingRevision: input.source.stagingRevision,
@@ -87,5 +94,6 @@ export async function syncKnowledgeSource(input: {
     documents: preparedDocuments,
     embeddings
   });
+  input.signal?.throwIfAborted();
   return { documents: documents.length, chunks: preparedChunks.length, embedded, status };
 }

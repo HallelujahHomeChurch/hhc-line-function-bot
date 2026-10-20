@@ -251,6 +251,28 @@ node dist/tools/sync-catalog.js
 
 The webhook service should stay on `node dist/index.js`; do not run recurring sync work inside the long-lived LINE webhook process.
 
+The catalog command owns a cooperative 540-second work deadline starting before
+PostgreSQL bootstrap. Only its Graph/Notion instances disable SDK retries and use
+job cancellation; existing API, admin, worker and other tool defaults are unchanged.
+Notion uses a streaming fetch owner that joins actual headers/body cancellation,
+including late requests hidden by the SDK timeout. On stop, the job pool ends
+active queries through public client shutdown; each client and queued acquisition
+uses the remaining native connection timeout. Finalization waits for actual work,
+provider bodies, physical client end events and the idempotent pool close.
+
+Owner abort does not become delta reset, embedding_pending, failure bookkeeping
+or another source attempt. Completed snapshots/cursors and revision fences remain
+authoritative; cancellation during COMMIT is not proof of rollback. The catalog
+command creates no Redis client. Knowledge transaction failures preserve the original
+error; if rollback also fails, both are reported in AggregateError (including for
+API callers), while single-error identity and SQL/release behavior stay unchanged.
+
+The work deadline is not a hard 540/600-second process or backend-zero guarantee.
+MSAL token acquisition can still ignore caller cancellation; PG shutdown can start
+independently while the command continues awaiting that real auth result. Driver,
+OS and remote provider teardown are separate phases. No invocation/admission
+ceiling is inferred from the pool size, schedule or per-execution parallelism.
+
 ## Agent Runtime And Memory
 
 `src/helper-agent/runtime.ts` is the only helper runtime. It projects the effective capabilities before entering `src/helper-agent/state.ts`, then builds authority-specific reads, proposal-only writes, or the isolated consented sheet-music research tools. Every protected tool call asks Account again; checkpoint content never grants permission or source freshness.

@@ -21,20 +21,45 @@ interface NotionSdk {
   blocks: { children: { list(args: Record<string, unknown>): Promise<Record<string, unknown>> } };
 }
 
-export function createNotionKnowledgeClient(token: string): NotionKnowledgeClient {
-  const sdk = new Client({ auth: token, logLevel: LogLevel.ERROR }) as unknown as NotionSdk;
+export function createNotionKnowledgeClient(
+  token: string,
+  options: { signal?: AbortSignal; fetch?: typeof fetch; noRetry?: boolean } = {}
+): NotionKnowledgeClient {
+  const sdk = new Client({
+    auth: token,
+    logLevel: LogLevel.ERROR,
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.noRetry ? { retry: false } : {})
+  }) as unknown as NotionSdk;
   return {
     async fetchRoot(rootId: string): Promise<NotionKnowledgeDocument[]> {
+      options.signal?.throwIfAborted();
       try {
         const page = await sdk.pages.retrieve({ page_id: rootId });
-        return [await readPageDocument(sdk, page)];
+        options.signal?.throwIfAborted();
+        return [await readPageDocument(sdk, page, options.signal)];
       } catch (pageError) {
+        options.signal?.throwIfAborted();
         try {
           const database = await sdk.databases.retrieve({ database_id: rootId });
+          options.signal?.throwIfAborted();
           const sourceId = dataSourceId(database);
-          const pages = await queryAllPages(sdk, sourceId);
-          return Promise.all(pages.map((page) => readPageDocument(sdk, page)));
+          const pages = await queryAllPages(sdk, sourceId, options.signal);
+          options.signal?.throwIfAborted();
+          const work = pages.map((page) => readPageDocument(sdk, page, options.signal));
+          if (!options.signal) return Promise.all(work);
+          const results = await Promise.allSettled(work);
+          options.signal.throwIfAborted();
+          const documents: NotionKnowledgeDocument[] = [];
+          const errors: unknown[] = [];
+          for (const result of results) {
+            if (result.status === "fulfilled") documents.push(result.value);
+            else errors.push(result.reason);
+          }
+          if (errors.length) throw errors[0];
+          return documents;
         } catch {
+          options.signal?.throwIfAborted();
           throw sanitizeNotionError(pageError);
         }
       }
@@ -82,30 +107,39 @@ export function notionBlockToKnowledgeNode(
 
 async function readPageDocument(
   sdk: NotionSdk,
-  page: Record<string, unknown>
+  page: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<NotionKnowledgeDocument> {
+  signal?.throwIfAborted();
   const externalId = String(page.id);
   return {
     externalId,
     title: pageTitle(page.properties),
     url: typeof page.url === "string" ? page.url : "",
     properties: isRecord(page.properties) ? page.properties : {},
-    nodes: await readBlocks(sdk, externalId)
+    nodes: await readBlocks(sdk, externalId, signal)
   };
 }
 
-async function readBlocks(sdk: NotionSdk, rootId: string): Promise<KnowledgeNodeInput[]> {
+async function readBlocks(
+  sdk: NotionSdk,
+  rootId: string,
+  signal?: AbortSignal
+): Promise<KnowledgeNodeInput[]> {
   const nodes: KnowledgeNodeInput[] = [];
   const visit = async (blockId: string, parentExternalId?: string): Promise<void> => {
     let cursor: string | undefined;
     do {
+      signal?.throwIfAborted();
       const response = await sdk.blocks.children.list({
         block_id: blockId,
         page_size: 100,
         ...(cursor ? { start_cursor: cursor } : {})
       });
+      signal?.throwIfAborted();
       const results = Array.isArray(response.results) ? response.results.filter(isRecord) : [];
       for (const block of results) {
+        signal?.throwIfAborted();
         const node = notionBlockToKnowledgeNode(block, nodes.length, parentExternalId);
         nodes.push(node);
         if (block.has_children === true) await visit(node.externalId, node.externalId);
@@ -120,15 +154,21 @@ async function readBlocks(sdk: NotionSdk, rootId: string): Promise<KnowledgeNode
   return nodes;
 }
 
-async function queryAllPages(sdk: NotionSdk, sourceId: string): Promise<Record<string, unknown>[]> {
+async function queryAllPages(
+  sdk: NotionSdk,
+  sourceId: string,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>[]> {
   const pages: Record<string, unknown>[] = [];
   let cursor: string | undefined;
   do {
+    signal?.throwIfAborted();
     const response = await sdk.dataSources.query({
       data_source_id: sourceId,
       page_size: 100,
       ...(cursor ? { start_cursor: cursor } : {})
     });
+    signal?.throwIfAborted();
     if (Array.isArray(response.results)) pages.push(...response.results.filter(isRecord));
     cursor =
       response.has_more === true && typeof response.next_cursor === "string"

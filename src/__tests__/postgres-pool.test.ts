@@ -14,5 +14,6 @@ describe("PostgreSQL pool budget", () => {
     pools.push(pool);
 
     expect(pool.options.max).toBe(2);
+    expect(pool.options.connectionTimeoutMillis ?? 0).toBe(0);
   });
 });

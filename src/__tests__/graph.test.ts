@@ -1,16 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const graph = vi.hoisted(() => ({
-  api: vi.fn()
+  api: vi.fn(),
+  token: vi.fn(),
+  auth: undefined as unknown as { getAccessToken(): Promise<string> }
 }));
 
 vi.mock("@azure/identity", () => ({
-  ClientSecretCredential: class {}
+  ClientSecretCredential: class {
+    getToken(...args: unknown[]) {
+      return graph.token(...args);
+    }
+  }
 }));
 
 vi.mock("@microsoft/microsoft-graph-client", () => ({
   Client: {
-    initWithMiddleware: () => ({ api: graph.api })
+    initWithMiddleware: (options: { authProvider: typeof graph.auth }) => {
+      graph.auth = options.authProvider;
+      return { api: graph.api };
+    }
   },
   RetryHandlerOptions: class {
     readonly maxRetries: number;
@@ -158,5 +167,72 @@ describe("Graph diagnostics folder", () => {
     await defaultClient.getItemById!("drive-1", "item-1");
 
     expect(request.middlewareOptions).not.toHaveBeenCalled();
+  });
+});
+
+describe("job-owned Graph cancellation", () => {
+  it("forwards the signal and stops pagination after a late page", async () => {
+    const controller = new AbortController();
+    const reason = new Error("job_stopped");
+    const request = {
+      option: vi.fn(),
+      middlewareOptions: vi.fn(),
+      get: vi.fn(async () => {
+        controller.abort(reason);
+        return { value: [], "@odata.nextLink": "https://graph.microsoft.com/next" };
+      })
+    };
+    request.option.mockReturnValue(request);
+    request.middlewareOptions.mockReturnValue(request);
+    graph.api.mockReset().mockReturnValue(request);
+    const client = createGraphDriveClient(CONFIG, { signal: controller.signal, noRetry: true });
+    await expect(client.listFolderChildren("drive", "folder")).rejects.toBe(reason);
+    expect(request.option).toHaveBeenCalledWith("signal", controller.signal);
+    expect(graph.api).toHaveBeenCalledOnce();
+    expect(request.middlewareOptions.mock.calls[0]?.[0][0].maxRetries).toBe(0);
+  });
+  it("does not pretend ignored auth aborted while PG shutdown can start independently", async () => {
+    const { createCatalogSyncPostgres } = await import("../tools/catalog-sync-postgres.js");
+    const controller = new AbortController();
+    const reason = new Error("job_stopped");
+    const pg = createCatalogSyncPostgres(
+      { url: "postgres://fixture.invalid/test", ssl: false },
+      { signal: controller.signal, deadline: Date.now() + 540_000 }
+    );
+    const end = vi.spyOn(pg.pool, "end");
+    const token = Promise.withResolvers<{ token: string }>();
+    graph.token.mockReturnValue(token.promise);
+    const request = {
+      option: vi.fn(),
+      get: vi.fn(async () => {
+        await graph.auth.getAccessToken();
+        return { value: [] };
+      })
+    };
+    request.option.mockReturnValue(request);
+    graph.api.mockReset().mockReturnValue(request);
+    const client = createGraphDriveClient(CONFIG, { signal: controller.signal });
+    let settled = false;
+    const work = client.listFolderChildren("drive", "folder").then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error) => {
+        settled = true;
+        return error;
+      }
+    );
+    await vi.waitFor(() => expect(graph.token).toHaveBeenCalled());
+    controller.abort(reason);
+    await pg.close();
+    const early = settled;
+    token.resolve({ token: "fixture" });
+    expect(await work).toBe(reason);
+    expect(early).toBe(false);
+    expect(end).toHaveBeenCalledOnce();
+    expect(graph.token).toHaveBeenCalledWith("https://graph.microsoft.com/.default", {
+      abortSignal: controller.signal
+    });
   });
 });

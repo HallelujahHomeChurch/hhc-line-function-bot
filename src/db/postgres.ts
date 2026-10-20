@@ -10,30 +10,39 @@ export interface PostgresRuntime {
   mediaSyncStore: PostgresMediaSyncStore;
 }
 
-export function createPostgresPool(config: DatabaseConfig): pg.Pool {
+export function createPostgresPool(
+  config: DatabaseConfig,
+  options: Pick<pg.PoolConfig, "Client" | "connectionTimeoutMillis"> = {}
+): pg.Pool {
   return new pg.Pool({
     connectionString: config.url,
     ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
-    max: 2
+    max: 2,
+    ...options
   });
 }
 
 export async function createPostgresRuntime(
-  config: DatabaseConfig | undefined
+  config: DatabaseConfig | undefined,
+  owned?: { pool: pg.Pool; signal?: AbortSignal; close(): Promise<void> }
 ): Promise<PostgresRuntime | undefined> {
   if (!config) {
     return undefined;
   }
 
-  const pool = createPostgresPool(config);
+  const pool = owned?.pool ?? createPostgresPool(config);
 
   try {
+    owned?.signal?.throwIfAborted();
     await pool.query("select 1");
+    owned?.signal?.throwIfAborted();
     await runAccessMigrations(pool);
+    owned?.signal?.throwIfAborted();
     await runMediaSyncMigrations(pool);
+    owned?.signal?.throwIfAborted();
     return { pool, mediaSyncStore: new PostgresMediaSyncStore(pool) };
   } catch (error) {
-    await pool.end().catch(() => undefined);
+    await (owned ? owned.close() : pool.end()).catch(() => undefined);
     throw error;
   }
 }
