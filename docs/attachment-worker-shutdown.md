@@ -46,9 +46,7 @@ certify that a sent EVAL stopped. A graceful-close-then-destroy timeout fallback
 is not assumed safe. pg-pool 3.14.0 may resolve `end()` before idle clients finish
 physical close. Local close settlement is not remote backend-zero evidence.
 
-This change is based on main independently of PR #115. Integrate
-[PR #115](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/pull/115)
-first for its separate post-bootstrap setup-error cleanup, then refresh this PR
-onto the resulting main and rerun review and CI. This branch intentionally does
-not duplicate that setup repair. A green check before that integration is source
-validation, not deployment or a connection-capacity certificate.
+PR #115 combines post-bootstrap setup-error cleanup with this shutdown repair
+for one reviewed release. Both regression groups run against the integrated head
+and current main before deployment. A green check is source validation, not
+deployment or a connection-capacity certificate.
