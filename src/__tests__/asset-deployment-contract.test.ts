@@ -24,7 +24,10 @@ describe("Asset deployment access contract", () => {
       /deploy_job \\\n+ {2}"\$\{PERIODIC_ASSURANCE_JOB_NAME\}" \\\n+ {2}"\$\{periodic_assurance_job_manifest\}" \\\n+ {2}"\$\{attachment_job_identity_id\}"/u
     );
     expect(manifest).toContain("PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
-    expect(manifest).not.toContain("PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID");
+    expect(manifest).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
+    expect(manifest).toContain(
+      "name: AZURE_CLIENT_ID\n            value: PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID"
+    );
     expect(manifest).toContain("name: ASSET_API_URL");
     expect(manifest).toContain("name: ASSET_API_AUDIENCE");
     expect(manifest).toContain("name: AZURE_CLIENT_ID");
