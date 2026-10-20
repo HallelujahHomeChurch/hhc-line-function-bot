@@ -5,7 +5,7 @@ import { createCatalogSyncPostgres } from "../tools/catalog-sync-postgres.js";
 
 const url = process.env.KERNEL_POSTGRES_URL;
 describe.skipIf(!url)("catalog PG cancellation on owned CI PostgreSQL", () => {
-  it("returns a blocked transaction while its lock is still held, then closes named backends", async () => {
+  it("joins local shutdown while blocked, then observes backend exit after the server wait resolves", async () => {
     const name = `catalog-c2-${randomUUID()}`;
     const dsn = new URL(url!);
     dsn.searchParams.set("application_name", name);
@@ -56,6 +56,8 @@ describe.skipIf(!url)("catalog PG cancellation on owned CI PostgreSQL", () => {
       released = true;
       await owner.close();
       expect(owner.pool.totalCount).toBe(0);
+      // Socket shutdown is not server-side query cancellation; unblock PostgreSQL before observing exit.
+      await lock.query("rollback");
       await expect
         .poll(
           async () => {

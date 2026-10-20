@@ -272,6 +272,8 @@ MSAL token acquisition can still ignore caller cancellation; PG shutdown can sta
 independently while the command continues awaiting that real auth result. Driver,
 OS and remote provider teardown are separate phases. No invocation/admission
 ceiling is inferred from the pool size, schedule or per-execution parallelism.
+In particular, local socket shutdown can return while PostgreSQL still waits on
+a lock; remote backend exit can require that server-side wait to resolve.
 
 ## Agent Runtime And Memory
 
