@@ -274,6 +274,10 @@ OS and remote provider teardown are separate phases. No invocation/admission
 ceiling is inferred from the pool size, schedule or per-execution parallelism.
 In particular, local socket shutdown can return while PostgreSQL still waits on
 a lock; remote backend exit can require that server-side wait to resolve.
+The CI test preserves this negative invariant before unlocking its fixture; the
+later backend exit proves eventual disconnect only. C2/C4 finite-backend and a
+global PG maximum of eight are not certified; idle/startup, retry and manual/CI
+overlap cannot be assumed to contribute zero connections.
 
 ## Agent Runtime And Memory
 

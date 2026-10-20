@@ -56,6 +56,17 @@ describe.skipIf(!url)("catalog PG cancellation on owned CI PostgreSQL", () => {
       released = true;
       await owner.close();
       expect(owner.pool.totalCount).toBe(0);
+      const blockedAfterClose = await observer.query(
+        "select count(*)::int count from pg_stat_activity where application_name=$1 and wait_event_type='Lock'",
+        [name]
+      );
+      expect(blockedAfterClose.rows[0]?.count).toBe(1);
+      console.info("catalog_pg_local_shutdown", {
+        queryReturned: settled,
+        clientAndPoolJoined: true,
+        localPoolCount: owner.pool.totalCount,
+        blockedBackendsWithFixtureLockHeld: blockedAfterClose.rows[0]?.count
+      });
       // Socket shutdown is not server-side query cancellation; unblock PostgreSQL before observing exit.
       await lock.query("rollback");
       await expect
@@ -70,6 +81,7 @@ describe.skipIf(!url)("catalog PG cancellation on owned CI PostgreSQL", () => {
           { timeout: 5000 }
         )
         .toBe(0);
+      console.info("catalog_pg_eventual_disconnect_after_fixture_unlock", { namedBackends: 0 });
     } finally {
       controller.abort();
       if (client && !released) {
