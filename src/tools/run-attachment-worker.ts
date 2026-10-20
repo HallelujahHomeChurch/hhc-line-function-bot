@@ -33,7 +33,11 @@ import { createRedisRuntime } from "../redis.js";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export interface AttachmentScanQueueReceiver {
-  receiveMessages(options: { numberOfMessages: number; visibilityTimeout: number }): Promise<{
+  receiveMessages(options: {
+    numberOfMessages: number;
+    visibilityTimeout: number;
+    abortSignal?: AbortSignal;
+  }): Promise<{
     receivedMessageItems: Array<{
       messageText: string;
       messageId: string;
@@ -50,12 +54,22 @@ export interface AttachmentScanWorkLease {
 }
 
 export async function receiveAttachmentScanWork(
-  client: AttachmentScanQueueReceiver
+  client: AttachmentScanQueueReceiver,
+  signal?: AbortSignal
 ): Promise<AttachmentScanWorkLease | undefined> {
-  const response = await client.receiveMessages({
-    numberOfMessages: 1,
-    visibilityTimeout: ATTACHMENT_SCAN_TIMING.queueVisibilityMs / 1000
-  });
+  if (signal?.aborted) return undefined;
+  let response;
+  try {
+    response = await client.receiveMessages({
+      numberOfMessages: 1,
+      visibilityTimeout: ATTACHMENT_SCAN_TIMING.queueVisibilityMs / 1000,
+      ...(signal ? { abortSignal: signal } : {})
+    });
+  } catch (error) {
+    if (signal?.aborted && error instanceof Error && error.name === "AbortError") return undefined;
+    throw error;
+  }
+  if (signal?.aborted) return undefined;
   const message = response.receivedMessageItems[0];
   if (!message) return undefined;
 
@@ -177,8 +191,17 @@ export async function runAttachmentWorkerLoop(
   env: NodeJS.ProcessEnv = process.env,
   options: { signal?: AbortSignal; sleep?: (milliseconds: number) => Promise<void> } = {}
 ): Promise<void> {
+  if (options.signal?.aborted) return;
   const runtime = await createAttachmentWorkerRuntime(env);
-  let stopMediaSyncOutbox: (() => void) | undefined;
+  if (options.signal?.aborted) {
+    await runtime.close();
+    return;
+  }
+  let stopMediaSyncOutbox: (() => Promise<void>) | undefined;
+  let mediaOutboxJoin: Promise<void> | undefined;
+  const stopOutbox = () => {
+    mediaOutboxJoin ??= stopMediaSyncOutbox?.();
+  };
   try {
     const meetingUrl = requiredHttpsUrl(env, "MEETING_API_BASE_URL");
     const meetingAudience = requiredAudience(env, "MEETING_API_AUDIENCE");
@@ -199,19 +222,29 @@ export async function runAttachmentWorkerLoop(
       store: runtime.mediaSyncStore,
       queue: new AzureAttachmentScanQueue(runtime.queue)
     });
+    options.signal?.addEventListener("abort", stopOutbox, { once: true });
     while (!options.signal?.aborted) {
-      await consumeWarmPulse(warmQueue);
-      const lease = await receiveAttachmentScanWork(runtime.queue);
+      await consumeWarmPulse(warmQueue, options.signal);
+      if (options.signal?.aborted) break;
+      const lease = await receiveAttachmentScanWork(runtime.queue, options.signal);
+      if (options.signal?.aborted) break;
       if (!lease) {
         await sleep(1_000);
         continue;
       }
       const warm = await meetings.isWarm().catch(() => false);
+      if (options.signal?.aborted) break;
+      // shortcut: no hard drain deadline until in-flight I/O and uncertain publication can be safely cancelled.
       await runtime.run(lease, warm);
     }
   } finally {
-    stopMediaSyncOutbox?.();
-    await runtime.close();
+    options.signal?.removeEventListener("abort", stopOutbox);
+    stopOutbox();
+    try {
+      await mediaOutboxJoin;
+    } finally {
+      await runtime.close();
+    }
   }
 }
 
@@ -302,8 +335,23 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
   }
 }
 
-async function consumeWarmPulse(client: AttachmentScanQueueReceiver): Promise<void> {
-  const response = await client.receiveMessages({ numberOfMessages: 1, visibilityTimeout: 30 });
+async function consumeWarmPulse(
+  client: AttachmentScanQueueReceiver,
+  signal?: AbortSignal
+): Promise<void> {
+  if (signal?.aborted) return;
+  let response;
+  try {
+    response = await client.receiveMessages({
+      numberOfMessages: 1,
+      visibilityTimeout: 30,
+      ...(signal ? { abortSignal: signal } : {})
+    });
+  } catch (error) {
+    if (signal?.aborted && error instanceof Error && error.name === "AbortError") return;
+    throw error;
+  }
+  if (signal?.aborted) return;
   const message = response.receivedMessageItems[0];
   if (message) await client.deleteMessage(message.messageId, message.popReceipt);
 }
@@ -365,16 +413,12 @@ async function closeRuntime(
   redis: Awaited<ReturnType<typeof createRedisRuntime>> | undefined,
   postgres: Awaited<ReturnType<typeof createPostgresRuntime>> | undefined
 ): Promise<void> {
-  try {
-    await (redis?.client as { quit(): Promise<unknown> } | undefined)?.quit();
-  } catch {
-    // The finite worker is already exiting.
-  }
-  try {
-    await postgres?.pool.end();
-  } catch {
-    // The finite worker is already exiting.
-  }
+  await Promise.allSettled([
+    Promise.resolve().then(() =>
+      (redis?.client as { quit(): Promise<unknown> } | undefined)?.quit()
+    ),
+    Promise.resolve().then(() => postgres?.pool.end())
+  ]);
 }
 
 async function main(): Promise<void> {
