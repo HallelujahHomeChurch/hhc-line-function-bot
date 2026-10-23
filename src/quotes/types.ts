@@ -44,6 +44,7 @@ export interface QuoteContext {
   cleared?: boolean;
   replyProjection?: QuoteReplyProjection;
   isCurrent(): Promise<boolean>;
+  admitRequest?(): Promise<boolean>;
 }
 export interface QuoteStore {
   inspect(scope: QuoteScope, messageId: string): Promise<{ bot: boolean }>;
@@ -53,6 +54,9 @@ export interface QuoteStore {
       quotedMessageId?: string;
       text?: string;
       timestamp?: number;
+      deferRequest?: boolean;
+      expectedGeneration?: string;
+      expectedQuoted?: QuotedText;
     }
   ): Promise<QuoteTurn | undefined>;
   recordReply(

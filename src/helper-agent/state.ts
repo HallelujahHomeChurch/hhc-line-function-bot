@@ -18,7 +18,7 @@ export interface HelperAgentRunSnapshot {
   contextReset?: "expired" | "policy_changed";
   externalSheetMusicAllowed: boolean;
   externalSheetMusicQuery?: string;
-  markExternalResearch?(): Promise<void>;
+  markContextDirty?(dirty?: boolean): Promise<void>;
 }
 
 export interface HelperAgentState {
@@ -89,8 +89,11 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
         const result = await guardedTask(input, options.checkpointer, async () =>
           input.task({
             contextReset: expired ? "expired" : policyChanged ? "policy_changed" : undefined,
-            markExternalResearch: async () => {
-              policyKeys.set(input.threadId, "research-in-progress");
+            markContextDirty: async (dirty = true) => {
+              policyKeys.set(
+                input.threadId,
+                dirty ? "untrusted-context-in-progress" : input.policyKey
+              );
             },
             externalSheetMusicQuery: externalSearchQueries.get(input.threadId),
             externalSheetMusicAllowed:
@@ -202,10 +205,10 @@ export function createPostgresHelperAgentState(
           const result = await guardedTask(input, options.checkpointer, async () =>
             input.task({
               contextReset,
-              markExternalResearch: async () => {
+              markContextDirty: async (dirty = true) => {
                 await options.pool.query(
                   "update agent_sdk_threads set policy_key = $2 where thread_id = $1",
-                  [input.threadId, "research-in-progress"]
+                  [input.threadId, dirty ? "untrusted-context-in-progress" : input.policyKey]
                 );
               },
               externalSheetMusicQuery: metadata?.external_search_query ?? undefined,

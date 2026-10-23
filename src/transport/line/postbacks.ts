@@ -2,7 +2,7 @@ import type { QuoteContext, QuoteToken } from "../../quotes/types.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { WebhookReceipt } from "./webhook-receipt.js";
 import type { CapabilityName } from "../../capabilities/names.js";
-import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
+import type { ProfileRuntime, ProfileTurnInput } from "../../runtime/profile-runtime.js";
 import type { AgentJobScope, AgentJobStore } from "../../agent/jobs.js";
 import { getFunctionDefinition } from "../../capabilities/catalog.js";
 import { buildPostbackQuickReply } from "../../line-reply.js";
@@ -145,6 +145,7 @@ export async function handlePostbackEvent(
 }
 
 export async function handleAgentTextTurnWithLongJob(input: {
+  quotedContinuation?: ProfileTurnInput["quotedContinuation"];
   channelId?: string;
   runtime: ProfileRuntime;
   jobStore: AgentJobStore;
@@ -168,8 +169,14 @@ export async function handleAgentTextTurnWithLongJob(input: {
     profile: input.profile,
     event: input.event,
     requesterDisplayName: input.requesterDisplayName,
-    operation: async (operationId) => {
+    deferStart: Boolean(input.quotedContinuation),
+    operation: async (operationId, start) => {
       const result = await input.runtime.handleTextTurn({
+        quotedContinuation: input.quotedContinuation
+          ? {
+              engage: async () => (await input.quotedContinuation!.engage()) && (await start())
+            }
+          : undefined,
         operationId,
         channelId: input.channelId,
         quoteContext: input.quoteContext,
@@ -197,7 +204,11 @@ export async function handleAgentOperationWithLongJob(input: {
   profile: BotProfileConfig;
   event: LineEvent;
   requesterDisplayName?: string;
-  operation(operationId?: string): Promise<FunctionExecutionResult | undefined>;
+  deferStart?: boolean;
+  operation(
+    operationId: string,
+    start: () => Promise<boolean>
+  ): Promise<FunctionExecutionResult | undefined>;
 }): Promise<FunctionExecutionResult | undefined> {
   const scope = buildAgentJobScope(input.profile, input.event);
   if (!scope) return undefined;
@@ -210,36 +221,55 @@ export async function handleAgentOperationWithLongJob(input: {
           .update(`${encodeURIComponent(input.profile.name)}:${encodeURIComponent(eventId)}`)
           .digest("hex")
       : randomUUID());
-  const job = await input.jobStore.createPending({
-    id,
-    scope,
-    label: "agent-turn",
-    contextToken: input.quoteContext?.token,
-    ttlMs: (config?.resultTtlMinutes ?? 30) * 60_000
+  let started = false;
+  let notifyStarted!: () => void;
+  const startedSignal = new Promise<void>((resolve) => {
+    notifyStarted = resolve;
   });
-  // Persist the stable event-to-operation record and start marker before invoking business code.
-  await input.receipt?.start();
-  if (!input.jobStore.markStarted || !(await input.jobStore.markStarted(job.id, 120_000))) {
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let startPromise: Promise<boolean> | undefined;
+  const start = () =>
+    (startPromise ??= (async () => {
+      await input.jobStore.createPending({
+        id,
+        scope,
+        label: "agent-turn",
+        contextToken: input.quoteContext?.token,
+        ttlMs: (config?.resultTtlMinutes ?? 30) * 60_000
+      });
+      // No function can run before its durable operation and start marker exist.
+      await input.receipt?.start();
+      if (!input.jobStore.markStarted || !(await input.jobStore.markStarted(id, 120_000)))
+        return false;
+      started = true;
+      heartbeat = setInterval(() => {
+        void input.jobStore.renewExecution?.(id, 120_000).catch(() => undefined);
+      }, 40_000);
+      heartbeat.unref();
+      notifyStarted();
+      return true;
+    })());
+  if (!input.deferStart && !(await start())) {
     return {
       ok: true,
       replyText: "這筆請求已有處理紀錄，請查看結果。",
-      quickReplies: [buildAgentJobQuickReply(job.id)]
+      quickReplies: [buildAgentJobQuickReply(id)]
     };
   }
-  const heartbeat = setInterval(() => {
-    void input.jobStore.renewExecution?.(job.id, 120_000).catch(() => undefined);
-  }, 40_000);
-  heartbeat.unref();
   const turnPromise = (async () => {
     try {
       if (input.quoteContext && !(await input.quoteContext.isCurrent())) {
-        await input.jobStore.fail(job.id, "context_invalidated");
+        if (started) await input.jobStore.fail(id, "context_invalidated");
         await input.receipt?.finish(true);
-        return invalidatedResult();
+        return started ? invalidatedResult() : undefined;
       }
-      const result = await input.operation(job.id);
+      const result = await input.operation(id, start);
+      if (!started) {
+        await input.receipt?.finish(true);
+        return undefined;
+      }
       if (input.quoteContext && !(await input.quoteContext.isCurrent())) {
-        await input.jobStore.fail(job.id, "context_invalidated");
+        await input.jobStore.fail(id, "context_invalidated");
         await input.receipt?.finish(true);
         return invalidatedResult();
       }
@@ -253,16 +283,16 @@ export async function handleAgentOperationWithLongJob(input: {
                 resultAuthority: result.resultAuthority
               }
             : result;
-        await input.jobStore.complete(job.id, storedResult, result.executedAction);
-        const persisted = await input.jobStore.get(job.id, scope);
+        await input.jobStore.complete(id, storedResult, result.executedAction);
+        const persisted = await input.jobStore.get(id, scope);
         if (persisted?.status !== "completed") throw new Error("agent_result_not_persisted");
       } else {
-        await input.jobStore.fail(job.id, "missing_capability_owner");
+        await input.jobStore.fail(id, "missing_capability_owner");
       }
       await input.receipt?.finish(true);
       return result;
     } catch (error) {
-      await input.jobStore.fail(job.id, "execution_uncertain").catch(() => undefined);
+      if (started) await input.jobStore.fail(id, "execution_uncertain").catch(() => undefined);
       await input.receipt?.finish(false).catch(() => undefined);
       throw error;
     } finally {
@@ -274,14 +304,18 @@ export async function handleAgentOperationWithLongJob(input: {
   const timeout = new Promise<typeof timeoutSymbol>((resolve) => {
     timer = setTimeout(() => resolve(timeoutSymbol), config.inlineReplyTimeoutMs);
   });
-  const first = await Promise.race([turnPromise, timeout]).finally(() => clearTimeout(timer));
+  const handoff = timeout.then(async (value) => {
+    await startedSignal;
+    return value;
+  });
+  const first = await Promise.race([turnPromise, handoff]).finally(() => clearTimeout(timer));
   if (first !== timeoutSymbol) return first as FunctionExecutionResult | undefined;
   if (input.receipt) input.receipt.deferred = true;
   void turnPromise.catch(() => undefined);
   return {
     ok: true,
     replyText: waitingForAgentJobReply(input.requesterDisplayName),
-    quickReplies: [buildAgentJobQuickReply(job.id)]
+    quickReplies: [buildAgentJobQuickReply(id)]
   };
 }
 

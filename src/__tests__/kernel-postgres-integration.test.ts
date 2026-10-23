@@ -378,6 +378,125 @@ function requiredEnvironment(
 }
 
 describe("LINE quote context in real PostgreSQL", () => {
+  it("defers candidate text and dependencies, then rechecks generation and quote freshness before admission", async () => {
+    const { PostgresQuoteStore } = await import("../quotes/postgres-store.js");
+    const environment = await createKernelPostgresEnvironment();
+    const [pool] = environment.pools;
+    let now = new Date("2026-10-23T00:00:00Z");
+    const store = new PostgresQuoteStore(pool, "synthetic-admission", () => now);
+    const source = { type: "group", groupId: "synthetic-group", userId: "synthetic-a" };
+    const scope = { profileName: "helper", source };
+    const begin = (messageId: string, extra: Partial<Parameters<typeof store.begin>[0]> = {}) =>
+      store.begin({
+        ...scope,
+        messageId,
+        text: "SYNTHETIC_REQUEST",
+        timestamp: now.getTime(),
+        ...extra
+      });
+    try {
+      await store.setup();
+      const original = (await begin("original"))!;
+      await begin("member", { source: { ...source, userId: "synthetic-b" } });
+      const before = (
+        await pool.query("select lineage, expires_at from line_quote_threads where thread_id=$1", [
+          original.token.threadId
+        ])
+      ).rows[0];
+      now = new Date(now.getTime() + 30000);
+      const candidate = (await begin("candidate", {
+        quotedMessageId: "member",
+        deferRequest: true,
+        text: undefined
+      }))!;
+      expect(candidate.quoted?.status).toBe("resolved");
+      expect(candidate.requestText).toBeNull();
+      expect(
+        (
+          await pool.query(
+            "select lineage, expires_at from line_quote_threads where thread_id=$1",
+            [original.token.threadId]
+          )
+        ).rows[0]
+      ).toEqual(before);
+      expect(
+        (
+          await pool.query("select safe_text from line_quote_messages where thread_id=$1", [
+            original.token.threadId
+          ])
+        ).rows
+      ).toEqual([{ safe_text: "SYNTHETIC_REQUEST" }]);
+      expect(
+        (
+          await begin("probe", {
+            quotedMessageId: "candidate",
+            source: { ...source, userId: "synthetic-c" },
+            deferRequest: true
+          })
+        )?.quoted
+      ).toEqual({ status: "unavailable" });
+
+      const admitted = await begin("candidate", {
+        quotedMessageId: "member",
+        expectedGeneration: candidate.token.generation,
+        expectedQuoted: candidate.quoted
+      });
+      expect(admitted?.requestText).toBe("SYNTHETIC_REQUEST");
+      expect(
+        (
+          await begin("probe-admitted", {
+            quotedMessageId: "candidate",
+            source: { ...source, userId: "synthetic-c" },
+            deferRequest: true
+          })
+        )?.quoted?.status
+      ).toBe("resolved");
+
+      const stale = (await begin("stale", { quotedMessageId: "member", deferRequest: true }))!;
+      await store.reset(scope);
+      expect(
+        await begin("stale", {
+          quotedMessageId: "member",
+          expectedGeneration: stale.token.generation,
+          expectedQuoted: stale.quoted
+        })
+      ).toBeUndefined();
+
+      const withdrawn = (await begin("withdrawn", {
+        quotedMessageId: "member",
+        deferRequest: true
+      }))!;
+      await store.unsend({ ...scope, source: { ...source, userId: "synthetic-b" } }, "member");
+      expect(await store.isCurrent(withdrawn.token)).toBe(false);
+      expect(
+        await begin("withdrawn", {
+          quotedMessageId: "member",
+          expectedGeneration: withdrawn.token.generation,
+          expectedQuoted: withdrawn.quoted
+        })
+      ).toBeUndefined();
+
+      await begin("expiring-member", { source: { ...source, userId: "synthetic-b" } });
+      now = new Date(now.getTime() + 14 * 60000);
+      await begin("keep-requester-live");
+      const expiring = (await begin("expiring", {
+        quotedMessageId: "expiring-member",
+        deferRequest: true
+      }))!;
+      now = new Date(now.getTime() + 61000);
+      expect(await store.isCurrent(expiring.token)).toBe(true);
+      expect(
+        await begin("expiring", {
+          quotedMessageId: "expiring-member",
+          expectedGeneration: expiring.token.generation,
+          expectedQuoted: expiring.quoted
+        })
+      ).toBeUndefined();
+    } finally {
+      await environment.cleanup();
+    }
+  });
+
   it("keeps long conversations and exact public replies while isolating withdrawal dependencies", async () => {
     const { PostgresQuoteStore } = await import("../quotes/postgres-store.js");
     const environment = await createKernelPostgresEnvironment();
@@ -625,6 +744,57 @@ describe("LINE quote context in real PostgreSQL", () => {
       await environment.cleanup();
     }
   });
+});
+
+it("fences interrupted quote candidates in PostgreSQL while preserving context after engagement", async () => {
+  const { PostgresSaver } = await import("@langchain/langgraph-checkpoint-postgres");
+  const { FakeToolCallingModel } = await import("langchain");
+  const { createHelperAgent } = await import("../helper-agent/agent.js");
+  const { createPostgresHelperAgentState } = await import("../helper-agent/state.js");
+  const environment = await createKernelPostgresEnvironment();
+  const [pool, lockPool] = environment.pools;
+  const saver = new PostgresSaver(pool);
+  const state = createPostgresHelperAgentState({
+    pool,
+    lockPool,
+    checkpointer: saver,
+    hmacKey: "synthetic-engagement"
+  });
+  const run = {
+    threadId: "synthetic-engagement",
+    policyKey: "policy",
+    source: { type: "group", groupId: "synthetic-group", userId: "synthetic-user" }
+  };
+  try {
+    await saver.setup();
+    await state.setup();
+    for (const engaged of [false, true]) {
+      await expect(
+        state.run({
+          ...run,
+          task: async (snapshot) => {
+            await snapshot.markContextDirty!();
+            if (engaged) await snapshot.markContextDirty!(false);
+            await createHelperAgent({
+              checkpointer: saver,
+              model: new FakeToolCallingModel({ toolCalls: [[]] }),
+              summaryModel: new FakeToolCallingModel({ toolCalls: [[]] })
+            }).invoke(
+              { messages: [{ role: "user", content: "SYNTHETIC_CANDIDATE" }] },
+              { configurable: { thread_id: run.threadId } }
+            );
+            throw new Error("synthetic interruption");
+          }
+        })
+      ).rejects.toThrow("synthetic interruption");
+      const reset = await state.run({ ...run, task: async (snapshot) => snapshot.contextReset });
+      expect(reset).toBe(engaged ? undefined : "policy_changed");
+      const checkpoint = await saver.getTuple({ configurable: { thread_id: run.threadId } });
+      expect(Boolean(checkpoint)).toBe(engaged);
+    }
+  } finally {
+    await environment.cleanup();
+  }
 });
 
 it("deletes a real late LangGraph checkpoint after a concurrent quote reset", async () => {

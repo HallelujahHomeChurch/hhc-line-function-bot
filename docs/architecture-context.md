@@ -188,8 +188,20 @@ truncation), while approval previews retain status only. Pending generated repli
 are marked as not yet delivered. A normalized dependency table prevents active
 conversations from resetting at 64 messages and preserves withdrawal propagation
 past text expiry. Group/direct text expires after 15/30 minutes; reset, unsend and
-policy changes invalidate stale state and callbacks. Unknown quotes ask for
-restatement. Native quote behavior requires device acceptance.
+policy changes invalidate stale state and callbacks. Unknown quotes carry an
+unavailable-data status into helper rather than forcing an ingress reply. Native
+quote behavior requires device acceptance.
+
+For an unaddressed group quote that is not a known Bot reply, an existing
+requester continuation admits only an engagement decision inside the same helper
+agent. Middleware exposes only `decide_quoted_continuation` until a strict,
+single-tool decision engages; uncertain addressees, invalid decisions and
+pre-engagement errors remain silent. Engagement rechecks the quote generation and
+reference before indexing request text, refreshing the conversation window or
+starting a durable result job. Slow-operation handoff waits for engagement.
+Ignored turns restore the previous active model messages and retain no quoted
+request text or result job. Explicit wake words, Bot mentions and known Bot quotes
+use the normal path. Quote content remains untrusted and never grants authority.
 
 Admission opens the requester continuation marker before a first reply, including
 eligible media intake. Accepted events remain separate sequential turns under the
