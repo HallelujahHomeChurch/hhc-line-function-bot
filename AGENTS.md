@@ -193,6 +193,7 @@ Testing map:
 - Helper composition/context: `src/__tests__/helper-agent.test.ts`, `helper-agent-state.test.ts`, and `helper-agent-budget.test.ts`.
 - Helper tools/authority: `src/__tests__/helper-agent-read-tools.test.ts`, `helper-agent-policy-gateway.test.ts`, and `helper-agent-sheet-music.test.ts`.
 - Helper runtime/review: `src/__tests__/helper-agent-runtime.test.ts` and `helper-agent-review.test.ts`.
+- Quoted group continuation, silence and deferred handoff: `src/__tests__/quoted-continuation.test.ts`.
 - Main deterministic behavior: `src/__tests__/main-runtime.test.ts` and `main-direct-functions.test.ts`.
 - Profile dispatch: `src/__tests__/profile-runtime.test.ts`.
 - Final evaluator/docs: `src/__tests__/kernel-corpus.test.ts` and `helper-agent-docs.test.ts`.
@@ -226,6 +227,7 @@ Testing map:
 
 ## Helper experience continuation
 
+- Unaddressed member/unknown group quotes inside an active requester continuation use the same helper agent's strict `decide_quoted_continuation` gate. Only that tool is visible until engagement; invalid or uncertain decisions stay silent. Defer request indexing, function tools, durable jobs, window refresh and slow-operation handoff until engagement rechecks the quote generation/reference. Ignored candidates restore the prior active model context. An unavailable quote is missing data, not an automatic restatement reply or a requirement for the original speaker to ask.
 - Preserve the four-second slow-operation handoff and “查看結果” button for text and review operations. Results require server-owned public or complete capability provenance and requester/source checks on replay; never infer public status from a missing executedAction.
 - Helper attachment purpose/title collection uses a strict draft tool after explicit opt-in; confirmation uses a version-bound opaque postback and atomic compare-and-set. No second upload or worker path.
 - Consented research and draft mutation are mutually exclusive within a turn. Before future writable turns, remove external research tool/model/summary content; persist a dirty-policy marker before research I/O so crashes cannot retain usable tainted checkpoints.

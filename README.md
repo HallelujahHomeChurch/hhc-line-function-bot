@@ -542,6 +542,14 @@ Checkpoints retain safe delivered reply text rather than an unselected model
 answer. An explicit public group read quote can trigger a fresh authorized lookup
 for another requester, with only the explicitly quoted public reply's safe excerpt
 to identify old list items; private history, notes and approvals stay isolated.
+An unaddressed member or unknown quote inside the requester's group continuation
+window first asks the same helper agent to engage or ignore. Until engagement,
+only that decision tool is available: no function, durable task or waiting reply
+can run. Ignored candidates do not refresh the continuation window, enter the
+quote index, or remain in the active model context. Normal quoted follow-ups can
+continue without repeating the wake word. An unavailable quote is missing data;
+the helper uses the current request when sufficient, or asks for the missing
+content after engagement. It does not require the original speaker to ask.
 `get_conversation_state` reports current scoped work and finite media counts; an
 unknown outcome is never reported as completed. See the
 [implementation plan](docs/superpowers/plans/2026-10-17-line-context-continuity.md)

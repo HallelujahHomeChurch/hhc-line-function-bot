@@ -727,6 +727,7 @@ async function handleWebhook(
     }
     let line = receipt ? receipt.lineClient(transportLine) : transportLine;
     let quoteContext: QuoteContext | undefined;
+    let deferQuotedRequest = false;
     const attachQuoteContext = async (): Promise<boolean> => {
       if (!quoteStore || !event.source.userId) return true;
       {
@@ -739,7 +740,8 @@ async function handleWebhook(
             if (scope) await conversationWindowStore.clear?.(scope);
           },
           event,
-          line
+          line,
+          deferRequest: deferQuotedRequest
         });
         if (!prepared) {
           incrementIgnored(ignoredCounts, "stale_quote_context");
@@ -1073,21 +1075,42 @@ async function handleWebhook(
       const effectiveProfile = effectiveAccess.profile;
       const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
       const requesterDisplayName = await resolveRequesterDisplayName(getLineIdentity(), event);
+      deferQuotedRequest =
+        effectiveProfile.name === "helper" &&
+        Boolean(effectiveProfile.agent) &&
+        event.source.type === "group" &&
+        Boolean(event.message?.quotedMessageId) &&
+        !knownBotQuote &&
+        !sourceCommand &&
+        !groupEngagementAllowsReply(classifyGroupEngagement(effectiveProfile, event.message));
       if (!(await attachQuoteContext())) continue;
       // Accept same-requester supplements while the first answer is still running.
       const admittedScope = buildConversationWindowScope(effectiveProfile, event);
       const admittedTtl = conversationWindowTtlMs(effectiveProfile);
-      if (event.message?.type === "text" && admittedScope && admittedTtl) {
+      const recordAdmission = async () => {
+        if (event.message?.type !== "text" || !admittedScope || !admittedTtl) return;
         await conversationWindowStore.recordTurn({
           scope: admittedScope,
           role: "user",
           text: "[admitted turn]",
           ttlMs: admittedTtl
         });
+      };
+      if (!deferQuotedRequest) {
+        await recordAdmission();
+        await receipt?.start();
       }
-      await receipt?.start();
 
       const profileTurnInput = {
+        quotedContinuation: deferQuotedRequest
+          ? {
+              engage: async () => {
+                if (quoteContext && !(await quoteContext.admitRequest?.())) return false;
+                await recordAdmission();
+                return true;
+              }
+            }
+          : undefined,
         channelId: payload.destination,
         quoteContext,
         profile: effectiveProfile,
@@ -1108,23 +1131,24 @@ async function handleWebhook(
         event.replyToken &&
         !/^(?:\/reset|忘記這段對話)$/u.test(event.message.text?.trim() ?? "")
       ) {
-        const result = /^(確認|取消)$/u.test(event.message.text?.trim() ?? "")
-          ? {
-              ok: true,
-              replyText: "引用訊息不會確認或取消操作；請使用原預覽的按鈕，或重新提出需求。"
-            }
-          : quoteContext?.quoted?.status === "resolved"
-            ? await handleAgentTextTurnWithLongJob({
-                runtime: profileRuntime,
-                jobStore: agentJobStore,
-                receipt,
-                ...profileTurnInput
-              })
-            : {
+        const result =
+          !deferQuotedRequest && /^(確認|取消)$/u.test(event.message.text?.trim() ?? "")
+            ? {
                 ok: true,
-                replyText:
-                  "我無法取得這則引用的內容。請在這段對話重新描述需求；若涉及其他人的內容，請由原發話者提出。"
-              };
+                replyText: "引用訊息不會確認或取消操作；請使用原預覽的按鈕，或重新提出需求。"
+              }
+            : effectiveProfile.name === "helper" || quoteContext?.quoted?.status === "resolved"
+              ? await handleAgentTextTurnWithLongJob({
+                  runtime: profileRuntime,
+                  jobStore: agentJobStore,
+                  receipt,
+                  ...profileTurnInput
+                })
+              : {
+                  ok: true,
+                  replyText:
+                    "我無法取得這則引用的內容。請在這段對話重新描述需求，或貼上要我處理的內容。"
+                };
         if (result) {
           await line.replyText(
             event.replyToken,

@@ -93,6 +93,9 @@ export class PostgresQuoteStore implements QuoteStore {
       quotedMessageId?: string;
       text?: string;
       timestamp?: number;
+      deferRequest?: boolean;
+      expectedGeneration?: string;
+      expectedQuoted?: QuotedText;
     }
   ): Promise<QuoteTurn | undefined> {
     const chat = this.chat(input);
@@ -115,6 +118,11 @@ export class PostgresQuoteStore implements QuoteStore {
         )
       ).rows[0];
       const expired = Boolean(thread && thread.expires_at <= now);
+      if (
+        input.expectedGeneration &&
+        (!thread || expired || thread.generation !== input.expectedGeneration)
+      )
+        return undefined;
       const clearCheckpoint = Boolean(thread?.clear_pending || expired);
       if (!thread || expired) {
         await client.query("delete from line_quote_messages where thread_id=$1", [threadId]);
@@ -170,6 +178,11 @@ export class PostgresQuoteStore implements QuoteStore {
             ...(reference.public_reference ? { lookup: reference.public_reference } : {})
           };
       }
+      if (
+        input.expectedGeneration &&
+        JSON.stringify(quoted) !== JSON.stringify(input.expectedQuoted)
+      )
+        return undefined;
       const dependencies = [
         ...new Set([
           ...thread.lineage,
@@ -181,7 +194,10 @@ export class PostgresQuoteStore implements QuoteStore {
       ];
       if (await this.tombstoned(client, dependencies)) return undefined;
       const lineage = dependencies.slice(-MAX_TOKEN_LINEAGE);
-      const expiresAt = new Date(now.getTime() + ttl(input.source));
+      const expiresAt =
+        input.deferRequest && thread.expires_at > now
+          ? thread.expires_at
+          : new Date(now.getTime() + ttl(input.source));
       await client.query(
         `insert into line_quote_threads(thread_id,chat_key,generation,scope,lineage,expires_at,gc_after,clear_pending)
         values($1,$2,$3,$4,$5,$6,$7,$8) on conflict(thread_id) do update
@@ -191,23 +207,24 @@ export class PostgresQuoteStore implements QuoteStore {
           chat,
           thread.generation,
           JSON.stringify(thread.scope),
-          lineage,
+          input.deferRequest ? thread.lineage : lineage,
           expiresAt,
           new Date(now.getTime() + RETENTION_MS),
           clearCheckpoint
         ]
       );
-      await client.query(
-        `insert into line_quote_dependencies(thread_id,generation,message_key)
+      if (!input.deferRequest)
+        await client.query(
+          `insert into line_quote_dependencies(thread_id,generation,message_key)
          select $1,$2,unnest($3::text[]) on conflict do nothing`,
-        [threadId, thread.generation, dependencies]
-      );
-      if (ownKey)
+          [threadId, thread.generation, dependencies]
+        );
+      if (ownKey && !input.deferRequest)
         await client.query(
           "update line_quote_dependencies set owned=true where thread_id=$1 and generation=$2 and message_key=$3",
           [threadId, thread.generation, ownKey]
         );
-      if (ownKey)
+      if (ownKey && !input.deferRequest)
         await this.saveMessage(client, {
           key: ownKey,
           chat,
@@ -229,7 +246,7 @@ export class PostgresQuoteStore implements QuoteStore {
         },
         quoted,
         clearCheckpoint,
-        requestText: safeQuoteText(input.text ?? "")
+        requestText: input.deferRequest ? null : safeQuoteText(input.text ?? "")
       };
     });
   }

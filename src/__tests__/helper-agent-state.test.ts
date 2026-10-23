@@ -327,7 +327,7 @@ it("discards a checkpoint marked by interrupted external research on the next tu
       policyKey: "v4",
       source,
       task: async (snapshot) => {
-        await snapshot.markExternalResearch!();
+        await snapshot.markContextDirty!();
         throw new Error("process_interrupted");
       }
     })
@@ -339,4 +339,28 @@ it("discards a checkpoint marked by interrupted external research on the next tu
     task: async () => undefined
   });
   expect(deleted).toHaveBeenCalledWith("research-failure");
+});
+
+it("preserves recoverable context after an engagement clears the dirty marker", async () => {
+  const checkpointer = new MemorySaver();
+  const deleted = vi.spyOn(checkpointer, "deleteThread");
+  const state = createHelperAgentState({ checkpointer, hmacKey: "synthetic-engagement" });
+  const run = {
+    threadId: "synthetic-engagement",
+    policyKey: "policy",
+    source: { type: "group", groupId: "synthetic-group", userId: "synthetic-user" }
+  };
+  await expect(
+    state.run({
+      ...run,
+      task: async (snapshot) => {
+        await snapshot.markContextDirty!();
+        await snapshot.markContextDirty!(false);
+        throw new Error("synthetic provider failure after engagement");
+      }
+    })
+  ).rejects.toThrow("synthetic provider failure after engagement");
+  const reset = await state.run({ ...run, task: async (snapshot) => snapshot.contextReset });
+  expect(reset).toBeUndefined();
+  expect(deleted).not.toHaveBeenCalled();
 });
