@@ -103,6 +103,13 @@ class FakeRedisClient {
     );
   }
 
+  async *scanIterator(options: { MATCH: string; COUNT: number }): AsyncGenerator<string[]> {
+    const keys = await this.keys(options.MATCH);
+    for (let offset = 0; offset < keys.length; offset += options.COUNT) {
+      yield keys.slice(offset, offset + options.COUNT);
+    }
+  }
+
   multi() {
     return {
       del: async () => undefined,

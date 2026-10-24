@@ -1,10 +1,10 @@
 import type { CacheStore, CacheStoreStats } from "./cache-store.js";
+import { scanKeyBatches, type RedisScanClient } from "../redis-scan.js";
 
-export interface RedisCacheClient {
+export interface RedisCacheClient extends RedisScanClient {
   get(key: string): Promise<string | null>;
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
   del(key: string | string[]): Promise<number>;
-  keys(pattern: string): Promise<string[]>;
 }
 
 export interface RedisCacheStoreOptions {
@@ -29,16 +29,19 @@ export class RedisCacheStore implements CacheStore {
   }
 
   async deleteByPrefix(prefix: string): Promise<number> {
-    const keys = await this.options.client.keys(this.key(`${prefix}*`));
-    if (keys.length === 0) {
-      return 0;
+    let deleted = 0;
+    for await (const keys of scanKeyBatches(this.options.client, this.key(prefix))) {
+      deleted += await this.options.client.del(keys);
     }
-    return this.options.client.del(keys);
+    return deleted;
   }
 
   async stats(): Promise<CacheStoreStats> {
-    const keys = await this.options.client.keys(this.key("*"));
-    return { totalEntries: keys.length };
+    const seen = new Set<string>();
+    for await (const keys of scanKeyBatches(this.options.client, this.key(""))) {
+      for (const key of keys) seen.add(key);
+    }
+    return { totalEntries: seen.size };
   }
 
   private key(key: string): string {
