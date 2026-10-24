@@ -218,72 +218,76 @@ describe("release assurance shell transaction", () => {
     expect(report.checks.map((check) => check.name)).toEqual(["release_probe"]);
   });
 
-  it("captures known-good state, runs live gates, and writes an allowlisted digest-only report", async () => {
-    const fixture = await createFixture("success");
-    const result = fixture.run();
-    const calls = await fixture.calls();
-    expect(result.status, diagnostic(result, calls)).toBe(0);
-    const reportText = await readFile(fixture.reportPath, "utf8");
-    const report = JSON.parse(reportText) as AssuranceReportInput;
+  it.each(["success", "scan_empty_ephemeral_storage"])(
+    "captures known-good state and passes exact live gates for %s",
+    async (scenario) => {
+      const fixture = await createFixture(scenario);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      expect(result.status, diagnostic(result, calls)).toBe(0);
+      const reportText = await readFile(fixture.reportPath, "utf8");
+      const report = JSON.parse(reportText) as AssuranceReportInput;
 
-    expect(() => buildAssuranceReport(report)).not.toThrow();
-    expect(report.status).toBe("passed");
-    expect(report.failureCode).toBe("none");
-    expect(report.knownGood).toEqual({
-      revision: "bot--known-good",
-      image: GOOD_BOT_DIGEST
-    });
-    expect(report.target).toEqual({
-      resource: "bot",
-      revision: "bot--target",
-      image: `sha256:${"9".repeat(64)}`,
-      status: "ready"
-    });
-    expect(report.rollback).toEqual({ status: "not_required" });
-    expect(report.providerRequests).toEqual({ deepseek: 0, embedding: 0 });
-    expect(report.checks.map((check) => check.name)).toHaveLength(
-      new Set(report.checks.map((check) => check.name)).size
-    );
-    expect(Object.keys(report).sort()).toEqual(
-      [
-        "checks",
-        "commitSha",
-        "completedAt",
-        "failureCode",
-        "kind",
-        "knownGood",
-        "providerRequests",
-        "releaseId",
-        "rollback",
-        "startedAt",
-        "status",
-        "target",
-        "version"
-      ].sort()
-    );
-    expect(reportText).not.toContain("fixture-secret");
-    expect(reportText).not.toContain("internal.example");
-    expect(reportText).not.toContain("missing_line_signature");
-    expect(reportText).not.toContain("registry.example");
-    expect(reportText).not.toContain(MAIN_EMPTY_WEBHOOK_SIGNATURE);
-    expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
-    expect(calls.some((args) => args.slice(0, 2).join(" ") === "containerapp exec")).toBe(true);
-    expect(calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")).toBe(
-      false
-    );
-    expect(calls.some((args) => args.slice(0, 3).join(" ") === "monitor log-analytics query")).toBe(
-      true
-    );
-    const analyticsCall = calls.find(
-      (args) => args.slice(0, 3).join(" ") === "monitor log-analytics query"
-    );
-    const analyticsQuery = analyticsCall?.[analyticsCall.indexOf("--analytics-query") + 1] ?? "";
-    expect(analyticsQuery.indexOf("| order by TimeGenerated asc")).toBeLessThan(
-      analyticsQuery.indexOf("| project Log_s")
-    );
-    expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
-    expectForbiddenCallsAbsent(calls);
-  }, 15_000);
+      expect(() => buildAssuranceReport(report)).not.toThrow();
+      expect(report.status).toBe("passed");
+      expect(report.failureCode).toBe("none");
+      expect(report.knownGood).toEqual({
+        revision: "bot--known-good",
+        image: GOOD_BOT_DIGEST
+      });
+      expect(report.target).toEqual({
+        resource: "bot",
+        revision: "bot--target",
+        image: `sha256:${"9".repeat(64)}`,
+        status: "ready"
+      });
+      expect(report.rollback).toEqual({ status: "not_required" });
+      expect(report.providerRequests).toEqual({ deepseek: 0, embedding: 0 });
+      expect(report.checks.map((check) => check.name)).toHaveLength(
+        new Set(report.checks.map((check) => check.name)).size
+      );
+      expect(Object.keys(report).sort()).toEqual(
+        [
+          "checks",
+          "commitSha",
+          "completedAt",
+          "failureCode",
+          "kind",
+          "knownGood",
+          "providerRequests",
+          "releaseId",
+          "rollback",
+          "startedAt",
+          "status",
+          "target",
+          "version"
+        ].sort()
+      );
+      expect(reportText).not.toContain("fixture-secret");
+      expect(reportText).not.toContain("internal.example");
+      expect(reportText).not.toContain("missing_line_signature");
+      expect(reportText).not.toContain("registry.example");
+      expect(reportText).not.toContain(MAIN_EMPTY_WEBHOOK_SIGNATURE);
+      expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
+      expect(calls.some((args) => args.slice(0, 2).join(" ") === "containerapp exec")).toBe(true);
+      expect(
+        calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")
+      ).toBe(false);
+      expect(
+        calls.some((args) => args.slice(0, 3).join(" ") === "monitor log-analytics query")
+      ).toBe(true);
+      const analyticsCall = calls.find(
+        (args) => args.slice(0, 3).join(" ") === "monitor log-analytics query"
+      );
+      const analyticsQuery = analyticsCall?.[analyticsCall.indexOf("--analytics-query") + 1] ?? "";
+      expect(analyticsQuery.indexOf("| order by TimeGenerated asc")).toBeLessThan(
+        analyticsQuery.indexOf("| project Log_s")
+      );
+      expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
+      expectForbiddenCallsAbsent(calls);
+    },
+    15_000
+  );
 
   it("rolls back when the bounded Account preflight fails", async () => {
     const fixture = await createFixture("account_preflight_failure");
@@ -438,6 +442,8 @@ describe("release assurance shell transaction", () => {
     "scan_definition_failure",
     "scan_scaler_mismatch",
     "scan_resources_mismatch",
+    "scan_storage_resources_mismatch",
+    "scan_extra_resources_mismatch",
     "scan_mount_mismatch",
     "scan_clamav_env_mismatch",
     "release_probe_args_mismatch",
@@ -480,6 +486,15 @@ describe("release assurance shell transaction", () => {
       }
       if (scenario === "bot_ingress_mismatch") {
         expect(report.failureCode).toBe("http_mismatch");
+      }
+      if (
+        [
+          "scan_resources_mismatch",
+          "scan_storage_resources_mismatch",
+          "scan_extra_resources_mismatch"
+        ].includes(scenario)
+      ) {
+        expect(result.stderr).not.toContain("fixture-secret");
       }
       expect(report.rollback).toEqual({
         status: "restored",
@@ -1533,6 +1548,9 @@ if (command("containerapp", "job", "show")) {
   if (scenario === "catalog_hmac_env_mismatch" && name === "hhc-line-bot-catalog-sync") definition.env = [];
   if (scenario === "scan_definition_failure" && name === "hhc-line-bot-attachment-worker") definition.replicaTimeout = 1;
   if (scenario === "scan_resources_mismatch" && name === "hhc-line-bot-attachment-worker") definition.resources.memory = "4Gi";
+  if (scenario === "scan_empty_ephemeral_storage" && name === "hhc-line-bot-attachment-worker") definition.resources.ephemeralStorage = "";
+  if (scenario === "scan_storage_resources_mismatch" && name === "hhc-line-bot-attachment-worker") definition.resources.ephemeralStorage = "2Gi";
+  if (scenario === "scan_extra_resources_mismatch" && name === "hhc-line-bot-attachment-worker") definition.resources.gpu = 1;
   if (scenario === "scan_mount_mismatch" && name === "hhc-line-bot-attachment-worker") definition.volumes.push({ name: "unexpected", storageType: "AzureFile", storageName: "unexpected" });
   if (scenario === "scan_clamav_env_mismatch" && name === "hhc-line-bot-attachment-worker") definition.env.push({ name: "CLAMAV_SIGNATURE_MANIFEST_PATH", value: "/retired" });
   if (scenario === "release_probe_args_mismatch" && name === "hhc-line-bot-release-probe") definition.args = ["dist/tools/wrong.js"];
