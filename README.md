@@ -216,7 +216,7 @@ Each profile may declare `schedulePolicy.meetingReferences` with central Meeting
 Redis and PostgreSQL have explicit ownership:
 
 - Redis stores restart-safe requester-scoped sessions, one-shot postbacks, webhook deduplication, research consent, recent errors, rate limits, and long-running/durable review results. Without Redis these guarantees are process-local.
-- PostgreSQL stores access/audit, catalog/schedule/knowledge/memory data, the official LangGraph checkpoint, and `agent_sdk_threads` TTL metadata. Helper same-thread execution uses a dedicated PostgreSQL advisory-lock pool.
+- PostgreSQL stores access/audit, catalog/schedule/knowledge/memory data, the official LangGraph checkpoint, and `agent_sdk_threads` TTL metadata. Helper same-thread execution uses a dedicated PostgreSQL advisory-lock pool. Each shared runtime pool keeps max2 with a two-second connection/checkout timeout; finite job owners may override it with their remaining deadline. This bounds pool queueing, not SQL execution or time spent holding the thread lock.
 - Helper checkpoint idle TTL is fixed at 30 minutes for direct chat and 15 minutes for group/room. Cleanup runs every five minutes. Policy/tool-contract changes and explicit reset delete the checkpoint before reuse.
 - Long-running and reviewed action results are keyed by opaque ID and can be read only by the same profile, LINE source, and requester.
 - Selection and attachment sessions remain narrow deterministic state owned by their transport/capability flows. Schedule ambiguity and helper follow-up remain in the requester checkpoint and require a fresh authorized tool call.
@@ -263,7 +263,7 @@ provider bodies, physical client end events and the idempotent pool close.
 Each catalog-owned PG client also sets a positive server `statement_timeout` at
 startup, using the remaining work budget at client birth (at most 540 seconds).
 The job setting overrides DSN/startup options for this parameter while preserving
-other options; shared pool defaults and global PG settings are unchanged. A stuck
+other options; the shared two-second checkout default does not replace that remaining job deadline; global PG settings are unchanged. A stuck
 server statement therefore has a server-side timeout even after local socket close.
 This is per statement from server receipt, not an absolute job/transaction deadline:
 later statements restart the timer, and a multi-statement batch has no single total
@@ -564,3 +564,11 @@ failed first migration retains the current workloads and reports rollback failed
 recovery requires a compatible forward release. Once a healthy matching v2 set is
 established, normal reviewed digest rollback remains available. Keep lifecycle
 controls disabled until older worker revisions and finite executions are drained.
+
+Catalog-sync and attachment Jobs use a separate Key Vault reference
+`hhc-line-jobs-database-url` for the shared `hhc_line_jobs` login (cap6). The
+API and persistent attachment worker keep their runtime login. Periodic
+assurance, media-sync warmer and release probe do not open PG pools. Provision
+the capped credential and narrow secret-read access for both Job identities
+with admission paused before release; metadata preflight rejects a missing
+credential. This source change does not provision credentials or permissions.
