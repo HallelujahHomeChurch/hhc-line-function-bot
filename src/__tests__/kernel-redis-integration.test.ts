@@ -11,12 +11,66 @@ import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js"
 import { RedisFirstSuccessStore } from "../observability/first-success-store.js";
 import { RedisSessionStore } from "../state/redis-session-store.js";
 import { RedisConversationWindowStore } from "../agent/context-manager.js";
+import { RedisCacheStore } from "../cache/redis-cache-store.js";
 
 describe("kernel Redis integration environment", () => {
   let environment: KernelRedisEnvironment | undefined;
 
   afterAll(async () => {
     await environment?.cleanup();
+  });
+
+  it("enumerates multiple cache pages without crossing literal prefixes or other namespaces", async () => {
+    environment ??= await createKernelRedisEnvironment();
+    const keyPrefix = `${environment.keyPrefix}:literal[1]*?\\`;
+    const stores = environment.clients.map((client) => new RedisCacheStore({ client, keyPrefix }));
+    await Promise.all(
+      Array.from({ length: 215 }, (_, index) =>
+        stores[index % 2]!.set(`page:${index}`, { index }, 60_000)
+      )
+    );
+    await stores[0]!.set("glob[1]*?\\:item", "selected", 60_000);
+    await stores[0]!.set("glob1-other:item", "kept", 60_000);
+    await environment.clients[0].setEx(`${keyPrefix}:session:unrelated`, 60, "kept");
+    expect(await stores[1]!.stats()).toEqual({ totalEntries: 217 });
+    expect(await stores[1]!.deleteByPrefix("glob[1]*?\\:")).toBe(1);
+    expect(await stores[0]!.get("glob1-other:item")).toBe("kept");
+    expect(await stores[0]!.deleteByPrefix("page:")).toBe(215);
+    expect(await stores[1]!.stats()).toEqual({ totalEntries: 1 });
+    expect(await environment.clients[1].get(`${keyPrefix}:session:unrelated`)).toBe("kept");
+    expect(
+      await environment.clients[1].pTTL(`${keyPrefix}:cache:glob1-other:item`)
+    ).toBeGreaterThan(0);
+  });
+
+  it("reads and clears multiple session pages while retaining unrelated cache and receipts", async () => {
+    environment ??= await createKernelRedisEnvironment();
+    const keyPrefix = `${environment.keyPrefix}:sessions[1]*?\\`;
+    const stores = environment.clients.map(
+      (client) => new RedisSessionStore({ client, keyPrefix })
+    );
+    await Promise.all(
+      Array.from({ length: 215 }, (_, index) =>
+        stores[index % 2]!.set({
+          id: `attachment-${index}`,
+          type: "pending_attachment",
+          profileName: "helper",
+          requesterUserId: `synthetic-${index}`,
+          source: { type: "user", userId: `synthetic-${index}` },
+          attachment: { messageId: `synthetic-${index}`, messageType: "file" },
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        })
+      )
+    );
+    await environment.clients[0].setEx(`${keyPrefix}:cache:unrelated`, 60, "kept");
+    await environment.clients[0].setEx(`${keyPrefix}:webhook-event:v1:unrelated`, 60, "kept");
+    expect(await stores[1]!.summary()).toEqual({ total: 215, byType: { pending_attachment: 215 } });
+    expect(await stores[0]!.clear()).toBe(430);
+    expect(await stores[1]!.summary()).toEqual({ total: 0, byType: {} });
+    expect(await environment.clients[1].get(`${keyPrefix}:cache:unrelated`)).toBe("kept");
+    expect(await environment.clients[1].get(`${keyPrefix}:webhook-event:v1:unrelated`)).toBe(
+      "kept"
+    );
   });
 
   it("indexes scoped recent jobs atomically across clients and excludes the querying turn", async () => {

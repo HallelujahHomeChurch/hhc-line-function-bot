@@ -18,13 +18,13 @@ import type {
 } from "./session-store.js";
 import type { LineSource } from "../types.js";
 import { lineSourcesEqual, requesterMatchesForSource } from "./session-safety.js";
+import { scanKeyBatches, type RedisScanClient } from "../redis-scan.js";
 
-export interface RedisSessionClient {
+export interface RedisSessionClient extends RedisScanClient {
   get(key: string): Promise<string | null>;
   getDel(key: string): Promise<string | null>;
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
   del(key: string | string[]): Promise<number>;
-  keys(pattern: string): Promise<string[]>;
   eval?(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 }
 
@@ -475,21 +475,22 @@ export class RedisSessionStore implements SessionStore {
   }
 
   async clear(): Promise<number> {
-    const [sessionKeys, indexKeys] = await Promise.all([
-      this.options.client.keys(this.key("*")),
-      this.options.client.keys(`${this.options.keyPrefix}:interactive-session-v1:*`)
-    ]);
-    const keys = [...sessionKeys, ...indexKeys];
-    if (keys.length === 0) {
-      return 0;
+    let deleted = 0;
+    for (const prefix of [this.key(""), `${this.options.keyPrefix}:interactive-session-v1:`]) {
+      for await (const keys of scanKeyBatches(this.options.client, prefix)) {
+        deleted += await this.options.client.del(keys);
+      }
     }
-    return this.options.client.del(keys);
+    return deleted;
   }
 
   private async liveSessions(): Promise<ConversationSession[]> {
-    const keys = await this.options.client.keys(this.key("*"));
-    const sessions = await Promise.all(keys.map((key) => this.readSession(key)));
-    return sessions
+    const sessions = new Map<string, ConversationSession | undefined>();
+    for await (const keys of scanKeyBatches(this.options.client, this.key(""))) {
+      const batch = await Promise.all(keys.map((key) => this.readSession(key)));
+      keys.forEach((key, index) => sessions.set(key, batch[index]));
+    }
+    return [...sessions.values()]
       .map((session) => this.liveSession(session))
       .filter((session): session is ConversationSession => Boolean(session));
   }
