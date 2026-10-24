@@ -196,6 +196,12 @@ audit_vault_id="$(az keyvault show \
   --output tsv \
   --only-show-errors)"
 audit_token_scope="${audit_vault_id}/secrets/audit-log-production-token-line-bot"
+jobs_database_secret_id="${audit_vault_id}/secrets/hhc-line-jobs-database-url"
+if [[ "$(az resource show --ids "${jobs_database_secret_id}" --api-version 2024-11-01 --query properties.attributes.enabled --output tsv --only-show-errors)" != "true" ]]; then
+  set_release_failure preflight_failed
+  echo "Capped Job database credential is unavailable" >&2
+  exit 1
+fi
 if [[ -z "${bot_principal_id}" || -z "${audit_vault_id}" \
   || "$(az role assignment list \
     --scope "${audit_token_scope}" \

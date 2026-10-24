@@ -18,6 +18,7 @@ export function createPostgresPool(
     connectionString: config.url,
     ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
     max: 2,
+    connectionTimeoutMillis: 2_000,
     ...options
   });
 }

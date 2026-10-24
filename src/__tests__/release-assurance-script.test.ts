@@ -142,6 +142,19 @@ describe("release assurance shell transaction", () => {
     expect(report.rollback).toEqual({ status: "not_required" });
   });
 
+  it("rejects a missing capped Job database credential before external writes", async () => {
+    const fixture = await createDeployFixture("missing_jobs_database_credential");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const flattened = calls.map((args) => args.join(" ")).join("\n");
+    expect(result.status, diagnostic(result, calls)).not.toBe(0);
+    expect(result.stderr).toContain("Capped Job database credential is unavailable");
+    expect(flattened).toContain("properties.attributes.enabled");
+    expect(flattened).not.toMatch(
+      /containerapp (?:secret set|update|create|revision copy)|containerapp job (?:update|create)/u
+    );
+  });
+
   it("fails a blank account presentation preflight before snapshot or external writes", async () => {
     const fixture = await createDeployFixture("missing_account_presentation");
     const result = fixture.run();
@@ -741,7 +754,8 @@ async function createDeployFixture(scenario: string) {
   if (
     scenario === "known_good_capture_failure" ||
     scenario === "missing_account_presentation" ||
-    scenario === "provider_console_mismatch"
+    scenario === "provider_console_mismatch" ||
+    scenario === "missing_jobs_database_credential"
   ) {
     await mkdir(path.join(directory, "infra/searxng"), { recursive: true });
     await Promise.all(
@@ -763,8 +777,14 @@ async function createDeployFixture(scenario: string) {
   }
   await writeFile(
     path.join(binDirectory, "az"),
-    scenario === "missing_account_presentation" || scenario === "provider_console_mismatch"
-      ? accountPresentationAz(callLogPath, scenario === "missing_account_presentation")
+    scenario === "missing_account_presentation" ||
+      scenario === "provider_console_mismatch" ||
+      scenario === "missing_jobs_database_credential"
+      ? accountPresentationAz(
+          callLogPath,
+          scenario === "missing_account_presentation",
+          scenario === "missing_jobs_database_credential"
+        )
       : `#!/usr/bin/env bash
 printf '%s\n' "$*" >> "${toBashPath(callLogPath)}"
 exit 61
@@ -816,7 +836,11 @@ exec bash "${toBashPath(path.join(scriptsDirectory, "deploy-aca.sh"))}"
   };
 }
 
-function accountPresentationAz(callLogPath: string, missingMain: boolean): string {
+function accountPresentationAz(
+  callLogPath: string,
+  missingMain: boolean,
+  missingJobsDatabase = false
+): string {
   return `#!/usr/bin/env node
 const { appendFileSync } = require("node:fs");
 const args = process.argv.slice(2);
@@ -838,6 +862,7 @@ else if (command("containerapp", "show") && name === "operations-api") output("m
 else if (command("storage", "account", "show")) output("/storage/fixture-attachments");
 else if (command("acr", "show")) output("/acr/fixture");
 else if (command("keyvault", "show")) output("/vaults/fixture");
+else if (command("resource", "show")) output(${JSON.stringify(missingJobsDatabase ? "false" : "true")});
 else if (command("role", "assignment", "list")) output("1");
 else if (command("ad", "sp", "show")) output({ id: "asset-sp", appRoles: [{ id: "asset-role", value: "Asset.Invoke", isEnabled: true, allowedMemberTypes: ["Application"] }] });
 else if (command("rest")) output({ value: [{ appRoleId: "asset-role", resourceId: "asset-sp" }] });

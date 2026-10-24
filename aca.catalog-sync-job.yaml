@@ -28,7 +28,8 @@ properties:
       - name: notion-token
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: database-url
-        value: PLACEHOLDER_COPY_FROM_BOT_SECRET
+        keyVaultUrl: https://alive-vault.vault.azure.net/secrets/hhc-line-jobs-database-url
+        identity: PLACEHOLDER_CONTAINER_APP_JOB_IDENTITY_ID
       - name: redis-url
         value: PLACEHOLDER_COPY_FROM_BOT_SECRET
       - name: azure-openai-embedding-key
