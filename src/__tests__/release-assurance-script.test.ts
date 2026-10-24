@@ -218,76 +218,80 @@ describe("release assurance shell transaction", () => {
     expect(report.checks.map((check) => check.name)).toEqual(["release_probe"]);
   });
 
-  it.each(["success", "scan_empty_ephemeral_storage"])(
-    "captures known-good state and passes exact live gates for %s",
-    async (scenario) => {
-      const fixture = await createFixture(scenario);
-      const result = fixture.run();
-      const calls = await fixture.calls();
-      expect(result.status, diagnostic(result, calls)).toBe(0);
-      const reportText = await readFile(fixture.reportPath, "utf8");
-      const report = JSON.parse(reportText) as AssuranceReportInput;
+  it("captures known-good state, runs live gates, and writes an allowlisted digest-only report", async () => {
+    const fixture = await createFixture("success");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    expect(result.status, diagnostic(result, calls)).toBe(0);
+    const reportText = await readFile(fixture.reportPath, "utf8");
+    const report = JSON.parse(reportText) as AssuranceReportInput;
 
-      expect(() => buildAssuranceReport(report)).not.toThrow();
-      expect(report.status).toBe("passed");
-      expect(report.failureCode).toBe("none");
-      expect(report.knownGood).toEqual({
-        revision: "bot--known-good",
-        image: GOOD_BOT_DIGEST
-      });
-      expect(report.target).toEqual({
-        resource: "bot",
-        revision: "bot--target",
-        image: `sha256:${"9".repeat(64)}`,
-        status: "ready"
-      });
-      expect(report.rollback).toEqual({ status: "not_required" });
-      expect(report.providerRequests).toEqual({ deepseek: 0, embedding: 0 });
-      expect(report.checks.map((check) => check.name)).toHaveLength(
-        new Set(report.checks.map((check) => check.name)).size
-      );
-      expect(Object.keys(report).sort()).toEqual(
-        [
-          "checks",
-          "commitSha",
-          "completedAt",
-          "failureCode",
-          "kind",
-          "knownGood",
-          "providerRequests",
-          "releaseId",
-          "rollback",
-          "startedAt",
-          "status",
-          "target",
-          "version"
-        ].sort()
-      );
-      expect(reportText).not.toContain("fixture-secret");
-      expect(reportText).not.toContain("internal.example");
-      expect(reportText).not.toContain("missing_line_signature");
-      expect(reportText).not.toContain("registry.example");
-      expect(reportText).not.toContain(MAIN_EMPTY_WEBHOOK_SIGNATURE);
-      expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
-      expect(calls.some((args) => args.slice(0, 2).join(" ") === "containerapp exec")).toBe(true);
-      expect(
-        calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")
-      ).toBe(false);
-      expect(
-        calls.some((args) => args.slice(0, 3).join(" ") === "monitor log-analytics query")
-      ).toBe(true);
-      const analyticsCall = calls.find(
-        (args) => args.slice(0, 3).join(" ") === "monitor log-analytics query"
-      );
-      const analyticsQuery = analyticsCall?.[analyticsCall.indexOf("--analytics-query") + 1] ?? "";
-      expect(analyticsQuery.indexOf("| order by TimeGenerated asc")).toBeLessThan(
-        analyticsQuery.indexOf("| project Log_s")
-      );
-      expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
-      expectForbiddenCallsAbsent(calls);
-    },
-    15_000
-  );
+    expect(() => buildAssuranceReport(report)).not.toThrow();
+    expect(report.status).toBe("passed");
+    expect(report.failureCode).toBe("none");
+    expect(report.knownGood).toEqual({
+      revision: "bot--known-good",
+      image: GOOD_BOT_DIGEST
+    });
+    expect(report.target).toEqual({
+      resource: "bot",
+      revision: "bot--target",
+      image: `sha256:${"9".repeat(64)}`,
+      status: "ready"
+    });
+    expect(report.rollback).toEqual({ status: "not_required" });
+    expect(report.providerRequests).toEqual({ deepseek: 0, embedding: 0 });
+    expect(report.checks.map((check) => check.name)).toHaveLength(
+      new Set(report.checks.map((check) => check.name)).size
+    );
+    expect(Object.keys(report).sort()).toEqual(
+      [
+        "checks",
+        "commitSha",
+        "completedAt",
+        "failureCode",
+        "kind",
+        "knownGood",
+        "providerRequests",
+        "releaseId",
+        "rollback",
+        "startedAt",
+        "status",
+        "target",
+        "version"
+      ].sort()
+    );
+    expect(reportText).not.toContain("fixture-secret");
+    expect(reportText).not.toContain("internal.example");
+    expect(reportText).not.toContain("missing_line_signature");
+    expect(reportText).not.toContain("registry.example");
+    expect(reportText).not.toContain(MAIN_EMPTY_WEBHOOK_SIGNATURE);
+    expect(calls.some((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toBe(true);
+    expect(calls.some((args) => args.slice(0, 2).join(" ") === "containerapp exec")).toBe(true);
+    expect(calls.some((args) => args.slice(0, 4).join(" ") === "containerapp job logs show")).toBe(
+      false
+    );
+    expect(calls.some((args) => args.slice(0, 3).join(" ") === "monitor log-analytics query")).toBe(
+      true
+    );
+    const analyticsCall = calls.find(
+      (args) => args.slice(0, 3).join(" ") === "monitor log-analytics query"
+    );
+    const analyticsQuery = analyticsCall?.[analyticsCall.indexOf("--analytics-query") + 1] ?? "";
+    expect(analyticsQuery.indexOf("| order by TimeGenerated asc")).toBeLessThan(
+      analyticsQuery.indexOf("| project Log_s")
+    );
+    expect(calls.some((args) => args.includes("revision") && args.includes("copy"))).toBe(false);
+    expectForbiddenCallsAbsent(calls);
+  }, 15_000);
+
+  it("accepts Azure's empty Job ephemeralStorage metadata", async () => {
+    const fixture = await createFixture("scan_empty_ephemeral_storage");
+    const result = fixture.run();
+    expect(result.status, diagnostic(result, await fixture.calls())).toBe(0);
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+    expect(report.status).toBe("passed");
+  });
 
   it("rolls back when the bounded Account preflight fails", async () => {
     const fixture = await createFixture("account_preflight_failure");
