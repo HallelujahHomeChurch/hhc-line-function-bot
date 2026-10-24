@@ -896,14 +896,12 @@ start_release_job \
   attachment_bootstrap_start_failed
 RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="${RELEASE_STARTED_EXECUTION_NAME}"
 mark_release_attachment_app_mutated
-if az containerapp show \
+# CLI update --yaml strips empty userAssignedIdentities entries; PUT upsert preserves them.
+az containerapp create \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${ATTACHMENT_WORKER_APP_NAME}" \
-  --only-show-errors --output none 2>/dev/null; then
-  az containerapp update --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --yaml "${attachment_worker_app_manifest}" --only-show-errors --output none
-else
-  az containerapp create --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --yaml "${attachment_worker_app_manifest}" --only-show-errors --output none
-fi
+  --yaml "${attachment_worker_app_manifest}" \
+  --only-show-errors --output none
 mark_release_job_mutated "${MEDIA_SYNC_WARMER_JOB_NAME}"
 deploy_job "${MEDIA_SYNC_WARMER_JOB_NAME}" "${media_sync_warmer_job_manifest}" "${attachment_job_identity_id}"
 mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
