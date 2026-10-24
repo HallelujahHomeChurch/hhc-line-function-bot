@@ -865,7 +865,10 @@ elif check_name == "attachment_worker_job":
         and env_by_name.get("MEDIA_SYNC_MAX_BYTES", {}).get("value") == "209715200"
         and env_by_name.get("MAX_ATTACHMENT_BYTES", {}).get("value") == "26214400"
         and not any(name and name.startswith("CLAMAV_") for name in env_names)
-        and resources == {"cpu": 0.5, "memory": "1Gi"}
+        and resources in (
+            {"cpu": 0.5, "memory": "1Gi"},
+            {"cpu": 0.5, "memory": "1Gi", "ephemeralStorage": ""},
+        )
         and not mounts
         and not volumes
     )
@@ -950,7 +953,7 @@ raise SystemExit(0 if valid else 1)
 PY
   then
     if [[ -n "${definition_json}" ]]; then
-      printf 'Release definition mismatch for %s: %s\n' "${check_name}" "${definition_json}" >&2
+      printf 'Release definition mismatch for %s\n' "${check_name}" >&2
     fi
     fail_release_check "${check_name}" "${failure_reason}" http_mismatch
     return

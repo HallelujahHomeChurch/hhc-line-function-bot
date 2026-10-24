@@ -285,6 +285,14 @@ describe("release assurance shell transaction", () => {
     expectForbiddenCallsAbsent(calls);
   }, 15_000);
 
+  it("accepts Azure's empty Job ephemeralStorage metadata", async () => {
+    const fixture = await createFixture("scan_empty_ephemeral_storage");
+    const result = fixture.run();
+    expect(result.status, diagnostic(result, await fixture.calls())).toBe(0);
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+    expect(report.status).toBe("passed");
+  });
+
   it("rolls back when the bounded Account preflight fails", async () => {
     const fixture = await createFixture("account_preflight_failure");
     const result = fixture.run();
@@ -438,6 +446,8 @@ describe("release assurance shell transaction", () => {
     "scan_definition_failure",
     "scan_scaler_mismatch",
     "scan_resources_mismatch",
+    "scan_storage_resources_mismatch",
+    "scan_extra_resources_mismatch",
     "scan_mount_mismatch",
     "scan_clamav_env_mismatch",
     "release_probe_args_mismatch",
@@ -480,6 +490,15 @@ describe("release assurance shell transaction", () => {
       }
       if (scenario === "bot_ingress_mismatch") {
         expect(report.failureCode).toBe("http_mismatch");
+      }
+      if (
+        [
+          "scan_resources_mismatch",
+          "scan_storage_resources_mismatch",
+          "scan_extra_resources_mismatch"
+        ].includes(scenario)
+      ) {
+        expect(result.stderr).not.toContain("fixture-secret");
       }
       expect(report.rollback).toEqual({
         status: "restored",
@@ -1533,6 +1552,9 @@ if (command("containerapp", "job", "show")) {
   if (scenario === "catalog_hmac_env_mismatch" && name === "hhc-line-bot-catalog-sync") definition.env = [];
   if (scenario === "scan_definition_failure" && name === "hhc-line-bot-attachment-worker") definition.replicaTimeout = 1;
   if (scenario === "scan_resources_mismatch" && name === "hhc-line-bot-attachment-worker") definition.resources.memory = "4Gi";
+  if (scenario === "scan_empty_ephemeral_storage" && name === "hhc-line-bot-attachment-worker") definition.resources.ephemeralStorage = "";
+  if (scenario === "scan_storage_resources_mismatch" && name === "hhc-line-bot-attachment-worker") definition.resources.ephemeralStorage = "2Gi";
+  if (scenario === "scan_extra_resources_mismatch" && name === "hhc-line-bot-attachment-worker") definition.resources.gpu = 1;
   if (scenario === "scan_mount_mismatch" && name === "hhc-line-bot-attachment-worker") definition.volumes.push({ name: "unexpected", storageType: "AzureFile", storageName: "unexpected" });
   if (scenario === "scan_clamav_env_mismatch" && name === "hhc-line-bot-attachment-worker") definition.env.push({ name: "CLAMAV_SIGNATURE_MANIFEST_PATH", value: "/retired" });
   if (scenario === "release_probe_args_mismatch" && name === "hhc-line-bot-release-probe") definition.args = ["dist/tools/wrong.js"];
