@@ -1,3 +1,4 @@
+import { recoveryAllowsEvent } from "../../application/recovery/redis-recovery.js";
 import type { QuoteContext, QuoteStore } from "../../quotes/types.js";
 import { completedBulletinButton } from "../../account/bulletin-continuation.js";
 import type { MemberAccessPresentation } from "../../account/member-access.js";
@@ -364,6 +365,14 @@ async function handleWebhook(
   const payload = parseWebhookPayload(body);
   if (!payload) {
     return reply.code(400).send({ ok: false, error: "invalid_line_payload" });
+  }
+
+  if (
+    config.redisRecoveryCutoffMs !== undefined &&
+    payload.events.some((event) => !recoveryAllowsEvent(event, config.redisRecoveryCutoffMs!))
+  ) {
+    // Keep the entire signed batch held; never partly dispatch a recovery batch.
+    return reply.code(409).send({ ok: false, error: "redis_recovery_event_quarantined" });
   }
 
   const ignoredCounts = new Map<string, number>();

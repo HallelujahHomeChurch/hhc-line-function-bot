@@ -109,7 +109,11 @@ properties:
           - name: REDIS_URL
             secretRef: PLACEHOLDER_REDIS_URL_SECRET_REF
           - name: REDIS_KEY_PREFIX
-            value: hhc-line-function-bot
+            value: PLACEHOLDER_REDIS_KEY_PREFIX
+          - name: LINE_REDIS_RECOVERY
+            value: PLACEHOLDER_LINE_REDIS_RECOVERY
+          - name: LINE_REDIS_RECOVERY_CUTOFF_MS
+            value: PLACEHOLDER_LINE_REDIS_RECOVERY_CUTOFF_MS
           - name: REGISTRATION_INVITE_CODE_TTL_MINUTES
             value: "60"
           - name: CONFIRMATION_TTL_MINUTES

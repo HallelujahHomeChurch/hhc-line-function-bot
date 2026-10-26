@@ -1,3 +1,4 @@
+import { rehearseRedisLoss } from "../testing/redis-recovery-rehearsal.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { createClient } from "redis";
 
@@ -15,6 +16,14 @@ import { RedisCacheStore } from "../cache/redis-cache-store.js";
 
 describe("kernel Redis integration environment", () => {
   let environment: KernelRedisEnvironment | undefined;
+
+  it.each(["full", "partial", "stale"] as const)(
+    "quarantines %s receipt loss before mocked provider dispatch",
+    async (loss) => {
+      environment ??= await createKernelRedisEnvironment();
+      await rehearseRedisLoss(environment, loss);
+    }
+  );
 
   afterAll(async () => {
     await environment?.cleanup();

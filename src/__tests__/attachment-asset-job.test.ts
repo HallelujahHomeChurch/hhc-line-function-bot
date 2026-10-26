@@ -7,6 +7,19 @@ import {
 } from "../tools/run-attachment-worker.js";
 
 describe("attachment asset job environment", () => {
+  it("never acknowledges missing Redis work during recovery", async () => {
+    const complete = vi.fn(async () => undefined);
+    const runAttachment = vi.fn(async () => ({ status: "missing" as const }));
+    const runMediaSync = vi.fn(async () => ({ status: "missing" as const }));
+    const result = await runAttachmentWorkerQueueLease(
+      { kind: "attachment", workId: "synthetic-old-work", complete },
+      { recoveryActive: true, runAttachment, runMediaSync }
+    );
+    expect(result.exitCode).toBe(1);
+    expect(complete).not.toHaveBeenCalled();
+    expect(runMediaSync).not.toHaveBeenCalled();
+  });
+
   it("requires one dedicated managed identity and private Asset endpoint", () => {
     expect(
       readAttachmentWorkerEnvironment({
