@@ -1,3 +1,4 @@
+import { recoveryCutoff } from "../application/recovery/redis-recovery.js";
 import { readFileSync } from "node:fs";
 
 import type {
@@ -27,6 +28,7 @@ export interface AttachmentScanWorkerConfig {
 export function loadAttachmentScanWorkerConfigFromEnv(
   env: NodeJS.ProcessEnv
 ): AttachmentScanWorkerConfig {
+  recoveryCutoff(env);
   const profileConfigPath = required(env, "PROFILE_CONFIG_PATH");
   const rawProfiles = JSON.parse(readFileSync(profileConfigPath, "utf8")) as unknown;
   if (!Array.isArray(rawProfiles) || rawProfiles.length === 0) {

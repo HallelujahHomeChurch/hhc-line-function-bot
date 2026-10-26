@@ -572,3 +572,5 @@ assurance, media-sync warmer and release probe do not open PG pools. Provision
 the capped credential and narrow secret-read access for both Job identities
 with admission paused before release; metadata preflight rejects a missing
 credential. This source change does not provision credentials or permissions.
+
+Redis full/partial/stale loss requires the [bounded recovery procedure](docs/runbooks/redis-loss-recovery.md). The offline planner does not authorize replay; signed-event cutoff and a consistent new namespace retire old one-shot authority while unknown effects remain quarantined. The default recovery configuration is inactive.

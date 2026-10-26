@@ -1281,6 +1281,17 @@ values = {item.get("name"): item.get("value") for item in json.loads(os.environ[
 print(values.get("LINE_RUNTIME_STATE_CONTRACT", "legacy"))
 PYTHON
 )" || return 1
+  if [[ -n "${RELEASE_RECOVERY_ENV_JSON:-}" ]]; then
+    local recovery_compatible
+    recovery_compatible="$(KNOWN_GOOD_ENV_JSON="${known_good_env_json}" \
+      KNOWN_GOOD_CATALOG_MANIFEST="${RELEASE_KNOWN_GOOD_CATALOG_MANIFEST:-}" \
+      KNOWN_GOOD_SCAN_MANIFEST="${RELEASE_KNOWN_GOOD_SCAN_MANIFEST:-}" \
+      python3 "$(dirname "${BASH_SOURCE[0]}")/redis-recovery.py" compatible)" || return 1
+    if [[ "${recovery_compatible}" != "true" ]]; then
+      RELEASE_STATE_DOWNGRADE_BLOCKED=true
+      echo "Redis recovery fence changed: automatic downgrade is blocked" >&2
+    fi
+  fi
   if [[ "${contract}" != "2" ]] \
     || [[ "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]] \
     || [[ "${RELEASE_KNOWN_GOOD_WARMER_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]] \

@@ -1,3 +1,4 @@
+import { recoveryCutoff } from "../application/recovery/redis-recovery.js";
 import { pathToFileURL } from "node:url";
 
 import { ManagedIdentityCredential } from "@azure/identity";
@@ -294,6 +295,7 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
       run: (lease: AttachmentScanWorkLease, warm: boolean) => {
         const deadlines = attachmentWorkerDeadlines(new Date());
         return runAttachmentWorkerQueueLease(lease, {
+          recoveryActive: recoveryCutoff(env) !== undefined,
           runAttachment: (workId) =>
             runAttachmentAssetWorker(workId, {
               workStore,
@@ -359,6 +361,7 @@ async function consumeWarmPulse(
 export async function runAttachmentWorkerQueueLease(
   lease: AttachmentScanWorkLease,
   handlers: {
+    recoveryActive?: boolean;
     runAttachment(workId: string): Promise<AttachmentAssetWorkerResult>;
     runMediaSync(workId: string): Promise<MediaSyncWorkerResult>;
   }
@@ -373,7 +376,9 @@ export async function runAttachmentWorkerQueueLease(
     };
   }
   const result = await handlers.runAttachment(lease.workId);
-  const acknowledge = shouldAcknowledgeAttachmentWorkerResult(result);
+  const acknowledge =
+    !(handlers.recoveryActive && result.status === "missing") &&
+    shouldAcknowledgeAttachmentWorkerResult(result);
   if (acknowledge) await lease.complete();
   return {
     exitCode: acknowledge ? 0 : 1,

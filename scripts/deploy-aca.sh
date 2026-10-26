@@ -344,6 +344,8 @@ fi
 # Capture every traffic-serving and finite-workload identity before the first
 # production write. Compatible secret/storage reconciliation is inside the
 # same failure boundary even though rollback ownership is workload-scoped.
+RELEASE_RECOVERY_ENV_JSON="$(BOT_ENV_JSON="${bot_env_json}" python3 "${script_dir}/redis-recovery.py" select "${script_dir}/../config/redis-recovery.json")"
+export RELEASE_RECOVERY_ENV_JSON
 capture_known_good_state
 classify_runtime_state_rollback
 mark_release_mutated
@@ -568,7 +570,11 @@ for name in source_env_names:
     if env_values.get(name) is None:
         raise SystemExit(f"Required ACA environment reference is unavailable: {name}")
 
+recovery = json.loads(os.environ["RELEASE_RECOVERY_ENV_JSON"])
 substitutions = {
+    "PLACEHOLDER_REDIS_KEY_PREFIX": recovery["REDIS_KEY_PREFIX"],
+    "PLACEHOLDER_LINE_REDIS_RECOVERY": recovery["LINE_REDIS_RECOVERY"],
+    "PLACEHOLDER_LINE_REDIS_RECOVERY_CUTOFF_MS": recovery["LINE_REDIS_RECOVERY_CUTOFF_MS"],
     "PLACEHOLDER_CONTAINER_APP_NAME": os.environ["CONTAINER_APP_NAME"],
     "PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID": os.environ["MANAGED_ENVIRONMENT_ID"],
     "PLACEHOLDER_AZURE_REGION": os.environ["CONTAINER_APP_LOCATION"],

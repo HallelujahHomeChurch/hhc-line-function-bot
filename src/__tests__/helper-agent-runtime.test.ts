@@ -102,6 +102,61 @@ function state(overrides: Partial<HelperAgentState> = {}): HelperAgentState {
 }
 
 describe("helper profile runtime", () => {
+  it("cannot revive an old approval from a retained checkpoint after Redis namespace recovery", async () => {
+    const probe = createEvalProbe();
+    const checkpointer = new MemorySaver();
+    const retainedState = createHelperAgentState({
+      checkpointer,
+      hmacKey: "recovery-test",
+      now: () => new Date("2026-09-04T00:00:00.000Z")
+    });
+    const model = instrumentedFakeModel(
+      [[{ name: "propose_save_memory", args: { content: "synthetic draft" }, id: "draft" }], []],
+      probe
+    );
+    const write = vi.fn(async () => ({
+      ok: true,
+      replyText: "synthetic preview",
+      writePhase: "preview" as const
+    }));
+    const before = createSyntheticRuntimeFixture({
+      probe,
+      model,
+      state: retainedState,
+      enabledFunctions: ["save_memory"],
+      handlers: { save_memory: write }
+    });
+    await before.runtime.handleTextTurn(before.turn("請保存合成內容"));
+    const review = await before.sessions.findActionReview({
+      profileName: "helper",
+      source: before.source,
+      requesterUserId: before.source.userId
+    });
+    expect(review).toBeDefined();
+    if (!review) throw new Error("missing synthetic approval");
+    const threadId = retainedState.threadId({ profileName: "helper", source: before.source });
+    expect(await checkpointer.getTuple({ configurable: { thread_id: threadId } })).toBeDefined();
+    const calls = write.mock.calls.length;
+    const modelCalls = probe.values().modelCalls;
+    const after = createSyntheticRuntimeFixture({
+      probe,
+      model,
+      state: retainedState,
+      enabledFunctions: ["save_memory"],
+      handlers: { save_memory: write }
+    });
+    await after.runtime.handleActionReview!({
+      ...after.turn("確認"),
+      event: { ...after.turn("確認").event, timestamp: Date.now() },
+      reviewId: review.id,
+      resultJobId: review.resultJobId,
+      text: "確認"
+    });
+    expect(write).toHaveBeenCalledTimes(calls);
+    expect(probe.values().modelCalls).toBe(modelCalls);
+    expect(await checkpointer.getTuple({ configurable: { thread_id: threadId } })).toBeDefined();
+  });
+
   it.each(["needs_input", "ambiguous"] as const)(
     "allows a corrected proposal after %s while retaining only the successful preview",
     async (status) => {

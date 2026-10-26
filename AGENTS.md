@@ -250,3 +250,9 @@ Testing map:
   and scoped job/media state server-owned rather than model-declared success.
 - Accepted supplements are separate serialized turns, not a generic inbox/task
   engine. Never infer group-wide intake or durable memory from a wake window.
+
+## Redis loss recovery
+
+- Follow `docs/runbooks/redis-loss-recovery.md`; `scripts/redis-recovery.py` is offline evidence validation, never a replay or production mutation tool.
+- Preserve the deployment cutoff and recovered namespace across releases and compatible rollback. Unknown effects and missing attachment work remain quarantined; never infer no effect from a missing receipt.
+- Redis namespace retirement does not delete PostgreSQL conversation context or prove queue/provider reconciliation. Require reviewed writer drain, queue quarantine and independent durable journal evidence before reopening.

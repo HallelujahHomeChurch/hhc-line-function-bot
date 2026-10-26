@@ -342,6 +342,7 @@ export interface WebSearchConfig {
 }
 
 export interface AppConfig {
+  redisRecoveryCutoffMs?: number;
   serviceName: string;
   host: string;
   port: number;

@@ -21,6 +21,69 @@ afterEach(async () => {
 });
 
 describe("release assurance shell transaction", () => {
+  it("blocks rollback before writes when a saved worker namespace predates the API fence", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "recovery-rollback-"));
+    temporaryDirectories.push(directory);
+    const manifest = path.join(directory, "old-job.json");
+    await writeFile(
+      manifest,
+      JSON.stringify({ properties: { template: { containers: [{ env: [] }] } } })
+    );
+    const id = "cb9c8b8f-8f59-47af-a79c-302fbf916512";
+    const identity = {
+      operationId: id,
+      previousPrefix: "hhc-line-function-bot",
+      prefix: `hhc-line-function-bot:recovery:${id}`,
+      cutoffMs: 1792960000000,
+      journalSha256: "a".repeat(64)
+    };
+    const selected = {
+      REDIS_KEY_PREFIX: identity.prefix,
+      LINE_REDIS_RECOVERY: JSON.stringify(identity),
+      LINE_REDIS_RECOVERY_CUTOFF_MS: String(identity.cutoffMs)
+    };
+    const known = [
+      ...Object.entries(selected).map(([name, value]) => ({ name, value })),
+      { name: "LINE_RUNTIME_STATE_CONTRACT", value: "2" }
+    ];
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+      set -euo pipefail
+      source scripts/release-assurance.sh
+      RESOURCE_GROUP=fixture-rg
+      CONTAINER_APP_NAME=fixture-bot
+      RELEASE_KNOWN_GOOD_REVISION=fixture--ready
+      RELEASE_KNOWN_GOOD_IMAGE=same
+      RELEASE_KNOWN_GOOD_SCAN_IMAGE=same
+      RELEASE_KNOWN_GOOD_WARMER_IMAGE=same
+      RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE=same
+      RELEASE_KNOWN_GOOD_CATALOG_MANIFEST="$FIXTURE_MANIFEST"
+      RELEASE_KNOWN_GOOD_SCAN_MANIFEST="$FIXTURE_MANIFEST"
+      az() { if [[ "$*" == "containerapp revision show "* ]]; then printf '%s' "$FIXTURE_KNOWN"; else echo unsafe-write; return 97; fi; }
+      classify_runtime_state_rollback
+      [[ "$RELEASE_STATE_DOWNGRADE_BLOCKED" == true ]]
+      if restore_known_good_revision; then exit 98; fi
+      [[ "$RELEASE_ROLLBACK_STATUS" == failed ]]
+    `
+      ],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIXTURE_MANIFEST: manifest,
+          FIXTURE_KNOWN: JSON.stringify(known),
+          RELEASE_RECOVERY_ENV_JSON: JSON.stringify(selected)
+        }
+      }
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("unsafe-write");
+  });
+
   it("refuses a legacy journal/receipt downgrade before any Azure rollback write", () => {
     const result = spawnSync(
       "bash",
@@ -760,6 +823,15 @@ async function createDeployFixture(scenario: string) {
   const reportPath = path.join(directory, "report.json");
   const driverPath = path.join(directory, "driver.sh");
   await Promise.all([mkdir(scriptsDirectory), mkdir(binDirectory)]);
+  await mkdir(path.join(directory, "config"), { recursive: true });
+  await copyFile(
+    path.join(ROOT, "config/redis-recovery.json"),
+    path.join(directory, "config/redis-recovery.json")
+  );
+  await copyFile(
+    path.join(ROOT, "scripts/redis-recovery.py"),
+    path.join(scriptsDirectory, "redis-recovery.py")
+  );
   await Promise.all([
     copyFile(
       path.join(ROOT, "scripts/deploy-aca.sh"),

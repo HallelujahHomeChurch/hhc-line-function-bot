@@ -62,7 +62,11 @@ properties:
           - name: REDIS_URL
             secretRef: redis-url
           - name: REDIS_KEY_PREFIX
-            value: hhc-line-function-bot
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: LINE_REDIS_RECOVERY
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
+          - name: LINE_REDIS_RECOVERY_CUTOFF_MS
+            value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: ATTACHMENT_SCAN_QUEUE_URL
             secretRef: attachment-scan-queue-url
           - name: OBSERVABILITY_HMAC_KEY

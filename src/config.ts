@@ -1,3 +1,4 @@
+import { recoveryCutoff } from "./application/recovery/redis-recovery.js";
 import { CAPABILITY_NAMES } from "./capabilities/names.js";
 import type { CapabilityName } from "./capabilities/names.js";
 import { readFileSync } from "node:fs";
@@ -367,6 +368,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
           timeoutMs: readInt(env.SEARXNG_TIMEOUT_MS, 8000)
         }
       : undefined,
+    redisRecoveryCutoffMs: recoveryCutoff(env),
     redis: env.REDIS_URL?.trim()
       ? {
           url: env.REDIS_URL,
