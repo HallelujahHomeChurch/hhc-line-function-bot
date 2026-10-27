@@ -8,6 +8,10 @@ on:
       - scripts/deploy-aca.sh
       - scripts/redis-recovery.py
       - scripts/release-assurance.sh
+      - scripts/maintenance-contract.sh
+      - scripts/release-catalog.py
+      - scripts/release-receipt.py
+      - scripts/accept-release.sh
       - Dockerfile
       - .dockerignore
       - package.json
@@ -29,6 +33,12 @@ on:
       - infra/searxng/**
   workflow_dispatch:
     inputs:
+      public_expectation:
+        description: Public Gateway mode; maintenance defers public acceptance until controlled reopening
+        required: true
+        default: normal
+        type: choice
+        options: [normal, maintenance]
       fail_openapi_before_pointer:
         description: Test last-good API docs pointer preservation
         required: false
@@ -36,6 +46,7 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
@@ -50,6 +61,9 @@ jobs:
     outputs:
       commit: ${{ steps.release_outputs.outputs.commit }}
       image: ${{ steps.release_outputs.outputs.image }}
+      revision: ${{ steps.release_outputs.outputs.revision }}
+      deployment_attempt: ${{ steps.release_outputs.outputs.deployment_attempt }}
+      receipt_id: ${{ steps.assurance_artifact.outputs.artifact-id }}
     env:
       ACR_NAME: alive
       ACR_LOGIN_SERVER: alive.azurecr.io
@@ -69,6 +83,7 @@ jobs:
       MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}
       LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}
       RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
+      RELEASE_PUBLIC_EXPECTATION: ${{ inputs.public_expectation || 'normal' }}
     steps:
       - uses: actions/checkout@v5
       - name: Sign in to Azure with OIDC
@@ -101,32 +116,77 @@ jobs:
         id: release_outputs
         shell: bash
         run: |
-          ready_revision="$(az containerapp show \
-            --resource-group "${RESOURCE_GROUP}" \
-            --name "${CONTAINER_APP_NAME}" \
-            --query properties.latestReadyRevisionName \
-            --output tsv \
-            --only-show-errors)"
-          live_image="$(az containerapp revision show \
-            --resource-group "${RESOURCE_GROUP}" \
-            --name "${CONTAINER_APP_NAME}" \
-            --revision "${ready_revision}" \
-            --query 'properties.template.containers[0].image' \
-            --output tsv \
-            --only-show-errors)"
-          [[ "${live_image}" == alive.azurecr.io/alive/hhc-line-function-bot@sha256:* ]]
+          test "$(jq -r .commit artifacts/release-assurance/deployment.json)" = "${GITHUB_SHA}"
           echo "commit=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
-          echo "image=${live_image}" >> "${GITHUB_OUTPUT}"
+          echo "image=$(jq -r .image artifacts/release-assurance/deployment.json)" >> "${GITHUB_OUTPUT}"
+          echo "revision=$(jq -r .revision artifacts/release-assurance/deployment.json)" >> "${GITHUB_OUTPUT}"
+          echo "deployment_attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
       - name: Upload release assurance report
+        id: assurance_artifact
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: release-assurance-${{ github.run_id }}
-          path: artifacts/release-assurance/report.json
+          path: artifacts/release-assurance/*.json
+          retention-days: 7
           if-no-files-found: error
 
-  publish_openapi:
+  public_acceptance:
+    name: Public acceptance after controlled reopening
     needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      commit: ${{ steps.accept.outputs.commit }}
+      image: ${{ steps.accept.outputs.image }}
+    env:
+      RESOURCE_GROUP: alive
+      CONTAINER_APP_NAME: hhc-line-function-bot
+      CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
+      ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker
+      ATTACHMENT_WORKER_APP_NAME: hhc-line-bot-attachment-app
+      MEDIA_SYNC_WARMER_JOB_NAME: hhc-line-bot-media-sync-warmer
+      RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe
+      PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
+      LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}
+      RELEASE_REPORT_PATH: artifacts/public-acceptance/report.json
+      RELEASE_RECEIPT_PATH: artifacts/deployment/deployment.json
+      RELEASE_CATALOG_RECEIPT_PATH: artifacts/public-acceptance/catalog.json
+      RELEASE_PUBLIC_EXPECTATION: ${{ inputs.public_expectation || 'normal' }}
+      DEPLOYED_REVISION: ${{ needs.release.outputs.revision }}
+      DEPLOYED_IMAGE: ${{ needs.release.outputs.image }}
+      DEPLOYMENT_ATTEMPT: ${{ needs.release.outputs.deployment_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download the same successful deployment receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.release.outputs.receipt_id }}
+          path: artifacts/deployment
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --yes
+      - name: Accept public LINE contract
+        id: accept
+        run: bash scripts/accept-release.sh
+      - name: Upload public acceptance report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: public-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/public-acceptance/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish_openapi:
+    needs: public_acceptance
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -137,8 +197,8 @@ jobs:
       API_DOCS_AZURE_CLIENT_ID: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      RELEASE_COMMIT: ${{ needs.release.outputs.commit }}
-      RELEASE_IMAGE: ${{ needs.release.outputs.image }}
+      RELEASE_COMMIT: ${{ needs.public_acceptance.outputs.commit }}
+      RELEASE_IMAGE: ${{ needs.public_acceptance.outputs.image }}
       FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}
     steps:
       - uses: actions/checkout@v5

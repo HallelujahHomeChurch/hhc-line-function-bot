@@ -40,8 +40,10 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 
 export async function runReleaseProbe(
   input: ReleaseProbeInput,
-  dependencies: ReleaseProbeDependencies
+  dependencies: ReleaseProbeDependencies,
+  scope: "full" | "private" = "full"
 ): Promise<ReleaseProbeResult> {
+  if (scope !== "full" && scope !== "private") throw new Error("release_probe_invalid_input");
   const timeoutMs = validTimeout(input.timeoutMs);
   const mainSignature = validLineSignature(input.lineMainEmptyWebhookSignature);
   const checks = await Promise.all([
@@ -60,20 +62,24 @@ export async function runReleaseProbe(
       isReady
     ),
     checkSearxng(endpoint(input.searxngBaseUrl, "/"), dependencies, timeoutMs),
-    checkWebhook(
-      "gateway_helper_signed_empty_webhook",
-      input.gatewayWebhookUrl,
-      signLineBody(Buffer.from(EMPTY_EVENT_BODY), input.lineHelperChannelSecret),
-      dependencies,
-      timeoutMs
-    ),
-    checkWebhook(
-      "gateway_main_signed_empty_webhook",
-      input.gatewayMainWebhookUrl,
-      mainSignature,
-      dependencies,
-      timeoutMs
-    )
+    ...(scope === "private"
+      ? []
+      : [
+          checkWebhook(
+            "gateway_helper_signed_empty_webhook",
+            input.gatewayWebhookUrl,
+            signLineBody(Buffer.from(EMPTY_EVENT_BODY), input.lineHelperChannelSecret),
+            dependencies,
+            timeoutMs
+          ),
+          checkWebhook(
+            "gateway_main_signed_empty_webhook",
+            input.gatewayMainWebhookUrl,
+            mainSignature,
+            dependencies,
+            timeoutMs
+          )
+        ])
   ]);
   return {
     status: checks.some((check) => check.status === "failed") ? "failed" : "passed",

@@ -281,6 +281,42 @@ describe("release assurance shell transaction", () => {
     expect(report.checks.map((check) => check.name)).toEqual(["release_probe"]);
   });
 
+  it("accepts the complete public contract in a fresh process without deployment-only ambient variables", async () => {
+    const fixture = await createFixture("deferred_public_success");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    expect(result.status, diagnostic(result, calls)).toBe(0);
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+    expect(report.status).toBe("passed");
+    expect(report.checks.map((check) => check.name)).toEqual(
+      expect.arrayContaining([
+        "bot_health",
+        "bot_readiness",
+        "searxng_root",
+        "gateway_helper_signed_empty_webhook",
+        "gateway_main_signed_empty_webhook"
+      ])
+    );
+    expect(calls.filter((args) => isJobStart(args, "hhc-line-bot-release-probe"))).toHaveLength(2);
+    expect(calls.some((args) => args.includes("properties.managedEnvironmentId"))).toBe(true);
+    expect(
+      calls.some((args) =>
+        ["update", "create", "copy", "stop", "delete"].some((operation) => args.includes(operation))
+      )
+    ).toBe(false);
+  });
+
+  it("replaces a success report with failed rollback evidence if deployment receipt persistence fails", async () => {
+    const fixture = await createFixture("deployment_receipt_failure");
+    const result = fixture.run();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+    expect(result.status).not.toBe(0);
+    expect(report.status).toBe("failed");
+    expect(report.failureCode).toBe("network_failed");
+    expect(report.rollback.status).toBe("restored");
+    expect(() => buildAssuranceReport(report)).not.toThrow();
+  });
+
   it("captures known-good state, runs live gates, and writes an allowlisted digest-only report", async () => {
     const fixture = await createFixture("success");
     const result = fixture.run();
@@ -832,6 +868,10 @@ async function createDeployFixture(scenario: string) {
     path.join(ROOT, "scripts/redis-recovery.py"),
     path.join(scriptsDirectory, "redis-recovery.py")
   );
+  await copyFile(
+    path.join(ROOT, "scripts/maintenance-contract.sh"),
+    path.join(scriptsDirectory, "maintenance-contract.sh")
+  );
   await Promise.all([
     copyFile(
       path.join(ROOT, "scripts/deploy-aca.sh"),
@@ -942,7 +982,9 @@ const name = value("--name");
 const command = (...parts) => parts.every((part, index) => args[index] === part);
 const output = (value) => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
 
-if (command("acr", "manifest", "show-metadata")) output("sha256:${"1".repeat(64)}");
+if (command("containerapp", "revision", "list") && args[args.indexOf("-n") + 1] === "api-gateway") output([{ name: "gateway-r1", active: true, traffic: 100 }]);
+else if (command("containerapp", "revision", "show") && args[args.indexOf("-n") + 1] === "api-gateway") output(query.includes(".name") ? ["api-gateway"] : ["off"]);
+else if (command("acr", "manifest", "show-metadata")) output("sha256:${"1".repeat(64)}");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "properties.managedEnvironmentId") output("/subscriptions/fixture/managedEnvironments/fixture-env");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "location") output("eastasia");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "identity.principalId") output("bot-principal");
@@ -1167,7 +1209,23 @@ if ! run_release_gates; then
   exit 42
 fi
 write_release_report
+if [[ "\${FAKE_SCENARIO}" == "deployment_receipt_failure" ]]; then
+  python3() {
+    if [[ "$1" == */release-receipt.py ]]; then return 73; fi
+    command python3 "$@"
+  }
+  write_deployment_receipt
+fi
 complete_release_transaction
+if [[ "\${FAKE_SCENARIO}" == "deferred_public_success" ]]; then
+  export GITHUB_SHA="${"a".repeat(40)}" GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1
+  export RELEASE_RECEIPT_PATH="${toBashPath(path.join(directory, "deployment.json"))}"
+  write_deployment_receipt
+  export DEPLOYED_REVISION="$RELEASE_TARGET_REVISION" DEPLOYED_IMAGE="$RELEASE_TARGET_IMAGE" DEPLOYMENT_ATTEMPT=1
+  export RELEASE_CATALOG_RECEIPT_PATH="${toBashPath(path.join(directory, "catalog.json"))}"
+  unset managed_environment_name
+  exec bash "${toBashPath(path.join(ROOT, "scripts/accept-release.sh"))}"
+fi
 `,
     { mode: 0o700 }
   );
@@ -1236,6 +1294,18 @@ const command = (...parts) => parts.every((part, index) => args[index] === part)
 const output = (body) => process.stdout.write(typeof body === "string" ? body : JSON.stringify(body));
 const name = value("--name");
 const query = value("--query");
+if (scenario === "deferred_public_success") {
+  let body;
+  const shortName = value("-n");
+  if (query?.includes("REDIS_KEY_PREFIX")) body = [{ name: "LINE_RUNTIME_STATE_CONTRACT", value: "2" }];
+  else if (command("containerapp", "revision", "list") && shortName === "api-gateway") body = [{ name: "gateway--ready", active: true, traffic: 100 }];
+  else if (command("containerapp", "revision", "show") && shortName === "api-gateway") body = query.includes("containers[].name") ? ["api-gateway"] : ["off"];
+  else if (command("containerapp", "show") && query === "properties.managedEnvironmentId") body = "/subscriptions/fixture/managedEnvironments/fixture-env";
+  else if (command("containerapp", "job", "show") && shortName === "hhc-line-bot-catalog-sync") body = { state: "Ready", image: "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}", ...(query.includes("id:id") ? { id: "/subscriptions/fixture/jobs/catalog", trigger: "Schedule", cron: "*/15 * * * *" } : {}) };
+  else if (command("rest", "--method", "get")) body = { value: [{ name: "catalog-current", status: "Succeeded", startTime: new Date(Date.now() + 1000).toISOString() }], nextLink: null };
+  else if (command("containerapp", "job", "execution", "show") && shortName) body = ["registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"];
+  if (body !== undefined) { output(body); process.exit(0); }
+}
 const oldImages = {
   "hhc-line-bot-catalog-sync": "registry.example/fixture-secret/catalog@${GOOD_CATALOG_DIGEST}",
   "hhc-line-bot-attachment-worker": "registry.example/fixture-secret/scan@${GOOD_SCAN_DIGEST}",

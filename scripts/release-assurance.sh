@@ -23,6 +23,7 @@ RELEASE_PERIODIC_JOB_MUTATED="${RELEASE_PERIODIC_JOB_MUTATED:-false}"
 RELEASE_SEARXNG_MUTATED="${RELEASE_SEARXNG_MUTATED:-false}"
 RELEASE_STATE_DOWNGRADE_BLOCKED="${RELEASE_STATE_DOWNGRADE_BLOCKED:-false}"
 RELEASE_PROVIDER_CONTRACT_VERIFIED=false
+RELEASE_PUBLIC_ACCEPTANCE_PENDING=false
 RELEASE_CLEANUP_FILES=()
 
 set_release_failure() {
@@ -441,6 +442,7 @@ complete_release_transaction() {
 
 run_release_gates() {
   RELEASE_PROVIDER_CONTRACT_VERIFIED=false
+  RELEASE_PUBLIC_ACCEPTANCE_PENDING=false
   : "${SEARXNG_CONTAINER_APP_NAME:?SEARXNG_CONTAINER_APP_NAME is required}"
   : "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"
   : "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"
@@ -476,8 +478,26 @@ run_release_gates() {
     "${ATTACHMENT_SCAN_JOB_NAME}" \
     "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME}" \
     attachment_worker_job attachment_bootstrap_failed attachment_queue_failed || return
+  if [[ "${RELEASE_CATALOG_PREPARE:-false}" == true ]]; then
+    if ! RESOURCE_GROUP="$RESOURCE_GROUP" CATALOG_SYNC_JOB_NAME="$CATALOG_SYNC_JOB_NAME" RELEASE_TARGET_IMAGE="$RELEASE_TARGET_IMAGE" RELEASE_STARTED_AT="$RELEASE_STARTED_AT" RELEASE_POLL_INTERVAL_SECONDS="$RELEASE_POLL_INTERVAL_SECONDS" python3 "$(dirname "${BASH_SOURCE[0]}")/release-catalog.py" prepare; then
+      fail_release_check catalog_job catalog_recent_success_missing timeout
+      return
+    fi
+    RELEASE_CATALOG_PREPARE=false
+  fi
   release_check_recent_catalog_success || return
-  release_run_probe || return
+  if [[ "${RELEASE_PUBLIC_EXPECTATION:-normal}" == maintenance ]]; then
+    release_run_probe private || return
+    source "$(dirname "${BASH_SOURCE[0]}")/maintenance-contract.sh"
+    if ! require_gateway_mode on || ! maintenance_request "${PUBLIC_WEB_ORIGIN:-https://www.alive.org.tw}/api/line/webhook/helper"; then
+      fail_release_check gateway_maintenance gateway_maintenance_failed http_mismatch
+      return
+    fi
+    record_release_check gateway_maintenance passed none
+    RELEASE_PUBLIC_ACCEPTANCE_PENDING=true
+  else
+    release_run_probe || return
+  fi
 }
 
 release_check_attachment_worker_app() {
@@ -1091,6 +1111,12 @@ PY
 }
 
 release_run_probe() {
+  local scope="${1:-full}"
+  [[ "$scope" == full || "$scope" == private ]] || return 1
+  local probe_command=(az containerapp job start --resource-group "${RESOURCE_GROUP}" --name "${RELEASE_PROBE_JOB_NAME}" --query name --output tsv --only-show-errors)
+  if [[ "$scope" == private ]]; then
+    probe_command+=(--container-name release-probe --args dist/tools/run-release-probe.js private)
+  fi
   local execution_name
   local execution_status=""
   local probe_logs
@@ -1101,12 +1127,7 @@ release_run_probe() {
   local payload_status=""
   local failure_reason=""
   if ! execution_name="$(
-    az containerapp job start \
-      --resource-group "${RESOURCE_GROUP}" \
-      --name "${RELEASE_PROBE_JOB_NAME}" \
-      --query "name" \
-      --output tsv \
-      --only-show-errors
+    "${probe_command[@]}"
   )" || [[ -z "${execution_name}" ]]; then
     fail_release_check release_probe release_probe_start_failed network_failed
     return
@@ -1144,6 +1165,7 @@ release_run_probe() {
   if ! parsed="$(
     RELEASE_PROBE_LOGS="${probe_logs}" \
     RELEASE_PROBE_EXECUTION_STATUS="${execution_status}" \
+    RELEASE_PROBE_SCOPE="${scope}" \
     python3 - <<'PY'
 import json
 import os
@@ -1167,6 +1189,9 @@ check_codes = {
         "contract_mismatch",
     },
 }
+
+if os.environ["RELEASE_PROBE_SCOPE"] == "private":
+    check_codes = {name: codes for name, codes in check_codes.items() if not name.startswith("gateway_")}
 
 def candidates(value):
     if isinstance(value, dict):
@@ -1653,6 +1678,7 @@ write_release_report() {
   local target_status=failed
   if [[ "${RELEASE_FAILURE_REASON}" == "none" ]]; then
     status=passed
+    if [[ "$RELEASE_PUBLIC_ACCEPTANCE_PENDING" == true ]]; then status=private_verified_public_pending; fi
     target_status=ready
   fi
 
@@ -1692,6 +1718,7 @@ failure_map = {
     "account_preflight_unavailable": "network_failed",
     "account_preflight_malformed": "malformed_json",
     "account_preflight_failed": "http_mismatch",
+    "gateway_maintenance_failed": "http_mismatch",
     "malformed_target_state": "malformed_json",
     "searxng_definition_mismatch": "http_mismatch",
     "worker_definition_mismatch": "http_mismatch",
@@ -1724,6 +1751,7 @@ check_names = {
     "bot_ingress",
     "bot_dapr",
     "account_preflight",
+    "gateway_maintenance",
     "searxng_deployment",
     "release_probe",
     "catalog_job",
@@ -1777,6 +1805,12 @@ if os.environ["RELEASE_REPORT_STATUS"] == "passed" and not {
 } <= observed_check_names:
     raise SystemExit("passed release missing signed webhook check")
 
+if os.environ["RELEASE_REPORT_STATUS"] == "private_verified_public_pending":
+    if not {"gateway_maintenance", "bot_health", "bot_readiness", "searxng_root"} <= observed_check_names or any(
+        name.startswith("gateway_") and name != "gateway_maintenance" for name in observed_check_names
+    ):
+        raise SystemExit("invalid private pending release checks")
+
 reason = os.environ["RELEASE_FAILURE_REASON"]
 if reason not in failure_map:
     raise SystemExit("unknown release failure reason")
@@ -1822,7 +1856,7 @@ report = {
 }
 if os.environ["RELEASE_PROVIDER_CONTRACT_VERIFIED"] == "true":
     report["providerRequests"] = {"deepseek": 0, "embedding": 0}
-elif report["status"] == "passed":
+elif report["status"] in {"passed", "private_verified_public_pending"}:
     raise SystemExit("passed release lacks provider contract verification")
 
 path = Path(os.environ["RELEASE_REPORT_PATH"])
@@ -1850,6 +1884,23 @@ PY
   fi
   RELEASE_REPORT_WRITTEN=false
   return 1
+}
+
+write_deployment_receipt() {
+  # Any later receipt failure must let the EXIT trap replace the prior success report.
+  RELEASE_REPORT_WRITTEN=false
+  if RELEASE_TARGET_REVISION="$RELEASE_TARGET_REVISION" \
+  RELEASE_TARGET_IMAGE="$RELEASE_TARGET_IMAGE" \
+  RELEASE_EXPECTED_SEARXNG_IMAGE="$RELEASE_EXPECTED_SEARXNG_IMAGE" \
+  RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="$RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME" \
+  RELEASE_STARTED_AT="$RELEASE_STARTED_AT" \
+  RELEASE_KNOWN_GOOD_REVISION="$RELEASE_KNOWN_GOOD_REVISION" \
+  RELEASE_KNOWN_GOOD_IMAGE="$RELEASE_KNOWN_GOOD_IMAGE" \
+  python3 "$(dirname "${BASH_SOURCE[0]}")/release-receipt.py" write; then
+    RELEASE_REPORT_WRITTEN=true
+  else
+    return 1
+  fi
 }
 
 release_assurance_on_exit() {
