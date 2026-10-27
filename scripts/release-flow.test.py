@@ -89,7 +89,7 @@ class Catalog(unittest.TestCase):
         self.assertEqual(sum(call[:3] == ('containerapp', 'job', 'start') for call in calls), 1)
 
     def test_real_selection_rejects_stale_unknown_failed_concurrent_or_wrong_image(self):
-        for pages, scenario in [([[row(old=True)]], ''), ([[row(status='Running', old=True)]], ''), ([[row(status='Unknown')]], ''), ([[row(status='Failed')]], ''), ([[row('a', 'Running'), row('b', 'Running'), row('c', 'Running')]], ''), ([[row()]], 'old_image'), ([[row()]], 'bad_page')]:
+        for pages, scenario in [([[row(old=True)]], ''), ([[row(status='Running', old=True)]], ''), ([[row('good'), row('unknown', 'Unknown')]], ''), ([[row('good'), row('failed', 'Failed')]], ''), ([[row('a', 'Running'), row('b', 'Running'), row('c', 'Running')]], ''), ([[row()]], 'old_image'), ([[row()]], 'bad_page')]:
             with self.subTest(scenario=scenario, rows=pages):
                 self.assertFalse(self.run_catalog(pages, scenario=scenario)[0])
 

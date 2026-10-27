@@ -1887,14 +1887,20 @@ PY
 }
 
 write_deployment_receipt() {
-  RELEASE_TARGET_REVISION="$RELEASE_TARGET_REVISION" \
+  # Any later receipt failure must let the EXIT trap replace the prior success report.
+  RELEASE_REPORT_WRITTEN=false
+  if RELEASE_TARGET_REVISION="$RELEASE_TARGET_REVISION" \
   RELEASE_TARGET_IMAGE="$RELEASE_TARGET_IMAGE" \
   RELEASE_EXPECTED_SEARXNG_IMAGE="$RELEASE_EXPECTED_SEARXNG_IMAGE" \
   RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="$RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME" \
   RELEASE_STARTED_AT="$RELEASE_STARTED_AT" \
   RELEASE_KNOWN_GOOD_REVISION="$RELEASE_KNOWN_GOOD_REVISION" \
   RELEASE_KNOWN_GOOD_IMAGE="$RELEASE_KNOWN_GOOD_IMAGE" \
-  python3 "$(dirname "${BASH_SOURCE[0]}")/release-receipt.py" write
+  python3 "$(dirname "${BASH_SOURCE[0]}")/release-receipt.py" write; then
+    RELEASE_REPORT_WRITTEN=true
+  else
+    return 1
+  fi
 }
 
 release_assurance_on_exit() {
