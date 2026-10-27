@@ -102,7 +102,7 @@ if [[ ! -f "${bot_manifest_template}" \
   exit 1
 fi
 
-managed_environment_id="$(az containerapp show \
+managed_environment_id="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
   --query "properties.managedEnvironmentId" \
@@ -111,7 +111,7 @@ if [[ -z "${managed_environment_id}" ]]; then
   echo "Could not resolve the managed environment for ${CONTAINER_APP_NAME}"
   exit 1
 fi
-container_app_location="$(az containerapp show \
+container_app_location="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
   --query "location" \
@@ -153,7 +153,7 @@ if [[ -z "${attachment_job_identity_id}" \
   exit 1
 fi
 
-asset_api_fqdn="$(az containerapp show \
+asset_api_fqdn="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${ASSET_API_CONTAINER_APP_NAME}" \
   --query properties.configuration.ingress.fqdn \
@@ -165,7 +165,7 @@ if [[ -z "${asset_api_fqdn}" ]]; then
 fi
 asset_api_url="https://${asset_api_fqdn}"
 
-meeting_api_fqdn="$(az containerapp show \
+meeting_api_fqdn="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${MEETING_API_CONTAINER_APP_NAME}" \
   --query properties.configuration.ingress.fqdn \
@@ -191,7 +191,7 @@ acr_id="$(az acr show \
   --query id \
   --output tsv \
   --only-show-errors)"
-bot_principal_id="$(az containerapp show \
+bot_principal_id="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
   --query "identity.principalId" \
@@ -292,7 +292,7 @@ if [[ -z "${azure_openai_embedding_endpoint}" \
   exit 1
 fi
 
-bot_env_json="$(az containerapp show \
+bot_env_json="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
   --query "properties.template.containers[0].env" \
@@ -502,11 +502,8 @@ if [[ -z "${RELEASE_EXPECTED_SEARXNG_IMAGE}" ]]; then
   exit 1
 fi
 
-if az containerapp show \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${SEARXNG_CONTAINER_APP_NAME}" \
-  --only-show-errors \
-  --output none 2>/dev/null; then
+searxng_exists="$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")"
+if [[ "${searxng_exists}" == "true" ]]; then
   mark_release_searxng_mutated
   az containerapp update --yaml "${searxng_manifest}" \
     --resource-group "${RESOURCE_GROUP}" \
@@ -522,7 +519,7 @@ else
     --output none
 fi
 
-searxng_fqdn="$(az containerapp show \
+searxng_fqdn="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${SEARXNG_CONTAINER_APP_NAME}" \
   --query "properties.configuration.ingress.fqdn" \
@@ -621,7 +618,9 @@ substitutions.update(
 )
 
 text = Path(os.environ["BOT_MANIFEST_TEMPLATE"]).read_text()
-for placeholder, value in substitutions.items():
+# Replace longer names before their prefixes, including the recovery cutoff.
+for placeholder in sorted(substitutions, key=len, reverse=True):
+    value = substitutions[placeholder]
     if text.count(placeholder) != 1:
         raise SystemExit(f"Expected one bot manifest placeholder: {placeholder}")
     text = text.replace(placeholder, json.dumps(value, ensure_ascii=False))
@@ -638,7 +637,7 @@ az containerapp update \
   --only-show-errors \
   --output none
 
-target_revision="$(az containerapp show \
+target_revision="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
   --query "properties.latestRevisionName" \
@@ -649,7 +648,7 @@ RELEASE_TARGET_SCAN_IMAGE="${image_ref}"
 RELEASE_TARGET_ATTACHMENT_IMAGE="${image_ref}"
 RELEASE_TARGET_ATTACHMENT_APP_IMAGE="${image_ref}"
 
-bot_fqdn="$(az containerapp show \
+bot_fqdn="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
   --query "properties.configuration.ingress.fqdn" \
@@ -689,7 +688,7 @@ bot_secrets_json="$(az containerapp secret list \
   --name "${CONTAINER_APP_NAME}" \
   --show-values \
   --output json)"
-bot_env_json="$(az containerapp show \
+bot_env_json="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CONTAINER_APP_NAME}" \
   --query "properties.template.containers[0].env" \

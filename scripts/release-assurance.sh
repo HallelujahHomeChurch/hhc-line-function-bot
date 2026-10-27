@@ -151,7 +151,7 @@ capture_known_good_state() {
   : "${SEARXNG_CONTAINER_APP_NAME:?SEARXNG_CONTAINER_APP_NAME is required}"
 
   if ! RELEASE_KNOWN_GOOD_REVISION="$(
-    az containerapp show \
+    release_containerapp_read show \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${CONTAINER_APP_NAME}" \
       --query "properties.latestReadyRevisionName" \
@@ -189,7 +189,7 @@ capture_known_good_state() {
   }
   RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE=""
   if [[ "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_EXISTS}" == "true" ]]; then
-    RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE="$(az containerapp show --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --query properties.template.containers[0].image --output tsv --only-show-errors)" || return 1
+    RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE="$(release_containerapp_read show --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --query properties.template.containers[0].image --output tsv --only-show-errors)" || return 1
     RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE="$(resolve_release_image "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE}")" || return 1
   fi
   local searxng_exists
@@ -199,7 +199,7 @@ capture_known_good_state() {
   fi
   if [[ "${searxng_exists}" == "true" ]]; then
     if ! RELEASE_KNOWN_GOOD_SEARXNG_REVISION="$(
-      az containerapp show \
+      release_containerapp_read show \
         --resource-group "${RESOURCE_GROUP}" \
         --name "${SEARXNG_CONTAINER_APP_NAME}" \
         --query properties.latestReadyRevisionName \
@@ -304,11 +304,32 @@ capture_release_job_snapshot() {
   fi
 }
 
+release_containerapp_read() {
+  local operation="${1-}"
+  case "${operation}" in
+    show|list) ;;
+    *) echo "Refusing a non-metadata Container Apps operation" >&2; return 2 ;;
+  esac
+  shift
+  local observed
+  local attempt
+  for attempt in 1 2 3; do
+    if observed="$(az containerapp "${operation}" "$@" 2>/dev/null)"; then
+      printf '%s\n' "${observed}"
+      return 0
+    fi
+    printf 'Azure Container Apps metadata %s read failed (%s/3) at %s:%s\n' \
+      "${operation}" "${attempt}" "${BASH_SOURCE[1]:-shell}" "${BASH_LINENO[0]:-0}" >&2
+    if ((attempt < 3)); then sleep 2; fi
+  done
+  return 1
+}
+
 release_containerapp_exists() {
   local app_name="$1"
   local observed
   if ! observed="$(
-    az containerapp list \
+    release_containerapp_read list \
       --resource-group "${RESOURCE_GROUP}" \
       --query "[?name=='${app_name}'].name | [0]" \
       --output tsv \
@@ -502,7 +523,7 @@ run_release_gates() {
 
 release_check_attachment_worker_app() {
   local observed
-  observed="$(az containerapp show \
+  observed="$(release_containerapp_read show \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${ATTACHMENT_WORKER_APP_NAME}" \
     --query '{image:properties.template.containers[0].image,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,poll:properties.template.scale.pollingInterval,cooldown:properties.template.scale.cooldownPeriod,rules:properties.template.scale.rules}' \
@@ -600,7 +621,7 @@ release_wait_for_target() {
   local outcome
   for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
     if ! state_json="$(
-      az containerapp show \
+      release_containerapp_read show \
         --resource-group "${RESOURCE_GROUP}" \
         --name "${CONTAINER_APP_NAME}" \
         --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,dapr:properties.configuration.dapr}" \
@@ -716,7 +737,7 @@ PY
 release_check_searxng() {
   local state_json
   if ! state_json="$(
-    az containerapp show \
+    release_containerapp_read show \
       --resource-group "${RESOURCE_GROUP}" \
       --name "${SEARXNG_CONTAINER_APP_NAME}" \
       --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,image:properties.template.containers[0].image}" \
@@ -1351,7 +1372,7 @@ restore_known_good_revision() {
   else
     for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
       if state_json="$(
-        az containerapp show \
+        release_containerapp_read show \
           --resource-group "${RESOURCE_GROUP}" \
           --name "${CONTAINER_APP_NAME}" \
           --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,dapr:properties.configuration.dapr}" \
@@ -1516,7 +1537,7 @@ restore_known_good_searxng() {
   fi
   for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
     if state_json="$(
-      az containerapp show \
+      release_containerapp_read show \
         --resource-group "${RESOURCE_GROUP}" \
         --name "${SEARXNG_CONTAINER_APP_NAME}" \
         --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory}" \
