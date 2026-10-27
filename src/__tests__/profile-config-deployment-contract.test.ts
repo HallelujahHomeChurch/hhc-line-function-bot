@@ -216,7 +216,7 @@ describe("production profile configuration deployment contract", () => {
       botDeploy
     );
     const refreshedEnvSnapshot = deployment.indexOf(
-      'bot_env_json="$(az containerapp show',
+      'bot_env_json="$(release_containerapp_read show',
       botDeploy
     );
     const renderJobs = deployment.indexOf(
@@ -296,7 +296,7 @@ describe("production profile configuration deployment contract", () => {
       botDeploy
     );
     const refreshedEnvSnapshot = deployment.indexOf(
-      'bot_env_json="$(az containerapp show',
+      'bot_env_json="$(release_containerapp_read show',
       botDeploy
     );
     const retiredSecretCleanupBlock = deployment.slice(
