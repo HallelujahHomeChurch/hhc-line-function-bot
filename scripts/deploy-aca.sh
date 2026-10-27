@@ -34,6 +34,14 @@ for required_name in "${required_release_environment[@]}"; do
   fi
 done
 
+source "${script_dir}/maintenance-contract.sh"
+if [[ "$public_expectation" == maintenance ]]; then
+  require_gateway_mode on
+  maintenance_request "${PUBLIC_WEB_ORIGIN:-https://www.alive.org.tw}/api/line/webhook/helper"
+else
+  require_gateway_mode off
+fi
+
 : "${SEARXNG_CONTAINER_APP_NAME:=hhc-searxng}"
 : "${PUBLIC_WEB_ORIGIN:=https://www.alive.org.tw}"
 : "${CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs}"
@@ -918,6 +926,7 @@ mark_release_job_mutated "${MEDIA_SYNC_WARMER_JOB_NAME}"
 deploy_job "${MEDIA_SYNC_WARMER_JOB_NAME}" "${media_sync_warmer_job_manifest}" "${attachment_job_identity_id}"
 mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
+RELEASE_CATALOG_PREPARE=true
 mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"
 deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"
 mark_release_job_mutated "${PERIODIC_ASSURANCE_JOB_NAME}"
@@ -928,6 +937,7 @@ deploy_job \
 
 run_release_gates
 write_release_report
+write_deployment_receipt
 complete_release_transaction
 
 echo "Deployed ${image_ref} to revision ${target_revision}"

@@ -23,6 +23,32 @@ function dependencies(fetchImpl: typeof fetch) {
 }
 
 describe("runReleaseProbe", () => {
+  it("private deployment probes never call or report public webhooks as passed", async () => {
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith("/healthz")) {
+        return Response.json({ ok: true, service: "hhc-line-function-bot" });
+      }
+      if (String(url).endsWith("/readyz")) {
+        return Response.json({
+          status: "ok",
+          database: { postgres: { status: "ok" }, redis: { status: "ok" } }
+        });
+      }
+      if (String(url) === "http://searxng.internal/") return new Response(null, { status: 200 });
+      throw new Error("public webhook must remain untested during maintenance");
+    }) as unknown as typeof globalThis.fetch;
+
+    const result = await runReleaseProbe(input, dependencies(fetch), "private");
+
+    expect(result.status).toBe("passed");
+    expect(result.checks.map((check) => check.name)).toEqual([
+      "bot_health",
+      "bot_readiness",
+      "searxng_root"
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
   it("passes the provider-free release gates and returns only allowlisted observations", async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {

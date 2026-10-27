@@ -1,5 +1,5 @@
 export type AssuranceReportKind = "release" | "periodic";
-export type AssuranceReportStatus = "passed" | "failed";
+export type AssuranceReportStatus = "passed" | "failed" | "private_verified_public_pending";
 export type AssuranceCheckStatus = "passed" | "failed" | "warning";
 export type AssuranceRollbackStatus = "not_required" | "restored" | "failed";
 export type AssuranceFailureCode =
@@ -29,6 +29,7 @@ export type ReleaseCheckName =
   | "bot_ingress"
   | "bot_dapr"
   | "account_preflight"
+  | "gateway_maintenance"
   | "searxng_deployment"
   | "release_probe"
   | "catalog_job"
@@ -119,6 +120,7 @@ const releaseChecks = new Set<ReleaseCheckName>([
   "bot_ingress",
   "bot_dapr",
   "account_preflight",
+  "gateway_maintenance",
   "searxng_deployment",
   "release_probe",
   "catalog_job",
@@ -175,7 +177,11 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
   );
   const source = value as Record<string, unknown>;
   const kind = enumValue(source.kind, ["release", "periodic"] as const);
-  const status = enumValue(source.status, ["passed", "failed"] as const);
+  const status = enumValue(source.status, [
+    "passed",
+    "failed",
+    "private_verified_public_pending"
+  ] as const);
   const failureCode = failureCodeValue(source.failureCode);
   const startedAt = isoTimestamp(source.startedAt);
   const completedAt = isoTimestamp(source.completedAt);
@@ -198,7 +204,7 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
     rollback: rollback(source.rollback),
     ...(providerRequestReport === undefined ? {} : { providerRequests: providerRequestReport })
   };
-  if ((kind === "periodic" || status === "passed") && providerRequestReport === undefined)
+  if ((kind === "periodic" || status !== "failed") && providerRequestReport === undefined)
     invalid();
   if (reportCheckNames.size !== reportChecks.length) invalid();
   if (
@@ -210,8 +216,19 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
   ) {
     invalid();
   }
-  if ((status === "passed") !== (failureCode === "none")) invalid();
-  if (status === "passed" && reportChecks.some((check) => check.status === "failed")) invalid();
+  if (
+    status === "private_verified_public_pending" &&
+    (kind !== "release" ||
+      ["gateway_maintenance", "bot_health", "bot_readiness", "searxng_root"].some(
+        (name) => !reportCheckNames.has(name as AssuranceCheckName)
+      ) ||
+      reportChecks.some(
+        (check) => check.name.startsWith("gateway_") && check.name !== "gateway_maintenance"
+      ))
+  )
+    invalid();
+  if ((status !== "failed") !== (failureCode === "none")) invalid();
+  if (status !== "failed" && reportChecks.some((check) => check.status === "failed")) invalid();
   if (Date.parse(completedAt) < Date.parse(startedAt)) invalid();
   return report;
 }

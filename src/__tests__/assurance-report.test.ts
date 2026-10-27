@@ -382,6 +382,33 @@ describe("buildAssuranceReport", () => {
   });
 });
 
+describe("private deployment pending public acceptance", () => {
+  function pending(): AssuranceReportInput {
+    const input = validReleaseReport();
+    input.status = "private_verified_public_pending";
+    input.checks = (
+      ["gateway_maintenance", "bot_health", "bot_readiness", "searxng_root"] as const
+    ).map((name) => ({ name, status: "passed", observedAt: timestamp, code: "none" }));
+    return input;
+  }
+  it("records private-only success without claiming signed webhook success", () => {
+    expect(buildAssuranceReport(pending()).status).toBe("private_verified_public_pending");
+  });
+  it.each(["missing maintenance", "public check", "failed private", "passed", "periodic"])(
+    "rejects %s misclassification",
+    (scenario) => {
+      const input = pending();
+      if (scenario === "missing maintenance") input.checks.shift();
+      if (scenario === "public check") input.checks.push(validReleaseReport().checks[1]!);
+      if (scenario === "failed private")
+        input.checks[1] = { ...input.checks[1]!, status: "failed", code: "network_failed" };
+      if (scenario === "passed") input.status = "passed";
+      if (scenario === "periodic") input.kind = "periodic";
+      expect(() => buildAssuranceReport(input)).toThrow("assurance_report_invalid");
+    }
+  );
+});
+
 function validReleaseReport(): AssuranceReportInput {
   return {
     version: 1,

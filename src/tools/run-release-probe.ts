@@ -9,9 +9,10 @@ import {
 export async function runReleaseProbeCli(
   env: Record<string, string | undefined>,
   dependencies: ReleaseProbeDependencies = defaultDependencies(),
-  writeLine: (line: string) => void = (line) => process.stdout.write(`${line}\n`)
+  writeLine: (line: string) => void = (line) => process.stdout.write(`${line}\n`),
+  scope: "full" | "private" = "full"
 ): Promise<0 | 1> {
-  const result = await runReleaseProbe(readInput(env), dependencies);
+  const result = await runReleaseProbe(readInput(env), dependencies, scope);
   writeLine(JSON.stringify(result));
   return result.status === "passed" ? 0 : 1;
 }
@@ -39,7 +40,16 @@ function defaultDependencies(): ReleaseProbeDependencies {
 
 async function main(): Promise<void> {
   try {
-    process.exitCode = await runReleaseProbeCli(process.env);
+    const args = process.argv.slice(2);
+    if (args.length > 1 || (args.length === 1 && args[0] !== "private")) {
+      throw new Error("release_probe_invalid_input");
+    }
+    process.exitCode = await runReleaseProbeCli(
+      process.env,
+      undefined,
+      undefined,
+      args[0] === "private" ? "private" : "full"
+    );
   } catch {
     process.stdout.write('{"status":"failed","checks":[]}\n');
     process.exitCode = 1;

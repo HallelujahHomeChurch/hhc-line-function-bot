@@ -498,7 +498,7 @@ describe("production profile configuration deployment contract", () => {
     }
     expect(deployment).not.toMatch(/echo[^\n]*LINE_(?:HELPER|MAIN|ACCOUNT)_/u);
     expect(readProjectFile(".github/workflows/release.yml")).toContain(
-      "path: artifacts/release-assurance/report.json"
+      "path: artifacts/release-assurance/*.json"
     );
   });
 
@@ -593,13 +593,13 @@ describe("production profile configuration deployment contract", () => {
     expect(workflow).toContain("image: ${{ steps.release_outputs.outputs.image }}");
     expect(outputs).toBeGreaterThan(deploy);
     expect(publish).toBeGreaterThan(outputs);
-    expect(publishJob).toContain("needs: release");
+    expect(publishJob).toContain("needs: public_acceptance");
     expect(publishJob).not.toContain("environment:");
     expect(publishJob).toContain("contents: read\n      id-token: write");
     expect(publishJob).toContain("CONTAINER: api-docs-hhc-line-function-bot");
     expect(publishJob).toContain("API_DOCS_AZURE_CLIENT_ID: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}");
-    expect(publishJob).toContain("RELEASE_COMMIT: ${{ needs.release.outputs.commit }}");
-    expect(publishJob).toContain("RELEASE_IMAGE: ${{ needs.release.outputs.image }}");
+    expect(publishJob).toContain("RELEASE_COMMIT: ${{ needs.public_acceptance.outputs.commit }}");
+    expect(publishJob).toContain("RELEASE_IMAGE: ${{ needs.public_acceptance.outputs.image }}");
     expect(publishJob).toContain(
       "FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}"
     );
@@ -839,7 +839,7 @@ describe("production profile configuration deployment contract", () => {
     );
     expect(releaseWorkflow).toContain("uses: actions/upload-artifact@v6");
     expect(releaseWorkflow).toContain("if: always()");
-    expect(releaseWorkflow).toContain("path: artifacts/release-assurance/report.json");
+    expect(releaseWorkflow).toContain("path: artifacts/release-assurance/*.json");
     expect(releaseWorkflow).toContain("if-no-files-found: error");
     expect(releaseWorkflow).not.toContain("pnpm ");
     const azureLoginSteps = [...releaseWorkflow.matchAll(/uses: azure\/login@v3/gu)];
@@ -848,7 +848,7 @@ describe("production profile configuration deployment contract", () => {
     const docsLogin = azureLoginSteps.at(2)?.index ?? -1;
     const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
     const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v6");
-    expect(azureLoginSteps).toHaveLength(3);
+    expect(azureLoginSteps).toHaveLength(4);
     expect(finalImageBuild).toBeGreaterThanOrEqual(0);
     expect(refreshedLogin).toBeGreaterThan(finalImageBuild);
     expect(deploy).toBeGreaterThan(refreshedLogin);

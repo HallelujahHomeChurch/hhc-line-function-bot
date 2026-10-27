@@ -832,6 +832,10 @@ async function createDeployFixture(scenario: string) {
     path.join(ROOT, "scripts/redis-recovery.py"),
     path.join(scriptsDirectory, "redis-recovery.py")
   );
+  await copyFile(
+    path.join(ROOT, "scripts/maintenance-contract.sh"),
+    path.join(scriptsDirectory, "maintenance-contract.sh")
+  );
   await Promise.all([
     copyFile(
       path.join(ROOT, "scripts/deploy-aca.sh"),
@@ -942,7 +946,9 @@ const name = value("--name");
 const command = (...parts) => parts.every((part, index) => args[index] === part);
 const output = (value) => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
 
-if (command("acr", "manifest", "show-metadata")) output("sha256:${"1".repeat(64)}");
+if (command("containerapp", "revision", "list") && args[args.indexOf("-n") + 1] === "api-gateway") output([{ name: "gateway-r1", active: true, traffic: 100 }]);
+else if (command("containerapp", "revision", "show") && args[args.indexOf("-n") + 1] === "api-gateway") output(query.includes(".name") ? ["api-gateway"] : ["off"]);
+else if (command("acr", "manifest", "show-metadata")) output("sha256:${"1".repeat(64)}");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "properties.managedEnvironmentId") output("/subscriptions/fixture/managedEnvironments/fixture-env");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "location") output("eastasia");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "identity.principalId") output("bot-principal");
