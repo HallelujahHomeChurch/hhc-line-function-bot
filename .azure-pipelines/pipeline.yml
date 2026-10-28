@@ -13,6 +13,10 @@ trigger:
       - scripts/release-catalog.py
       - scripts/release-receipt.py
       - scripts/accept-release.sh
+      - scripts/verify-release-source.sh
+      - scripts/verify-release-admission.py
+      - scripts/azure-pipeline-context.py
+      - scripts/publish-openapi.sh
       - Dockerfile
       - .dockerignore
       - package.json
