@@ -55,48 +55,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare_image:
-    name: Build immutable image before physical admission
-    runs-on: ubuntu-latest
-    environment: production-actions
-    env:
-      ACR_NAME: alive
-      IMAGE_REPOSITORY: alive/hhc-line-function-bot
-    steps:
-      - uses: actions/checkout@v5
-      - uses: azure/login@v3
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Set image tag
-        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-      - name: Build and push image to ACR
-        run: |
-          az acr build \
-            --registry "${ACR_NAME}" \
-            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
-            --image "${IMAGE_REPOSITORY}:latest" \
-            --file Dockerfile \
-            .
-
-  physical_admission:
-    name: Approve release writer custody after image build
-    needs: prepare_image
-    runs-on: ubuntu-latest
-    environment: line-release-admission
-    permissions:
-      contents: read
-    steps:
-      - run: echo 'Owner approved current source and writer custody; require fresh physical admission immediately before Bot startup.'
-
   release:
-    needs: physical_admission
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      statuses: write
     name: Build and release
     runs-on: ubuntu-latest
     environment: production-actions
@@ -128,10 +87,24 @@ jobs:
       RELEASE_PUBLIC_EXPECTATION: ${{ inputs.public_expectation || 'normal' }}
     steps:
       - uses: actions/checkout@v5
-      - name: Install Container Apps extension
-        run: az extension add --name containerapp --upgrade --yes
+      - name: Sign in to build the immutable image
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Set image tag
         run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Build and push image to ACR
+        run: |
+          az acr build \
+            --registry "${ACR_NAME}" \
+            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+            --image "${IMAGE_REPOSITORY}:latest" \
+            --file Dockerfile \
+            .
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --yes
       - name: Refresh Azure OIDC session before deploy
         uses: azure/login@v3
         with:
@@ -139,8 +112,6 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Deploy image and wait for healthy revision
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: bash scripts/deploy-aca.sh
       - name: Capture production release outputs
         id: release_outputs
@@ -182,7 +153,6 @@ jobs:
       LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}
       RELEASE_REPORT_PATH: artifacts/public-acceptance/report.json
       RELEASE_RECEIPT_PATH: artifacts/deployment/deployment.json
-      RELEASE_CATALOG_RECEIPT_PATH: artifacts/public-acceptance/catalog.json
       RELEASE_PUBLIC_EXPECTATION: ${{ inputs.public_expectation || 'normal' }}
       DEPLOYED_REVISION: ${{ needs.release.outputs.revision }}
       DEPLOYED_IMAGE: ${{ needs.release.outputs.image }}

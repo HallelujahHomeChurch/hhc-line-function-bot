@@ -579,18 +579,13 @@ credential. This source change does not provision credentials or permissions.
 
 Redis full/partial/stale loss requires the [bounded recovery procedure](docs/runbooks/redis-loss-recovery.md). The offline planner does not authorize replay; signed-event cutoff and a consistent new namespace retire old one-shot authority while unknown effects remain quarantined. The default recovery configuration is inactive.
 
-The release builds its immutable image before the independent main-only
-`line-release-admission` environment approval. The release owner approves only
-after the full current-source metadata and six-second PostgreSQL pair pass;
-startup must remain within the original absolute evidence deadline. Image build
-does not authorize deployment. This gate does not replace any deployment or
-public-acceptance check.
+Normal releases build and deploy in the existing production job. The one-time
+maintenance admission is complete and is not a permanent manual/PG approval gate.
+Production remains main-only through the protected `production-actions`
+environment, scoped OIDC trust, PR CI and the existing deployment concurrency.
 
-The environment approval grants release-writer custody, not a PG freshness claim.
-After authenticated preparation, the runner publishes a pending
-`line-physical-admission/<run>/<attempt>` status and pauses immediately before
-the Bot update. The fixed environment reviewer supplies the actual paired-read
-receipt hash, last-observation epoch and original expiry in a success status.
-The runner rejects other creators, sources/runs/attempts, late approvals and
-expired windows, and checks again directly before the database-capable update.
-No credentials or physical session details belong in the public status.
+Release success requires the target image, healthy traffic, PG/Redis readiness,
+Account contract, Dapr/ingress, bounded worker definitions/bootstrap and signed
+empty Gateway smoke checks. `catalog_job` verifies its deployed definition;
+catalog warm-up and recent-sync verification are separate post-deployment checks
+and cannot roll back a healthy release. See the production operations runbook.

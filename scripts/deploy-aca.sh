@@ -629,8 +629,6 @@ if "PLACEHOLDER_" in text:
 Path(os.environ["BOT_MANIFEST"]).write_text(text)
 PY
 
-python3 "${script_dir}/physical-admission.py" wait
-python3 "${script_dir}/physical-admission.py" check
 mark_release_mutated
 az containerapp update \
   --resource-group "${RESOURCE_GROUP}" \
@@ -927,7 +925,6 @@ mark_release_job_mutated "${MEDIA_SYNC_WARMER_JOB_NAME}"
 deploy_job "${MEDIA_SYNC_WARMER_JOB_NAME}" "${media_sync_warmer_job_manifest}" "${attachment_job_identity_id}"
 mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
-RELEASE_CATALOG_PREPARE=true
 mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"
 deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"
 mark_release_job_mutated "${PERIODIC_ASSURANCE_JOB_NAME}"

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -23,8 +22,7 @@ describe("production profile configuration deployment contract", () => {
     ]) {
       const workflow = readProjectFile(path);
       const runners = workflow.match(/^ {4}runs-on: ubuntu-latest$/gm) ?? [];
-      const environments =
-        workflow.match(/^ {4}environment: (?:production-actions|line-release-admission)$/gm) ?? [];
+      const environments = workflow.match(/^ {4}environment: production-actions$/gm) ?? [];
       expect(environments).toHaveLength(runners.length);
       expect(environments.length).toBeGreaterThan(0);
     }
@@ -71,43 +69,19 @@ describe("production profile configuration deployment contract", () => {
     }
   });
 
-  it("builds before the independent physical-admission gate and deployment", () => {
+  it("builds and deploys in the normal production job without one-time maintenance gates", () => {
     const workflow = readProjectFile(".github/workflows/release.yml");
-    const prepare = workflow.slice(
-      workflow.indexOf("  prepare_image:"),
-      workflow.indexOf("  physical_admission:")
-    );
-    const admission = workflow.slice(
-      workflow.indexOf("  physical_admission:"),
-      workflow.indexOf("  release:")
-    );
     const release = workflow.slice(
       workflow.indexOf("  release:"),
       workflow.indexOf("  public_acceptance:")
     );
-    expect(prepare).toContain("az acr build");
-    expect(prepare).not.toContain("deploy-aca.sh");
-    expect(admission).toContain("needs: prepare_image");
-    expect(admission).toContain("environment: line-release-admission");
-    expect(release).toContain("needs: physical_admission");
-    expect(release).not.toContain("az acr build");
-    expect(release).toContain("bash scripts/deploy-aca.sh");
-  });
-
-  it("rejects expired, late, wrong-reviewer and cross-window physical admissions", () => {
-    expect(
-      execFileSync("python3", ["scripts/physical-admission.py", "self-check"], { encoding: "utf8" })
-    ).toContain("self-check passed");
-  });
-
-  it("waits for a fixed-reviewer current-run PG admission immediately before Bot update", () => {
-    const deployment = readProjectFile("scripts/deploy-aca.sh");
-    const gate = deployment.indexOf('physical-admission.py" wait');
-    const update = deployment.indexOf("\naz containerapp update", gate);
-    expect(gate).toBeGreaterThan(deployment.indexOf("SEARXNG_SECRET_KEY"));
-    expect(update).toBeGreaterThan(gate);
-    expect(deployment.slice(gate, update)).toContain('physical-admission.py" check');
-    expect(readProjectFile(".github/workflows/release.yml")).toContain("statuses: write");
+    expect(release.indexOf("az acr build")).toBeGreaterThan(0);
+    expect(release.indexOf("bash scripts/deploy-aca.sh")).toBeGreaterThan(
+      release.indexOf("az acr build")
+    );
+    expect(workflow).not.toContain("physical_admission");
+    expect(workflow).not.toContain("statuses: write");
+    expect(readProjectFile("scripts/deploy-aca.sh")).not.toContain("physical-admission.py");
   });
 
   it("pins media-sync management to the exact production Dapr app IDs", () => {

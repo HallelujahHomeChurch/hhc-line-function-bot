@@ -487,7 +487,7 @@ run_release_gates() {
   release_check_attachment_worker_app || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
-    "${RELEASE_TARGET_IMAGE}" catalog_job catalog_definition_mismatch false || return
+    "${RELEASE_TARGET_IMAGE}" catalog_job catalog_definition_mismatch || return
   release_check_job_definition \
     "${RELEASE_PROBE_JOB_NAME}" Manual 300 0 manual \
     "${RELEASE_TARGET_IMAGE}" release_probe release_probe_definition_mismatch false || return
@@ -499,14 +499,6 @@ run_release_gates() {
     "${ATTACHMENT_SCAN_JOB_NAME}" \
     "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME}" \
     attachment_worker_job attachment_bootstrap_failed attachment_queue_failed || return
-  if [[ "${RELEASE_CATALOG_PREPARE:-false}" == true ]]; then
-    if ! RESOURCE_GROUP="$RESOURCE_GROUP" CATALOG_SYNC_JOB_NAME="$CATALOG_SYNC_JOB_NAME" RELEASE_TARGET_IMAGE="$RELEASE_TARGET_IMAGE" RELEASE_STARTED_AT="$RELEASE_STARTED_AT" RELEASE_POLL_INTERVAL_SECONDS="$RELEASE_POLL_INTERVAL_SECONDS" python3 "$(dirname "${BASH_SOURCE[0]}")/release-catalog.py" prepare; then
-      fail_release_check catalog_job catalog_recent_success_missing timeout
-      return
-    fi
-    RELEASE_CATALOG_PREPARE=false
-  fi
-  release_check_recent_catalog_success || return
   if [[ "${RELEASE_PUBLIC_EXPECTATION:-normal}" == maintenance ]]; then
     release_run_probe private || return
     source "$(dirname "${BASH_SOURCE[0]}")/maintenance-contract.sh"
@@ -1055,36 +1047,6 @@ release_wait_for_job_execution() {
     fi
   done
   fail_release_check "${check_name}" "${failure_reason}_timeout" timeout
-}
-
-release_check_recent_catalog_success() {
-  local execution_json
-  if ! execution_json="$(
-    az containerapp job execution list \
-      --resource-group "${RESOURCE_GROUP}" \
-      --name "${CATALOG_SYNC_JOB_NAME}" \
-      --query "sort_by([?properties.status=='Succeeded'], &properties.startTime)[-1].{name:name,status:properties.status,startTime:properties.startTime}" \
-      --output json \
-      --only-show-errors
-  )" || ! RELEASE_CATALOG_EXECUTION="${execution_json}" python3 - <<'PY'
-from datetime import datetime, timezone
-import json
-import os
-
-execution = json.loads(os.environ["RELEASE_CATALOG_EXECUTION"] or "null") or {}
-try:
-    started = datetime.fromisoformat(execution["startTime"].replace("Z", "+00:00"))
-except (KeyError, TypeError, ValueError):
-    raise SystemExit(1)
-age = (datetime.now(timezone.utc) - started).total_seconds()
-valid = execution.get("status") == "Succeeded" and -300 <= age <= 1800
-raise SystemExit(0 if valid else 1)
-PY
-  then
-    fail_release_check catalog_job catalog_recent_success_missing timeout
-    return
-  fi
-  record_release_check catalog_job passed none
 }
 
 release_probe_logs_from_analytics() {

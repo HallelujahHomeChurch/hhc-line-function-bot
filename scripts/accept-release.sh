@@ -26,7 +26,6 @@ require_gateway_mode off
 managed_environment_id="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_APP_NAME" --query properties.managedEnvironmentId --output tsv --only-show-errors)"
 managed_environment_name="${managed_environment_id##*/}"
 [[ "$managed_environment_name" =~ ^[a-z0-9-]+$ ]] || { echo 'Managed environment unavailable' >&2; exit 1; }
-RESOURCE_GROUP="$RESOURCE_GROUP" CATALOG_SYNC_JOB_NAME="$CATALOG_SYNC_JOB_NAME" RELEASE_TARGET_IMAGE="$RELEASE_TARGET_IMAGE" RELEASE_STARTED_AT="$RELEASE_STARTED_AT" python3 "$script_dir/release-catalog.py" verify
 # The same full gate and signed-empty 200 checks run after controlled reopening.
 RELEASE_PUBLIC_EXPECTATION=normal
 run_release_gates

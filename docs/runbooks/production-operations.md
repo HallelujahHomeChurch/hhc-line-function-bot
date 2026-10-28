@@ -191,6 +191,27 @@ revision/image identities, check name/status/time/code, `failureCode`, and
 rollback status/revision/image. The normal success attestation includes
 `providerRequests: { deepseek: 0, embedding: 0 }`.
 
+The deployment transaction checks `catalog_job` image, schedule, resources and
+provider-free configuration. It does not resume the catalog, start warm-up work,
+or wait for a new sync. Catalog freshness and the existing weekly dependency
+assurance are separate post-deployment results; their failure must not roll back
+an otherwise healthy deployment.
+
+After release and schedule restoration, verify catalog freshness separately using
+the actual downloaded deployment receipt (not a fabricated timestamp or image):
+
+```bash
+export RESOURCE_GROUP=alive CATALOG_SYNC_JOB_NAME=hhc-line-bot-catalog-sync
+export RELEASE_TARGET_IMAGE="$(jq -r .image "$RELEASE_RECEIPT_PATH")"
+export RELEASE_STARTED_AT="$(jq -r .startedAt "$RELEASE_RECEIPT_PATH")"
+export RELEASE_CATALOG_RECEIPT_PATH=artifacts/post-deploy/catalog.json
+python3 scripts/release-catalog.py verify
+```
+
+This check is read-only. Preserve a failure as a separate unresolved freshness
+result; inspect naturally occurring work without restarting the deployment or
+stopping/replaying unknown executions. Keep the established job-role cap6.
+
 Before dispatching a release, a human must verify in LINE Developers Console
 that the Account LINE Login channel plus every participating Messaging API
 channel belong to the same Provider. Record only that verified Provider ID in
