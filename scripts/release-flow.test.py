@@ -151,5 +151,25 @@ print('503',end='')
             self.assertFalse(any(any(word in call for word in ('update', 'create', 'start', 'stop', 'resume', 'delete')) for call in commands))
 
 
+class ProviderIdentity(unittest.TestCase):
+    def test_azure_receipt_cannot_reuse_a_github_run_with_the_same_number(self):
+        module = load('release-receipt')
+        env = {'CI_PROVIDER': 'azure-pipelines', 'CI_PROJECT_ID': '12345678-1234-1234-1234-123456789abc',
+               'CI_PIPELINE_ID': '25', 'GITHUB_SHA': 'c' * 40, 'GITHUB_RUN_ID': '123',
+               'GITHUB_RUN_ATTEMPT': '2', 'RELEASE_RUN_URL': 'https://dev.azure.com/fixture/ops/_build/results?buildId=123'}
+        value = dict(version=2, provider='azure-pipelines', projectId=env['CI_PROJECT_ID'], pipelineId='25',
+                     runUrl=env['RELEASE_RUN_URL'], commit='c' * 40, runId='123', deploymentAttempt=1,
+                     revision='bot--new', image=IMAGE, searxngImage=SEARXNG, attachmentExecution='attachment-exec',
+                     startedAt=START, publicState='pending', redisFenceSha256='d' * 64,
+                     knownGoodRevision='bot--old', knownGoodImage=IMAGE)
+        with patch.dict(os.environ, env):
+            self.assertEqual(module.validate(value), value)
+            for key, replacement in [('provider', 'github-actions'), ('projectId', '22345678-1234-1234-1234-123456789abc'),
+                                     ('pipelineId', '26'), ('runUrl', 'https://github.com/fixture/bot/actions/runs/123'),
+                                     ('runId', '124'), ('version', 1)]:
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    module.validate({**value, key: replacement})
+
+
 if __name__ == '__main__':
     unittest.main()

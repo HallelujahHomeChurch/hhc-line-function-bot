@@ -1,0 +1,8 @@
+{
+  "sourceCommit": "217ebba10dfb32571285ee9e5bb4ebabadae395c",
+  "files": {
+    "ci.yml": "402446d04264ef8c8e21b98b116f2ae6e136c3361ae850b20142692612345adb",
+    "periodic-assurance.yml": "726d7aa2956f039b6a5f752ffb2c063eeefc5af9ad12cae801269a4215268b19",
+    "release.yml": "8f4a1e27a6d4721db96fac60a3a97cf1a5bca0b4330d5544c6d96f4301019d89"
+  }
+}

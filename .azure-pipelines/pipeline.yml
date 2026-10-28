@@ -1,0 +1,130 @@
+name: $(Date:yyyyMMdd).$(Rev:r)
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+pr:
+  autoCancel: true
+  branches:
+    include:
+      - main
+parameters:
+  - name: deploy
+    type: boolean
+    default: false
+  - name: publicExpectation
+    type: string
+    default: normal
+    values:
+      - normal
+      - maintenance
+  - name: failOpenapiBeforePointer
+    type: boolean
+    default: false
+pool:
+  vmImage: ubuntu-24.04
+resources:
+  containers:
+    - container: postgres
+      image: postgres:17
+      env:
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: line_test
+      ports:
+        - 5432:5432
+      options:
+        --health-cmd "pg_isready -U postgres -d line_test" --health-interval 10s --health-timeout 5s --health-retries
+        5
+stages:
+  - stage: CI
+    displayName: Validate exact source
+    jobs:
+      - job: validate
+        displayName: PR CI
+        timeoutInMinutes: 60
+        services:
+          postgres: postgres
+        variables:
+          KERNEL_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/line_test?sslmode=disable
+        steps:
+          - checkout: self
+            clean: true
+            fetchDepth: 0
+            persistCredentials: false
+          - task: NodeTool@0
+            inputs:
+              versionSpec: 24.22.1
+            displayName: Use Node.js 24
+          - bash: |-
+              corepack enable
+              corepack prepare pnpm@11.7.0 --activate
+              pnpm --version
+            displayName: Enable pinned pnpm
+          - bash: |-
+              set -euo pipefail
+              pnpm install --frozen-lockfile
+            displayName: Install dependencies
+          - bash: python3 scripts/azure-pipeline-context.py --selftest
+            displayName: Test pipeline output trust boundary
+          - bash: |-
+              set -euo pipefail
+              pnpm --package=@redocly/cli@2.47.0 dlx redocly lint docs/openapi.yaml
+            displayName: Lint OpenAPI contract
+          - bash: |-
+              set -euo pipefail
+              bash scripts/render-published-openapi.test.sh
+            displayName: Test published OpenAPI artifact
+          - bash: |-
+              set -euo pipefail
+              pnpm vitest run --config docs/vitest.config.ts docs/openapi-contract.test.ts
+            displayName: Test OpenAPI contract
+          - bash: |-
+              set -euo pipefail
+              pnpm format:check
+            displayName: Check formatting
+          - bash: |-
+              set -euo pipefail
+              pnpm typecheck
+            displayName: Typecheck
+          - bash: |-
+              set -euo pipefail
+              pnpm lint
+            displayName: Lint
+          - bash: |-
+              set -euo pipefail
+              pnpm architecture:check
+            displayName: Check architecture boundaries
+          - bash: |-
+              set -euo pipefail
+              pnpm test
+            displayName: Test
+          - bash: |-
+              set -euo pipefail
+              pnpm vitest run src/__tests__/media-sync-store.test.ts
+            displayName: Prove PostgreSQL media-sync suite executed
+          - bash: |-
+              set -euo pipefail
+              pnpm config:validate
+            displayName: Validate production profile config
+          - bash: |-
+              set -euo pipefail
+              pnpm eval:agent
+            displayName: SDK agent eval
+          - bash: |-
+              set -euo pipefail
+              pnpm eval:kernel
+            displayName: SDK acceptance gate
+          - bash: |-
+              set -euo pipefail
+              pnpm eval:kernel:integration
+            displayName: Kernel v1 real-dependency integration gate
+          - bash: |-
+              set -euo pipefail
+              pnpm build
+            displayName: Compile app
+  - ${{ if eq(parameters.deploy, true) }}:
+      - template: release.yml
+        parameters:
+          publicExpectation: ${{ parameters.publicExpectation }}
+          failOpenapiBeforePointer: ${{ parameters.failOpenapiBeforePointer }}

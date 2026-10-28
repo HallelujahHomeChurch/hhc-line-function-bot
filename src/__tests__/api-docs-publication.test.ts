@@ -95,7 +95,7 @@ fi
     return readFile(join(container, "current.json"), "utf8");
   }
 
-  function run(runId: string, failBeforePointer = false) {
+  function run(runId: string, failBeforePointer = false, extraEnv: Record<string, string> = {}) {
     return spawnSync("bash", [publicationScript], {
       cwd: fixture,
       encoding: "utf8",
@@ -109,10 +109,75 @@ fi
         GITHUB_SHA: commit,
         GITHUB_REPOSITORY: "HallelujahHomeChurch/hhc-line-function-bot",
         GITHUB_RUN_ID: runId,
-        FAIL_OPENAPI_BEFORE_POINTER: `${failBeforePointer}`
+        FAIL_OPENAPI_BEFORE_POINTER: `${failBeforePointer}`,
+        ...extraEnv
       }
     });
   }
+
+  const azureEnv = {
+    CI_PROVIDER: "azure-pipelines",
+    SYSTEM_COLLECTIONURI: "https://dev.azure.com/fixture/",
+    SYSTEM_TEAMPROJECT: "ops"
+  };
+
+  function git(...args: string[]): string {
+    const result = spawnSync("git", ["-C", fixture, ...args], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  }
+
+  it("records the real Azure build URL and retains the same-provider ordering guard", async () => {
+    expect(run("20", false, azureEnv).status).toBe(0);
+    expect(JSON.parse(await pointer()).releaseUrl).toBe(
+      "https://dev.azure.com/fixture/ops/_build/results?buildId=20"
+    );
+    expect(run("19", false, azureEnv).status).toBe(0);
+    expect(JSON.parse(await pointer()).releaseUrl).toContain("buildId=20");
+  });
+
+  it("migrates a GitHub pointer only when its commit is an ancestor of the validated source", async () => {
+    git("init", "--quiet");
+    const createCommit = () => {
+      git(
+        "-c",
+        "user.name=CI fixture",
+        "-c",
+        "user.email=ci@example.invalid",
+        "commit",
+        "--allow-empty",
+        "--quiet",
+        "-m",
+        "fixture"
+      );
+      return git("rev-parse", "HEAD");
+    };
+    const previous = createCommit();
+    const next = createCommit();
+    await seed(
+      "current.json",
+      JSON.stringify({
+        commit: previous,
+        releaseUrl:
+          "https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/999999"
+      })
+    );
+    const result = run("2", false, { ...azureEnv, GITHUB_SHA: next, RELEASE_COMMIT: next });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(await pointer()).releaseUrl).toContain("buildId=2");
+
+    const newer = createCommit();
+    const protectedPointer = JSON.stringify({
+      commit: newer,
+      releaseUrl:
+        "https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/999999"
+    });
+    await seed("current.json", protectedPointer);
+    expect(
+      run("3", false, { ...azureEnv, GITHUB_SHA: next, RELEASE_COMMIT: next }).status
+    ).not.toBe(0);
+    expect(await pointer()).toBe(protectedPointer);
+  });
 
   it("uploads immutable content before the production pointer", async () => {
     const result = run("20");

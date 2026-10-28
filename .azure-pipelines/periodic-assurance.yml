@@ -1,0 +1,49 @@
+trigger: none
+pr: none
+schedules:
+  - cron: 30 20 * * 1
+    displayName: Weekly production assurance
+    branches:
+      include:
+        - main
+    always: true
+pool:
+  vmImage: ubuntu-24.04
+jobs:
+  - deployment: periodic_assurance
+    environment: hhc-line-production
+    timeoutInMinutes: 20
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+              clean: true
+              persistCredentials: false
+            - task: AzureCLI@2
+              inputs:
+                azureSubscription: hhc-platform-release
+                scriptType: bash
+                scriptLocation: inlineScript
+                inlineScript: |-
+                  set -euo pipefail
+                  test "$BUILD_SOURCEBRANCH" = refs/heads/main
+                  az extension add --name containerapp --upgrade --yes
+                  bash scripts/run-periodic-assurance.sh
+              env:
+                RESOURCE_GROUP: alive
+                PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
+                ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker
+                PERIODIC_REPORT_PATH: artifacts/release-assurance/periodic-report.json
+                PERIODIC_RUN_ID: periodic-$(Build.BuildId)
+                PERIODIC_COMMIT_SHA: $(Build.SourceVersion)
+                PERIODIC_POLL_ATTEMPTS: "120"
+                PERIODIC_POLL_INTERVAL_SECONDS: "5"
+                PERIODIC_RECENT_SCAN_MAX_AGE_SECONDS: "604800"
+              displayName: Run bounded provider-free assurance
+            - task: PublishPipelineArtifact@1
+              condition: always()
+              inputs:
+                targetPath: artifacts/release-assurance
+                artifact: line-periodic-assurance-$(Build.BuildId)-$(System.JobAttempt)
+              displayName: Preserve assurance evidence

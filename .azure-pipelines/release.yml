@@ -1,0 +1,254 @@
+parameters:
+  - name: publicExpectation
+    type: string
+    default: normal
+  - name: failOpenapiBeforePointer
+    type: boolean
+    default: false
+stages:
+  - stage: Release
+    displayName: Build and deploy immutable LINE image
+    dependsOn: CI
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - deployment: release
+        displayName: LINE production release
+        environment: hhc-line-production
+        timeoutInMinutes: 40
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  clean: true
+                  fetchDepth: 0
+                  persistCredentials: false
+                - task: AzureCLI@2
+                  displayName: Build and push the validated source
+                  inputs:
+                    azureSubscription: hhc-platform-release
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |-
+                      set -euo pipefail
+                      test "$GITHUB_REF" = refs/heads/main
+                      test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+                      export IMAGE_TAG="main-${GITHUB_SHA::7}"
+                      az acr build --registry "$ACR_NAME" --image "$IMAGE_REPOSITORY:$IMAGE_TAG" --image "$IMAGE_REPOSITORY:latest" --file Dockerfile .
+                  env:
+                    CI_PROVIDER: azure-pipelines
+                    GITHUB_SHA: $(Build.SourceVersion)
+                    GITHUB_REPOSITORY: HallelujahHomeChurch/hhc-line-function-bot
+                    GITHUB_RUN_ID: $(Build.BuildId)
+                    GITHUB_RUN_ATTEMPT: $(System.JobAttempt)
+                    GITHUB_REF: $(Build.SourceBranch)
+                    RUNNER_TEMP: $(Agent.TempDirectory)
+                    GITHUB_WORKSPACE: $(Build.SourcesDirectory)
+                    GITHUB_ENV: $(Agent.TempDirectory)/release-environment
+                    GITHUB_OUTPUT: $(Agent.TempDirectory)/release-output
+                    GITHUB_STEP_SUMMARY: $(Agent.TempDirectory)/release-summary
+                    RELEASE_RUN_URL: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+                    CI_PROJECT_ID: $(System.TeamProjectId)
+                    CI_PIPELINE_ID: $(System.DefinitionId)
+                    ACR_NAME: alive
+                    ACR_LOGIN_SERVER: alive.azurecr.io
+                    IMAGE_REPOSITORY: alive/hhc-line-function-bot
+                    RESOURCE_GROUP: alive
+                    CONTAINER_APP_NAME: hhc-line-function-bot
+                    CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
+                    ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker
+                    ATTACHMENT_WORKER_APP_NAME: hhc-line-bot-attachment-app
+                    MEDIA_SYNC_WARMER_JOB_NAME: hhc-line-bot-media-sync-warmer
+                    RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe
+                    PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
+                    ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME: $(ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME)
+                    ATTACHMENT_SCAN_QUEUE_NAME: $(ATTACHMENT_SCAN_QUEUE_NAME)
+                    MEDIA_SYNC_WARM_QUEUE_NAME: media-sync-warm
+                    ASSET_API_AUDIENCE: $(ASSET_API_AUDIENCE)
+                    MEETING_API_AUDIENCE: $(MEETING_API_AUDIENCE)
+                    LINE_PROVIDER_CONSOLE_VERIFIED_ID: $(LINE_PROVIDER_CONSOLE_VERIFIED_ID)
+                    RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
+                    RELEASE_PUBLIC_EXPECTATION: ${{ parameters.publicExpectation }}
+                - task: AzureCLI@2
+                  displayName: Deploy and verify LINE workloads
+                  inputs:
+                    azureSubscription: hhc-platform-release
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |-
+                      set -euo pipefail
+                      export IMAGE_TAG="main-${GITHUB_SHA::7}"
+                      mkdir -p artifacts/release-assurance
+                      : > "$GITHUB_ENV"
+                      : > "$GITHUB_OUTPUT"
+                      az extension add --name containerapp --upgrade --yes
+                      bash scripts/deploy-aca.sh
+                      test "$(jq -r .commit artifacts/release-assurance/deployment.json)" = "${GITHUB_SHA}"
+                      echo "commit=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+                      echo "image=$(jq -r .image artifacts/release-assurance/deployment.json)" >> "${GITHUB_OUTPUT}"
+                      echo "revision=$(jq -r .revision artifacts/release-assurance/deployment.json)" >> "${GITHUB_OUTPUT}"
+                      echo "deployment_attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
+                      echo "receipt_artifact=line-deployment-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+                      python3 scripts/azure-pipeline-context.py "$GITHUB_ENV" "$GITHUB_OUTPUT"
+                  env:
+                    CI_PROVIDER: azure-pipelines
+                    GITHUB_SHA: $(Build.SourceVersion)
+                    GITHUB_REPOSITORY: HallelujahHomeChurch/hhc-line-function-bot
+                    GITHUB_RUN_ID: $(Build.BuildId)
+                    GITHUB_RUN_ATTEMPT: $(System.JobAttempt)
+                    GITHUB_REF: $(Build.SourceBranch)
+                    RUNNER_TEMP: $(Agent.TempDirectory)
+                    GITHUB_WORKSPACE: $(Build.SourcesDirectory)
+                    GITHUB_ENV: $(Agent.TempDirectory)/release-environment
+                    GITHUB_OUTPUT: $(Agent.TempDirectory)/release-output
+                    GITHUB_STEP_SUMMARY: $(Agent.TempDirectory)/release-summary
+                    RELEASE_RUN_URL: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+                    CI_PROJECT_ID: $(System.TeamProjectId)
+                    CI_PIPELINE_ID: $(System.DefinitionId)
+                    ACR_NAME: alive
+                    ACR_LOGIN_SERVER: alive.azurecr.io
+                    IMAGE_REPOSITORY: alive/hhc-line-function-bot
+                    RESOURCE_GROUP: alive
+                    CONTAINER_APP_NAME: hhc-line-function-bot
+                    CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
+                    ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker
+                    ATTACHMENT_WORKER_APP_NAME: hhc-line-bot-attachment-app
+                    MEDIA_SYNC_WARMER_JOB_NAME: hhc-line-bot-media-sync-warmer
+                    RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe
+                    PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
+                    ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME: $(ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME)
+                    ATTACHMENT_SCAN_QUEUE_NAME: $(ATTACHMENT_SCAN_QUEUE_NAME)
+                    MEDIA_SYNC_WARM_QUEUE_NAME: media-sync-warm
+                    ASSET_API_AUDIENCE: $(ASSET_API_AUDIENCE)
+                    MEETING_API_AUDIENCE: $(MEETING_API_AUDIENCE)
+                    LINE_PROVIDER_CONSOLE_VERIFIED_ID: $(LINE_PROVIDER_CONSOLE_VERIFIED_ID)
+                    RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
+                    RELEASE_PUBLIC_EXPECTATION: ${{ parameters.publicExpectation }}
+                  name: release_outputs
+                - task: PublishPipelineArtifact@1
+                  condition: always()
+                  inputs:
+                    targetPath: artifacts/release-assurance
+                    artifact: line-deployment-$(Build.BuildId)-$(System.JobAttempt)
+                  displayName: Preserve deployment assurance and same-run receipt
+  - stage: PublicAcceptance
+    displayName: Accept the same deployed revision
+    dependsOn: Release
+    jobs:
+      - job: public_acceptance
+        timeoutInMinutes: 20
+        variables:
+          commit: $[ stageDependencies.Release.release.outputs['release.release_outputs.commit'] ]
+          image: $[ stageDependencies.Release.release.outputs['release.release_outputs.image'] ]
+          revision: $[ stageDependencies.Release.release.outputs['release.release_outputs.revision'] ]
+          deployment_attempt: $[ stageDependencies.Release.release.outputs['release.release_outputs.deployment_attempt'] ]
+          receipt_artifact: $[ stageDependencies.Release.release.outputs['release.release_outputs.receipt_artifact'] ]
+        steps:
+          - checkout: self
+            clean: true
+            fetchDepth: 0
+            persistCredentials: false
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: current
+              artifactName: $(receipt_artifact)
+              targetPath: artifacts/deployment
+            displayName: Download this deployment receipt
+          - task: AzureCLI@2
+            displayName: Verify public LINE contract
+            inputs:
+              azureSubscription: hhc-platform-release
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |-
+                set -euo pipefail
+                : > "$GITHUB_ENV"
+                : > "$GITHUB_OUTPUT"
+                az extension add --name containerapp --upgrade --yes
+                bash scripts/accept-release.sh
+                python3 scripts/azure-pipeline-context.py "$GITHUB_ENV" "$GITHUB_OUTPUT"
+            env:
+              CI_PROVIDER: azure-pipelines
+              GITHUB_SHA: $(Build.SourceVersion)
+              GITHUB_REPOSITORY: HallelujahHomeChurch/hhc-line-function-bot
+              GITHUB_RUN_ID: $(Build.BuildId)
+              GITHUB_RUN_ATTEMPT: $(System.JobAttempt)
+              GITHUB_REF: $(Build.SourceBranch)
+              RUNNER_TEMP: $(Agent.TempDirectory)
+              GITHUB_WORKSPACE: $(Build.SourcesDirectory)
+              GITHUB_ENV: $(Agent.TempDirectory)/release-environment
+              GITHUB_OUTPUT: $(Agent.TempDirectory)/release-output
+              GITHUB_STEP_SUMMARY: $(Agent.TempDirectory)/release-summary
+              RELEASE_RUN_URL: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+              CI_PROJECT_ID: $(System.TeamProjectId)
+              CI_PIPELINE_ID: $(System.DefinitionId)
+              RESOURCE_GROUP: alive
+              CONTAINER_APP_NAME: hhc-line-function-bot
+              CATALOG_SYNC_JOB_NAME: hhc-line-bot-catalog-sync
+              ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker
+              ATTACHMENT_WORKER_APP_NAME: hhc-line-bot-attachment-app
+              MEDIA_SYNC_WARMER_JOB_NAME: hhc-line-bot-media-sync-warmer
+              RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe
+              PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
+              LINE_PROVIDER_CONSOLE_VERIFIED_ID: $(LINE_PROVIDER_CONSOLE_VERIFIED_ID)
+              RELEASE_REPORT_PATH: artifacts/public-acceptance/report.json
+              RELEASE_RECEIPT_PATH: artifacts/deployment/deployment.json
+              RELEASE_CATALOG_RECEIPT_PATH: artifacts/public-acceptance/catalog.json
+              RELEASE_PUBLIC_EXPECTATION: ${{ parameters.publicExpectation }}
+              DEPLOYED_REVISION: $(revision)
+              DEPLOYED_IMAGE: $(image)
+              DEPLOYMENT_ATTEMPT: $(deployment_attempt)
+            name: accept
+          - task: PublishPipelineArtifact@1
+            condition: always()
+            inputs:
+              targetPath: artifacts/public-acceptance
+              artifact: line-public-acceptance-$(Build.BuildId)-$(System.JobAttempt)
+            displayName: Preserve public acceptance evidence
+  - stage: PublishOpenAPI
+    displayName: Publish only the accepted OpenAPI contract
+    dependsOn: PublicAcceptance
+    jobs:
+      - job: publish_openapi
+        variables:
+          commit: $[ stageDependencies.PublicAcceptance.public_acceptance.outputs['accept.commit'] ]
+          image: $[ stageDependencies.PublicAcceptance.public_acceptance.outputs['accept.image'] ]
+        steps:
+          - checkout: self
+            clean: true
+            fetchDepth: 0
+            persistCredentials: false
+          - task: NodeTool@0
+            inputs:
+              versionSpec: 24.22.1
+            displayName: Use Node.js 24
+          - task: AzureCLI@2
+            displayName: Publish immutable contract and guarded pointer
+            inputs:
+              azureSubscription: hhc-line-api-docs
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |-
+                set -euo pipefail
+                bash scripts/publish-openapi.sh
+            env:
+              CI_PROVIDER: azure-pipelines
+              GITHUB_SHA: $(Build.SourceVersion)
+              GITHUB_REPOSITORY: HallelujahHomeChurch/hhc-line-function-bot
+              GITHUB_RUN_ID: $(Build.BuildId)
+              GITHUB_RUN_ATTEMPT: $(System.JobAttempt)
+              GITHUB_REF: $(Build.SourceBranch)
+              RUNNER_TEMP: $(Agent.TempDirectory)
+              GITHUB_WORKSPACE: $(Build.SourcesDirectory)
+              GITHUB_ENV: $(Agent.TempDirectory)/release-environment
+              GITHUB_OUTPUT: $(Agent.TempDirectory)/release-output
+              GITHUB_STEP_SUMMARY: $(Agent.TempDirectory)/release-summary
+              RELEASE_RUN_URL: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+              CI_PROJECT_ID: $(System.TeamProjectId)
+              CI_PIPELINE_ID: $(System.DefinitionId)
+              STORAGE_ACCOUNT: hhcapidocsprod
+              CONTAINER: api-docs-hhc-line-function-bot
+              RELEASE_COMMIT: $(commit)
+              RELEASE_IMAGE: $(image)
+              FAIL_OPENAPI_BEFORE_POINTER: ${{ lower(format('{0}', parameters.failOpenapiBeforePointer)) }}
