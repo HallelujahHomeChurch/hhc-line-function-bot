@@ -2,7 +2,7 @@
 
 GitHub remains the source and PR host. `hhc-line-ci-cd` reads `.azure-pipelines/pipeline.yml` through the existing GitHub App connection. Its Azure check must succeed on the exact PR head before replacing the old required check; do not bypass a failed check. Main triggers retain application/build/deployment paths. `deploy=false` requests CI only; the default production path waits for the fresh admission checkpoint.
 
-The release uses `hhc-platform-release`; OpenAPI uses the separate container-scoped `hhc-line-api-docs` identity. Authorize only the owning pipelines, use workload identity federation, and enforce main-only branch checks on the service connections. No stored client secret is needed. Release variables belong in the protected `hhc-line-release` group; runtime credentials stay in their existing Azure secret stores.
+The release uses `hhc-line-release`; OpenAPI uses the separate container-scoped `hhc-line-api-docs` identity. Authorize only the owning pipelines, use workload identity federation, and enforce protected-main branch checks with unknown status rejected on the service connections. No stored client secret is needed. Release variables belong in the protected `hhc-line-release` group; runtime credentials stay in their existing Azure secret stores.
 
 Configure an exclusive lock on `hhc-platform-production` and retain `lockBehavior: sequential`. Deployment, public acceptance and docs share one stage so the lock covers the whole release. Manual CMS migrations use that same protected resource. The periodic pipeline remains disabled until the first accepted release and runs through the same resource.
 
