@@ -122,6 +122,10 @@ def selftest():
 if __name__ == '__main__':
     if sys.argv[1:] == ['--selftest']:
         selftest()
+    elif sys.argv[1:] == ['--probe']:
+        require(read('')['repository']['id'] == REPO)
+        require(read('/properties?filter=hhc.productionAdmission')['count'] in [0, 1])
+        print('Authenticated build admission metadata read verified')
     elif os.environ.get('REQUIRE_FRESH_ADMISSION', '').lower() == 'true':
         item = read('/properties?filter=hhc.productionAdmission')['value']['hhc.productionAdmission']
         require(item['$type'] == 'System.String' and isinstance(item['$value'], str) and len(item['$value']) <= 16384)
