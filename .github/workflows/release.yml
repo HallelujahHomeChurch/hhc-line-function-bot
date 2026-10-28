@@ -55,7 +55,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare_image:
+    name: Build immutable image before physical admission
+    runs-on: ubuntu-latest
+    environment: production-actions
+    env:
+      ACR_NAME: alive
+      IMAGE_REPOSITORY: alive/hhc-line-function-bot
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Set image tag
+        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Build and push image to ACR
+        run: |
+          az acr build \
+            --registry "${ACR_NAME}" \
+            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+            --image "${IMAGE_REPOSITORY}:latest" \
+            --file Dockerfile \
+            .
+
+  physical_admission:
+    name: Approve fresh physical admission after image build
+    needs: prepare_image
+    runs-on: ubuntu-latest
+    environment: line-release-admission
+    permissions:
+      contents: read
+    steps:
+      - run: echo 'Owner approved the current source and fresh physical admission; proceed directly to deployment.'
+
   release:
+    needs: physical_admission
     name: Build and release
     runs-on: ubuntu-latest
     environment: production-actions
@@ -87,24 +123,10 @@ jobs:
       RELEASE_PUBLIC_EXPECTATION: ${{ inputs.public_expectation || 'normal' }}
     steps:
       - uses: actions/checkout@v5
-      - name: Sign in to Azure with OIDC
-        uses: azure/login@v3
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --yes
       - name: Set image tag
         run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-      - name: Build and push image to ACR
-        run: |
-          az acr build \
-            --registry "${ACR_NAME}" \
-            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
-            --image "${IMAGE_REPOSITORY}:latest" \
-            --file Dockerfile \
-            .
       - name: Refresh Azure OIDC session before deploy
         uses: azure/login@v3
         with:

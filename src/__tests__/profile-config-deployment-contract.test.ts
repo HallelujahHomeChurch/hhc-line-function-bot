@@ -22,7 +22,8 @@ describe("production profile configuration deployment contract", () => {
     ]) {
       const workflow = readProjectFile(path);
       const runners = workflow.match(/^ {4}runs-on: ubuntu-latest$/gm) ?? [];
-      const environments = workflow.match(/^ {4}environment: production-actions$/gm) ?? [];
+      const environments =
+        workflow.match(/^ {4}environment: (?:production-actions|line-release-admission)$/gm) ?? [];
       expect(environments).toHaveLength(runners.length);
       expect(environments.length).toBeGreaterThan(0);
     }
@@ -67,6 +68,29 @@ describe("production profile configuration deployment contract", () => {
       expect(rule).toMatch(/^ {12}queueLength: 1$/m);
       expect(rule).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
     }
+  });
+
+  it("builds before the independent physical-admission gate and deployment", () => {
+    const workflow = readProjectFile(".github/workflows/release.yml");
+    const prepare = workflow.slice(
+      workflow.indexOf("  prepare_image:"),
+      workflow.indexOf("  physical_admission:")
+    );
+    const admission = workflow.slice(
+      workflow.indexOf("  physical_admission:"),
+      workflow.indexOf("  release:")
+    );
+    const release = workflow.slice(
+      workflow.indexOf("  release:"),
+      workflow.indexOf("  public_acceptance:")
+    );
+    expect(prepare).toContain("az acr build");
+    expect(prepare).not.toContain("deploy-aca.sh");
+    expect(admission).toContain("needs: prepare_image");
+    expect(admission).toContain("environment: line-release-admission");
+    expect(release).toContain("needs: physical_admission");
+    expect(release).not.toContain("az acr build");
+    expect(release).toContain("bash scripts/deploy-aca.sh");
   });
 
   it("pins media-sync management to the exact production Dapr app IDs", () => {
