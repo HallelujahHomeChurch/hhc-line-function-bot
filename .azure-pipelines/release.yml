@@ -26,14 +26,12 @@ stages:
           - bash: |-
               set -euo pipefail
               test "$(git rev-parse HEAD)" = "$BUILD_SOURCEVERSION"
-              python3 scripts/verify-release-source.py
-            displayName: Reject unmerged or superseded source before cloud authentication
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              bash scripts/verify-release-source.sh
+            displayName: Verify current main from fresh native checkout
           - task: AzureCLI@2
             displayName: Verify release identity without production writes
             inputs:
-              azureSubscription: hhc-platform-release
+              azureSubscription: hhc-line-release
               scriptType: bash
               scriptLocation: inlineScript
               visibleAzLogin: false
@@ -84,10 +82,12 @@ stages:
                   clean: true
                   fetchDepth: 0
                   persistCredentials: false
+                - bash: bash scripts/verify-release-source.sh
+                  displayName: Verify current main from fresh native checkout
                 - task: AzureCLI@2
                   displayName: Build and push the validated source
                   inputs:
-                    azureSubscription: hhc-platform-release
+                    azureSubscription: hhc-line-release
                     scriptType: bash
                     scriptLocation: inlineScript
                     inlineScript: |-
@@ -136,7 +136,7 @@ stages:
                 - task: AzureCLI@2
                   displayName: Deploy and verify LINE workloads
                   inputs:
-                    azureSubscription: hhc-platform-release
+                    azureSubscription: hhc-line-release
                     scriptType: bash
                     scriptLocation: inlineScript
                     inlineScript: |-
@@ -221,7 +221,7 @@ stages:
           - task: AzureCLI@2
             displayName: Verify public LINE contract
             inputs:
-              azureSubscription: hhc-platform-release
+              azureSubscription: hhc-line-release
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |-

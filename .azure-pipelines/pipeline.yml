@@ -89,11 +89,8 @@ stages:
               version: 24.22.1
             displayName: Use Node.js 24
           - bash: |-
-              python3 scripts/verify-release-source.py --selftest
-              python3 scripts/verify-release-source.py --probe
-            displayName: Verify GitHub App source readback without exporting credentials
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              python3 scripts/test-release-source.py
+            displayName: Test release source guard
           - bash: |-
               corepack enable
               corepack prepare pnpm@11.7.0 --activate

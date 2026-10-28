@@ -22,7 +22,7 @@ jobs:
               persistCredentials: false
             - task: AzureCLI@2
               inputs:
-                azureSubscription: hhc-platform-release
+                azureSubscription: hhc-line-release
                 scriptType: bash
                 scriptLocation: inlineScript
                 inlineScript: |-

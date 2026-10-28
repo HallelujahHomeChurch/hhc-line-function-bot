@@ -630,7 +630,7 @@ Path(os.environ["BOT_MANIFEST"]).write_text(text)
 PY
 
 if [[ "${CI_PROVIDER:-}" == azure-pipelines ]]; then
-  python3 "${script_dir}/verify-release-source.py"
+  bash "${script_dir}/verify-release-source.sh"
 fi
 if [[ "${REQUIRE_FRESH_ADMISSION:-false}" == true ]]; then
   python3 "${script_dir}/verify-release-admission.py"
