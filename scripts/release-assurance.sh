@@ -550,20 +550,30 @@ PY
 release_check_account_preflight() {
   local command_output
   local result_json
-  if ! command_output="$(
-    timeout 60s script -q -e -c \
+  local command_ok
+  local attempt
+  for attempt in 1 2 3; do
+    command_ok=false
+    if command_output="$(
+      timeout 60s script -q -e -c \
       "az containerapp exec --resource-group \"${RESOURCE_GROUP}\" --name \"${CONTAINER_APP_NAME}\" --revision \"${RELEASE_TARGET_REVISION}\" --command \"/nodejs/bin/node dist/tools/run-account-deployment-preflight.js\"" \
       /dev/null 2>&1
-  )"; then
+    )"; then command_ok=true; fi
+    command_output="${command_output//$'\r'/}"
+    result_json="$(
+      printf '%s\n' "${command_output}" |
+      sed -n 's/^ACCOUNT_PREFLIGHT_RESULT=//p' |
+      tail -n 1
+    )"
+    # A nonzero preflight can carry a real contract failure; never retry that result.
+    if [[ "${command_ok}" == true || -n "${result_json}" ]]; then break; fi
+    printf 'Account preflight exec returned no result (%s/3)\n' "${attempt}" >&2
+    if ((attempt < 3)); then sleep 2; fi
+  done
+  if [[ "${command_ok}" != true && -z "${result_json}" ]]; then
     fail_release_check account_preflight account_preflight_unavailable network_failed
     return
   fi
-  command_output="${command_output//$'\r'/}"
-  result_json="$(
-    printf '%s\n' "${command_output}" |
-      sed -n 's/^ACCOUNT_PREFLIGHT_RESULT=//p' |
-      tail -n 1
-  )"
   if [[ -z "${result_json}" ]]; then
     fail_release_check account_preflight account_preflight_malformed malformed_json
     return
@@ -608,6 +618,10 @@ if (
 PY
   then
     fail_release_check account_preflight account_preflight_failed http_mismatch
+    return
+  fi
+  if [[ "${command_ok}" != true ]]; then
+    fail_release_check account_preflight account_preflight_unavailable network_failed
     return
   fi
   printf 'ACCOUNT_PREFLIGHT_RESULT=%s\n' "${result_json}"
