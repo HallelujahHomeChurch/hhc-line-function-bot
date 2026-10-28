@@ -9,16 +9,19 @@ stages:
   - stage: Release
     displayName: Build and deploy immutable LINE image
     dependsOn: CI
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'], 'PullRequest'))
+    condition:
+      and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'],
+      'PullRequest'))
     jobs:
       - deployment: release
         displayName: LINE production release
-        environment: hhc-line-production
+        environment: hhc-platform-production
         timeoutInMinutes: 40
         strategy:
           runOnce:
             deploy:
               steps:
+                - download: none
                 - checkout: self
                   clean: true
                   fetchDepth: 0
@@ -132,18 +135,14 @@ stages:
                     targetPath: artifacts/release-assurance
                     artifact: line-deployment-$(Build.BuildId)-$(System.JobAttempt)
                   displayName: Preserve deployment assurance and same-run receipt
-  - stage: PublicAcceptance
-    displayName: Accept the same deployed revision
-    dependsOn: Release
-    jobs:
       - job: public_acceptance
         timeoutInMinutes: 20
         variables:
-          commit: $[ stageDependencies.Release.release.outputs['release.release_outputs.commit'] ]
-          image: $[ stageDependencies.Release.release.outputs['release.release_outputs.image'] ]
-          revision: $[ stageDependencies.Release.release.outputs['release.release_outputs.revision'] ]
-          deployment_attempt: $[ stageDependencies.Release.release.outputs['release.release_outputs.deployment_attempt'] ]
-          receipt_artifact: $[ stageDependencies.Release.release.outputs['release.release_outputs.receipt_artifact'] ]
+          commit: $[ dependencies.release.outputs['release.release_outputs.commit'] ]
+          image: $[ dependencies.release.outputs['release.release_outputs.image'] ]
+          revision: $[ dependencies.release.outputs['release.release_outputs.revision'] ]
+          deployment_attempt: $[ dependencies.release.outputs['release.release_outputs.deployment_attempt'] ]
+          receipt_artifact: $[ dependencies.release.outputs['release.release_outputs.receipt_artifact'] ]
         steps:
           - checkout: self
             clean: true
@@ -206,22 +205,19 @@ stages:
               targetPath: artifacts/public-acceptance
               artifact: line-public-acceptance-$(Build.BuildId)-$(System.JobAttempt)
             displayName: Preserve public acceptance evidence
-  - stage: PublishOpenAPI
-    displayName: Publish only the accepted OpenAPI contract
-    dependsOn: PublicAcceptance
-    jobs:
+        dependsOn: release
       - job: publish_openapi
         variables:
-          commit: $[ stageDependencies.PublicAcceptance.public_acceptance.outputs['accept.commit'] ]
-          image: $[ stageDependencies.PublicAcceptance.public_acceptance.outputs['accept.image'] ]
+          commit: $[ dependencies.public_acceptance.outputs['accept.commit'] ]
+          image: $[ dependencies.public_acceptance.outputs['accept.image'] ]
         steps:
           - checkout: self
             clean: true
             fetchDepth: 0
             persistCredentials: false
-          - task: NodeTool@0
+          - task: UseNode@1
             inputs:
-              versionSpec: 24.22.1
+              version: 24.22.1
             displayName: Use Node.js 24
           - task: AzureCLI@2
             displayName: Publish immutable contract and guarded pointer
@@ -252,3 +248,7 @@ stages:
               RELEASE_COMMIT: $(commit)
               RELEASE_IMAGE: $(image)
               FAIL_OPENAPI_BEFORE_POINTER: ${{ lower(format('{0}', parameters.failOpenapiBeforePointer)) }}
+        dependsOn: public_acceptance
+    lockBehavior: sequential
+    variables:
+      - group: hhc-line-release

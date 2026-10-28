@@ -213,3 +213,7 @@ attachment and recent task status, with fresh-authorized finite media counts.
 
 Implementation and consultant dispositions:
 [conversation continuity plan](superpowers/plans/2026-10-17-line-context-continuity.md).
+
+## Release ownership
+
+GitHub owns source and pull requests. Native Azure Pipelines owns CI/CD; the protected main-only release stage serializes deployment, same-revision public acceptance and OpenAPI publication. Original Actions are inactive backups. See [pipeline cutover](runbooks/azure-pipelines.md).

@@ -11,7 +11,7 @@ pool:
   vmImage: ubuntu-24.04
 jobs:
   - deployment: periodic_assurance
-    environment: hhc-line-production
+    environment: hhc-platform-production
     timeoutInMinutes: 20
     strategy:
       runOnce:

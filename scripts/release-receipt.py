@@ -50,7 +50,9 @@ def validate(value):
     require(set(value) == fields)
     require(value["version"] == (2 if azure else 1) and value["commit"] == os.environ["GITHUB_SHA"] and re.fullmatch(r"[a-f0-9]{40}", value["commit"]))
     require(value["runId"] == os.environ["GITHUB_RUN_ID"] and value["runId"].isdigit())
-    require(type(value["deploymentAttempt"]) is int and 1 <= value["deploymentAttempt"] <= int(os.environ["GITHUB_RUN_ATTEMPT"]))
+    require(type(value["deploymentAttempt"]) is int and 1 <= value["deploymentAttempt"])
+    if not azure:
+        require(value["deploymentAttempt"] <= int(os.environ["GITHUB_RUN_ATTEMPT"]))
     for key in ("revision", "attachmentExecution", "knownGoodRevision"):
         require(isinstance(value[key], str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,200}", value[key]))
     for key in ("image", "knownGoodImage", "searxngImage"):

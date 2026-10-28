@@ -204,19 +204,19 @@ Testing map:
 - `main` is protected by a no-bypass repository ruleset. Administrators and automated agents must use a pull request; never push or force push directly to `main` and never add a bypass actor for routine or emergency work.
 - Before starting any task, inspect the current branch, worktree status, and matching GitHub pull request. If an open PR belongs to the same unfinished task, continue that branch. If its PR is merged or closed, or the new work is a different task, do not reuse or branch from it: switch to and synchronize the latest `main`, then create a new `codex/*` branch.
 - Preserve unrelated uncommitted or unmerged work. Do not overwrite it, discard it, mix it into a new task, or create a new task branch from a stale feature branch; isolate the new task from the latest `main` instead.
-- Work on a `codex/*` branch, open a pull request, and wait for the required `PR CI` check. The required approving-review count is zero, so an agent may enable auto-merge and GitHub will squash the PR after CI succeeds.
-- `.github/workflows/ci.yml` is the pull-request validation boundary. A CI failure blocks merge and is not a production deployment failure.
-- `.github/workflows/release.yml` is the post-merge production boundary. It builds the ACR image and deploys ACA without repeating pnpm validation. App/build/deploy path changes merged to `main` trigger it; `AGENTS.md`, `README.md`, and `docs/**`-only merges do not.
+- Work on a `codex/*` branch, open a pull request, and wait for the required `hhc-line-ci-cd` check. The required approving-review count is zero, so an agent may enable auto-merge and GitHub will squash the PR after CI succeeds.
+- `.azure-pipelines/pipeline.yml` is the direct GitHub PR/main validation boundary. A CI failure blocks merge and is not a production deployment failure.
+- `.azure-pipelines/release.yml` is the protected post-CI production boundary. It builds the ACR image, deploys ACA, accepts the same deployed revision and publishes OpenAPI in one serialized stage. Main path filters retain application/build/deploy inputs; PR validation also covers documentation. The migration keeps `deploy=false` until the reviewed trust cutover and fresh admission.
 - Treat merging a deploy-triggering pull request as a production deployment action. Do not enable auto-merge for deploy-triggering changes unless the user asked to deploy or confirmed that deploying is acceptable.
 - If the user asks for code changes but not deployment, leave the verified branch/PR unmerged and report that production release is intentionally pending.
-- GitHub Actions is the sole CI/CD system. Do not restore Azure DevOps or add a second automatic deployment path.
+- Azure Pipelines is the sole CI/CD system. GitHub remains the source/PR host; original Actions are inactive backups in `ci/github-actions-backup/`. Never restore a second publisher without fencing the current provider first. Deleting YAML does not cancel an already accepted run.
 - The helper agent runtime is the sole semantic agent path. `main` remains provider-free with narrow direct handlers. Do not add a shadow router or semantic fallback provider. Roll back through a reviewed application deployment while retaining DeepSeek-only helper policy.
 - R4.1/R5.0 acceptance describes the prior controlled-agent release. The authorized helper SDK redesign requires its own PR, release, and production acceptance. Do not infer SaaS or local-model follow-up work.
 - Release assurance is provider-free: after the provider-free job definitions are verified, the signed empty webhook probe and release report attest `providerRequests: { deepseek: 0, embedding: 0 }`; an earlier failed report omits that unverified attestation. It proves gateway/Dapr/bot reachability only, never LINE delivery or reply-token behavior. The normal rollback copies the known-good revision while pinning its resolved OCI digest into a new revision; use a manual image change only as bounded emergency fallback.
 
 ## Deployment Context
 
-- Pull-request CI is defined in `.github/workflows/ci.yml`. Production image build and deployment are defined in `.github/workflows/release.yml`; `scripts/deploy-aca.sh` owns the shared Azure Container Apps deployment sequence.
+- Pull-request CI is defined in `.azure-pipelines/pipeline.yml`. Production image build and deployment are defined in `.azure-pipelines/release.yml`; `scripts/deploy-aca.sh` owns the shared Azure Container Apps deployment sequence.
 - Images are built for `alive.azurecr.io`.
 - Runtime configuration and secrets belong in Azure Container Apps/Azure secrets, not in the repository.
 - This repository is public. Never commit real `.env` files, credentials, tokens, sensitive LINE or church user data, private operational exports, or secrets in source, tests, fixtures, documentation, commits, pull requests, issues, or Actions output.

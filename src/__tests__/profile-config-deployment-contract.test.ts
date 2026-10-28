@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -15,6 +16,21 @@ function projectFileExists(path: string): boolean {
 }
 
 describe("production profile configuration deployment contract", () => {
+  it("retains original Actions verbatim outside the active workflow directory", () => {
+    const manifest = JSON.parse(readProjectFile("ci/github-actions-backup/manifest.json")) as {
+      sourceCommit: string;
+      files: Record<string, string>;
+    };
+    expect(manifest.sourceCommit).toMatch(/^[a-f0-9]{40}$/u);
+    for (const [name, digest] of Object.entries(manifest.files)) {
+      expect(projectFileExists(`.github/workflows/${name}`)).toBe(false);
+      expect(
+        createHash("sha256")
+          .update(readProjectFile(`ci/github-actions-backup/${name}`))
+          .digest("hex")
+      ).toBe(digest);
+    }
+  });
   it("preserves existing job identities and typed queue activation settings", () => {
     for (const path of ["aca.attachment-worker-job.yaml", "aca.periodic-assurance-job.yaml"]) {
       const identity =
@@ -70,12 +86,12 @@ describe("production profile configuration deployment contract", () => {
   });
 
   it("requires a manual LINE Provider checkpoint and the bounded Account preflight", () => {
-    const workflow = readProjectFile(".github/workflows/release.yml");
+    const workflow = readProjectFile(".azure-pipelines/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
     const assurance = readProjectFile("scripts/release-assurance.sh");
 
     expect(workflow).toContain(
-      "LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}"
+      "LINE_PROVIDER_CONSOLE_VERIFIED_ID: $(LINE_PROVIDER_CONSOLE_VERIFIED_ID)"
     );
     expect(deployment).toContain("LINE_PROVIDER_CONSOLE_VERIFIED_ID");
     expect(`${deployment}\n${assurance}`).toContain(
@@ -329,8 +345,7 @@ describe("production profile configuration deployment contract", () => {
   it("ships file-backed profiles and does not deploy an ACA profile secret", () => {
     const dockerfile = readProjectFile("Dockerfile");
     const manifest = readProjectFile("aca.containerapp.yaml");
-    const ciWorkflow = readProjectFile(".github/workflows/ci.yml");
-    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
+    const ciWorkflow = readProjectFile(".azure-pipelines/pipeline.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
     const profiles = JSON.parse(readProjectFile("config/profiles.json")) as Array<{
       name: string;
@@ -377,7 +392,7 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).toContain("name: EXTERNAL_RESOURCE_MAX_REDIRECTS");
     expect(manifest).not.toContain("BOT_PROFILES_BASE64_JSON");
     expect(manifest).not.toContain("bot-profiles-base64-json");
-    expect(releaseWorkflow).toContain("- config/**");
+    expect(readProjectFile(".azure-pipelines/pipeline.yml")).toContain("- config/**");
     expect(ciWorkflow).toContain("pnpm config:validate");
     expect(deployment).toContain('"PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF"');
     expect(deployment).toContain('"observability-hmac-key"');
@@ -497,8 +512,8 @@ describe("production profile configuration deployment contract", () => {
       }
     }
     expect(deployment).not.toMatch(/echo[^\n]*LINE_(?:HELPER|MAIN|ACCOUNT)_/u);
-    expect(readProjectFile(".github/workflows/release.yml")).toContain(
-      "path: artifacts/release-assurance/*.json"
+    expect(readProjectFile(".azure-pipelines/release.yml")).toContain(
+      "targetPath: artifacts/release-assurance"
     );
   });
 
@@ -545,64 +560,61 @@ describe("production profile configuration deployment contract", () => {
   });
 
   it("validates pull requests before a separate main-only production release", () => {
-    const ciWorkflow = readProjectFile(".github/workflows/ci.yml");
-    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
+    const ciWorkflow = readProjectFile(".azure-pipelines/pipeline.yml");
+    const releaseWorkflow = readProjectFile(".azure-pipelines/release.yml");
 
-    expect(ciWorkflow).toContain("name: PR CI");
-    expect(ciWorkflow).toContain("pull_request:");
-    expect(ciWorkflow).not.toContain("push:");
-    expect(ciWorkflow).toContain("contents: read");
-    expect(ciWorkflow).not.toContain("id-token: write");
-    expect(ciWorkflow).toContain("pnpm format:check");
-    expect(ciWorkflow).toContain("pnpm typecheck");
-    expect(ciWorkflow).toContain("pnpm lint");
-    expect(ciWorkflow).toContain("pnpm test");
-    expect(ciWorkflow).toContain("pnpm config:validate");
-    expect(ciWorkflow).toContain("pnpm eval:agent");
-    expect(ciWorkflow).toContain("pnpm eval:kernel");
-    expect(ciWorkflow).toContain("pnpm eval:kernel:integration");
+    expect(ciWorkflow).toContain("displayName: PR CI");
+    expect(ciWorkflow).toContain("pr:");
+    expect(ciWorkflow).toContain("autoCancel: true");
+    expect(ciWorkflow).toContain("batch: true");
+    expect(ciWorkflow).not.toContain("azureSubscription:");
+    for (const command of [
+      "format:check",
+      "typecheck",
+      "lint",
+      "test",
+      "config:validate",
+      "eval:agent",
+      "eval:kernel",
+      "eval:kernel:integration",
+      "build"
+    ]) {
+      expect(ciWorkflow).toContain(`pnpm ${command}`);
+    }
     expect(ciWorkflow).toContain("bash scripts/render-published-openapi.test.sh");
-    expect(ciWorkflow.indexOf("pnpm eval:kernel")).toBeLessThan(ciWorkflow.indexOf("pnpm build"));
+    expect(ciWorkflow).toContain("pnpm vitest run src/__tests__/media-sync-store.test.ts");
     expect(ciWorkflow.indexOf("pnpm eval:kernel:integration")).toBeLessThan(
       ciWorkflow.indexOf("pnpm build")
     );
-    expect(ciWorkflow).toContain("pnpm build");
-
-    expect(releaseWorkflow).toContain("name: Production Release");
-    expect(releaseWorkflow).toContain("push:");
-    expect(releaseWorkflow).toContain("branches: [main]");
-    expect(releaseWorkflow).not.toContain("pull_request:");
-    expect(releaseWorkflow).toContain("id-token: write");
+    expect(releaseWorkflow).toContain("dependsOn: CI");
+    expect(releaseWorkflow).toContain("eq(variables['Build.SourceBranch'], 'refs/heads/main')");
+    expect(releaseWorkflow).toMatch(/ne\(variables\['Build.Reason'\],\s*'PullRequest'\)/u);
+    expect(releaseWorkflow).toContain("environment: hhc-platform-production");
+    expect(releaseWorkflow).toContain("lockBehavior: sequential");
+    expect(releaseWorkflow).toContain("azureSubscription: hhc-platform-release");
     expect(releaseWorkflow).toContain("az acr build");
     expect(releaseWorkflow).toContain("bash scripts/deploy-aca.sh");
     expect(releaseWorkflow).not.toContain("pnpm ");
-
-    expect(projectFileExists(".github/workflows/hhc-line-function-bot.yml")).toBe(false);
-    expect(projectFileExists("azure-pipelines.yml")).toBe(false);
+    expect(projectFileExists(".github/workflows/ci.yml")).toBe(false);
+    expect(projectFileExists(".github/workflows/release.yml")).toBe(false);
   });
 
-  it("publishes the deployed OpenAPI contract in a separate post-smoke job", () => {
-    const workflow = readProjectFile(".github/workflows/release.yml");
+  it("publishes only the same-run accepted OpenAPI contract without deployment authority", () => {
+    const workflow = readProjectFile(".azure-pipelines/release.yml");
     const deploy = workflow.indexOf("bash scripts/deploy-aca.sh");
-    const outputs = workflow.indexOf("id: release_outputs");
-    const publish = workflow.indexOf("  publish_openapi:");
+    const outputs = workflow.indexOf("name: release_outputs");
+    const publish = workflow.indexOf("- job: publish_openapi");
     const publishJob = workflow.slice(publish);
-
-    expect(workflow).toContain("fail_openapi_before_pointer:");
-    expect(workflow).toContain("commit: ${{ steps.release_outputs.outputs.commit }}");
-    expect(workflow).toContain("image: ${{ steps.release_outputs.outputs.image }}");
     expect(outputs).toBeGreaterThan(deploy);
     expect(publish).toBeGreaterThan(outputs);
-    expect(publishJob).toContain("needs: public_acceptance");
-    expect(publishJob).not.toContain("environment:");
-    expect(publishJob).toContain("contents: read\n      id-token: write");
+    expect(publishJob).toContain("dependsOn: public_acceptance");
+    expect(publishJob).toContain("azureSubscription: hhc-line-api-docs");
     expect(publishJob).toContain("CONTAINER: api-docs-hhc-line-function-bot");
-    expect(publishJob).toContain("API_DOCS_AZURE_CLIENT_ID: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}");
-    expect(publishJob).toContain("RELEASE_COMMIT: ${{ needs.public_acceptance.outputs.commit }}");
-    expect(publishJob).toContain("RELEASE_IMAGE: ${{ needs.public_acceptance.outputs.image }}");
-    expect(publishJob).toContain(
-      "FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}"
-    );
+    expect(publishJob).toContain("dependencies.public_acceptance.outputs['accept.commit']");
+    expect(publishJob).toContain("dependencies.public_acceptance.outputs['accept.image']");
+    expect(publishJob).toContain("RELEASE_COMMIT: $(commit)");
+    expect(publishJob).toContain("RELEASE_IMAGE: $(image)");
+    expect(publishJob).toContain("FAIL_OPENAPI_BEFORE_POINTER:");
     expect(publishJob).toContain("bash scripts/publish-openapi.sh");
     expect(publishJob).not.toMatch(/deploy-aca|rollback|containerapp (?:update|revision copy)/u);
   });
@@ -637,7 +649,6 @@ describe("production profile configuration deployment contract", () => {
 
   it("defines a scheduled ACA catalog sync job that reuses the app image", () => {
     const job = readProjectFile("aca.catalog-sync-job.yaml");
-    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
     const readme = readProjectFile("README.md");
 
     expect(job).toContain("type: Microsoft.App/jobs");
@@ -689,7 +700,9 @@ describe("production profile configuration deployment contract", () => {
     expect(job).toContain("name: EMBEDDING_BATCH_SIZE");
     expect(job).toContain("name: EMBEDDING_TIMEOUT_MS");
     expect(job).not.toContain("ingress:");
-    expect(releaseWorkflow).toContain("- aca.catalog-sync-job.yaml");
+    expect(readProjectFile(".azure-pipelines/pipeline.yml")).toContain(
+      "- aca.catalog-sync-job.yaml"
+    );
     expect(readme).toContain("aca.catalog-sync-job.yaml");
     expect(readme).toContain("node dist/tools/sync-catalog.js");
   });
@@ -782,7 +795,7 @@ describe("production profile configuration deployment contract", () => {
 
   it("renders and deploys immutable assurance jobs before uploading the release report", () => {
     const deployment = readProjectFile("scripts/deploy-aca.sh");
-    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
+    const releaseWorkflow = readProjectFile(".azure-pipelines/release.yml");
 
     expect(deployment).toContain("required_release_environment=(");
     expect(deployment).toMatch(/required_release_environment=\([\s\S]*RELEASE_PROBE_JOB_NAME/);
@@ -828,8 +841,12 @@ describe("production profile configuration deployment contract", () => {
     );
     expect(deployment).not.toMatch(/cat "\$\{(?:release_probe|periodic_assurance)_job_manifest\}"/);
 
-    expect(releaseWorkflow).toContain("- aca.release-probe-job.yaml");
-    expect(releaseWorkflow).toContain("- aca.periodic-assurance-job.yaml");
+    expect(readProjectFile(".azure-pipelines/pipeline.yml")).toContain(
+      "- aca.release-probe-job.yaml"
+    );
+    expect(readProjectFile(".azure-pipelines/pipeline.yml")).toContain(
+      "- aca.periodic-assurance-job.yaml"
+    );
     expect(releaseWorkflow).toContain("RELEASE_PROBE_JOB_NAME: hhc-line-bot-release-probe");
     expect(releaseWorkflow).toContain(
       "PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance"
@@ -837,63 +854,43 @@ describe("production profile configuration deployment contract", () => {
     expect(releaseWorkflow).toContain(
       "RELEASE_REPORT_PATH: artifacts/release-assurance/report.json"
     );
-    expect(releaseWorkflow).toContain("uses: actions/upload-artifact@v6");
-    expect(releaseWorkflow).toContain("if: always()");
-    expect(releaseWorkflow).toContain("path: artifacts/release-assurance/*.json");
-    expect(releaseWorkflow).toContain("if-no-files-found: error");
+    expect(releaseWorkflow).toContain("task: PublishPipelineArtifact@1");
+    expect(releaseWorkflow).toContain("condition: always()");
+    expect(releaseWorkflow).toContain("targetPath: artifacts/release-assurance");
     expect(releaseWorkflow).not.toContain("pnpm ");
-    const azureLoginSteps = [...releaseWorkflow.matchAll(/uses: azure\/login@v3/gu)];
+    const authenticatedTasks = [...releaseWorkflow.matchAll(/task: AzureCLI@2/gu)];
     const finalImageBuild = releaseWorkflow.lastIndexOf("az acr build");
-    const refreshedLogin = azureLoginSteps.at(1)?.index ?? -1;
-    const docsLogin = azureLoginSteps.at(2)?.index ?? -1;
+    const refreshedLogin = authenticatedTasks.at(1)?.index ?? -1;
+    const docsLogin = authenticatedTasks.at(3)?.index ?? -1;
     const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
-    const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v6");
-    expect(azureLoginSteps).toHaveLength(4);
-    expect(finalImageBuild).toBeGreaterThanOrEqual(0);
+    const upload = releaseWorkflow.indexOf("task: PublishPipelineArtifact@1");
+    expect(authenticatedTasks).toHaveLength(4);
     expect(refreshedLogin).toBeGreaterThan(finalImageBuild);
     expect(deploy).toBeGreaterThan(refreshedLogin);
-    expect(deploy).toBeGreaterThanOrEqual(0);
     expect(upload).toBeGreaterThan(deploy);
     expect(docsLogin).toBeGreaterThan(upload);
   });
 
-  it("schedules weekly periodic assurance with OIDC and always uploads its fixed report", () => {
-    expect(projectFileExists(".github/workflows/periodic-assurance.yml")).toBe(true);
-    const workflow = readProjectFile(".github/workflows/periodic-assurance.yml");
-
-    expect(workflow).toContain('cron: "30 20 * * 1"');
-    expect(workflow).toContain("workflow_dispatch:");
-    expect(workflow).toContain("permissions:\n  contents: read\n  id-token: write");
-    expect(workflow).toContain("uses: azure/login@v3");
-    expect(workflow).toContain("client-id: ${{ vars.AZURE_CLIENT_ID }}");
-    expect(workflow).toContain("tenant-id: ${{ vars.AZURE_TENANT_ID }}");
-    expect(workflow).toContain("subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}");
-    expect(workflow).not.toMatch(/\$\{\{\s*secrets\./);
+  it("schedules bounded weekly assurance with workload identity and retained evidence", () => {
+    const workflow = readProjectFile(".azure-pipelines/periodic-assurance.yml");
+    expect(workflow).toContain("cron: 30 20 * * 1");
+    expect(workflow).toContain("trigger: none");
+    expect(workflow).toContain("pr: none");
+    expect(workflow).toContain("task: AzureCLI@2");
+    expect(workflow).toContain("azureSubscription: hhc-platform-release");
+    expect(workflow).toContain("environment: hhc-platform-production");
     expect(workflow).toContain("ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker");
     expect(workflow).toContain("bash scripts/run-periodic-assurance.sh");
     expect(workflow).toContain(
       "PERIODIC_REPORT_PATH: artifacts/release-assurance/periodic-report.json"
     );
-    expect(workflow).toContain("uses: actions/upload-artifact@v6");
-    expect(workflow).toContain("path: artifacts/release-assurance/periodic-report.json");
-    expect(workflow).not.toMatch(/containerapp (?:update|revision|ingress)/);
+    expect(workflow).toContain("task: PublishPipelineArtifact@1");
+    expect(workflow).toContain("condition: always()");
+    expect(workflow).not.toMatch(/containerapp (?:update|revision|ingress)/u);
     expect(workflow).not.toMatch(/deepseek|embedding|eval:agent:live/iu);
-    const login = workflow.indexOf("uses: azure/login@v3");
-    const extension = workflow.indexOf("az extension add --name containerapp");
-    const runner = workflow.indexOf("bash scripts/run-periodic-assurance.sh");
-    const upload = workflow.indexOf("uses: actions/upload-artifact@v6");
-    const runnerStepStart = workflow.lastIndexOf("- name:", runner);
-    const uploadStepStart = workflow.lastIndexOf("- name:", upload);
-    const runnerStep = workflow.slice(runnerStepStart, uploadStepStart);
-    const uploadStep = workflow.slice(uploadStepStart);
-    expect(login).toBeGreaterThanOrEqual(0);
-    expect(extension).toBeGreaterThan(login);
-    expect(runner).toBeGreaterThan(extension);
-    expect(runner).toBeGreaterThanOrEqual(0);
-    expect(upload).toBeGreaterThan(runner);
-    expect(runnerStep).toContain("if: always()");
-    expect(uploadStep).toContain("if: always()");
-    expect(uploadStep).toContain("if-no-files-found: error");
+    expect(workflow.indexOf("task: PublishPipelineArtifact@1")).toBeGreaterThan(
+      workflow.indexOf("bash scripts/run-periodic-assurance.sh")
+    );
   });
 
   it("wraps every bot and dependent-job mutation in the recoverable release transaction", () => {
@@ -963,7 +960,7 @@ describe("production profile configuration deployment contract", () => {
     const bot = readProjectFile("aca.containerapp.yaml");
     const catalogJob = readProjectFile("aca.catalog-sync-job.yaml");
     const dockerfile = readProjectFile("Dockerfile");
-    const workflow = readProjectFile(".github/workflows/release.yml");
+    const workflow = readProjectFile(".azure-pipelines/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
     const packageJson = JSON.parse(readProjectFile("package.json")) as {
       scripts: Record<string, string>;

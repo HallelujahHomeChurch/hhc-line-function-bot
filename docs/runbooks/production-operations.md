@@ -269,7 +269,7 @@ After either path, verify `GET /healthz`, `GET /readyz`, and direct-admin
 
 ## Weekly Dependency Assurance
 
-The scheduled GitHub workflow runs `hhc-line-bot-periodic-assurance` weekly
+The scheduled Azure pipeline `.azure-pipelines/periodic-assurance.yml` runs `hhc-line-bot-periodic-assurance` weekly
 and uploads `artifacts/release-assurance/periodic-report.json`. It is distinct
 from release acceptance: it executes bounded Graph/Notion metadata checks,
 attachment-queue and recent-worker checks, Asset lifecycle assurance, and a

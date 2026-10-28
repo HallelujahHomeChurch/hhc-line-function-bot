@@ -1,0 +1,13 @@
+# Azure Pipelines cutover
+
+GitHub remains the source and PR host. `hhc-line-ci-cd` reads `.azure-pipelines/pipeline.yml` through the existing GitHub App connection. Its Azure check must succeed on the exact PR head before replacing the old required check; do not bypass a failed check. Main triggers retain application/build/deployment paths. `deploy=false` holds production during migration.
+
+The release uses `hhc-platform-release`; OpenAPI uses the separate container-scoped `hhc-line-api-docs` identity. Authorize only the owning pipelines, use workload identity federation, and enforce main-only branch checks on the service connections. No stored client secret is needed. Release variables belong in the protected `hhc-line-release` group; runtime credentials stay in their existing Azure secret stores.
+
+Configure an exclusive lock on `hhc-platform-production` and retain `lockBehavior: sequential`. Deployment, public acceptance and docs share one stage so the lock covers the whole release. Manual CMS migrations use that same protected resource. The periodic pipeline remains disabled until the first accepted release and runs through the same resource.
+
+Before cutover, review the exact old/new issuer and subject. Fence only this repository’s GitHub deployment and docs trusts; preserve unrelated trusts and all existing role assignments. Workflow removal or cancellation monitoring cannot fence an already accepted run. Verify the old trust rejects authentication and the new connection can authenticate before release. Re-evaluate current shared writers, physical database headroom and the release’s state/recovery contract; expired or earlier-source evidence is not admission.
+
+After CI passes, merge through the protected PR and release the merged commit through Azure CI/CD. Verify the immutable deployment receipt, current revision/image, health/readiness and complete public signed-empty webhook gates. For maintenance, `publicExpectation=maintenance` records public pending; after controlled reopening retry failed jobs in the same build, preserving successful deployment. Never rerun deployment merely to repeat public acceptance. Azure job attempt counters are independent; the receipt binds the producer’s actual attempt and immutable artifact rather than comparing unrelated counters.
+
+Original Actions YAML and SHA-256 manifest stay in `ci/github-actions-backup/`. Reverting source alone does not restore cloud trust. To return to Actions, first fence Azure publishing and settle its accepted runs, then review a reversed trust/check cutover before restoring YAML. Do not enable two automatic publishers.

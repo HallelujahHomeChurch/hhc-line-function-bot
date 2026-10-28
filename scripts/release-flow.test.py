@@ -164,6 +164,8 @@ class ProviderIdentity(unittest.TestCase):
                      knownGoodRevision='bot--old', knownGoodImage=IMAGE)
         with patch.dict(os.environ, env):
             self.assertEqual(module.validate(value), value)
+            # Azure counts attempts per job, so acceptance attempt 1 may consume deployment attempt 3.
+            self.assertEqual(module.validate({**value, 'deploymentAttempt': 3})['deploymentAttempt'], 3)
             for key, replacement in [('provider', 'github-actions'), ('projectId', '22345678-1234-1234-1234-123456789abc'),
                                      ('pipelineId', '26'), ('runUrl', 'https://github.com/fixture/bot/actions/runs/123'),
                                      ('runId', '124'), ('version', 1)]:

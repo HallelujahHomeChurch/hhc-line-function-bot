@@ -23,7 +23,7 @@ describe("LINE local ClamAV removal contract", () => {
 
     expect(read("package.json")).not.toMatch(/attachment-scan:(?:run|legacy)/u);
     expect(read("Dockerfile")).not.toMatch(/attachment-scan-worker|clamav/iu);
-    expect(read(".github/workflows/release.yml")).not.toMatch(
+    expect(read(".azure-pipelines/release.yml")).not.toMatch(
       /SCAN_IMAGE_REPOSITORY|clamav|aca\.attachment-scan-job/iu
     );
     expect(read("scripts/deploy-aca.sh")).not.toMatch(/CLAMAV_|clamav-|aca\.attachment-scan-job/iu);
