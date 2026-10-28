@@ -428,7 +428,7 @@ Operational details are in `docs/runbooks/production-operations.md`.
 
 `.github/workflows/ci.yml` runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the SDK agent eval, the SDK acceptance gate, the owned real-dependency integration gate, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
 
-`.github/workflows/release.yml` runs only after app, build, or deployment inputs are merged to `main`, or through an explicit manual dispatch. It does not repeat the pnpm validation suite. It authenticates to Azure through a branch-scoped OIDC federated credential, builds the production image with `az acr build`, and publishes these ACR tags:
+`.github/workflows/release.yml` runs only after app, build, or deployment inputs are merged to `main`, or through an explicit manual dispatch. It does not repeat the pnpm validation suite. It authenticates to Azure through the main-only `production-actions` environment OIDC credential, builds the production image with `az acr build`, and publishes these ACR tags:
 
 ```text
 alive.azurecr.io/alive/hhc-line-function-bot:<branch>-<githubRunId>
