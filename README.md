@@ -578,3 +578,10 @@ with admission paused before release; metadata preflight rejects a missing
 credential. This source change does not provision credentials or permissions.
 
 Redis full/partial/stale loss requires the [bounded recovery procedure](docs/runbooks/redis-loss-recovery.md). The offline planner does not authorize replay; signed-event cutoff and a consistent new namespace retire old one-shot authority while unknown effects remain quarantined. The default recovery configuration is inactive.
+
+The release builds its immutable image before the independent main-only
+`line-release-admission` environment approval. The release owner approves only
+after the full current-source metadata and six-second PostgreSQL pair pass;
+startup must remain within the original absolute evidence deadline. Image build
+does not authorize deployment. This gate does not replace any deployment or
+public-acceptance check.
