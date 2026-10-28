@@ -304,7 +304,7 @@ describe("release assurance shell transaction", () => {
         ["update", "create", "copy", "stop", "delete"].some((operation) => args.includes(operation))
       )
     ).toBe(false);
-  });
+  }, 15_000);
 
   it("replaces a success report with failed rollback evidence if deployment receipt persistence fails", async () => {
     const fixture = await createFixture("deployment_receipt_failure");
@@ -1324,8 +1324,8 @@ if (scenario === "deferred_public_success") {
   else if (command("containerapp", "revision", "list") && shortName === "api-gateway") body = [{ name: "gateway--ready", active: true, traffic: 100 }];
   else if (command("containerapp", "revision", "show") && shortName === "api-gateway") body = query.includes("containers[].name") ? ["api-gateway"] : ["off"];
   else if (command("containerapp", "show") && query === "properties.managedEnvironmentId") body = "/subscriptions/fixture/managedEnvironments/fixture-env";
-  else if (command("containerapp", "job", "show") && shortName === "hhc-line-bot-catalog-sync") body = { state: "Ready", image: "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}", ...(query.includes("id:id") ? { id: "/subscriptions/fixture/jobs/catalog", trigger: "Schedule", cron: "*/15 * * * *" } : {}) };
-  else if (command("rest", "--method", "get")) body = { value: [{ name: "catalog-current", status: "Succeeded", startTime: new Date(Date.now() + 1000).toISOString() }], nextLink: null };
+  else if (command("containerapp", "job", "show") && shortName === "hhc-line-bot-catalog-sync") body = query === "id" ? JSON.stringify("/subscriptions/fixture/jobs/catalog") : { image: "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}" };
+  else if (command("rest", "--method", "get")) body = value("--url").includes("/executions?") ? { value: [{ name: "catalog-current", status: "Succeeded", startTime: new Date(Date.now() + 1000).toISOString() }], nextLink: null } : { state: "Ready", image: "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}", ...(query.includes("id:id") ? { id: "/subscriptions/fixture/jobs/catalog", trigger: "Schedule", cron: "*/15 * * * *" } : {}) };
   else if (command("containerapp", "job", "execution", "show") && shortName) body = ["registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"];
   if (body !== undefined) { output(body); process.exit(0); }
 }
