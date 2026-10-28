@@ -5,6 +5,9 @@ parameters:
   - name: failOpenapiBeforePointer
     type: boolean
     default: false
+  - name: freshAdmission
+    type: boolean
+    default: true
 stages:
   - stage: Release
     displayName: Build and deploy immutable LINE image
@@ -13,6 +16,61 @@ stages:
       and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'],
       'PullRequest'))
     jobs:
+      - job: identity_probe
+        displayName: Read-only publisher identity verification
+        steps:
+          - checkout: self
+            clean: true
+            fetchDepth: 0
+            persistCredentials: false
+          - bash: |-
+              set -euo pipefail
+              test "$(git rev-parse HEAD)" = "$BUILD_SOURCEVERSION"
+              python3 scripts/verify-release-source.py
+            displayName: Reject unmerged or superseded source before cloud authentication
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          - task: AzureCLI@2
+            displayName: Verify release identity without production writes
+            inputs:
+              azureSubscription: hhc-platform-release
+              scriptType: bash
+              scriptLocation: inlineScript
+              visibleAzLogin: false
+              inlineScript: |-
+                set -euo pipefail
+                test "$BUILD_SOURCEBRANCH" = refs/heads/main
+                test "$(az acr show --name alive --query name --output tsv --only-show-errors)" = alive
+          - task: AzureCLI@2
+            displayName: Verify scoped docs identity without publication
+            inputs:
+              azureSubscription: hhc-line-api-docs
+              scriptType: bash
+              scriptLocation: inlineScript
+              visibleAzLogin: false
+              inlineScript: |-
+                set -euo pipefail
+                test "$(az storage container exists --account-name hhcapidocsprod --name api-docs-hhc-line-function-bot --auth-mode login --query exists --output tsv --only-show-errors)" = true
+      - job: admission
+        displayName: admission
+        pool: server
+        timeoutInMinutes: 65
+        steps:
+          - task: ManualValidation@1
+            displayName: Confirm fresh production admission
+            timeoutInMinutes: 60
+            condition: and(succeeded(), ${{ parameters.freshAdmission }})
+            inputs:
+              notifyUsers: ""
+              approvers: $(Build.RequestedForEmail)
+              allowApproversToApproveTheirOwnRuns: true
+              instructions:
+                Before resuming, verify the current source/build, fenced old publishers and current shared
+                capacity. Complete the physical PG pair within the last 60 seconds; attach the source-bound receipt reference.
+                No prior or expired evidence is admission. The first stateful write must pass the 180-second same-build
+                guard.
+              onTimeout: reject
+        dependsOn: identity_probe
       - deployment: release
         displayName: LINE production release
         environment: hhc-platform-production
@@ -36,6 +94,7 @@ stages:
                       set -euo pipefail
                       test "$GITHUB_REF" = refs/heads/main
                       test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+                      python3 scripts/verify-release-admission.py
                       export IMAGE_TAG="main-${GITHUB_SHA::7}"
                       az acr build --registry "$ACR_NAME" --image "$IMAGE_REPOSITORY:$IMAGE_TAG" --image "$IMAGE_REPOSITORY:latest" --file Dockerfile .
                   env:
@@ -72,6 +131,8 @@ stages:
                     LINE_PROVIDER_CONSOLE_VERIFIED_ID: $(LINE_PROVIDER_CONSOLE_VERIFIED_ID)
                     RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
                     RELEASE_PUBLIC_EXPECTATION: ${{ parameters.publicExpectation }}
+                    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+                    REQUIRE_FRESH_ADMISSION: ${{ lower(format('{0}', parameters.freshAdmission)) }}
                 - task: AzureCLI@2
                   displayName: Deploy and verify LINE workloads
                   inputs:
@@ -128,6 +189,8 @@ stages:
                     LINE_PROVIDER_CONSOLE_VERIFIED_ID: $(LINE_PROVIDER_CONSOLE_VERIFIED_ID)
                     RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
                     RELEASE_PUBLIC_EXPECTATION: ${{ parameters.publicExpectation }}
+                    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+                    REQUIRE_FRESH_ADMISSION: ${{ lower(format('{0}', parameters.freshAdmission)) }}
                   name: release_outputs
                 - task: PublishPipelineArtifact@1
                   condition: always()
@@ -135,6 +198,7 @@ stages:
                     targetPath: artifacts/release-assurance
                     artifact: line-deployment-$(Build.BuildId)-$(System.JobAttempt)
                   displayName: Preserve deployment assurance and same-run receipt
+        dependsOn: admission
       - job: public_acceptance
         timeoutInMinutes: 20
         variables:

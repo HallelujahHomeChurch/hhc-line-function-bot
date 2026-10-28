@@ -41,7 +41,7 @@ pr:
 parameters:
   - name: deploy
     type: boolean
-    default: false
+    default: true
   - name: publicExpectation
     type: string
     default: normal
@@ -51,6 +51,9 @@ parameters:
   - name: failOpenapiBeforePointer
     type: boolean
     default: false
+  - name: freshAdmission
+    type: boolean
+    default: true
 pool:
   vmImage: ubuntu-24.04
 resources:
@@ -85,76 +88,85 @@ stages:
             inputs:
               version: 24.22.1
             displayName: Use Node.js 24
-          - bash: "corepack enable
-
+          - bash: |-
+              python3 scripts/verify-release-source.py --selftest
+              python3 scripts/verify-release-source.py --probe
+            displayName: Verify GitHub App source readback without exporting credentials
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          - bash: |-
+              corepack enable
               corepack prepare pnpm@11.7.0 --activate
-
-              pnpm --version"
+              pnpm --version
             displayName: Enable pinned pnpm
-          - bash: "set -euo pipefail
-
-              pnpm install --frozen-lockfile"
+          - bash: |-
+              set -euo pipefail
+              pnpm install --frozen-lockfile
             displayName: Install dependencies
           - bash: python3 scripts/azure-pipeline-context.py --selftest
             displayName: Test pipeline output trust boundary
-          - bash: "set -euo pipefail
-
-              pnpm --package=@redocly/cli@2.47.0 dlx redocly lint docs/openapi.yaml"
+          - bash: python3 scripts/verify-release-admission.py --selftest
+            displayName: Test source-bound admission freshness
+          - bash: |-
+              set -euo pipefail
+              pnpm --package=@redocly/cli@2.47.0 dlx redocly lint docs/openapi.yaml
             displayName: Lint OpenAPI contract
-          - bash: "set -euo pipefail
-
-              bash scripts/render-published-openapi.test.sh"
+          - bash: |-
+              set -euo pipefail
+              bash scripts/render-published-openapi.test.sh
             displayName: Test published OpenAPI artifact
-          - bash: "set -euo pipefail
-
-              pnpm vitest run --config docs/vitest.config.ts docs/openapi-contract.test.ts"
+          - bash: |-
+              set -euo pipefail
+              pnpm vitest run --config docs/vitest.config.ts docs/openapi-contract.test.ts
             displayName: Test OpenAPI contract
-          - bash: "set -euo pipefail
-
-              pnpm format:check"
+          - bash: |-
+              set -euo pipefail
+              pnpm format:check
             displayName: Check formatting
-          - bash: "set -euo pipefail
-
-              pnpm typecheck"
+          - bash: |-
+              set -euo pipefail
+              pnpm typecheck
             displayName: Typecheck
-          - bash: "set -euo pipefail
-
-              pnpm lint"
+          - bash: |-
+              set -euo pipefail
+              pnpm lint
             displayName: Lint
-          - bash: "set -euo pipefail
-
-              pnpm architecture:check"
+          - bash: |-
+              set -euo pipefail
+              pnpm architecture:check
             displayName: Check architecture boundaries
-          - bash: "set -euo pipefail
-
-              pnpm test"
+          - bash: |-
+              set -euo pipefail
+              pnpm test
             displayName: Test
-          - bash: "set -euo pipefail
-
-              pnpm vitest run src/__tests__/media-sync-store.test.ts"
+          - bash: |-
+              set -euo pipefail
+              pnpm vitest run src/__tests__/media-sync-store.test.ts
             displayName: Prove PostgreSQL media-sync suite executed
-          - bash: "set -euo pipefail
-
-              pnpm config:validate"
+          - bash: |-
+              set -euo pipefail
+              pnpm config:validate
             displayName: Validate production profile config
-          - bash: "set -euo pipefail
-
-              pnpm eval:agent"
+          - bash: |-
+              set -euo pipefail
+              pnpm eval:agent
             displayName: SDK agent eval
-          - bash: "set -euo pipefail
-
-              pnpm eval:kernel"
+          - bash: |-
+              set -euo pipefail
+              pnpm eval:kernel
             displayName: SDK acceptance gate
-          - bash: "set -euo pipefail
-
-              pnpm eval:kernel:integration"
+          - bash: |-
+              set -euo pipefail
+              pnpm eval:kernel:integration
             displayName: Kernel v1 real-dependency integration gate
-          - bash: "set -euo pipefail
-
-              pnpm build"
+          - bash: |-
+              set -euo pipefail
+              pnpm build
             displayName: Compile app
-  - ${{ if eq(parameters.deploy, true) }}:
-      - template: release.yml
+  - ? ${{ if and(eq(parameters.deploy, true), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'],
+      'PullRequest')) }}
+    : - template: release.yml
         parameters:
           publicExpectation: ${{ parameters.publicExpectation }}
           failOpenapiBeforePointer: ${{ parameters.failOpenapiBeforePointer }}
+          freshAdmission: ${{ parameters.freshAdmission }}

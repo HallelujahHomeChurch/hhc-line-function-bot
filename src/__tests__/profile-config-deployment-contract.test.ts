@@ -858,12 +858,15 @@ describe("production profile configuration deployment contract", () => {
     expect(releaseWorkflow).toContain("condition: always()");
     expect(releaseWorkflow).toContain("targetPath: artifacts/release-assurance");
     expect(releaseWorkflow).not.toContain("pnpm ");
-    const authenticatedTasks = [...releaseWorkflow.matchAll(/task: AzureCLI@2/gu)];
-    const finalImageBuild = releaseWorkflow.lastIndexOf("az acr build");
+    const deploymentWorkflow = releaseWorkflow.slice(
+      releaseWorkflow.indexOf("- deployment: release")
+    );
+    const authenticatedTasks = [...deploymentWorkflow.matchAll(/task: AzureCLI@2/gu)];
+    const finalImageBuild = deploymentWorkflow.lastIndexOf("az acr build");
     const refreshedLogin = authenticatedTasks.at(1)?.index ?? -1;
     const docsLogin = authenticatedTasks.at(3)?.index ?? -1;
-    const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
-    const upload = releaseWorkflow.indexOf("task: PublishPipelineArtifact@1");
+    const deploy = deploymentWorkflow.indexOf("bash scripts/deploy-aca.sh");
+    const upload = deploymentWorkflow.indexOf("task: PublishPipelineArtifact@1");
     expect(authenticatedTasks).toHaveLength(4);
     expect(refreshedLogin).toBeGreaterThan(finalImageBuild);
     expect(deploy).toBeGreaterThan(refreshedLogin);

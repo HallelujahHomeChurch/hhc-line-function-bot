@@ -629,6 +629,12 @@ if "PLACEHOLDER_" in text:
 Path(os.environ["BOT_MANIFEST"]).write_text(text)
 PY
 
+if [[ "${CI_PROVIDER:-}" == azure-pipelines ]]; then
+  python3 "${script_dir}/verify-release-source.py"
+fi
+if [[ "${REQUIRE_FRESH_ADMISSION:-false}" == true ]]; then
+  python3 "${script_dir}/verify-release-admission.py"
+fi
 mark_release_mutated
 az containerapp update \
   --resource-group "${RESOURCE_GROUP}" \

@@ -428,7 +428,7 @@ Operational details are in `docs/runbooks/production-operations.md`.
 
 `.azure-pipelines/pipeline.yml` connects directly through the Azure Pipelines GitHub App and runs for every pull request targeting `main`, including documentation-only changes. It installs dependencies and runs formatting, typecheck, lint, tests, production-profile validation, the SDK agent eval, the SDK acceptance gate, the owned real-dependency integration gate, and TypeScript compilation. A validation failure blocks the PR and does not create a production deployment.
 
-`.azure-pipelines/release.yml` runs after CI in that same build, only from `main`, and uses protected workload-identity service connections. The migration initially holds `deploy=false`; enable it only after the reviewed trust cutover and fresh production admission. The serialized release stage builds the production image with `az acr build`, deploys, accepts the exact revision and publishes OpenAPI. It publishes these ACR tags:
+`.azure-pipelines/release.yml` runs after CI in that same build, only from `main`, and uses protected workload-identity service connections. Production runs after merged-main CI and waits for fresh source-bound admission; `deploy=false` requests CI only. The serialized release stage builds the production image with `az acr build`, deploys, accepts the exact revision and publishes OpenAPI. It publishes these ACR tags:
 
 ```text
 alive.azurecr.io/alive/hhc-line-function-bot:main-<commit-prefix>
