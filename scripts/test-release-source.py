@@ -7,7 +7,7 @@ import tempfile
 script = Path(__file__).with_name('verify-release-source.sh').resolve()
 with tempfile.TemporaryDirectory() as directory:
     def git(*args):
-        return subprocess.check_output(['git', *args], cwd=directory, stderr=subprocess.DEVNULL).decode().strip()
+        return subprocess.check_output(['git', *args], cwd=directory, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL).decode().strip()
     git('init', '-q')
     tree = git('hash-object', '-t', 'tree', '--stdin', '-w')
     env = {**os.environ, 'GIT_AUTHOR_NAME': 'test', 'GIT_AUTHOR_EMAIL': 'test@example.invalid',

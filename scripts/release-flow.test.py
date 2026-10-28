@@ -31,6 +31,18 @@ def row(name='current', status='Succeeded', old=False):
     return {'name': name, 'status': status, 'startTime': (NOW - dt.timedelta(minutes=5 if old else 1)).isoformat().replace('+00:00', 'Z')}
 
 
+class NativeAdmissionOrder(unittest.TestCase):
+    def test_physical_admission_is_after_build_and_before_database_startup(self):
+        release = (ROOT / '.azure-pipelines/release.yml').read_text()
+        self.assertLess(release.index('job: prebuild_admission'), release.index('job: build'))
+        self.assertLess(release.index('job: build'), release.index('job: admission'))
+        self.assertLess(release.index('job: admission'), release.index('deployment: release'))
+        self.assertIn('dependsOn: build', release)
+        self.assertIn('dependsOn: admission', release)
+        deploy = (ROOT / 'scripts/deploy-aca.sh').read_text()
+        self.assertLess(deploy.index('verify-release-admission.py'), deploy.index('mark_release_mutated\naz containerapp update'))
+
+
 class Catalog(unittest.TestCase):
     def run_catalog(self, pages, action='verify', scenario=''):
         module = load('release-catalog')

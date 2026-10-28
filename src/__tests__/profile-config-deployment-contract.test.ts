@@ -591,7 +591,7 @@ describe("production profile configuration deployment contract", () => {
     expect(releaseWorkflow).toMatch(/ne\(variables\['Build.Reason'\],\s*'PullRequest'\)/u);
     expect(releaseWorkflow).toContain("environment: hhc-platform-production");
     expect(releaseWorkflow).toContain("lockBehavior: sequential");
-    expect(releaseWorkflow).toContain("azureSubscription: hhc-platform-release");
+    expect(releaseWorkflow).toContain("azureSubscription: hhc-line-release");
     expect(releaseWorkflow).toContain("az acr build");
     expect(releaseWorkflow).toContain("bash scripts/deploy-aca.sh");
     expect(releaseWorkflow).not.toContain("pnpm ");
@@ -862,13 +862,15 @@ describe("production profile configuration deployment contract", () => {
       releaseWorkflow.indexOf("- deployment: release")
     );
     const authenticatedTasks = [...deploymentWorkflow.matchAll(/task: AzureCLI@2/gu)];
-    const finalImageBuild = deploymentWorkflow.lastIndexOf("az acr build");
-    const refreshedLogin = authenticatedTasks.at(1)?.index ?? -1;
-    const docsLogin = authenticatedTasks.at(3)?.index ?? -1;
+    const finalImageBuild = releaseWorkflow.lastIndexOf("az acr build");
+    const refreshedLogin = authenticatedTasks.at(0)?.index ?? -1;
+    const docsLogin = authenticatedTasks.at(2)?.index ?? -1;
     const deploy = deploymentWorkflow.indexOf("bash scripts/deploy-aca.sh");
     const upload = deploymentWorkflow.indexOf("task: PublishPipelineArtifact@1");
-    expect(authenticatedTasks).toHaveLength(4);
-    expect(refreshedLogin).toBeGreaterThan(finalImageBuild);
+    expect(authenticatedTasks).toHaveLength(3);
+    expect(releaseWorkflow.indexOf("- job: admission")).toBeGreaterThan(finalImageBuild);
+    expect(deploymentWorkflow).not.toContain("az acr build");
+    expect(refreshedLogin).toBeGreaterThan(0);
     expect(deploy).toBeGreaterThan(refreshedLogin);
     expect(upload).toBeGreaterThan(deploy);
     expect(docsLogin).toBeGreaterThan(upload);
@@ -880,7 +882,7 @@ describe("production profile configuration deployment contract", () => {
     expect(workflow).toContain("trigger: none");
     expect(workflow).toContain("pr: none");
     expect(workflow).toContain("task: AzureCLI@2");
-    expect(workflow).toContain("azureSubscription: hhc-platform-release");
+    expect(workflow).toContain("azureSubscription: hhc-line-release");
     expect(workflow).toContain("environment: hhc-platform-production");
     expect(workflow).toContain("ATTACHMENT_SCAN_JOB_NAME: hhc-line-bot-attachment-worker");
     expect(workflow).toContain("bash scripts/run-periodic-assurance.sh");
