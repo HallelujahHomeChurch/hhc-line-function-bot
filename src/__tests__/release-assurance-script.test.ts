@@ -392,6 +392,21 @@ describe("release assurance shell transaction", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("keeps catalog freshness outside the deployment rollback transaction", async () => {
+    const fixture = await createFixture("catalog_no_recent_success");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+    expect(result.status, diagnostic(result, calls)).toBe(0);
+    expect(report.status).toBe("passed");
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({ name: "catalog_job", status: "passed" })
+    );
+    expect(report.rollback.status).toBe("not_required");
+    expect(calls.some((args) => isJobStart(args, "hhc-line-bot-catalog-sync"))).toBe(false);
+    expect(calls.some((args) => args.some((arg) => arg.includes("/resume?")))).toBe(false);
+  }, 15_000);
+
   it("rolls back when the bounded Account preflight fails", async () => {
     const fixture = await createFixture("account_preflight_failure");
     const result = fixture.run();
@@ -564,7 +579,6 @@ describe("release assurance shell transaction", () => {
     "catalog_cron_mismatch",
     "catalog_image_mismatch",
     "catalog_hmac_env_mismatch",
-    "catalog_no_recent_success",
     "scan_definition_failure",
     "scan_scaler_mismatch",
     "scan_resources_mismatch",
