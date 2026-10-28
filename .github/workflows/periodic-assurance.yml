@@ -17,6 +17,7 @@ jobs:
   periodic-assurance:
     name: Run periodic assurance
     runs-on: ubuntu-latest
+    environment: production-actions
     env:
       RESOURCE_GROUP: alive
       PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance

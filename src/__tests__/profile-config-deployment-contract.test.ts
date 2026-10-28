@@ -15,6 +15,22 @@ function projectFileExists(path: string): boolean {
 }
 
 describe("production profile configuration deployment contract", () => {
+  it("fences historical releases from replacement publishing credentials", () => {
+    for (const path of [
+      ".github/workflows/release.yml",
+      ".github/workflows/periodic-assurance.yml"
+    ]) {
+      const workflow = readProjectFile(path);
+      const runners = workflow.match(/^ {4}runs-on: ubuntu-latest$/gm) ?? [];
+      const environments = workflow.match(/^ {4}environment: production-actions$/gm) ?? [];
+      expect(environments).toHaveLength(runners.length);
+      expect(environments.length).toBeGreaterThan(0);
+    }
+    expect(readProjectFile(".github/workflows/release.yml")).toContain(
+      "group: hhc-line-function-bot-production-actions"
+    );
+  });
+
   it("preserves existing job identities and typed queue activation settings", () => {
     for (const path of ["aca.attachment-worker-job.yaml", "aca.periodic-assurance-job.yaml"]) {
       const identity =
@@ -594,7 +610,7 @@ describe("production profile configuration deployment contract", () => {
     expect(outputs).toBeGreaterThan(deploy);
     expect(publish).toBeGreaterThan(outputs);
     expect(publishJob).toContain("needs: public_acceptance");
-    expect(publishJob).not.toContain("environment:");
+    expect(publishJob).toContain("environment: production-actions");
     expect(publishJob).toContain("contents: read\n      id-token: write");
     expect(publishJob).toContain("CONTAINER: api-docs-hhc-line-function-bot");
     expect(publishJob).toContain("API_DOCS_AZURE_CLIENT_ID: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}");

@@ -51,13 +51,14 @@ permissions:
   id-token: write
 
 concurrency:
-  group: hhc-line-function-bot-production
+  group: hhc-line-function-bot-production-actions
   cancel-in-progress: false
 
 jobs:
   release:
     name: Build and release
     runs-on: ubuntu-latest
+    environment: production-actions
     outputs:
       commit: ${{ steps.release_outputs.outputs.commit }}
       image: ${{ steps.release_outputs.outputs.image }}
@@ -135,6 +136,7 @@ jobs:
     name: Public acceptance after controlled reopening
     needs: release
     runs-on: ubuntu-latest
+    environment: production-actions
     timeout-minutes: 15
     outputs:
       commit: ${{ steps.accept.outputs.commit }}
@@ -188,6 +190,7 @@ jobs:
   publish_openapi:
     needs: public_acceptance
     runs-on: ubuntu-latest
+    environment: production-actions
     permissions:
       contents: read
       id-token: write
