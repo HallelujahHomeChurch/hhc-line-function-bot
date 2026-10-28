@@ -629,6 +629,8 @@ if "PLACEHOLDER_" in text:
 Path(os.environ["BOT_MANIFEST"]).write_text(text)
 PY
 
+python3 "${script_dir}/physical-admission.py" wait
+python3 "${script_dir}/physical-admission.py" check
 mark_release_mutated
 az containerapp update \
   --resource-group "${RESOURCE_GROUP}" \
