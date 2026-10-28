@@ -585,3 +585,12 @@ after the full current-source metadata and six-second PostgreSQL pair pass;
 startup must remain within the original absolute evidence deadline. Image build
 does not authorize deployment. This gate does not replace any deployment or
 public-acceptance check.
+
+The environment approval grants release-writer custody, not a PG freshness claim.
+After authenticated preparation, the runner publishes a pending
+`line-physical-admission/<run>/<attempt>` status and pauses immediately before
+the Bot update. The fixed environment reviewer supplies the actual paired-read
+receipt hash, last-observation epoch and original expiry in a success status.
+The runner rejects other creators, sources/runs/attempts, late approvals and
+expired windows, and checks again directly before the database-capable update.
+No credentials or physical session details belong in the public status.

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -91,6 +92,22 @@ describe("production profile configuration deployment contract", () => {
     expect(release).toContain("needs: physical_admission");
     expect(release).not.toContain("az acr build");
     expect(release).toContain("bash scripts/deploy-aca.sh");
+  });
+
+  it("rejects expired, late, wrong-reviewer and cross-window physical admissions", () => {
+    expect(
+      execFileSync("python3", ["scripts/physical-admission.py", "self-check"], { encoding: "utf8" })
+    ).toContain("self-check passed");
+  });
+
+  it("waits for a fixed-reviewer current-run PG admission immediately before Bot update", () => {
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const gate = deployment.indexOf('physical-admission.py" wait');
+    const update = deployment.indexOf("\naz containerapp update", gate);
+    expect(gate).toBeGreaterThan(deployment.indexOf("SEARXNG_SECRET_KEY"));
+    expect(update).toBeGreaterThan(gate);
+    expect(deployment.slice(gate, update)).toContain('physical-admission.py" check');
+    expect(readProjectFile(".github/workflows/release.yml")).toContain("statuses: write");
   });
 
   it("pins media-sync management to the exact production Dapr app IDs", () => {

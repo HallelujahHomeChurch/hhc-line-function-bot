@@ -81,17 +81,22 @@ jobs:
             .
 
   physical_admission:
-    name: Approve fresh physical admission after image build
+    name: Approve release writer custody after image build
     needs: prepare_image
     runs-on: ubuntu-latest
     environment: line-release-admission
     permissions:
       contents: read
     steps:
-      - run: echo 'Owner approved the current source and fresh physical admission; proceed directly to deployment.'
+      - run: echo 'Owner approved current source and writer custody; require fresh physical admission immediately before Bot startup.'
 
   release:
     needs: physical_admission
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      statuses: write
     name: Build and release
     runs-on: ubuntu-latest
     environment: production-actions
@@ -134,6 +139,8 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Deploy image and wait for healthy revision
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/deploy-aca.sh
       - name: Capture production release outputs
         id: release_outputs
