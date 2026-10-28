@@ -60,11 +60,11 @@ def main():
         print('PHYSICAL_ADMISSION_WAIT: authenticated runner is paused before Bot update',flush=True)
     deadline = time.monotonic() + (300 if mode=='wait' else 0)
     while True:
-        response = api('commits/'+source+'/status?per_page=100')
-        assert response['sha']==source and response['total_count']==len(response['statuses'])<=100
-        matches = [s for s in response['statuses'] if s['context']==context]
+        response = api('commits/'+source+'/statuses?per_page=100')
+        assert isinstance(response,list) and len(response)<100
+        matches = [s for s in response if s['context']==context]
         try:
-            assert len(matches)==1
+            assert matches
             value=validate(matches[0],approver,time.time())
             print('Physical admission accepted; original expiry '+str(value['expires']),flush=True)
             return
