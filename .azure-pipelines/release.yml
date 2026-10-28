@@ -58,7 +58,7 @@ stages:
             condition: and(succeeded(), ${{ parameters.freshAdmission }})
             inputs:
               notifyUsers: ""
-              approvers: $(Build.RequestedForEmail)
+              approvers: $(RELEASE_ADMISSION_APPROVER)
               allowApproversToApproveTheirOwnRuns: true
               instructions:
                 Verify this exact merged source/build and current publisher fencing and shared-writer custody. This
@@ -105,7 +105,7 @@ stages:
             condition: and(succeeded(), ${{ parameters.freshAdmission }})
             inputs:
               notifyUsers: ""
-              approvers: $(Build.RequestedForEmail)
+              approvers: $(RELEASE_ADMISSION_APPROVER)
               allowApproversToApproveTheirOwnRuns: true
               instructions:
                 Before resuming, verify the current source/build, fenced old publishers and current shared capacity.
