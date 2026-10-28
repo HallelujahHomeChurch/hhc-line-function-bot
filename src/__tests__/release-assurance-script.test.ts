@@ -406,6 +406,29 @@ describe("release assurance shell transaction", () => {
     expect(report.rollback.status).toBe("restored");
   }, 15_000);
 
+  it.each([
+    ["account_exec_transient", 0, 2, "none"],
+    ["account_exec_unavailable", 42, 3, "network_failed"],
+    ["account_preflight_pass_nonzero", 42, 1, "network_failed"],
+    ["account_preflight_nonzero", 42, 1, "http_mismatch"]
+  ] as const)(
+    "bounds Account exec recovery for %s",
+    async (scenario, status, attempts, code) => {
+      const fixture = await createFixture(scenario);
+      const result = fixture.run();
+      const calls = await fixture.calls();
+      const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+      expect(result.status, diagnostic(result, calls)).toBe(status);
+      expect(
+        calls.filter((args) => args.slice(0, 2).join(" ") === "containerapp exec")
+      ).toHaveLength(attempts);
+      expect(report.failureCode).toBe(code);
+      expect(report.rollback.status).toBe(status === 0 ? "not_required" : "restored");
+    },
+    15_000
+  );
+
   it.each(["release_probe_replica_gone", "release_probe_logs_missing"])(
     "falls back to durable Log Analytics for %s",
     async (scenario) => {
@@ -1322,7 +1345,12 @@ const targetImages = {
 };
 
 if (command("containerapp", "exec")) {
-  const failed = scenario === "account_preflight_failure";
+  if (scenario === "account_exec_unavailable") process.exit(73);
+  if (scenario === "account_exec_transient" && !existsSync(path.join(state, "account-exec"))) {
+    writeFileSync(path.join(state, "account-exec"), "attempted");
+    process.exit(73);
+  }
+  const failed = scenario === "account_preflight_failure" || scenario === "account_preflight_nonzero";
   output(
     "ACCOUNT_PREFLIGHT_RESULT=" +
       JSON.stringify({
@@ -1331,7 +1359,7 @@ if (command("containerapp", "exec")) {
         outcomes: { identityLookup: "unbound", binding: "rejected" }
       })
   );
-  process.exit(0);
+  process.exit(scenario === "account_preflight_nonzero" || scenario === "account_preflight_pass_nonzero" ? 1 : 0);
 }
 
 if (command("containerapp", "list")) {
