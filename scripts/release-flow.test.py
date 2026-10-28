@@ -40,7 +40,8 @@ class Catalog(unittest.TestCase):
             nonlocal state
             calls.append(args)
             if args[:3] == ('containerapp', 'job', 'show'):
-                return {'state': state, 'image': IMAGE, **({'id': '/subscriptions/fixture/jobs/catalog', 'trigger': 'Schedule', 'cron': '*/15 * * * *'} if 'id:id' in args[-1] else {})}
+                # Match the real CLI model: identity exists, runtime state is omitted.
+                return '/subscriptions/fixture/jobs/catalog' if args[-1] == 'id' else {'state': None, 'image': IMAGE, 'id': '/subscriptions/fixture/jobs/catalog', 'trigger': 'Schedule', 'cron': '*/15 * * * *'}
             if args[:3] == ('containerapp', 'job', 'start'):
                 if scenario == 'lost_start':
                     raise RuntimeError('ambiguous start')
@@ -51,6 +52,9 @@ class Catalog(unittest.TestCase):
                 state = 'Ready'
                 return None
             if args[:3] == ('rest', '--method', 'get'):
+                if '/executions?' not in args[args.index('--url') + 1]:
+                    observed = None if scenario == 'missing_state' else state
+                    return {'state': observed, 'image': IMAGE, **({'id': '/subscriptions/fixture/jobs/catalog', 'trigger': 'Schedule', 'cron': '*/15 * * * *'} if 'id:id' in args[-1] else {})}
                 values = pages.pop(0) if len(pages) > 1 else pages[0]
                 return {'value': values, 'nextLink': 'https://wrong.invalid' if scenario == 'bad_page' else None}
             raise AssertionError(args)
@@ -77,6 +81,12 @@ class Catalog(unittest.TestCase):
         ok, calls, _ = self.run_catalog([[row()]])
         self.assertTrue(ok)
         self.assertFalse(any(call[:3] in {('rest', '--method', 'post'), ('containerapp', 'job', 'start')} for call in calls))
+
+    def test_missing_arm_runtime_state_never_starts_or_resumes(self):
+        for action in ('prepare', 'verify'):
+            ok, calls, _ = self.run_catalog([[row()]], action, 'missing_state')
+            self.assertFalse(ok)
+            self.assertFalse(any(call[:3] in {('rest', '--method', 'post'), ('containerapp', 'job', 'start')} for call in calls))
 
     def test_over_budget_work_must_block_even_when_all_three_would_succeed(self):
         ok, calls, _ = self.run_catalog([[row('a', 'Running'), row('b', 'Running'), row('c', 'Running')], [row('a'), row('b'), row('c')]], 'prepare')

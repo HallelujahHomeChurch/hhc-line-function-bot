@@ -34,7 +34,10 @@ def main():
     prepare = sys.argv[1] == 'prepare'
     group, name, image = (os.environ[k] for k in ('RESOURCE_GROUP', 'CATALOG_SYNC_JOB_NAME', 'RELEASE_TARGET_IMAGE'))
     started = stamp(os.environ['RELEASE_STARTED_AT'])
-    job = az('containerapp', 'job', 'show', '-g', group, '-n', name, '--query', '{id:id,state:properties.runningState,image:properties.template.containers[0].image,trigger:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression}')
+    job_id = az('containerapp', 'job', 'show', '-g', group, '-n', name, '--query', 'id')
+    job_url = 'https://management.azure.com' + job_id + '?api-version=2026-07-01'
+    # The CLI Job model drops runningState; read the runtime contract directly from ARM.
+    job = az('rest', '--method', 'get', '--url', job_url, '--query', '{id:id,state:properties.runningState,image:properties.template.containers[0].image,trigger:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression}')
     if job['image'] != image or job['trigger'] != 'Schedule' or job['cron'] != '*/15 * * * *' or job['state'] not in {'Ready', 'Suspended'}:
         raise RuntimeError('catalog template differs from released image/contract')
     prefix = 'https://management.azure.com' + job['id'] + '/executions'
@@ -87,7 +90,7 @@ def main():
         recent = [r for r in candidates if r['status'] == 'Succeeded' and -300 <= (dt.datetime.now(dt.timezone.utc) - stamp(r['startTime'])).total_seconds() <= 1800]
         own_complete = manual is None or any(r['name'] == manual and r['status'] == 'Succeeded' for r in candidates)
         if recent and own_complete and not active:
-            current = az('containerapp', 'job', 'show', '-g', group, '-n', name, '--query', '{state:properties.runningState,image:properties.template.containers[0].image}')
+            current = az('rest', '--method', 'get', '--url', job_url, '--query', '{state:properties.runningState,image:properties.template.containers[0].image}')
             if current != {'state': 'Ready', 'image': image}:
                 raise RuntimeError('catalog schedule not restored on admitted image')
             receipt = {'status': 'passed', 'image': image, 'releaseStartedAt': os.environ['RELEASE_STARTED_AT'], 'manualExecution': manual, 'maxConcurrentExecutions': maximum, 'lineJobRolePoolBudget': 6, 'catalogPoolPerExecution': 2, 'finiteAttachmentPool': 2, 'executions': candidates, 'completeAvailableHistory': True}
@@ -102,6 +105,8 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except Exception:
-        print('Catalog release verification failed; inspect owned execution metadata; no stop/restart retry was issued.', file=sys.stderr)
+    except Exception as error:
+        # RuntimeError messages are fixed local strings, never raw CLI responses.
+        reason = str(error) if type(error) is RuntimeError else type(error).__name__
+        print('Catalog release verification failed (' + reason + '); no stop/restart retry was issued.', file=sys.stderr)
         raise SystemExit(1)
