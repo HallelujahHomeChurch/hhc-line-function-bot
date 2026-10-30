@@ -38,7 +38,7 @@ A malformed group/direct event without `source.userId` does not receive a helper
 
 ## Helper Agent And Context
 
-`src/helper-agent/agent.ts` is the sole LangChain `createAgent` composition. DeepSeek is the only remote chat provider. It uses official context editing, summarization, model-call, and tool-call middleware plus exact duplicate-tool-call rejection.
+`src/helper-agent/agent.ts` is the sole LangChain `createAgent` composition. Helper explicitly selects DeepSeek or OpenAI in its profile; response and summary models use that same provider. It uses official context editing, summarization, model-call, and tool-call middleware plus exact duplicate-tool-call rejection.
 
 `src/helper-agent/state.ts` owns HMAC-derived thread identity, checkpoint access, same-thread serialization, idle metadata, explicit reset, cleanup, and consented sheet-music mode.
 
@@ -55,7 +55,7 @@ Context reduction is ordered:
 
 1. tools bound results before checkpointing;
 2. at about 8K input tokens, old tool outputs clear while the two newest remain;
-3. at about 16K, the same DeepSeek provider creates a bounded summary while six recent messages remain;
+3. at about 16K, the same selected provider creates a bounded summary while six recent messages remain;
 4. summaries use at most about 512 output tokens and cannot grant authority or claim current data;
 5. at 24K after reduction, the turn stops and asks the requester to narrow or reset.
 

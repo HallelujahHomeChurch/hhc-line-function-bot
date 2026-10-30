@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 export type AgentRunMode = "normal" | "sheet_music_research";
 
-type Budget = { modelCalls: number; toolCalls: number };
+type Budget = { modelCalls: number; toolCalls: number; onProviderRequest?: () => void };
 
 const limits: Record<AgentRunMode, Budget> = {
   normal: { modelCalls: 4, toolCalls: 4 },
@@ -10,8 +10,12 @@ const limits: Record<AgentRunMode, Budget> = {
 };
 const storage = new AsyncLocalStorage<Budget>();
 
-export function runWithAgentBudget<T>(mode: AgentRunMode, task: () => Promise<T>): Promise<T> {
-  return storage.run({ ...limits[mode] }, task);
+export function runWithAgentBudget<T>(
+  mode: AgentRunMode,
+  task: () => Promise<T>,
+  onProviderRequest?: () => void
+): Promise<T> {
+  return storage.run({ ...limits[mode], onProviderRequest }, task);
 }
 
 export function createBudgetedFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
@@ -20,6 +24,7 @@ export function createBudgetedFetch(fetchImpl: typeof fetch = fetch): typeof fet
     if (budget) {
       if (budget.modelCalls <= 0) throw new Error("agent_model_budget_exceeded");
       budget.modelCalls -= 1;
+      budget.onProviderRequest?.();
     }
     return fetchImpl(input, init);
   };

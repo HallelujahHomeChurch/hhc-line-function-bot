@@ -37,7 +37,10 @@
     },
     "agent": {
       "personaFile": "agents/helper/PERSONA.md",
-      "memoryPolicyFile": "agents/helper/MEMORY.md"
+      "memoryPolicyFile": "agents/helper/MEMORY.md",
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash",
+      "summaryModel": "deepseek-v4-flash"
     },
     "smallTalk": {
       "mode": "llm",

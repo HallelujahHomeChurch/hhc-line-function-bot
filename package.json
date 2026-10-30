@@ -33,6 +33,7 @@
     "@langchain/deepseek": "1.1.11",
     "@langchain/langgraph": "1.4.13",
     "@langchain/langgraph-checkpoint-postgres": "1.0.5",
+    "@langchain/openai": "1.5.11",
     "@line/bot-sdk": "^10.1.1",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@notionhq/client": "^5.1.0",

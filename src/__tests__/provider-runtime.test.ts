@@ -65,9 +65,9 @@ function provider(raw: string): ChatProvider & TextGenerationProvider {
 }
 
 describe("provider runtime", () => {
-  it("exposes DeepSeek as the only model provider", () => {
-    expect(MODEL_PROVIDER_NAMES).toEqual(["deepseek"]);
-    expect(Object.keys(providerCapabilities)).toEqual(["deepseek"]);
+  it("exposes supported helper API providers", () => {
+    expect(MODEL_PROVIDER_NAMES).toEqual(["deepseek", "openai"]);
+    expect(Object.keys(providerCapabilities).sort()).toEqual(["deepseek", "openai"]);
   });
 
   it("selects DeepSeek as the global primary provider when no lane is requested", async () => {

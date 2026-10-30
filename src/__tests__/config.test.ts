@@ -88,6 +88,43 @@ async function withJsonFile<T>(
 }
 
 describe("config", () => {
+  it("validates explicit OpenAI selection against model and profile allowlist", async () => {
+    await withProfileFile(
+      [
+        {
+          name: "helper",
+          webhookPath: "/api/line/webhook/helper",
+          channelSecret: "synthetic",
+          channelAccessToken: "synthetic",
+          allowedProviders: ["deepseek", "openai"],
+          agent: {
+            personaFile: "agents/helper/PERSONA.md",
+            memoryPolicyFile: "agents/helper/MEMORY.md",
+            provider: "openai",
+            model: "synthetic",
+            summaryModel: "synthetic-summary"
+          }
+        }
+      ],
+      async (path) => {
+        const directory = join(path, "..", "agents", "helper");
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, "PERSONA.md"), "synthetic");
+        await writeFile(join(directory, "MEMORY.md"), "synthetic");
+        const config = loadConfigFromEnv({
+          PROFILE_CONFIG_PATH: path,
+          OPENAI_API_KEY: "synthetic"
+        });
+        expect(config.profiles[0]!.agent).toMatchObject({
+          provider: "openai",
+          model: "synthetic",
+          summaryModel: "synthetic-summary"
+        });
+        expect(config.llm.openaiApiKey).toBe("synthetic");
+      }
+    );
+  });
+
   it("loads helper persona and memory policy from bounded profile files", async () => {
     await withProfileFile(
       [
@@ -109,6 +146,7 @@ describe("config", () => {
         await writeFile(join(directory, "MEMORY.md"), "MEMORY POLICY", "utf8");
 
         expect(loadConfigFromEnv({ PROFILE_CONFIG_PATH: path }).profiles[0]?.agent).toEqual({
+          provider: "deepseek",
           personaPrompt: "PERSONA",
           memoryPolicyPrompt: "MEMORY POLICY"
         });
@@ -971,7 +1009,7 @@ describe("config", () => {
     }
   });
 
-  it.each(["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_EMBEDDING_MODEL"])(
+  it.each(["OPENAI_BASE_URL", "OPENAI_EMBEDDING_MODEL"])(
     "rejects retired direct OpenAI setting %s",
     (name) => {
       expect(() =>

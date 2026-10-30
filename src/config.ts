@@ -58,6 +58,9 @@ const accountLinkPresentationSchema = z
 
 const agentPromptFilesSchema = z
   .object({
+    provider: z.enum(MODEL_PROVIDER_NAMES).default("deepseek"),
+    model: z.string().trim().min(1).max(128).optional(),
+    summaryModel: z.string().trim().min(1).max(128).optional(),
     personaFile: z.string().regex(/^agents\/[a-z0-9_-]+\/PERSONA\.md$/u),
     memoryPolicyFile: z.string().regex(/^agents\/[a-z0-9_-]+\/MEMORY\.md$/u)
   })
@@ -344,6 +347,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     })),
     llm: {
       provider: llmProvider,
+      openaiApiKey: env.OPENAI_API_KEY || undefined,
       deepseekApiKey: env.DEEPSEEK_API_KEY || undefined,
       deepseekBaseUrl: env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
       deepseekModel: env.DEEPSEEK_MODEL || "deepseek-v4-flash",
@@ -490,6 +494,9 @@ type NormalizedProfile = Omit<
   channelAccessToken: string;
   smallTalk: SmallTalkConfig;
   agent?: {
+    provider?: ModelProviderName;
+    model?: string;
+    summaryModel?: string;
     personaPrompt: string;
     memoryPolicyPrompt: string;
   };
@@ -558,6 +565,9 @@ function readAgentPrompts(
     throw new Error(`Profile ${profileName} agent prompt files must stay in its profile directory`);
   }
   return {
+    provider: files.provider,
+    model: files.model,
+    summaryModel: files.summaryModel,
     personaPrompt: readAgentPrompt(profileDirectory, files.personaFile),
     memoryPolicyPrompt: readAgentPrompt(profileDirectory, files.memoryPolicyFile)
   };
@@ -678,6 +688,10 @@ function validateProviderPolicy(
   defaultProvider: ModelProviderName
 ): void {
   for (const profile of profiles) {
+    if (profile.agent && !profile.allowedProviders.includes(profile.agent.provider ?? "deepseek"))
+      throw new Error("helper_provider_not_allowed");
+    if (profile.agent?.provider === "openai" && !profile.agent.model)
+      throw new Error("helper_openai_model_required");
     for (const provider of profile.allowedProviders) {
       if (providerCapabilities[provider].subscriptionBased && !profile.allowSubscriptionProviders) {
         throw new Error(`Profile ${profile.name} cannot allow subscription provider ${provider}`);
@@ -768,11 +782,7 @@ function loadCatalogSyncDependencies(
 function readKnowledgeEmbeddingConfig(
   env: NodeJS.ProcessEnv
 ): KnowledgeConfig["embedding"] | undefined {
-  if (
-    ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_EMBEDDING_MODEL"].some(
-      (name) => env[name] !== undefined
-    )
-  ) {
+  if (["OPENAI_BASE_URL", "OPENAI_EMBEDDING_MODEL"].some((name) => env[name] !== undefined)) {
     throw new Error("Direct OpenAI embedding settings are no longer supported");
   }
   if (env.EMBEDDING_DIMENSIONS !== undefined) {

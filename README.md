@@ -7,7 +7,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Fastify webhook server with LINE signature validation.
 - Multiple bot profiles in one service, each on its own webhook path.
 - Per-profile access policy, wake words, message type filtering, and function toggles.
-- LangChain/LangGraph tool-calling agent for `helper`, using DeepSeek as its sole model; the public `main` profile remains provider-free.
+- LangChain/LangGraph tool-calling agent for `helper`, using a profile-selected DeepSeek or OpenAI model; the public `main` profile remains provider-free.
 - Action catalog that separates user functions, admin actions, and system actions.
 - Policy gate and admin action registry for natural-language admin operations.
 - Server-owned tool allowlists, live Account authorization, strict schemas, and existing write confirmations around every helper tool call.
@@ -181,7 +181,7 @@ The application resolves this authority once and projects the exact effective ca
 
 ## Routing
 
-The helper profile has one semantic path: `src/helper-agent/runtime.ts` constructs the effective tool set and invokes the sole LangChain/LangGraph agent in `src/helper-agent/agent.ts`. DeepSeek is the only helper model. The main profile uses `src/runtime/main-runtime.ts` and makes zero model and embedding requests.
+The helper profile has one semantic path: `src/helper-agent/runtime.ts` constructs the effective tool set and invokes the sole LangChain/LangGraph agent in `src/helper-agent/agent.ts`. Helper explicitly selects its DeepSeek or OpenAI provider, response model and summary model in profile configuration. The main profile uses `src/runtime/main-runtime.ts` and makes zero model and embedding requests.
 
 LINE ingress validates the signature, profile, access, engagement, commands, postbacks, and deterministic attachment/selection flows before `src/runtime/profile-runtime.ts` dispatches the turn. There is no compatibility agent, semantic fallback, shadow route, generic pending-function engine, or model router.
 
@@ -199,7 +199,7 @@ Helper side effects are proposal tools. The SDK agent prepares a validated scope
 
 Pasted schedules can contain several months, emoji, reminders and unrelated announcements. The helper organizes structured `entries` while retaining `content` for comparison. Schedule tool identifiers come from the current profile registry; assignee names do not select the domain. The full preview includes every included month, and one approval publishes those monthly records atomically. Other months remain unchanged. Recoverable preparation results allow another authorized attempt within the existing turn budget. Exact structured draft edits preserve untouched entries; invalid edits revoke the old approval without discarding the draft.
 
-Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same DeepSeek provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
+Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same selected provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
 
 A local sheet-music miss may create requester-scoped consent. Only after atomic consent does the helper receive `search_sheet_music_web` and `read_sheet_music_page`; a per-turn gate separates external research from draft mutation, and research-derived messages are removed before later turns. Search returns opaque invocation-local refs, the reader treats bounded public page text as untrusted, and only detected direct PDF/JPEG/PNG candidates can enter the existing import review. The agent and bot process never download the binary. `src/transport/line/attachment-intake.ts`, the durable outbox, finite worker, Asset scan, clean-only publication, and catalog upsert remain the sole attachment path.
 
