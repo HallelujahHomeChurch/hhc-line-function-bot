@@ -405,10 +405,14 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
         hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
       });
     }
+    const helperProvider = helperProfile.agent?.provider ?? "deepseek";
     const helperModels = createHelperModels({
-      apiKey: config.llm.deepseekApiKey,
-      baseUrl: config.llm.deepseekBaseUrl,
-      model: config.llm.deepseekModel,
+      provider: helperProvider,
+      apiKey: helperProvider === "openai" ? config.llm.openaiApiKey : config.llm.deepseekApiKey,
+      baseUrl:
+        helperProvider === "openai" ? "https://api.openai.com/v1" : config.llm.deepseekBaseUrl,
+      model: helperProfile.agent?.model ?? config.llm.deepseekModel,
+      summaryModel: helperProfile.agent?.summaryModel,
       timeoutMs: config.llm.deepseekTimeoutMs
     });
     runtimes.helper = createHelperRuntime({

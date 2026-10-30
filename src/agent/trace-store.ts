@@ -58,6 +58,9 @@ export interface AgentTurnTraceStep {
   toolCallCount?: number;
   historyEvidenceBytes?: number;
   historyLookupCount?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
   estimatedInputTokens?: number;
   estimatedOutputTokens?: number;
   contextEdited?: boolean;

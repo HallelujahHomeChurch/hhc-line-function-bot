@@ -137,6 +137,9 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       return boundedTelemetryCount(value, 6);
     case "historyEvidenceBytes":
     case "historyLookupCount":
+    case "inputTokens":
+    case "outputTokens":
+    case "cachedInputTokens":
     case "estimatedInputTokens":
     case "estimatedOutputTokens":
       return boundedTelemetryCount(value, 1_000_000);

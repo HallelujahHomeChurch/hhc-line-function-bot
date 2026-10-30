@@ -12,6 +12,7 @@ export function extractProviderUsage(message: unknown): ProviderUsage {
         prompt_tokens?: number;
         completion_tokens?: number;
         prompt_cache_hit_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
         prompt_cache_miss_tokens?: number;
       };
     };
@@ -27,7 +28,11 @@ export function extractProviderUsage(message: unknown): ProviderUsage {
   const outputTokens = safeCount(provider?.completion_tokens ?? normalized?.output_tokens);
   const cacheHitTokens = Math.min(
     inputTokens,
-    safeCount(provider?.prompt_cache_hit_tokens ?? normalized?.input_token_details?.cache_read)
+    safeCount(
+      provider?.prompt_cache_hit_tokens ??
+        provider?.prompt_tokens_details?.cached_tokens ??
+        normalized?.input_token_details?.cache_read
+    )
   );
   const cacheMissTokens = Math.min(
     inputTokens - cacheHitTokens,

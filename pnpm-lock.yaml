@@ -22,6 +22,9 @@ importers:
       "@langchain/langgraph-checkpoint-postgres":
         specifier: 1.0.5
         version: 1.0.5(@langchain/core@1.2.9(openai@7.9.0(zod@4.4.3)))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.9(openai@7.9.0(zod@4.4.3))))
+      "@langchain/openai":
+        specifier: 1.5.11
+        version: 1.5.11(@langchain/core@1.2.9(openai@7.9.0(zod@4.4.3)))
       "@line/bot-sdk":
         specifier: ^10.1.1
         version: 10.8.0

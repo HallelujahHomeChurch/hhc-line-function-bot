@@ -1,6 +1,7 @@
 import type { ProfileTurnInput } from "../runtime/profile-runtime.js";
 import type { UpdateOwnProfileInput } from "../account/account-admin-client.js";
 import { writeFileSync } from "node:fs";
+import { ChatOpenAI } from "@langchain/openai";
 import { ChatDeepSeek } from "@langchain/deepseek";
 import { MemorySaver } from "@langchain/langgraph";
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
@@ -51,6 +52,13 @@ interface EvalReport extends EvalMetrics {
 class EvalBoundaryError extends Error {}
 
 const live = process.argv.includes("--live");
+const comparisonProvider =
+  process.argv.find((a) => a.startsWith("--provider="))?.split("=")[1] ?? "deepseek";
+if (!["deepseek", "openai"].includes(comparisonProvider)) throw new Error("invalid_eval_provider");
+const comparisonModel =
+  process.argv.find((a) => a.startsWith("--model="))?.slice(8) ??
+  (comparisonProvider === "deepseek" ? "deepseek-v4-flash" : undefined);
+if (live && !comparisonModel) throw new Error("explicit_openai_eval_model_required");
 const selectedCases = process.argv
   .filter((arg) => arg.startsWith("--case="))
   .map((arg) => arg.slice(7));
@@ -76,7 +84,17 @@ if (live) {
   console.log(
     JSON.stringify({
       event: "live_eval_budget",
+      provider: comparisonProvider,
+      model: comparisonModel,
       requests: liveRequests,
+      usageComplete:
+        [...liveProbes]
+          .flatMap((probe) => probe.outputs)
+          .filter(
+            (message) =>
+              AIMessage.isInstance(message) &&
+              Boolean(message.usage_metadata || message.response_metadata.usage)
+          ).length === liveRequests,
       ...mergeMetrics(...[...liveProbes].map((probe) => probe.values())),
       requestLimit,
       tokenLimit: 500_000,
@@ -807,7 +825,8 @@ async function mainProviderFree(): Promise<boolean> {
 }
 
 async function runLiveCases(): Promise<EvalReport[]> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey =
+    comparisonProvider === "openai" ? process.env.OPENAI_API_KEY : process.env.DEEPSEEK_API_KEY;
   const ids = [
     "live/conversation/greeting",
     "live/schedule/latest-default",
@@ -1160,9 +1179,21 @@ function createLiveModel(apiKey: string, probe: ReturnType<typeof createEvalProb
     liveRequests += 1;
     return fetch(input, init);
   };
+  if (comparisonProvider === "openai")
+    return new ChatOpenAI({
+      apiKey,
+      model: comparisonModel!,
+      maxCompletionTokens: 800,
+      maxRetries: 0,
+      timeout: 8000,
+      useResponsesApi: false,
+      modelKwargs: { store: false },
+      callbacks: probe.callbacks,
+      configuration: { fetch: createBudgetedFetch(boundedFetch) }
+    });
   return new ChatDeepSeek({
     apiKey,
-    model: "deepseek-v4-flash",
+    model: comparisonModel!,
     temperature: 0,
     maxTokens: 800,
     maxRetries: 0,

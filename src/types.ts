@@ -77,7 +77,7 @@ export type ActionName = CapabilityName | SystemActionName | AdminActionName;
 
 export type JsonRecord = Record<string, unknown>;
 
-export const MODEL_PROVIDER_NAMES = ["deepseek"] as const;
+export const MODEL_PROVIDER_NAMES = ["deepseek", "openai"] as const;
 
 export type ModelProviderName = (typeof MODEL_PROVIDER_NAMES)[number];
 export type RouteProviderName = ModelProviderName | "keyword" | "router";
@@ -282,6 +282,9 @@ export interface BotProfileConfig extends ProfileFunctionPolicy {
   groupAccessPolicy?: GroupAccessPolicy;
   registration?: RegistrationConfig;
   agent?: {
+    provider?: ModelProviderName;
+    model?: string;
+    summaryModel?: string;
     personaPrompt: string;
     memoryPolicyPrompt: string;
   };
@@ -295,6 +298,7 @@ export interface BotProfileConfig extends ProfileFunctionPolicy {
 }
 
 export interface LlmConfig {
+  openaiApiKey?: string;
   provider?: ModelProviderName;
   deepseekApiKey?: string;
   deepseekBaseUrl: string;

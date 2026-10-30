@@ -1,5 +1,6 @@
 import type { GroupHistory } from "../history/types.js";
 import { createHistoryTurn } from "./history-tools.js";
+import { ChatOpenAI } from "@langchain/openai";
 import type { QuotedText, ConversationReadReference, QuoteContext } from "../quotes/types.js";
 import {
   deliveredContextText,
@@ -88,6 +89,8 @@ export interface HelperRuntimeOptions {
 }
 
 export interface HelperModelOptions {
+  provider?: "deepseek" | "openai";
+  summaryModel?: string;
   apiKey?: string;
   baseUrl: string;
   model: string;
@@ -97,6 +100,22 @@ export interface HelperModelOptions {
 
 export function createHelperModels(options: HelperModelOptions) {
   const budgetedFetch = createBudgetedFetch(options.fetchImpl);
+  if (options.provider === "openai") {
+    const fields = {
+      apiKey: options.apiKey,
+      model: options.model,
+      maxCompletionTokens: 800,
+      maxRetries: 1,
+      timeout: options.timeoutMs,
+      useResponsesApi: false,
+      modelKwargs: { store: false },
+      configuration: { baseURL: options.baseUrl, fetch: budgetedFetch }
+    };
+    return {
+      model: new ChatOpenAI(fields),
+      summaryModel: new ChatOpenAI({ ...fields, model: options.summaryModel ?? options.model })
+    };
+  }
   const fields = {
     apiKey: options.apiKey,
     model: options.model,
@@ -109,7 +128,7 @@ export function createHelperModels(options: HelperModelOptions) {
   } as const;
   return {
     model: new ChatDeepSeek(fields),
-    summaryModel: new ChatDeepSeek(fields)
+    summaryModel: new ChatDeepSeek({ ...fields, model: options.summaryModel ?? options.model })
   };
 }
 
@@ -1122,6 +1141,9 @@ export function helperPolicyKey(profile: BotProfileConfig): string {
       JSON.stringify({
         functions: [...profile.enabledFunctions].sort(),
         permissionRequiredFunctions: [...profile.permissionRequiredFunctions].sort(),
+        provider: profile.agent?.provider ?? "deepseek",
+        model: profile.agent?.model,
+        summaryModel: profile.agent?.summaryModel,
         persona: profile.agent?.personaPrompt,
         memoryPolicy: profile.agent?.memoryPolicyPrompt,
         contract: "helper-explicit-admission-v8",
@@ -1293,6 +1315,9 @@ async function reviewJobResult(
 interface HelperMetrics {
   historyEvidenceBytes?: number;
   historyLookupCount?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
   modelCallCount: number;
   toolCallCount: number;
   estimatedInputTokens: number;
@@ -1324,7 +1349,16 @@ function createMetrics(): HelperMetrics {
         );
       },
       handleLLMEnd(output: unknown) {
-        metrics.estimatedOutputTokens += countTokensApproximately(outputMessages(output));
+        const messages = outputMessages(output);
+        metrics.estimatedOutputTokens += countTokensApproximately(messages);
+        for (const message of messages) {
+          const usage = AIMessage.isInstance(message) ? message.usage_metadata : undefined;
+          if (!usage) continue;
+          metrics.inputTokens = (metrics.inputTokens ?? 0) + usage.input_tokens;
+          metrics.outputTokens = (metrics.outputTokens ?? 0) + usage.output_tokens;
+          metrics.cachedInputTokens =
+            (metrics.cachedInputTokens ?? 0) + (usage.input_token_details?.cache_read ?? 0);
+        }
       },
       handleToolStart(
         _tool: unknown,
@@ -1372,12 +1406,15 @@ async function recordHelperObservability(
         {
           phase: "route",
           outcome: finalStatus === "error" ? "unavailable" : "respond",
-          provider: "deepseek",
+          provider: input.profile.agent?.provider ?? "deepseek",
           durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
           modelCallCount: metrics.modelCallCount,
           toolCallCount: metrics.toolCallCount,
           historyEvidenceBytes: metrics.historyEvidenceBytes,
           historyLookupCount: metrics.historyLookupCount,
+          inputTokens: metrics.inputTokens,
+          outputTokens: metrics.outputTokens,
+          cachedInputTokens: metrics.cachedInputTokens,
           estimatedInputTokens: metrics.estimatedInputTokens,
           estimatedOutputTokens: metrics.estimatedOutputTokens,
           contextEdited: metrics.contextEdited,
