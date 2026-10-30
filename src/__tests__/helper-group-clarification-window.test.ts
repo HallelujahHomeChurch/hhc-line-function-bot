@@ -15,7 +15,7 @@ const clarification: FunctionExecutionResult = {
 
 describe("helper group clarification wake window", () => {
   it.each([
-    { name: "domain ambiguity", result: clarification, elapsed: 90_000, accepted: true },
+    { name: "domain ambiguity", result: clarification, elapsed: 90_000, accepted: false },
     {
       name: "missing draft data",
       result: {
@@ -24,7 +24,7 @@ describe("helper group clarification wake window", () => {
         writePreparation: "needs_input"
       } as FunctionExecutionResult,
       elapsed: 90_000,
-      accepted: true
+      accepted: false
     },
     {
       name: "ordinary group reply",

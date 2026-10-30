@@ -2,7 +2,7 @@ import type { QuoteContext, QuoteToken } from "../../quotes/types.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { WebhookReceipt } from "./webhook-receipt.js";
 import type { CapabilityName } from "../../capabilities/names.js";
-import type { ProfileRuntime, ProfileTurnInput } from "../../runtime/profile-runtime.js";
+import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
 import type { AgentJobScope, AgentJobStore } from "../../agent/jobs.js";
 import { getFunctionDefinition } from "../../capabilities/catalog.js";
 import { buildPostbackQuickReply } from "../../line-reply.js";
@@ -145,7 +145,6 @@ export async function handlePostbackEvent(
 }
 
 export async function handleAgentTextTurnWithLongJob(input: {
-  quotedContinuation?: ProfileTurnInput["quotedContinuation"];
   channelId?: string;
   runtime: ProfileRuntime;
   jobStore: AgentJobStore;
@@ -169,14 +168,8 @@ export async function handleAgentTextTurnWithLongJob(input: {
     profile: input.profile,
     event: input.event,
     requesterDisplayName: input.requesterDisplayName,
-    deferStart: Boolean(input.quotedContinuation),
-    operation: async (operationId, start) => {
+    operation: async (operationId) => {
       const result = await input.runtime.handleTextTurn({
-        quotedContinuation: input.quotedContinuation
-          ? {
-              engage: async () => (await input.quotedContinuation!.engage()) && (await start())
-            }
-          : undefined,
         operationId,
         channelId: input.channelId,
         quoteContext: input.quoteContext,

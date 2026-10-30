@@ -1,3 +1,4 @@
+import { groupReplyClient, takeGroupReply } from "./group-replies.js";
 import { recoveryAllowsEvent } from "../../application/recovery/redis-recovery.js";
 import type { QuoteContext, QuoteStore } from "../../quotes/types.js";
 import { completedBulletinButton } from "../../account/bulletin-continuation.js";
@@ -62,7 +63,7 @@ import {
 } from "../../llm/provider-runtime.js";
 import { messages, requestFailedMessage } from "../../messages.js";
 import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
-import { handleAttachmentIntake, isUploadActivation } from "./attachment-intake.js";
+import { handleAttachmentIntake } from "./attachment-intake.js";
 import { sanitizeActionTelemetryEvent } from "../../observability/action-telemetry.js";
 import { emitProductEvent } from "../../observability/product-events.js";
 import { resolveRequesterDisplayName } from "../../requester-personalization.js";
@@ -703,7 +704,19 @@ async function handleWebhook(
   let admittedEvents = mediaSyncOnlyEvents.length;
   let rejectedAfterStructuralGate = false;
   const transportLine = line;
-  for (const event of allowedEvents) {
+  for (let event of allowedEvents) {
+    const groupButton =
+      event.source.type === "group" &&
+      event.type === "postback" &&
+      new URLSearchParams(event.postback?.data).get("action") === "group_reply";
+    if (groupButton) {
+      const resolved = await takeGroupReply(sessionStore, profile.name, event);
+      if (!resolved) {
+        incrementIgnored(ignoredCounts, "group_reply_invalid");
+        continue;
+      }
+      event = resolved;
+    }
     const sourceCommand = parseAdminCommand(event.message?.text)?.command;
     if (!event.source.userId && sourceCommand !== "media-sync" && sourceCommand !== "registry") {
       incrementIgnored(ignoredCounts, "missing_requester");
@@ -734,9 +747,13 @@ async function handleWebhook(
       }
       if ("lease" in claimed) receipt = new WebhookReceipt(webhookEventStore, claimed.lease);
     }
-    let line = receipt ? receipt.lineClient(transportLine) : transportLine;
+    let line = groupReplyClient(
+      receipt ? receipt.lineClient(transportLine) : transportLine,
+      sessionStore,
+      profile.name,
+      event
+    );
     let quoteContext: QuoteContext | undefined;
-    let deferQuotedRequest = false;
     const attachQuoteContext = async (): Promise<boolean> => {
       if (!quoteStore || !event.source.userId) return true;
       {
@@ -749,8 +766,7 @@ async function handleWebhook(
             if (scope) await conversationWindowStore.clear?.(scope);
           },
           event,
-          line,
-          deferRequest: deferQuotedRequest
+          line
         });
         if (!prepared) {
           incrementIgnored(ignoredCounts, "stale_quote_context");
@@ -774,19 +790,9 @@ async function handleWebhook(
         ).bot
       );
       // Read-only admission precedes conversational quota; ambient group chat is free.
-      if (event.source.type === "group" && event.message?.type === "text") {
-        const systemAction = matchNaturalLanguageSystemActionHint(event.message.text ?? "");
-        if (!systemAction) {
-          const admission = await allowEvent(
-            profile,
-            event,
-            textMessageHandlers,
-            accessStore,
-            conversationWindowStore,
-            false,
-            sessionStore,
-            knownBotQuote
-          );
+      if (event.source.type === "group" && event.message?.type === "text" && !groupButton) {
+        {
+          const admission = await allowEvent(profile, event, accessStore, false, knownBotQuote);
           if (!admission.allowed) {
             rejectedAfterStructuralGate = true;
             incrementIgnored(ignoredCounts, admission.reason);
@@ -1035,12 +1041,9 @@ async function handleWebhook(
       let allow = await allowEvent(
         profile,
         event,
-        textMessageHandlers,
         accessStore,
-        conversationWindowStore,
         accountAuthorization.allowed,
-        sessionStore,
-        knownBotQuote
+        knownBotQuote || groupButton
       );
       if (
         !allow.allowed &&
@@ -1053,16 +1056,7 @@ async function handleWebhook(
         accountState = await turnAccountAuthorization.state([]);
         accountAuthorization = adminAuthorizationFromFunctionState(accountState);
         if (accountAuthorization.allowed) {
-          allow = await allowEvent(
-            profile,
-            event,
-            textMessageHandlers,
-            accessStore,
-            conversationWindowStore,
-            true,
-            sessionStore,
-            knownBotQuote
-          );
+          allow = await allowEvent(profile, event, accessStore, true, knownBotQuote);
         }
       }
       if (!allow.allowed) {
@@ -1084,14 +1078,6 @@ async function handleWebhook(
       const effectiveProfile = effectiveAccess.profile;
       const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
       const requesterDisplayName = await resolveRequesterDisplayName(getLineIdentity(), event);
-      deferQuotedRequest =
-        effectiveProfile.name === "helper" &&
-        Boolean(effectiveProfile.agent) &&
-        event.source.type === "group" &&
-        Boolean(event.message?.quotedMessageId) &&
-        !knownBotQuote &&
-        !sourceCommand &&
-        !groupEngagementAllowsReply(classifyGroupEngagement(effectiveProfile, event.message));
       if (!(await attachQuoteContext())) continue;
       // Accept same-requester supplements while the first answer is still running.
       const admittedScope = buildConversationWindowScope(effectiveProfile, event);
@@ -1105,21 +1091,10 @@ async function handleWebhook(
           ttlMs: admittedTtl
         });
       };
-      if (!deferQuotedRequest) {
-        await recordAdmission();
-        await receipt?.start();
-      }
+      await recordAdmission();
+      await receipt?.start();
 
       const profileTurnInput = {
-        quotedContinuation: deferQuotedRequest
-          ? {
-              engage: async () => {
-                if (quoteContext && !(await quoteContext.admitRequest?.())) return false;
-                await recordAdmission();
-                return true;
-              }
-            }
-          : undefined,
         channelId: payload.destination,
         quoteContext,
         profile: effectiveProfile,
@@ -1140,24 +1115,23 @@ async function handleWebhook(
         event.replyToken &&
         !/^(?:\/reset|忘記這段對話)$/u.test(event.message.text?.trim() ?? "")
       ) {
-        const result =
-          !deferQuotedRequest && /^(確認|取消)$/u.test(event.message.text?.trim() ?? "")
-            ? {
+        const result = /^(確認|取消)$/u.test(event.message.text?.trim() ?? "")
+          ? {
+              ok: true,
+              replyText: "引用訊息不會確認或取消操作；請使用原預覽的按鈕，或重新提出需求。"
+            }
+          : effectiveProfile.name === "helper" || quoteContext?.quoted?.status === "resolved"
+            ? await handleAgentTextTurnWithLongJob({
+                runtime: profileRuntime,
+                jobStore: agentJobStore,
+                receipt,
+                ...profileTurnInput
+              })
+            : {
                 ok: true,
-                replyText: "引用訊息不會確認或取消操作；請使用原預覽的按鈕，或重新提出需求。"
-              }
-            : effectiveProfile.name === "helper" || quoteContext?.quoted?.status === "resolved"
-              ? await handleAgentTextTurnWithLongJob({
-                  runtime: profileRuntime,
-                  jobStore: agentJobStore,
-                  receipt,
-                  ...profileTurnInput
-                })
-              : {
-                  ok: true,
-                  replyText:
-                    "我無法取得這則引用的內容。請在這段對話重新描述需求，或貼上要我處理的內容。"
-                };
+                replyText:
+                  "我無法取得這則引用的內容。請在這段對話重新描述需求，或貼上要我處理的內容。"
+              };
         if (result) {
           await line.replyText(
             event.replyToken,
@@ -2281,8 +2255,7 @@ function incrementIgnored(counts: Map<string, number>, reason: string): void {
 
 async function shouldAllowGroupRegistrationPrompt(
   profile: BotProfileConfig,
-  event: LineEvent,
-  textMessageHandlers: TextMessageHandlerRegistry
+  event: LineEvent
 ): Promise<boolean> {
   if (!profile.registration?.enabled) {
     return false;
@@ -2297,17 +2270,14 @@ async function shouldAllowGroupRegistrationPrompt(
   if (!profile.groupRequireWakeWord || groupEngagementAllowsReply(engagement)) {
     return true;
   }
-  return Boolean(await matchingTextMessageHandler(event, profile, textMessageHandlers));
+  return false;
 }
 
 async function allowEvent(
   profile: BotProfileConfig,
   event: LineEvent,
-  textMessageHandlers: TextMessageHandlerRegistry,
   accessStore: AccessStore,
-  conversationWindowStore: ConversationWindowStore,
   requesterIsAdmin: boolean,
-  sessionStore?: SessionStore,
   knownBotQuote = false
 ): Promise<AllowResult> {
   const eventType = event.type?.trim().toLowerCase();
@@ -2332,7 +2302,7 @@ async function allowEvent(
         if (command) {
           return { allowed: true, reason: "group_admin_command_allowed" };
         }
-        if (await shouldAllowGroupRegistrationPrompt(profile, event, textMessageHandlers)) {
+        if (await shouldAllowGroupRegistrationPrompt(profile, event)) {
           return { allowed: true, reason: "group_registration_prompt_allowed" };
         }
         return { allowed: false, reason: "group_not_allowed" };
@@ -2356,39 +2326,6 @@ async function allowEvent(
       const engagement = classifyGroupEngagement(profile, event.message);
       if (!profile.groupRequireWakeWord || groupEngagementAllowsReply(engagement)) {
         return { allowed: true, reason: `group_${engagement.kind}_matched` };
-      }
-      if (await hasActiveConversationWindow(profile, event, conversationWindowStore)) {
-        return { allowed: true, reason: "group_conversation_window_active" };
-      }
-      if (
-        sessionStore &&
-        event.source.userId &&
-        (await sessionStore.findActionReview({
-          profileName: profile.name,
-          source: event.source,
-          requesterUserId: event.source.userId
-        }))
-      ) {
-        return { allowed: true, reason: "group_action_review_active" };
-      }
-      if (await hasAttachmentTextIntake(profile, event, sessionStore)) {
-        return { allowed: true, reason: "group_attachment_intake_active" };
-      }
-      if (
-        await matchingTextMessageHandler(
-          event,
-          (
-            await resolveEffectiveAccessContext({
-              profile,
-              event,
-              accessStore,
-              requesterIsAdmin
-            })
-          ).profile,
-          textMessageHandlers
-        )
-      ) {
-        return { allowed: true, reason: "group_text_message_handler_matched" };
       }
       return { allowed: false, reason: groupEngagementIgnoredReason(engagement) };
     }
@@ -2484,18 +2421,6 @@ function isConfiguredExactFunctionCommand(
       )
     );
   });
-}
-
-async function hasActiveConversationWindow(
-  profile: BotProfileConfig,
-  event: LineEvent,
-  store: ConversationWindowStore
-): Promise<boolean> {
-  if (!profile.generalAgent?.enabled) {
-    return false;
-  }
-  const scope = buildConversationWindowScope(profile, event);
-  return scope ? store.isActive(scope) : false;
 }
 
 async function recordConversationReply(
@@ -3304,50 +3229,6 @@ function messageTypeAllowed(profile: BotProfileConfig, event: LineEvent): boolea
     return false;
   }
   return profile.allowedMessageTypes.map((type) => type.toLowerCase()).includes(messageType);
-}
-
-async function matchingTextMessageHandler(
-  event: LineEvent,
-  profile: BotProfileConfig,
-  textMessageHandlers: TextMessageHandlerRegistry,
-  requesterDisplayName?: string
-) {
-  const text = event.message?.text;
-  if (event.type !== "message" || event.message?.type !== "text" || !text) {
-    return undefined;
-  }
-  for (const [name, handler] of Object.entries(textMessageHandlers)) {
-    if (await handler.matches({ text }, { profile, event, requesterDisplayName })) {
-      return { name, handler };
-    }
-  }
-  return undefined;
-}
-
-async function hasAttachmentTextIntake(
-  profile: BotProfileConfig,
-  event: LineEvent,
-  sessionStore?: SessionStore
-): Promise<boolean> {
-  const text = event.message?.text;
-  const requesterUserId = event.source.userId;
-  if (
-    event.type !== "message" ||
-    event.message?.type !== "text" ||
-    !text ||
-    !requesterUserId ||
-    !profile.enabledFunctions.includes("save_resource")
-  ) {
-    return false;
-  }
-  if (isUploadActivation(text)) return true;
-  return Boolean(
-    await sessionStore?.findPendingAttachment({
-      profileName: profile.name,
-      source: event.source,
-      requesterUserId
-    })
-  );
 }
 
 async function emitRouteEvent(

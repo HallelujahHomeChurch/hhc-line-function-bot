@@ -227,11 +227,11 @@ Testing map:
 
 ## Helper experience continuation
 
-- Unaddressed member/unknown group quotes inside an active requester continuation use the same helper agent's strict `decide_quoted_continuation` gate. Only that tool is visible until engagement; invalid or uncertain decisions stay silent. Defer request indexing, function tools, durable jobs, window refresh and slow-operation handoff until engagement rechecks the quote generation/reference. Ignored candidates restore the prior active model context. An unavailable quote is missing data, not an automatic restatement reply or a requirement for the original speaker to ask.
+- Group text must be explicitly addressed on every event before quota, system actions, model/tools or waiting jobs. Active windows, drafts, attachment sessions, generic text handlers and bare numeric choices never grant admission. Member/unknown quotes cannot wake the Bot. Keep safe quote understanding after explicit invocation; do not restore a model engagement classifier.
 - Preserve the four-second slow-operation handoff and “查看結果” button for text and review operations. Results require server-owned public or complete capability provenance and requester/source checks on replay; never infer public status from a missing executedAction.
 - Helper attachment purpose/title collection uses a strict draft tool after explicit opt-in; confirmation uses a version-bound opaque postback and atomic compare-and-set. No second upload or worker path.
 - Consented research and draft mutation are mutually exclusive within a turn. Before future writable turns, remove external research tool/model/summary content; persist a dirty-policy marker before research I/O so crashes cannot retain usable tainted checkpoints.
-- Structured group clarification may extend requester-specific continuation to two minutes. Plain model question punctuation must never expand the wake window.
+- Short-lived requester context may be retained for explicit resumption, but its TTL never grants group speaking eligibility. Prompt free-text follow-ups to quote the Bot or explicitly invoke it; use existing buttons for finite choices.
 
 ## Structured draft contract
 

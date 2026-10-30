@@ -815,7 +815,7 @@ describe("LINE entrance", () => {
     }
   );
 
-  it("preserves unaddressed small talk for an active helper group conversation", async () => {
+  it("silences unaddressed small talk despite an active helper group conversation", async () => {
     const config = testConfig();
     config.profiles[0] = {
       ...config.profiles[0]!,
@@ -855,7 +855,7 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(route).toHaveBeenCalledWith(expect.objectContaining({ text: "晚安" }));
+    expect(route).not.toHaveBeenCalled();
   });
 
   it("ignores third-person group mentions of the bot before calling the router", async () => {
@@ -3585,6 +3585,7 @@ describe("LINE entrance", () => {
       getGroupDisplayName: vi.fn().mockResolvedValue("LINE 影音同工群")
     };
     const app = createApp(accessConfig(), {
+      sessionStore: new InMemorySessionStore(),
       router: { route },
       accessStore,
       registrationInviteCodeStore,
@@ -6571,7 +6572,7 @@ describe("LINE entrance", () => {
     });
 
     expect(secondRes.statusCode).toBe(200);
-    expect(route).toHaveBeenCalledWith(expect.objectContaining({ text: "I want to look up data" }));
+    expect(route).not.toHaveBeenCalled();
   });
 
   it("handles numeric PPT selections in groups without routing them", async () => {
@@ -6611,29 +6612,9 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(matchesNumericSelection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "1"
-      }),
-      expect.objectContaining({
-        profile: expect.objectContaining({ name: "main" }),
-        event: expect.objectContaining({ replyToken: "reply-token" })
-      })
-    );
-    expect(handleNumericSelection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "1"
-      }),
-      expect.objectContaining({
-        profile: expect.objectContaining({ name: "main" }),
-        event: expect.objectContaining({ replyToken: "reply-token" })
-      })
-    );
-    expect(replyText).toHaveBeenCalledWith(
-      "reply-token",
-      "已找到詩歌投影片：\n奇異恩典.pptx\n下載連結（1 天內有效）：\nhttps://download.invalid/1",
-      undefined
-    );
+    expect(matchesNumericSelection).not.toHaveBeenCalled();
+    expect(handleNumericSelection).not.toHaveBeenCalled();
+    expect(replyText).not.toHaveBeenCalled();
   });
 
   it("ignores numeric group messages without an active text-message handler result", async () => {
@@ -6669,7 +6650,7 @@ describe("LINE entrance", () => {
 
     expect(res.statusCode).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(handleNumericSelection).toHaveBeenCalledOnce();
+    expect(handleNumericSelection).not.toHaveBeenCalled();
     expect(replyText).not.toHaveBeenCalled();
   });
 
@@ -6737,11 +6718,9 @@ describe("LINE entrance", () => {
       payload: otherBody
     });
 
-    expect(handleTextTurn).toHaveBeenCalledOnce();
-    expect(handleTextTurn).toHaveBeenCalledWith(
-      expect.objectContaining({ event: expect.objectContaining({ source }) })
-    );
-    expect(replyText).toHaveBeenCalledOnce();
+    expect(handleTextTurn).not.toHaveBeenCalled();
+    expect(replyText).not.toHaveBeenCalled();
+    expect(await sessions.get("review-1")).toBeDefined();
   });
 
   it("routes consented research to helper while keeping other deterministic continuations outside it", async () => {

@@ -8,8 +8,9 @@ export interface GroupEngagement {
   smallTalkCategory?: SmallTalkCategory;
 }
 
+// Require a vocative boundary; a name embedded in commentary is not an invocation.
 const addressContinuationPattern =
-  /^[\s,，、:：。.!！?？]|^[查找幫帮請请可你會会人謝谢辛投服流樂乐歌要給给]/u;
+  /^(?:[\s,，、:：!！?？]|幫|帮|請|请|查|找|你好|你會|你能|謝謝|辛苦)/u;
 
 const commandHints = [
   "查",
