@@ -17,7 +17,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Server-owned latest defaults and focused clarification only for genuine ambiguity or missing business input.
 - Friendly intro/help replies for `小哈`, `小哈可以幹嘛`, `help`, and related prompts without exposing internal function names or backing services.
 - Requester-scoped helper checkpoints plus explicit text/resource memories and typed domain handlers.
-- Requester-scoped short conversation windows, so group follow-up messages can continue naturally without letting other users inherit context.
+- Requester-scoped short context retained for explicit follow-ups; group text requires a fresh invocation, known Bot quote or button.
 - Long-running task handoff: slow turns can reply with a "check result" postback instead of using LINE push quota.
 - Free Wikipedia-only lookup: Chinese Wikipedia first, English fallback, then source-bounded summary generation.
 - Catalog-driven resource search foundation: OneDrive-style sources can be registered as catalog sources and indexed into a unified item table abstraction. User-facing lookup functions do not expose whether data came from OneDrive, Notion, PostgreSQL, or a future source.
@@ -546,14 +546,15 @@ Checkpoints retain safe delivered reply text rather than an unselected model
 answer. An explicit public group read quote can trigger a fresh authorized lookup
 for another requester, with only the explicitly quoted public reply's safe excerpt
 to identify old list items; private history, notes and approvals stay isolated.
-An unaddressed member or unknown quote inside the requester's group continuation
-window first asks the same helper agent to engage or ignore. Until engagement,
-only that decision tool is available: no function, durable task or waiting reply
-can run. Ignored candidates do not refresh the continuation window, enter the
-quote index, or remain in the active model context. Normal quoted follow-ups can
-continue without repeating the wake word. An unavailable quote is missing data;
-the helper uses the current request when sufficient, or asks for the missing
-content after engagement. It does not require the original speaker to ask.
+Group text requires a fresh explicit invocation: a Bot mention, a valid known Bot
+quote, or a conservative vocative such as `小哈，幫我找…`. A leading name followed
+by commentary (such as `小哈今天又亂回`) does not qualify. Active windows, drafts,
+attachment sessions and numeric selections never admit unaddressed text. Ambient
+messages stop before quota, system actions, model calls, errors and waiting jobs.
+Member/unknown quotes cannot wake the helper; there is no model admission decision.
+Once explicitly addressed, safe quote understanding and requester isolation remain.
+For free-text follow-ups, reply to the Bot message or invoke it again; finite
+choices use existing buttons. A quote never approves or cancels an action.
 `get_conversation_state` reports current scoped work and finite media counts; an
 unknown outcome is never reported as completed. See the
 [implementation plan](docs/superpowers/plans/2026-10-17-line-context-continuity.md)

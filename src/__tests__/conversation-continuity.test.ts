@@ -155,14 +155,14 @@ describe("conversation continuity across real runtime boundaries", () => {
     try {
       const first = send("小哈，幫我查服事表").then((response) => response);
       await vi.waitFor(() => expect(texts).toHaveLength(1));
-      const second = send("下週兒主的").then((response) => response);
+      const second = send("小哈，下週兒主的").then((response) => response);
       await vi.waitFor(() => expect(texts).toHaveLength(2));
       const other = await send("我在跟別人說話", "synthetic-other");
       expect(other.json()).toMatchObject({ ignored: true, reason: "wake_word_missing" });
       release();
       expect((await first).statusCode).toBe(200);
       expect((await second).statusCode).toBe(200);
-      expect(texts).toEqual(["小哈，幫我查服事表", "下週兒主的"]);
+      expect(texts).toEqual(["小哈，幫我查服事表", "小哈，下週兒主的"]);
     } finally {
       release();
       await app.close();

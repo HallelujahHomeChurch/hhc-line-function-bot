@@ -166,7 +166,7 @@ R5.0 describes the prior controlled-agent release. The helper SDK redesign requi
 
 Helper explicitly enables a four-second agent-operation inline budget and thirty-minute result TTL. Text and review operations share the waiting reply plus requester-scoped “查看結果” postback. Stored generated answers carry server-owned capability provenance; retrieval rechecks every dependency. Empty-tool conversation results use explicit public provenance. Expired approval previews cannot be replayed as current. Pending jobs expire; in-process execution is not restartable merely because results use Redis. The four seconds excludes preauthorization, prior webhook batch events, and LINE network delivery.
 
-Structured helper group clarification extends addressed requester continuation to two minutes; ordinary conversation retains its configured sixty-second wake window. A longer checkpoint TTL is not permission to ingest unaddressed whole-group chat. Read/selection completion can append bounded source-typed context without another model call; failure to synchronize must not suppress a completed result.
+Group text requires a fresh explicit invocation before quota and every reply path. Context TTLs never grant speaking eligibility. Use existing buttons for finite choices and prompt free-text replies to quote the Bot or invoke it again. Read/selection completion can append bounded source-typed context without another model call.
 
 ### LINE quoted context
 
@@ -192,16 +192,10 @@ policy changes invalidate stale state and callbacks. Unknown quotes carry an
 unavailable-data status into helper rather than forcing an ingress reply. Native
 quote behavior requires device acceptance.
 
-For an unaddressed group quote that is not a known Bot reply, an existing
-requester continuation admits only an engagement decision inside the same helper
-agent. Middleware exposes only `decide_quoted_continuation` until a strict,
-single-tool decision engages; uncertain addressees, invalid decisions and
-pre-engagement errors remain silent. Engagement rechecks the quote generation and
-reference before indexing request text, refreshing the conversation window or
-starting a durable result job. Slow-operation handoff waits for engagement.
-Ignored turns restore the previous active model messages and retain no quoted
-request text or result job. Explicit wake words, Bot mentions and known Bot quotes
-use the normal path. Quote content remains untrusted and never grants authority.
+Unaddressed member and unknown quotes remain silent, including within an active
+requester window. Admission is deterministic; no model engagement tool is exposed.
+Known Bot quotes still require current quote/source/requester validation. Explicit
+invocations may use safe member quotes as untrusted context, never authority.
 
 Admission opens the requester continuation marker before a first reply, including
 eligible media intake. Accepted events remain separate sequential turns under the

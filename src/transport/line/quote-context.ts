@@ -9,7 +9,6 @@ export async function prepareQuoteContext(input: {
   event: LineEvent;
   line: LineReplyClient;
   clearConversation?: () => Promise<void>;
-  deferRequest?: boolean;
 }): Promise<{ context: QuoteContext; line: LineReplyClient } | undefined> {
   const { store, runtime, scope, event } = input;
   const reset = /^(?:\/reset|忘記這段對話)$/u.test(event.message?.text?.trim() ?? "");
@@ -20,9 +19,8 @@ export async function prepareQuoteContext(input: {
     ...scope,
     messageId: event.message?.id,
     quotedMessageId: event.message?.quotedMessageId,
-    text: input.deferRequest ? undefined : event.message?.text,
-    timestamp: event.timestamp,
-    ...(input.deferRequest ? { deferRequest: true } : {})
+    text: event.message?.text,
+    timestamp: event.timestamp
   });
   if (!turn) return undefined;
   if (turn.clearCheckpoint) {
@@ -37,24 +35,6 @@ export async function prepareQuoteContext(input: {
     cleared: turn.clearCheckpoint && !reset,
     isCurrent: () => store.isCurrent(turn.token)
   };
-  if (input.deferRequest) {
-    context.admitRequest = async () => {
-      if (!(await context.isCurrent())) return false;
-      const admitted = await store.begin({
-        ...scope,
-        messageId: event.message?.id,
-        quotedMessageId: event.message?.quotedMessageId,
-        text: event.message?.text,
-        timestamp: event.timestamp,
-        expectedGeneration: turn.token.generation,
-        expectedQuoted: turn.quoted
-      });
-      if (!admitted) return false;
-      Object.assign(turn.token, admitted.token);
-      turn.requestText = admitted.requestText;
-      return true;
-    };
-  }
   return {
     context,
     line: {

@@ -149,7 +149,19 @@ export interface BulletinContinuationSession {
   expiresAt: string;
 }
 
+export interface GroupReplySession {
+  id: string;
+  type: "group_reply";
+  profileName: string;
+  source: LineSource;
+  requesterUserId: string;
+  texts: string[];
+  stateKey: string;
+  expiresAt: string;
+}
+
 export type ConversationSession =
+  | GroupReplySession
   | BulletinContinuationSession
   | PptSelectionSession
   | SelectionSession

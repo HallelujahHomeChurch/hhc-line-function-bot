@@ -44,7 +44,6 @@ export interface QuoteContext {
   cleared?: boolean;
   replyProjection?: QuoteReplyProjection;
   isCurrent(): Promise<boolean>;
-  admitRequest?(): Promise<boolean>;
 }
 export interface QuoteStore {
   inspect(scope: QuoteScope, messageId: string): Promise<{ bot: boolean }>;

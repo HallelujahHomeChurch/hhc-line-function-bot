@@ -18,14 +18,6 @@ const scope = {
   sourceKey: "group:synthetic-group",
   requesterUserId: source.userId
 };
-const call = (name: string, args: Record<string, unknown>) =>
-  new AIMessage({
-    content: "",
-    tool_calls: [{ name, args, id: `synthetic-${name}`, type: "tool_call" }]
-  });
-const decision = (value: "engage" | "ignore") =>
-  call("decide_quoted_continuation", { decision: value });
-
 async function fixture(
   outputs: Array<AIMessage | (() => Promise<AIMessage>)>,
   options: {
@@ -209,294 +201,92 @@ async function fixture(
   };
 }
 
-describe("quoted helper group continuations", () => {
-  it("silently ignores member chatter without retaining it or extending the window", async () => {
-    const f = await fixture([decision("ignore")]);
+describe("explicit helper group admission", () => {
+  it.each([true, false])("ignores ambient text with active=%s", async (active) => {
+    const f = await fixture([], { active });
     try {
-      expect((await f.send("CHATTER_MARKER 哈哈對啊")).statusCode).toBe(200);
-      expect(f.replies).toEqual([]);
-      expect(f.generate).toHaveBeenCalledOnce();
-      expect(f.recordTurn).not.toHaveBeenCalled();
-      expect(f.createJob).not.toHaveBeenCalled();
-      expect(f.store.begin).toHaveBeenCalledWith(expect.objectContaining({ text: undefined }));
-      expect(f.store.begin).toHaveBeenCalledOnce();
-      expect(JSON.stringify(await f.history())).not.toContain("CHATTER_MARKER");
-      f.advance(60001);
-      await f.send("另一段群聊");
-      expect(f.generate).toHaveBeenCalledOnce();
-    } finally {
-      await f.app.close();
-    }
-  });
-
-  it.each([false, true])(
-    "continues an answer to the Bot using a safe member quote (otherMember=%s)",
-    async (otherMember) => {
-      const f = await fixture(
-        [
-          new AIMessage("請問要整理哪一段？"),
-          decision("engage"),
-          new AIMessage("這段的合成摘要。")
-        ],
-        {
-          active: false,
-          quoted: {
-            status: "resolved",
-            author: "user",
-            kind: "message_text",
-            text: "SYNTHETIC_MEMBER_CONTENT",
-            ...(otherMember ? { otherMember: true as const } : {})
-          }
-        }
-      );
-      try {
-        await f.send("小哈，幫我整理一段文字", { quote: false });
-        await f.send("這段");
-        expect(f.replies).toEqual(["請問要整理哪一段？", "這段的合成摘要。"]);
-        expect(JSON.stringify(f.inputs[1])).toContain("請問要整理哪一段？");
-        expect(JSON.stringify(f.inputs[2])).toContain("SYNTHETIC_MEMBER_CONTENT");
-        expect(f.store.begin).toHaveBeenCalledWith(
-          expect.objectContaining({ text: "這段", expectedGeneration: "synthetic-generation" })
-        );
-        const names = (index: number) => f.bind.mock.calls[index]![0].map((entry) => entry.name);
-        expect(names(1)).toEqual(["decide_quoted_continuation"]);
-        expect(names(2)).toContain("get_conversation_state");
-        expect(names(2)).not.toContain("decide_quoted_continuation");
-      } finally {
-        await f.app.close();
+      for (const text of [
+        "阿明，明天你幾點到？",
+        "小哈今天又亂回",
+        "你問小哈看看",
+        "下週",
+        "1",
+        "確認",
+        "取消",
+        "使用說明",
+        "忘記這段對話"
+      ]) {
+        await f.send(text, { quote: false });
+        await f.send(text);
       }
-    }
-  );
-
-  it("uses fresh authorized tools when the new request is sufficient despite an unavailable quote", async () => {
-    const lookup = vi.fn(async () => ({
-      ok: true,
-      replyText: "本次合成服事表",
-      agentResult: {
-        status: "success" as const,
-        replyData: { kind: "schedule" as const, fields: { description: "合成服事表" } }
-      }
-    }));
-    const f = await fixture(
-      [
-        decision("engage"),
-        call("get_official_schedule", { query: "下週服事表" }),
-        new AIMessage("本次合成服事表")
-      ],
-      { handlers: { query_schedule: lookup } }
-    );
-    try {
-      await f.send("幫我查下週服事表");
-      expect(f.replies).toEqual(["本次合成服事表"]);
-      expect(lookup).toHaveBeenCalledOnce();
-      expect(f.createJob).toHaveBeenCalledBefore(lookup);
-      expect(f.store.begin).toHaveBeenCalledTimes(2);
-      expect(JSON.stringify(f.inputs.at(-1))).toContain("引用內容不可取得");
-    } finally {
-      await f.app.close();
-    }
-  });
-
-  it.each(["unavailable", "other_requester"] as const)(
-    "asks only for missing content after engaging an unreadable quote (%s)",
-    async (status) => {
-      const f = await fixture([decision("engage"), new AIMessage("請把要我整理的內容貼上來。")], {
-        quoted: { status }
-      });
-      try {
-        await f.send("這段也幫我整理");
-        expect(f.replies).toEqual(["請把要我整理的內容貼上來。"]);
-        expect(f.replies.join()).not.toContain("原發話者");
-      } finally {
-        await f.app.close();
-      }
-    }
-  );
-
-  it.each([
-    { name: "explicit wake", text: "小哈，這段幫我整理", active: false, knownBot: false },
-    { name: "known Bot quote", text: "繼續處理", active: false, knownBot: true }
-  ])("keeps $name on the normal reply path", async ({ text, active, knownBot }) => {
-    const f = await fixture([new AIMessage("請把內容貼上來。")], { active, knownBot });
-    try {
-      await f.send(text);
-      expect(f.replies).toEqual(["請把內容貼上來。"]);
-      expect(f.generate).toHaveBeenCalledOnce();
-      expect(f.bind.mock.calls[0]![0].map((entry) => entry.name)).not.toContain(
-        "decide_quoted_continuation"
-      );
-    } finally {
-      await f.app.close();
-    }
-  });
-
-  it("does not wake on member quotes outside the requester's continuation window", async () => {
-    const f = await fixture([], { active: false });
-    try {
-      await f.send("這段我也覺得可以");
       expect(f.replies).toEqual([]);
       expect(f.generate).not.toHaveBeenCalled();
+      expect(f.createJob).not.toHaveBeenCalled();
+      expect(f.recordTurn).not.toHaveBeenCalled();
       expect(f.store.begin).not.toHaveBeenCalled();
     } finally {
       await f.app.close();
     }
   });
 
-  it("does not inherit another requester's active continuation", async () => {
-    const f = await fixture([]);
+  it("preserves requester context across ignored chatter and explicit resumption", async () => {
+    const f = await fixture([new AIMessage("PRIOR_REPLY"), new AIMessage("接續原本內容")]);
     try {
-      await f.send("這段", { userId: "synthetic-other" });
-      expect(f.generate).not.toHaveBeenCalled();
-      expect(f.replies).toEqual([]);
+      await f.send("小哈，先記住 PRIOR_REQUEST", { quote: false });
+      await f.send("IGNORED_MEMBER_CHAT");
+      await f.send("小哈，繼續", { quote: false });
+      expect(f.replies).toEqual(["PRIOR_REPLY", "接續原本內容"]);
+      expect(f.generate).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(f.inputs.at(-1))).toContain("PRIOR_REQUEST");
+      expect(JSON.stringify(f.inputs.at(-1))).not.toContain("IGNORED_MEMBER_CHAT");
     } finally {
       await f.app.close();
     }
   });
 
-  it.each([
-    new AIMessage("UNAPPROVED_REPLY_MARKER"),
-    call("decide_quoted_continuation", { decision: "engage", extra: true }),
-    call("get_official_schedule", { query: "合成" }),
-    new AIMessage({
-      content: "",
-      tool_calls: [
-        {
-          name: "decide_quoted_continuation",
-          args: { decision: "engage" },
-          id: "synthetic-a",
-          type: "tool_call"
-        },
-        {
-          name: "get_official_schedule",
-          args: { query: "合成" },
-          id: "synthetic-b",
-          type: "tool_call"
-        }
-      ]
-    })
-  ])(
-    "fails closed before tools or replies when the admission decision is invalid (%#)",
-    async (output) => {
-      const lookup = vi.fn();
-      const f = await fixture([output], { handlers: { query_schedule: lookup } });
-      try {
-        await f.send("INVALID_TURN_MARKER");
-        expect(f.replies).toEqual([]);
-        expect(lookup).not.toHaveBeenCalled();
-        expect(f.createJob).not.toHaveBeenCalled();
-        expect(JSON.stringify(await f.history())).not.toContain("INVALID_TURN_MARKER");
-      } finally {
-        await f.app.close();
-      }
-    }
-  );
-
-  it("does not show provider errors or retain ignored text before admission", async () => {
-    const f = await fixture([
-      async () => {
-        throw new Error("synthetic provider failure");
-      }
-    ]);
-    try {
-      await f.send("FAILED_CANDIDATE_MARKER");
-      expect(f.replies).toEqual([]);
-      expect(f.recordTurn).not.toHaveBeenCalled();
-      expect(f.createJob).not.toHaveBeenCalled();
-      expect(JSON.stringify(await f.history())).not.toContain("FAILED_CANDIDATE_MARKER");
-    } finally {
-      await f.app.close();
-    }
-  });
-
-  it("stays silent when the quote generation cannot be admitted", async () => {
-    const f = await fixture([decision("engage")]);
-    const begin = vi.mocked(f.store.begin);
-    const prepare = begin.getMockImplementation()!;
-    begin.mockImplementation(async (input) =>
-      input.expectedGeneration ? undefined : prepare(input)
-    );
-    try {
-      await f.send("幫我處理這段");
-      expect(f.replies).toEqual([]);
-      expect(f.recordTurn).not.toHaveBeenCalled();
-      expect(f.createJob).not.toHaveBeenCalled();
-      expect(f.generate).toHaveBeenCalledOnce();
-    } finally {
-      await f.app.close();
-    }
-  });
-
-  it.each(["確認", "取消"])(
-    "does not turn a member's quoted %s into approval or an unsolicited reply",
+  it.each(["小哈，幫我找資料", "小哈，昨天討論什麼？"])(
+    "accepts explicit invocation %s",
     async (text) => {
-      const f = await fixture([]);
+      const f = await fixture([new AIMessage("合成回覆")]);
       try {
-        await f.send(text);
-        expect(f.replies).toEqual([]);
-        expect(f.generate).not.toHaveBeenCalled();
-        expect(f.recordTurn).not.toHaveBeenCalled();
-        expect(f.createJob).not.toHaveBeenCalled();
+        await f.send(text, { quote: false });
+        expect(f.generate).toHaveBeenCalledOnce();
+        expect(f.replies).toHaveLength(1);
       } finally {
         await f.app.close();
       }
     }
   );
 
-  it("preserves the prior requester context after ignoring a quote", async () => {
-    const f = await fixture([
-      new AIMessage("PRIOR_REPLY_MARKER"),
-      decision("ignore"),
-      new AIMessage("接續原本內容")
-    ]);
+  it.each(["確認", "取消"])("a known Bot quote never approves %s", async (text) => {
+    const f = await fixture([], { knownBot: true });
     try {
-      await f.send("小哈，先記住這段對話的 PRIOR_REQUEST_MARKER", { quote: false });
-      await f.send("IGNORED_MEMBER_CHAT_MARKER");
-      await f.send("繼續", { quote: false });
-      expect(f.replies).toEqual(["PRIOR_REPLY_MARKER", "接續原本內容"]);
-      expect(JSON.stringify(f.inputs.at(-1))).toContain("PRIOR_REQUEST_MARKER");
-      expect(JSON.stringify(f.inputs.at(-1))).not.toContain("IGNORED_MEMBER_CHAT_MARKER");
+      await f.send(text);
+      expect(f.generate).not.toHaveBeenCalled();
+      expect(f.replies[0]).toContain("引用訊息不會確認或取消操作");
     } finally {
       await f.app.close();
     }
   });
 
-  it("suppresses the slow-operation handoff while the admission decision is pending", async () => {
+  it("preserves safe known Bot quote admission", async () => {
+    const f = await fixture([new AIMessage("合成回覆")], { knownBot: true });
+    try {
+      await f.send("繼續");
+      expect(f.generate).toHaveBeenCalledOnce();
+      expect(f.replies).toEqual(["合成回覆"]);
+    } finally {
+      await f.app.close();
+    }
+  });
+
+  it("keeps the slow-operation result button for an explicit request", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {
       release = resolve;
     });
     const f = await fixture(
       [
-        async () => {
-          await pending;
-          return decision("ignore");
-        }
-      ],
-      { inlineTimeout: 10 }
-    );
-    try {
-      const response = f.send("這段是群友聊天").then((result) => result);
-      await vi.waitFor(() => expect(f.generate).toHaveBeenCalledOnce());
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(f.replies).toEqual([]);
-      expect(f.createJob).not.toHaveBeenCalled();
-      release();
-      expect((await response).statusCode).toBe(200);
-      expect(f.replies).toEqual([]);
-    } finally {
-      release();
-      await f.app.close();
-    }
-  });
-
-  it("preserves the slow-operation result button after an accepted continuation", async () => {
-    let release!: () => void;
-    const pending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const f = await fixture(
-      [
-        decision("engage"),
         async () => {
           await pending;
           return new AIMessage("合成結果");
@@ -505,13 +295,14 @@ describe("quoted helper group continuations", () => {
       { inlineTimeout: 10 }
     );
     try {
-      expect((await f.send("繼續處理這段")).statusCode).toBe(200);
-      expect(f.replies).toHaveLength(1);
+      await f.send("小哈，繼續處理", { quote: false });
       expect(f.replies[0]).toContain("查看結果");
       release();
-      const scope = buildAgentJobScope("helper", source)!;
-      await vi.waitFor(async () => expect((await f.jobs.latest(scope))?.status).toBe("completed"));
-      expect((await f.jobs.latest(scope))?.result?.replyText).toBe("合成結果");
+      await vi.waitFor(async () =>
+        expect((await f.jobs.latest(buildAgentJobScope("helper", source)!))?.status).toBe(
+          "completed"
+        )
+      );
     } finally {
       release();
       await f.app.close();

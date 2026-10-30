@@ -28,56 +28,6 @@ function fakeStore(): QuoteStore {
   };
 }
 describe("quote context boundary", () => {
-  it("defers request text until a generation-bound admission succeeds", async () => {
-    const store = fakeStore();
-    const event = {
-      type: "message",
-      source: scope.source,
-      timestamp: Date.now(),
-      message: {
-        id: "synthetic-request",
-        type: "text",
-        text: "合成追問",
-        quotedMessageId: "synthetic-reference"
-      }
-    };
-    const prepared = await prepareQuoteContext({
-      store,
-      scope,
-      event,
-      deferRequest: true,
-      runtime: { handleTextTurn: async () => undefined },
-      line: { replyText: async () => undefined }
-    });
-    expect(store.begin).toHaveBeenCalledWith(
-      expect.objectContaining({ deferRequest: true, text: undefined })
-    );
-    expect(await prepared!.context.admitRequest!()).toBe(true);
-    expect(store.begin).toHaveBeenLastCalledWith(
-      expect.objectContaining({ text: "合成追問", expectedGeneration: "generation" })
-    );
-  });
-
-  it("does not admit an invalidated candidate", async () => {
-    const store = fakeStore();
-    const prepared = await prepareQuoteContext({
-      store,
-      scope,
-      deferRequest: true,
-      event: {
-        type: "message",
-        source: scope.source,
-        timestamp: Date.now(),
-        message: { type: "text", text: "合成追問" }
-      },
-      runtime: { handleTextTurn: async () => undefined },
-      line: { replyText: async () => undefined }
-    });
-    vi.mocked(store.isCurrent).mockResolvedValue(false);
-    expect(await prepared!.context.admitRequest!()).toBe(false);
-    expect(store.begin).toHaveBeenCalledOnce();
-  });
-
   it("keeps credentials, URLs and commands out of retained text", () => {
     for (const text of [
       "https://example.test/private",
