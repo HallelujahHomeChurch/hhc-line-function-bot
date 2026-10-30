@@ -1,4 +1,6 @@
 import { groupReplyClient, takeGroupReply } from "./group-replies.js";
+import type { GroupHistory } from "../../history/types.js";
+import { createHistoryCollector } from "../../history/collector.js";
 import { recoveryAllowsEvent } from "../../application/recovery/redis-recovery.js";
 import type { QuoteContext, QuoteStore } from "../../quotes/types.js";
 import { completedBulletinButton } from "../../account/bulletin-continuation.js";
@@ -109,6 +111,7 @@ import { memoryCommandCapabilityName, type MemoryCommandHandler } from "./memory
 import { pendingAttachmentPrompt } from "./attachment-intake.js";
 
 export interface AppDependencies {
+  history?: GroupHistory;
   readMemberAccess?(
     lineUserId: string,
     profileName: string,
@@ -236,6 +239,11 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     logger: false,
     bodyLimit: config.maxBodyBytes
   });
+  const collectHistory = deps.history
+    ? createHistoryCollector(deps.history, () => {
+        console.warn(JSON.stringify({ event: "history_gap" }));
+      })
+    : undefined;
   const createReplyClient = deps.createLineReplyClient;
   const createIdentityClient = deps.createLineIdentityClient;
   const requestIdFactory = deps.requestIdFactory;
@@ -307,7 +315,9 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
         deps.mediaSyncStore,
         deps.mediaSyncManagementService,
         deps.quoteStore,
-        deps.readMemberAccess
+        deps.readMemberAccess,
+        collectHistory,
+        deps.history
       );
     });
   }
@@ -351,7 +361,9 @@ async function handleWebhook(
   mediaSyncStore: PostgresMediaSyncStore | undefined,
   mediaSyncManagementService: MediaSyncManagementService | undefined,
   quoteStore: QuoteStore | undefined,
-  readMemberAccess: AppDependencies["readMemberAccess"]
+  readMemberAccess: AppDependencies["readMemberAccess"],
+  collectHistory: ReturnType<typeof createHistoryCollector> | undefined,
+  history: GroupHistory | undefined
 ) {
   const signature = getHeaderValue(request.headers["x-line-signature"]);
   if (!signature) {
@@ -380,6 +392,12 @@ async function handleWebhook(
   const handledLifecycleEvents = new Set<LineEvent>();
   for (const event of payload.events) {
     if (!isOrdinaryLineEvent(event)) continue;
+    if (
+      collectHistory &&
+      event.source.type === "group" &&
+      (await isGroupAllowed(profile, event.source.groupId, accessStore))
+    )
+      collectHistory({ profileName: profile.name, source: event.source }, event);
     if (quoteStore && event.type === "unsend" && event.unsend?.messageId) {
       try {
         const scopes = await quoteStore.unsend(
@@ -766,7 +784,22 @@ async function handleWebhook(
             if (scope) await conversationWindowStore.clear?.(scope);
           },
           event,
-          line
+          line,
+          recordHistoryReply: (messages, dependencies) =>
+            history?.recordReply?.(
+              { profileName: profile.name, source: event.source },
+              messages,
+              dependencies
+            ) ?? Promise.resolve(),
+          validateHistory: async (dependencies) =>
+            Boolean(history) &&
+            (
+              await Promise.all(
+                dependencies.map((d) =>
+                  history!.validate({ profileName: profile.name, source: event.source }, d)
+                )
+              )
+            ).every(Boolean)
         });
         if (!prepared) {
           incrementIgnored(ignoredCounts, "stale_quote_context");
@@ -1223,7 +1256,16 @@ async function handleWebhook(
                 })) ?? { ok: true, replyText: messages.postbackUnsupported }
             : undefined,
           quoteStore ? (token) => quoteStore.isCurrent(token) : undefined,
-          payload.destination
+          payload.destination,
+          async (dependencies) =>
+            Boolean(history) &&
+            (
+              await Promise.all(
+                dependencies.map((d) =>
+                  history!.validate({ profileName: profile.name, source: event.source }, d)
+                )
+              )
+            ).every(Boolean)
         );
         const postbackProfile = authorizedPostbackProfile ?? effectiveProfile;
         const postbackCapabilityName = completionEligible ? capability : undefined;

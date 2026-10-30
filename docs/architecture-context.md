@@ -207,3 +207,7 @@ attachment and recent task status, with fresh-authorized finite media counts.
 
 Implementation and consultant dispositions:
 [conversation continuity plan](superpowers/plans/2026-10-17-line-context-continuity.md).
+
+## Optional bounded group history
+
+`src/history/` owns the disabled-by-default PG source; `src/helper-agent/history-tools.ts` exposes the current group's server-scoped context tool within the existing call budget. Passive collection has its own bounded queue and never grants speaking eligibility. Source keys and policy/restore identity are rechecked at retrieval and delivery; history evidence and derived answers do not enter the next checkpoint. See [the phase-B runbook](runbooks/group-history.md).

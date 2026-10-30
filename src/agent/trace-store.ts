@@ -56,6 +56,8 @@ export interface AgentTurnTraceStep {
   referenceFingerprint?: string;
   modelCallCount?: number;
   toolCallCount?: number;
+  historyEvidenceBytes?: number;
+  historyLookupCount?: number;
   estimatedInputTokens?: number;
   estimatedOutputTokens?: number;
   contextEdited?: boolean;

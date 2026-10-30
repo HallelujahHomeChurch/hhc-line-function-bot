@@ -1,3 +1,4 @@
+import type { HistoryDependency } from "../../history/types.js";
 import type { QuoteContext, QuoteToken } from "../../quotes/types.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { WebhookReceipt } from "./webhook-receipt.js";
@@ -47,7 +48,8 @@ export async function handlePostbackEvent(
   ) => Promise<readonly CapabilityName[]>,
   helperReviewHandler?: HelperReviewPostbackHandler,
   isContextCurrent?: (token: QuoteToken) => Promise<boolean>,
-  channelId?: string
+  channelId?: string,
+  validateHistory?: (dependencies: HistoryDependency[]) => Promise<boolean>
 ): Promise<HandledPostbackEvent> {
   const request = parsePostbackData(event.postback?.data ?? "");
   if (!request) {
@@ -65,7 +67,8 @@ export async function handlePostbackEvent(
         agentJobStore,
         configuredFunctions,
         authorizeFunctions,
-        isContextCurrent
+        isContextCurrent,
+        validateHistory
       ),
       completionEligible: false
     };
@@ -343,7 +346,8 @@ async function handleAgentJobResultPostback(
   authorizeFunctions?: (
     functionNames: readonly CapabilityName[]
   ) => Promise<readonly CapabilityName[]>,
-  isContextCurrent?: (token: QuoteToken) => Promise<boolean>
+  isContextCurrent?: (token: QuoteToken) => Promise<boolean>,
+  validateHistory?: (dependencies: HistoryDependency[]) => Promise<boolean>
 ): Promise<FunctionExecutionResult> {
   const jobId = request.params.jobId;
   const scope = buildAgentJobScope(profile, event);
@@ -371,6 +375,8 @@ async function handleAgentJobResultPostback(
   if (job.status === "failed") {
     return { ok: true, replyText: "剛剛處理時遇到問題，請再問一次。" };
   }
+  if (job.result?.historyDependencies && !(await validateHistory?.(job.result.historyDependencies)))
+    return invalidatedResult();
   const authority = job.result?.resultAuthority;
   const capabilities = new Set([
     ...(authority?.kind === "capabilities" ? authority.capabilities : []),

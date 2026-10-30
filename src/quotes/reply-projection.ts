@@ -5,6 +5,7 @@ export function deliveredContextText(
   text: string,
   projection?: QuoteReplyProjection
 ): string | null {
+  if (projection?.history) return null;
   if (projection?.kind === "preview") return "已顯示待確認預覽，尚未保存；修改時須讀取目前草稿。";
   const redacted = text.replace(/https?:\/\/[^\s<>]+/giu, "[連結省略]");
   const safe = safeQuoteText(redacted);
@@ -13,6 +14,9 @@ export function deliveredContextText(
 
 export function replyProjection(result: FunctionExecutionResult): QuoteReplyProjection {
   return {
+    ...(result.historyDependencies !== undefined
+      ? { history: true as const, historyDependencies: result.historyDependencies }
+      : {}),
     kind: result.writePhase ?? (result.contextReference ? "read" : "conversation"),
     ...(result.contextReference ? { publicRead: result.contextReference } : {})
   };

@@ -1,0 +1,12 @@
+{
+  "enabled": false,
+  "generation": 1,
+  "restoreEpoch": "REPLACE_BEFORE_ENABLE",
+  "retentionDays": 90,
+  "maxGroupMessages": 10000,
+  "maxGroupBytes": 10000000,
+  "maxTotalMessages": 100000,
+  "maxTotalBytes": 100000000,
+  "maxMessageBytes": 4000,
+  "policies": []
+}
