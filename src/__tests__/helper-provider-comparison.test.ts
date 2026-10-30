@@ -3,7 +3,7 @@ import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 import { createHelperModels, helperPolicyKey } from "../helper-agent/runtime.js";
 import { createHelperAgent } from "../helper-agent/agent.js";
-import { runWithAgentBudget } from "../helper-agent/budget.js";
+import { createBudgetedFetch, runWithAgentBudget } from "../helper-agent/budget.js";
 import { helperProfile } from "../evals/synthetic-runtime-fixture.js";
 
 describe("equivalent helper provider contract (offline)", () => {
@@ -93,5 +93,22 @@ describe("equivalent helper provider contract (offline)", () => {
     expect(
       helperPolicyKey({ ...profile, agent: { ...profile.agent!, summaryModel: "different" } })
     ).not.toBe(baseline);
+  });
+  it("counts actual HTTP attempts separately from logical model calls", async () => {
+    let attempts = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("{}"));
+    const transport = createBudgetedFetch(fetchImpl);
+    await runWithAgentBudget(
+      "normal",
+      async () => {
+        await transport("https://synthetic.invalid");
+        await transport("https://synthetic.invalid");
+      },
+      () => {
+        attempts++;
+      }
+    );
+    expect(attempts).toBe(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

@@ -12,7 +12,9 @@ Keep `LLM_PROVIDER=deepseek` for existing non-agent lanes; helper selection is
 profile-owned. There is no automatic provider fallback. A denied allowlist or
 missing OpenAI model fails configuration validation. `OPENAI_API_KEY` comes only
 from local environment or an ACA secret; never put it in profiles or PostgreSQL.
-The checked-in production selection stays DeepSeek. Changing provider/model/
+The checked-in production selection stays DeepSeek. Explicit `agent.model` and
+`agent.summaryModel` override the legacy helper `DEEPSEEK_MODEL` fallback; compare
+the current runtime model with the reviewed profile before approving a release. Changing provider/model/
 summary model changes the checkpoint policy key before another turn.
 
 `pnpm test src/__tests__/helper-provider-comparison.test.ts` exercises the same
@@ -39,7 +41,8 @@ user input, and latency; divide total task cost by successful tasks using dated,
 reviewed provider prices. Report missing usage rather than treating it as free.
 Keep failure/retry/summary costs in the numerator. No winner has been measured.
 
-Runtime traces retain confirmed returned input/output/cache counts separately
+Runtime traces count each actual HTTP attempt (including retries) separately from
+logical model calls, and retain confirmed returned input/output/cache counts separately
 from approximate input/output estimates. They do not retain prompts, payloads,
 keys or group text. Returned usage is not a complete billing reconciliation when
 a provider fails before returning usage; reconcile missing requests separately.

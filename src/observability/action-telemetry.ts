@@ -132,6 +132,7 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       );
     case "clarificationCountBucket":
       return allowedString(value, new Set(["zero", "one", "multiple"]));
+    case "providerRequestCount":
     case "modelCallCount":
     case "toolCallCount":
       return boundedTelemetryCount(value, 6);

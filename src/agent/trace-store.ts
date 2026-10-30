@@ -54,6 +54,7 @@ export interface AgentTurnTraceStep {
   sourceRevision?: RetrievalDiagnostics["sourceRevision"];
   queryFingerprint?: string;
   referenceFingerprint?: string;
+  providerRequestCount?: number;
   modelCallCount?: number;
   toolCallCount?: number;
   historyEvidenceBytes?: number;
