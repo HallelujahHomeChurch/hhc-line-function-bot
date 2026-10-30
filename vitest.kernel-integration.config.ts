@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: [
+      "src/__tests__/kernel-history-integration.test.ts",
       "src/__tests__/kernel-redis-integration.test.ts",
       "src/__tests__/kernel-postgres-integration.test.ts",
       "src/__tests__/schedule-memory-store.test.ts"

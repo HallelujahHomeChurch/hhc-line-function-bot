@@ -1,3 +1,5 @@
+import type { GroupHistory } from "../history/types.js";
+import { createHistoryTurn } from "./history-tools.js";
 import type { QuotedText, ConversationReadReference, QuoteContext } from "../quotes/types.js";
 import {
   deliveredContextText,
@@ -65,6 +67,8 @@ import {
 import { safeWriteClarification, createHelperWriteTools } from "./write-tools.js";
 
 export interface HelperRuntimeOptions {
+  history?: GroupHistory;
+  timeZone?: string;
   readMediaState?(input: ProfileTurnInput): Promise<ConversationStateSnapshot["media"]>;
   model: CreateAgentParams["model"];
   summaryModel: SummarizationMiddlewareConfig["model"];
@@ -364,6 +368,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
               currentPolicyKey: async () => helperPolicyKey(await effectiveProfile(input))
             })
           : undefined;
+        let historyTurn: ReturnType<typeof createHistoryTurn> | undefined;
         let proposalStarted = false;
         const turn = await options.state.run({
           threadId,
@@ -380,7 +385,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           }) => {
             let lane: "research" | "write" | undefined;
             const claimWrite = () => {
-              if (lane === "research") return false;
+              if (lane === "research" || historyTurn?.used) return false;
               lane = "write";
               return true;
             };
@@ -634,7 +639,24 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                 conversationSnapshot = snapshot;
               }
             );
+            historyTurn = options.history?.enabledFor({
+              profileName: profile.name,
+              source: input.event.source
+            })
+              ? createHistoryTurn(
+                  options.history!,
+                  { profileName: profile.name, source: input.event.source },
+                  now(),
+                  async () => {
+                    if (lane === "write") throw new Error("history_draft_mutation_excluded");
+                    await markContextDirty?.();
+                  },
+                  input.event.message?.quotedMessageId,
+                  options.timeZone
+                )
+              : undefined;
             const tools = [
+              ...(historyTurn?.tools ?? []),
               ...readTools,
               conversationTool,
               ...attachmentTools,
@@ -750,7 +772,8 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                     input.requestId,
                     evidenceRequired && !pendingClarification,
                     conversationSnapshot,
-                    readFailed
+                    readFailed,
+                    historyTurn?.hasEvidence
                   );
                 if (input.quoteContext)
                   input.quoteContext.replyProjection = replyProjection(visible);
@@ -776,6 +799,17 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                   ? { kind: "review" as const, result: proposedResult }
                   : { kind: "complete" as const, state };
               } finally {
+                if (historyTurn?.used) {
+                  await agent.updateState(config, {
+                    messages: [
+                      { role: "remove" as const, content: "", id: REMOVE_ALL_MESSAGES },
+                      ...previousMessages,
+                      new HumanMessage(text),
+                      new AIMessage("歷史查詢已結束；後續問題必須重新取得仍有效的來源。")
+                    ]
+                  });
+                  await markContextDirty?.(false);
+                }
                 if (lane === "research") {
                   await Promise.resolve(
                     agent.updateState(config, {
@@ -857,8 +891,22 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           input.requestId,
           evidenceRequired && !pendingClarification,
           conversationSnapshot,
-          readFailed
+          readFailed,
+          historyTurn?.hasEvidence
         );
+        if (historyTurn?.used) {
+          if (!(await historyTurn.valid()))
+            return {
+              ok: false,
+              replyText: historyTurn.needsInput
+                ? "請提供要查詢的日期或時間範圍；例如昨天，或指定月份與主題。"
+                : "歷史來源已失效或暫不可取得，請重新查詢或引用必要內容。",
+              resultAuthority: { kind: "public" }
+            };
+          result.historyDependencies = historyTurn.dependencies;
+          metrics.historyEvidenceBytes = historyTurn.evidenceBytes;
+          metrics.historyLookupCount = historyTurn.lookupCount;
+        }
         const reference = publicReadReference(profile, input.event.source, results);
         if (reference) result.contextReference = reference;
         if (input.quoteContext) input.quoteContext.replyProjection = replyProjection(result);
@@ -1151,7 +1199,8 @@ function selectHelperReply(
   requestId: string,
   evidenceRequired = false,
   snapshot?: ConversationStateSnapshot,
-  readFailed = false
+  readFailed = false,
+  freshContextEvidence = false
 ): FunctionExecutionResult {
   const authoritative = results.filter((entry) => isAuthoritativeResult(entry.result));
   if (authoritative.length && results.length > 1)
@@ -1169,7 +1218,7 @@ function selectHelperReply(
     };
   if (results.length && results.every((entry) => entry.result.agentResult?.status !== "success"))
     return { ...results.at(-1)!.result };
-  if (evidenceRequired && !results.length)
+  if (evidenceRequired && !results.length && !freshContextEvidence)
     return {
       ok: false,
       writePreparation: "needs_input",
@@ -1242,6 +1291,8 @@ async function reviewJobResult(
 }
 
 interface HelperMetrics {
+  historyEvidenceBytes?: number;
+  historyLookupCount?: number;
   modelCallCount: number;
   toolCallCount: number;
   estimatedInputTokens: number;
@@ -1325,6 +1376,8 @@ async function recordHelperObservability(
           durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
           modelCallCount: metrics.modelCallCount,
           toolCallCount: metrics.toolCallCount,
+          historyEvidenceBytes: metrics.historyEvidenceBytes,
+          historyLookupCount: metrics.historyLookupCount,
           estimatedInputTokens: metrics.estimatedInputTokens,
           estimatedOutputTokens: metrics.estimatedOutputTokens,
           contextEdited: metrics.contextEdited,

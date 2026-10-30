@@ -1,3 +1,4 @@
+import type { HistoryDependency } from "../history/types.js";
 import type { JsonRecord, LineSource } from "../types.js";
 import type { CapabilityName } from "../capabilities/names.js";
 
@@ -6,6 +7,8 @@ export interface ConversationReadReference {
   arguments: JsonRecord;
 }
 export interface QuoteReplyProjection {
+  history?: true;
+  historyDependencies?: HistoryDependency[];
   kind: "conversation" | "read" | "preview" | "commit" | "status";
   publicRead?: ConversationReadReference;
 }

@@ -1,3 +1,5 @@
+import { loadHistoryConfig } from "../history/config.js";
+import { PostgresGroupHistory } from "../history/postgres.js";
 import { PostgresQuoteStore } from "../quotes/postgres-store.js";
 import { readMemberAccess } from "../account/member-access.js";
 import { createMeetingOccurrenceReader } from "../clients/meeting-occurrences.js";
@@ -89,6 +91,31 @@ export async function createLocalRuntime(config: AppConfig): Promise<Application
 async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const redis = await createRedisRuntime(config.redis);
   const postgres = await createPostgresRuntime(config.database);
+  const historyConfig = loadHistoryConfig(process.env.GROUP_HISTORY_CONFIG_PATH);
+  const historyPool =
+    historyConfig && config.database
+      ? createPostgresPool(config.database, { connectionTimeoutMillis: 250 })
+      : undefined;
+  const history =
+    historyConfig && historyPool
+      ? new PostgresGroupHistory(
+          historyPool,
+          historyConfig,
+          config.observability?.hmacKey ?? config.profiles[0]!.channelSecret,
+          async (scope) =>
+            scope.source.type === "group" &&
+            (await accessStore.hasActivePrincipal(
+              scope.profileName,
+              "group",
+              scope.source.groupId!
+            ))
+        )
+      : undefined;
+  await history?.synchronize();
+  const historyPurgeTimer = history
+    ? setInterval(() => void history.purge().catch(() => undefined), 300000)
+    : undefined;
+  historyPurgeTimer?.unref();
   const accountAdminClient = createAccountAdminClient({
     baseUrl: config.account?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
     timeoutMs: config.account?.timeoutMs ?? 3000
@@ -385,6 +412,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       timeoutMs: config.llm.deepseekTimeoutMs
     });
     runtimes.helper = createHelperRuntime({
+      history,
+      timeZone: config.timeZone,
       ...helperModels,
       async readMediaState(input) {
         if (
@@ -421,6 +450,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   }
   const profileRuntime = createProfileRuntimeDispatcher(runtimes);
   const app = createApp(config, {
+    history,
     async readMemberAccess(lineUserId, profileName, requestId) {
       const subject = await accountAdminClient.resolveLineSubject({ lineUserId, profileName });
       if (!subject.bound || !subject.active) return "unavailable";
@@ -466,6 +496,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   return {
     app,
     async close() {
+      clearInterval(historyPurgeTimer);
       clearInterval(memoryPurgeTimer);
       clearInterval(knowledgePurgeTimer);
       stopSdkStateCleanup?.();
@@ -482,6 +513,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
         if (result.status === "rejected") errors.push(result.reason);
       }
       for (const close of [
+        () => historyPool?.end(),
         () => redis?.close(),
         () => helperStateLockPool?.end(),
         () => postgres?.pool.end()

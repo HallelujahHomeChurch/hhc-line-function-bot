@@ -1,3 +1,4 @@
+import type { HistoryDependency } from "../../history/types.js";
 import type { QuoteContext, QuoteScope, QuoteStore } from "../../quotes/types.js";
 import type { ProfileRuntime } from "../../runtime/profile-runtime.js";
 import type { LineEvent, LineReplyClient } from "../../types.js";
@@ -9,6 +10,11 @@ export async function prepareQuoteContext(input: {
   event: LineEvent;
   line: LineReplyClient;
   clearConversation?: () => Promise<void>;
+  validateHistory?(dependencies: HistoryDependency[]): Promise<boolean>;
+  recordHistoryReply?(
+    messages: Array<{ id: string; text: string }>,
+    dependencies?: HistoryDependency[]
+  ): Promise<void>;
 }): Promise<{ context: QuoteContext; line: LineReplyClient } | undefined> {
   const { store, runtime, scope, event } = input;
   const reset = /^(?:\/reset|忘記這段對話)$/u.test(event.message?.text?.trim() ?? "");
@@ -40,9 +46,17 @@ export async function prepareQuoteContext(input: {
     line: {
       async replyText(...args) {
         if (!(await context.isCurrent())) return;
+        if (
+          context.replyProjection?.historyDependencies &&
+          !(await input.validateHistory?.(context.replyProjection.historyDependencies))
+        )
+          return;
         const result = await input.line.replyText(...args);
         // LINE has accepted the reply; an index failure must never resend it.
         if (result) {
+          await input
+            .recordHistoryReply?.(result.sentMessages, context.replyProjection?.historyDependencies)
+            .catch(() => undefined);
           await (
             context.replyProjection
               ? store.recordReply(turn, result.sentMessages, context.replyProjection)

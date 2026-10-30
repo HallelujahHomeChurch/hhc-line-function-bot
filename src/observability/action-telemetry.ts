@@ -135,6 +135,8 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
     case "modelCallCount":
     case "toolCallCount":
       return boundedTelemetryCount(value, 6);
+    case "historyEvidenceBytes":
+    case "historyLookupCount":
     case "estimatedInputTokens":
     case "estimatedOutputTokens":
       return boundedTelemetryCount(value, 1_000_000);

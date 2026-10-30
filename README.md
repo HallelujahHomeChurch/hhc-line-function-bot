@@ -590,3 +590,7 @@ Account contract, Dapr/ingress, bounded worker definitions/bootstrap and signed
 empty Gateway smoke checks. `catalog_job` verifies its deployed definition;
 catalog warm-up and recent-sync verification are separate post-deployment checks
 and cannot roll back a healthy release. See the production operations runbook.
+
+### Optional bounded group history
+
+Phase B is disabled by default. Same-group members (including later joiners) may read only that group's enabled shared history; no cross-group or private checkpoint disclosure is allowed. See [activation, migration, evidence and restore gates](docs/runbooks/group-history.md). No production collection is enabled by this source change.
