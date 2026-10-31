@@ -3,7 +3,7 @@
 ## Startup Context
 
 - This repo is `hhc-line-function-bot`, a TypeScript/Fastify LINE webhook service.
-- `helper` uses one LangChain/LangGraph agent with DeepSeek and server-owned tools.
+- `helper` uses one LangChain/LangGraph agent with a profile-selected OpenAI or DeepSeek model and server-owned tools.
 - `main` is a deterministic provider-free runtime for public and self-service functions.
 - Runtime behavior is controlled by bot profiles, capability toggles, access policy, and state stores.
 - Group context is requester-scoped and short-lived; never feed raw whole-group chat into the model. Explicit public group read references carry a server-produced safe locator plus only the explicitly quoted public Bot reply's safe excerpt and require a fresh read under the current requester; never share checkpoints, saved notes, drafts or approvals. An explicitly quoted, already-admitted safe member message may supply only that message in the same group; it must not wake the Bot by itself or grant authority.
@@ -27,13 +27,13 @@ Read these first when starting work:
 - Profile names must be lowercase URL-safe names, and `webhookPath` must equal `/api/line/webhook/{profileName}`. Do not reintroduce `/line/{profile}/webhook`.
 - Each profile has its own LINE credential references, access policy, wake-word behavior, and enabled functions.
 - The intended split is:
-  - `helper`: managed direct users/groups, registration enabled, DeepSeek SDK agent.
+  - `helper`: managed direct users/groups, registration enabled, profile-selected OpenAI or DeepSeek SDK agent.
   - `main`: public direct users, groups blocked, registration disabled, provider-free, with protected member Weekly Paper access and Account-authorized own-profile updates.
 - Access registration is profile-scoped. Do not make user/group registration global unless the user explicitly asks.
 - Administrator authority comes from a current linked Account administrator role and is rechecked for each protected operation. Legacy bootstrap or allowlist fields should not be reintroduced.
 - Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv` and `channelAccessTokenEnv`; do not put real LINE credentials or user IDs in the file.
 - The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`; use API keys from ACA/local secrets for remote providers.
-- Remote API providers such as `deepseek` are profile-scoped; `main` intentionally keeps an empty provider allowlist.
+- Remote API providers `openai` and `deepseek` are profile-scoped; `main` intentionally keeps an empty provider allowlist. Provider switching and Luna Chat Completions requirements are in `docs/runbooks/helper-provider-comparison.md`.
 - Helper persona and memory rules come from `config/agents/helper/PERSONA.md` and `MEMORY.md`, loaded through restricted profile-relative paths. Treat them as read-only prompt policy and never append runtime content. Keep house-church quote/golden-sentence behavior out of the persona; it should become a separate function if needed.
 
 ## Function Surface

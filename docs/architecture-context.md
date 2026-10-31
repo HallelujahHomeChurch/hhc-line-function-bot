@@ -49,7 +49,7 @@ A malformed group/direct event without `source.userId` does not receive a helper
 | Model output |                800 tokens |                     800 tokens |
 | Tool result  | 2,000 chars or 10 records |      2,000 chars or 10 records |
 
-Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. Cleanup runs every five minutes. `/reset` and `忘記這段對話` delete only the current requester thread. A persona, memory-policy, safety-policy, or tool-contract change changes the policy key and clears the old checkpoint before another model call.
+Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. Cleanup runs every five minutes. `/reset` and `忘記這段對話` delete only the current requester thread. A provider/model/reasoning, persona, memory-policy, safety-policy, or tool-contract change changes the policy key and clears the old checkpoint before another model call.
 
 Context reduction is ordered:
 

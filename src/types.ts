@@ -285,6 +285,7 @@ export interface BotProfileConfig extends ProfileFunctionPolicy {
     provider?: ModelProviderName;
     model?: string;
     summaryModel?: string;
+    reasoningEffort?: "none";
     personaPrompt: string;
     memoryPolicyPrompt: string;
   };

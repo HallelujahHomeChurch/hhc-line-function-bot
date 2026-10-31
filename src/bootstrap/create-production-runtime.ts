@@ -413,6 +413,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
         helperProvider === "openai" ? "https://api.openai.com/v1" : config.llm.deepseekBaseUrl,
       model: helperProfile.agent?.model ?? config.llm.deepseekModel,
       summaryModel: helperProfile.agent?.summaryModel,
+      reasoningEffort: helperProfile.agent?.reasoningEffort,
       timeoutMs: config.llm.deepseekTimeoutMs
     });
     runtimes.helper = createHelperRuntime({

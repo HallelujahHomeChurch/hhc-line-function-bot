@@ -391,6 +391,7 @@ required_bot_secrets = {
     "line-main-channel-secret",
     "line-main-channel-access-token",
     "deepseek-api-key",
+    "openai-api-key",
     "azure-openai-embedding-key",
     "notion-token",
     "database-url",
@@ -607,6 +608,7 @@ substitutions = {
         "azure-openai-embedding-key"
     ),
     "PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF": "deepseek-api-key",
+    "PLACEHOLDER_OPENAI_API_KEY_SECRET_REF": "openai-api-key",
     "PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF": "observability-hmac-key",
     "PLACEHOLDER_DATABASE_URL_SECRET_REF": "database-url",
     "PLACEHOLDER_REDIS_URL_SECRET_REF": "redis-url",
@@ -665,7 +667,6 @@ gateway_main_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/main"
 retired_bot_secrets=(
   bot-profiles-base64-json
   attachment-scan-queue-connection-string
-  openai-api-key
 )
 for retired_bot_secret in "${retired_bot_secrets[@]}"; do
   retired_bot_secret_name="$(az containerapp secret list \
