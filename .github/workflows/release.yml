@@ -8,6 +8,7 @@ on:
       - scripts/deploy-aca.sh
       - scripts/redis-recovery.py
       - scripts/release-assurance.sh
+      - scripts/meeting-cron-drift.py
       - scripts/maintenance-contract.sh
       - scripts/release-catalog.py
       - scripts/release-receipt.py
@@ -27,7 +28,6 @@ on:
       - aca.catalog-sync-job.yaml
       - aca.attachment-worker-job.yaml
       - aca.attachment-worker-app.yaml
-      - aca.media-sync-warmer-job.yaml
       - aca.release-probe-job.yaml
       - aca.periodic-assurance-job.yaml
       - infra/searxng/**
