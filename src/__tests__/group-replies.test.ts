@@ -1,3 +1,4 @@
+import { groupContinuationReply } from "../line-reply.js";
 import { describe, expect, it, vi } from "vitest";
 import { groupReplyClient, takeGroupReply } from "../transport/line/group-replies.js";
 import type { LineReplyClient } from "../types.js";
@@ -65,4 +66,37 @@ describe("scoped group message buttons", () => {
       })
     ).toBeUndefined();
   });
+});
+
+it("renders finite domain choices as scoped-safe text, never as approval", () => {
+  const result = {
+    ok: true,
+    replyText: "請選擇角色。",
+    agentResult: {
+      status: "ambiguous" as const,
+      replyText: "請選擇角色。",
+      clarification: { prompt: "請選擇角色。", choices: ["司琴", "確認"] }
+    }
+  };
+  const reply = groupContinuationReply(result, "group");
+  expect(reply.quickReplies?.map((item) => item.action)).toEqual([
+    { type: "message", label: "司琴", text: "選擇：司琴" },
+    { type: "message", label: "確認", text: "選擇：確認" }
+  ]);
+  expect(groupContinuationReply(result, "user")).toBe(result);
+});
+it("adds guidance only to missing-input or question replies, preserving previews and existing buttons", () => {
+  const result = {
+    ok: true,
+    replyText: "請輸入這份檔案的名稱。",
+    writePreparation: "needs_input" as const
+  };
+  expect(groupContinuationReply(result, "group").replyText).toContain("引用回覆");
+  expect(groupContinuationReply({ ok: true, replyText: "完成。" }, "group").replyText).toBe(
+    "完成。"
+  );
+  const preview = { ...result, writePhase: "preview" as const };
+  expect(groupContinuationReply(preview, "group")).toBe(preview);
+  const guided = groupContinuationReply(result, "group");
+  expect(groupContinuationReply(guided, "group")).toBe(guided);
 });

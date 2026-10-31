@@ -1,3 +1,4 @@
+import { introVariantForText } from "./intro.js";
 import type { BotProfileConfig, LineMessage, SmallTalkCategory } from "./types.js";
 
 export type GroupEngagementKind =
@@ -11,27 +12,6 @@ export interface GroupEngagement {
 // Require a vocative boundary; a name embedded in commentary is not an invocation.
 const addressContinuationPattern =
   /^(?:[\s,，、:：!！?？]|幫|帮|請|请|查|找|你好|你會|你能|謝謝|辛苦)/u;
-
-const commandHints = [
-  "查",
-  "找",
-  "搜尋",
-  "投影片",
-  "ppt",
-  "簡報",
-  "服事",
-  "服事表",
-  "聚會",
-  "流行",
-  "樂譜",
-  "歌譜",
-  "sheet",
-  "music",
-  "下一場",
-  "今天",
-  "明天",
-  "主日"
-];
 
 export function classifyGroupEngagement(
   profile: BotProfileConfig,
@@ -49,18 +29,13 @@ export function classifyGroupEngagement(
     return classifyAddressedText(text);
   }
 
-  const selfMention = Boolean(
-    profile.acceptMention && message.mention?.mentionees?.some((mentionee) => mentionee.isSelf)
-  );
-  const wakeKeywords = profile.wakeKeywords.filter((keyword) => keyword.trim());
-  const startsWithWake = wakeKeywords.some((keyword) => startsWithAddress(text, keyword));
-  const containsWake = wakeKeywords.some((keyword) => text.includes(keyword));
-
-  if (!selfMention && !startsWithWake) {
-    return containsWake ? { kind: "third_person" } : { kind: "ignore" };
+  const addressedText = explicitAddressedText(profile, message);
+  if (addressedText === undefined) {
+    return profile.wakeKeywords.some((keyword) => text.includes(keyword))
+      ? { kind: "third_person" }
+      : { kind: "ignore" };
   }
 
-  const addressedText = stripAddress(text, wakeKeywords, selfMention);
   if (!addressedText) {
     return { kind: "intro" };
   }
@@ -85,17 +60,31 @@ function classifyAddressedText(text: string): GroupEngagement {
   if (!normalized) {
     return { kind: "intro" };
   }
-  if (isIntroText(normalized)) {
+  if (introVariantForText(normalized)) {
     return { kind: "intro" };
   }
   const smallTalkCategory = classifySmallTalkCategory(normalized);
   if (smallTalkCategory) {
     return { kind: "small_talk", smallTalkCategory };
   }
-  if (commandHints.some((hint) => normalized.toLowerCase().includes(hint.toLowerCase()))) {
-    return { kind: "command" };
-  }
   return { kind: "command" };
+}
+
+export function explicitAddressedText(
+  profile: BotProfileConfig,
+  message?: LineMessage
+): string | undefined {
+  if (message?.type !== "text") return undefined;
+  let text = normalizeText(message.text ?? "");
+  const selfMention = Boolean(
+    profile.acceptMention && message.mention?.mentionees?.some((m) => m.isSelf)
+  );
+  const keywords = profile.wakeKeywords.filter((keyword) => keyword.trim());
+  const afterGreeting = text.replace(/^(?:hi|hello|hey|嗨|哈囉|你好)[\s,，、!！]+/iu, "");
+  if (keywords.some((keyword) => startsWithAddress(afterGreeting, keyword))) text = afterGreeting;
+  if (!selfMention && !keywords.some((keyword) => startsWithAddress(text, keyword)))
+    return undefined;
+  return stripAddress(text, keywords, selfMention);
 }
 
 function startsWithAddress(text: string, keyword: string): boolean {
@@ -103,7 +92,11 @@ function startsWithAddress(text: string, keyword: string): boolean {
     return false;
   }
   const rest = text.slice(keyword.length);
-  return rest.length === 0 || addressContinuationPattern.test(rest);
+  return (
+    rest.length === 0 ||
+    addressContinuationPattern.test(rest) ||
+    introVariantForText(rest) !== undefined
+  );
 }
 
 function stripAddress(text: string, wakeKeywords: string[], selfMention: boolean): string {
@@ -118,26 +111,6 @@ function stripAddress(text: string, wakeKeywords: string[], selfMention: boolean
     result = result.replace(/^@\S+\s*/u, "");
   }
   return result.replace(/^[\s,，、:：。.!！?？]+/u, "").trim();
-}
-
-function isIntroText(text: string): boolean {
-  const value = text.replace(/[!！。.\s]+$/gu, "").toLowerCase();
-  return [
-    "小哈",
-    "help",
-    "功能",
-    "使用說明",
-    "可以幹嘛",
-    "可以做什麼",
-    "能做什麼",
-    "你會什麼",
-    "會什麼",
-    "小哈可以幹嘛",
-    "小哈可以做什麼",
-    "小哈你能做什麼",
-    "小哈你會什麼",
-    "小哈會什麼"
-  ].includes(value);
 }
 
 export function classifySmallTalkCategory(text: string): SmallTalkCategory | undefined {

@@ -1,3 +1,5 @@
+import { InMemorySessionStore } from "../state/session-store.js";
+import type { LineReplyOptions } from "../types.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { AIMessage, FakeToolCallingModel, type BaseMessage } from "langchain";
 import { describe, expect, it, vi } from "vitest";
@@ -85,12 +87,14 @@ async function fixture(
   const checkpointer = new MemorySaver();
   const state = createHelperAgentState({ checkpointer, hmacKey: "synthetic-continuation" });
   const jobs = new InMemoryAgentJobStore();
+  const sessions = new InMemorySessionStore();
   const createJob = vi.spyOn(jobs, "createPending");
   const runtime = createHelperRuntime({
     model,
     summaryModel: model,
     state,
     handlers: options.handlers ?? {},
+    sessions,
     jobs
   });
   const store: QuoteStore = {
@@ -117,8 +121,10 @@ async function fixture(
     unsend: vi.fn(async () => [])
   };
   const replies: string[] = [];
+  const replyOptions: Array<LineReplyOptions | undefined> = [];
   const app = createTestApp(config, {
     quoteStore: store,
+    sessionStore: sessions,
     profileRuntime: runtime,
     conversationWindowStore: windows,
     agentJobStore: jobs,
@@ -139,7 +145,8 @@ async function fixture(
       getGroupDisplayName: async () => undefined
     }),
     createLineReplyClient: () => ({
-      replyText: async (_token, text) => {
+      replyText: async (_token, text, options) => {
+        replyOptions.push(options);
         replies.push(text);
         return { sentMessages: [{ id: `synthetic-reply-${replies.length}`, text }] };
       }
@@ -175,6 +182,29 @@ async function fixture(
       payload
     });
   };
+  const click = (data: string, userId = source.userId) => {
+    const payload = JSON.stringify({
+      events: [
+        {
+          type: "postback",
+          timestamp: Date.now(),
+          webhookEventId: `synthetic-click-${++sequence}`,
+          replyToken: `reply-${sequence}`,
+          source: { ...source, userId },
+          postback: { data }
+        }
+      ]
+    });
+    return app.inject({
+      method: "POST",
+      url: "/api/line/webhook/helper",
+      headers: {
+        "content-type": "application/json",
+        "x-line-signature": signLineBody(Buffer.from(payload), "synthetic")
+      },
+      payload
+    });
+  };
   const history = async () =>
     (
       await checkpointer.getTuple({
@@ -185,6 +215,8 @@ async function fixture(
     app,
     send,
     replies,
+    replyOptions,
+    click,
     store,
     generate,
     bind,
@@ -309,3 +341,100 @@ describe("explicit helper group admission", () => {
     }
   });
 });
+
+describe("group follow-up experience", () => {
+  it("accepts a bounded greeting before the Bot name", async () => {
+    const f = await fixture([new AIMessage("你好")]);
+    try {
+      await f.send("Hi 小哈", { quote: false });
+      expect(f.replies).toEqual(["我是小哈，家教會的小幫手。"]);
+      expect(f.generate).not.toHaveBeenCalled();
+    } finally {
+      await f.app.close();
+    }
+  });
+  it.each([
+    "小哈 可以做什麼",
+    "小哈 你能夠做什麼",
+    "小哈，你能做什麼？",
+    "小哈可以幹嘛",
+    "小哈可以做什麼"
+  ])("renders the deterministic capability menu for %s", async (text) => {
+    const f = await fixture([]);
+    try {
+      await f.send(text, { quote: false });
+      expect(f.replies[0]).toContain("查服事表");
+      expect(f.generate).not.toHaveBeenCalled();
+    } finally {
+      await f.app.close();
+    }
+  });
+  it("resets an explicitly addressed conversation without calling the model", async () => {
+    const f = await fixture([new AIMessage("先前答案"), new AIMessage("不應呼叫")]);
+    try {
+      await f.send("小哈，記住 SYNTHETIC_PRIOR", { quote: false });
+      await f.send("小哈，忘記這段對話", { quote: false });
+      expect(f.generate).toHaveBeenCalledTimes(1);
+      expect(f.replies.at(-1)).toContain("已清除");
+      expect(f.store.reset).toHaveBeenCalledOnce();
+    } finally {
+      await f.app.close();
+    }
+  });
+});
+
+it("gives a free-text group question an explicit continuation instruction without admitting bare replies", async () => {
+  const f = await fixture([new AIMessage("你想查哪一天？"), new AIMessage("已接續")], {
+    knownBot: true
+  });
+  try {
+    await f.send("小哈，幫我查資料", { quote: false });
+    expect(f.replies[0]).toContain("請引用回覆這則訊息");
+    await f.send("明天", { quote: false });
+    expect(f.generate).toHaveBeenCalledTimes(1);
+    await f.send("明天");
+    expect(f.generate).toHaveBeenCalledTimes(2);
+    expect(f.replies.at(-1)).toBe("已接續");
+  } finally {
+    await f.app.close();
+  }
+});
+
+it("completes a capability-menu journey with an owner-only one-shot button", async () => {
+  const f = await fixture([new AIMessage("需要哪一天？")]);
+  try {
+    await f.send("小哈 你能夠做什麼", { quote: false });
+    expect(f.generate).not.toHaveBeenCalled();
+    const action = f.replyOptions[0]?.quickReplies?.find(
+      (item) => item.label === "查服事表"
+    )?.action;
+    expect(action?.type).toBe("postback");
+    if (action?.type !== "postback") throw new Error("missing scoped menu action");
+    await f.click(action.data, "other-requester");
+    expect(f.generate).not.toHaveBeenCalled();
+    await f.click(action.data);
+    expect(f.generate).toHaveBeenCalledOnce();
+    expect(f.replies.at(-1)).toContain("引用回覆");
+    await f.click(action.data);
+    expect(f.generate).toHaveBeenCalledOnce();
+    await f.send("阿明，明天你幾點到？", { quote: false });
+    expect(f.generate).toHaveBeenCalledOnce();
+    expect(f.replies).toHaveLength(2);
+  } finally {
+    await f.app.close();
+  }
+});
+it.each(["Hi 大家，小哈今天又亂回", "Hi 小哈今天又亂回", "你問小哈看看", "阿明，明天你幾點到？"])(
+  "does not expand greeting admission to %s",
+  async (text) => {
+    const f = await fixture([]);
+    try {
+      await f.send(text, { quote: false });
+      expect(f.generate).not.toHaveBeenCalled();
+      expect(f.replies).toEqual([]);
+      expect(f.createJob).not.toHaveBeenCalled();
+    } finally {
+      await f.app.close();
+    }
+  }
+);
