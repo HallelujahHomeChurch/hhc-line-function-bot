@@ -453,6 +453,45 @@ mark_release_job_mutated() {
   esac
 }
 
+# Delete a Job that this release intentionally retires. The known-good snapshot
+# captured before mutation lets a failed release recreate it.
+retire_release_job() {
+  local job_name="$1"
+  local exists
+  local retired_image
+  local retired_digest
+  if ! exists="$(release_job_exists "${job_name}")"; then
+    set_release_failure job_retirement_failed
+    echo "Could not determine whether retired Job ${job_name} exists" >&2
+    return 1
+  fi
+  if [[ "${exists}" != "true" ]]; then
+    echo "Retired Job ${job_name} is already absent; nothing to delete"
+    return 0
+  fi
+  if ! retired_image="$(release_job_image "${job_name}")" || [[ -z "${retired_image}" ]] \
+    || ! retired_digest="$(resolve_release_image "${retired_image}")"; then
+    set_release_failure job_retirement_failed
+    echo "Could not record the image of retired Job ${job_name}" >&2
+    return 1
+  fi
+  # Keep the pre-deletion image in the release log for a manual rollback.
+  echo "Retiring Job ${job_name}: image ${retired_image} (${retired_digest})"
+  mark_release_job_mutated "${job_name}" || return 1
+  if ! az containerapp job delete \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${job_name}" \
+    --yes \
+    --only-show-errors \
+    --output none \
+    || [[ "$(release_job_exists "${job_name}")" != "false" ]]; then
+    set_release_failure job_retirement_failed
+    echo "Retired Job ${job_name} could not be deleted" >&2
+    return 1
+  fi
+  echo "Retired Job ${job_name} deleted"
+}
+
 complete_release_transaction() {
   if [[ "${RELEASE_REPORT_WRITTEN}" != "true" ]]; then
     set_release_failure report_write_failed
@@ -481,9 +520,6 @@ run_release_gates() {
   release_check_job_definition \
     "${ATTACHMENT_SCAN_JOB_NAME}" Manual 1800 1 manual \
     "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_worker_job worker_definition_mismatch false || return
-  release_check_job_definition \
-    "${MEDIA_SYNC_WARMER_JOB_NAME}" Schedule 120 1 schedule \
-    "${RELEASE_TARGET_ATTACHMENT_APP_IMAGE}" media_sync_warmer_job worker_definition_mismatch || return
   release_check_attachment_worker_app || return
   release_check_job_definition \
     "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
@@ -520,20 +556,53 @@ release_check_attachment_worker_app() {
     --name "${ATTACHMENT_WORKER_APP_NAME}" \
     --query '{image:properties.template.containers[0].image,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,poll:properties.template.scale.pollingInterval,cooldown:properties.template.scale.cooldownPeriod,rules:properties.template.scale.rules}' \
     --output json --only-show-errors)" || return 1
-  RELEASE_ATTACHMENT_APP_STATE="${observed}" RELEASE_ATTACHMENT_APP_IMAGE="${RELEASE_TARGET_ATTACHMENT_APP_IMAGE}" python3 - <<'PY'
+  RELEASE_ATTACHMENT_APP_STATE="${observed}" \
+  RELEASE_ATTACHMENT_APP_IMAGE="${RELEASE_TARGET_ATTACHMENT_APP_IMAGE}" \
+  RELEASE_SCRIPTS_DIR="$(dirname "${BASH_SOURCE[0]}")" \
+  python3 - <<'PY'
+import importlib.util
 import json
 import os
+from pathlib import Path
+
+scripts = Path(os.environ["RELEASE_SCRIPTS_DIR"])
+spec = importlib.util.spec_from_file_location("meeting_cron_drift", scripts / "meeting-cron-drift.py")
+drift = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(drift)
+# The checked-out manifest is the single source of the expected meeting warm windows.
+expected_cron = {
+    rule["name"]: {
+        "timezone": "Asia/Taipei",
+        "start": rule["startExpression"],
+        "end": rule["endExpression"],
+        "desiredReplicas": "1",
+    }
+    for rule in drift.cron_rules(
+        (scripts.parent / "aca.attachment-worker-app.yaml").read_text(encoding="utf-8")
+    )
+}
 
 state = json.loads(os.environ["RELEASE_ATTACHMENT_APP_STATE"])
-rules = state.get("rules") or []
-names = {rule.get("name") for rule in rules if isinstance(rule, dict)}
+rules = [rule for rule in (state.get("rules") or []) if isinstance(rule, dict)]
+names = [rule.get("name") for rule in rules]
+# Compare only the declared metadata keys; ACA may echo extra server-side fields.
+observed_cron = {
+    rule.get("name"): {
+        key: ((rule["custom"].get("metadata") or {}).get(key))
+        for key in ("timezone", "start", "end", "desiredReplicas")
+    }
+    for rule in rules
+    if isinstance(rule.get("custom"), dict) and rule["custom"].get("type") == "cron"
+}
 valid = (
     state.get("image") == os.environ["RELEASE_ATTACHMENT_APP_IMAGE"]
     and state.get("min") == 0
     and state.get("max") == 1
     and state.get("poll") == 1
     and state.get("cooldown") == 120
-    and names == {"attachment-work", "media-sync-warm"}
+    and len(names) == len(set(names))
+    and set(names) == {"attachment-work", *expected_cron}
+    and observed_cron == expected_cron
 )
 raise SystemExit(0 if valid else 1)
 PY
@@ -919,29 +988,6 @@ elif check_name == "attachment_worker_job":
         and not mounts
         and not volumes
     )
-elif check_name == "media_sync_warmer_job":
-    valid = (
-        valid
-        and trigger.get("cronExpression") == "*/1 * * * *"
-        and args == ["dist/tools/run-media-sync-warmer.js"]
-        and env_contract(
-            env,
-            {
-                "MEETING_API_BASE_URL": {"value": None},
-                "MEETING_API_AUDIENCE": {"value": None},
-                "MEDIA_SYNC_WARM_QUEUE_URL": {"value": None},
-                "MEDIA_SYNC_WARM_LEAD": {"value": "5m"},
-                "MEDIA_SYNC_WARM_TAIL": {"value": "10m"},
-                "AZURE_CLIENT_ID": {"value": None},
-            },
-        )
-        and isinstance(resources, dict)
-        and resources.get("cpu") == 0.25
-        and resources.get("memory") == "0.5Gi"
-        and resources.get("ephemeralStorage", "") == ""
-        and not mounts
-        and not volumes
-    )
 elif check_name == "release_probe":
     valid = (
         valid
@@ -1316,7 +1362,8 @@ PYTHON
   fi
   if [[ "${contract}" != "2" ]] \
     || [[ "${RELEASE_KNOWN_GOOD_SCAN_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]] \
-    || [[ "${RELEASE_KNOWN_GOOD_WARMER_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]] \
+    || [[ "${RELEASE_KNOWN_GOOD_WARMER_EXISTS:-false}" == "true" \
+      && "${RELEASE_KNOWN_GOOD_WARMER_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]] \
     || [[ "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE}" != "${RELEASE_KNOWN_GOOD_IMAGE}" ]]; then
     RELEASE_STATE_DOWNGRADE_BLOCKED=true
     echo "Runtime state migration: automatic downgrade is blocked; recovery requires a compatible forward release" >&2
@@ -1635,12 +1682,24 @@ restore_changed_job() {
     fi
     return 0
   fi
-  az containerapp job update \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${job_name}" \
-    --yaml "${known_manifest}" \
-    --only-show-errors \
-    --output none || return
+  local present
+  present="$(release_job_exists "${job_name}")" || return
+  if [[ "${present}" == "true" ]]; then
+    az containerapp job update \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${job_name}" \
+      --yaml "${known_manifest}" \
+      --only-show-errors \
+      --output none || return
+  else
+    # A retired Job deleted by this release is recreated from its captured manifest.
+    az containerapp job create \
+      --resource-group "${RESOURCE_GROUP}" \
+      --name "${job_name}" \
+      --yaml "${known_manifest}" \
+      --only-show-errors \
+      --output none || return
+  fi
   observed_image="$(release_job_image "${job_name}")" || return
   observed_image="$(resolve_release_image "${observed_image}")" || return
   [[ "${observed_image}" == "${known_image}" ]] || return
@@ -1741,6 +1800,7 @@ failure_map = {
     "transaction_incomplete": "network_failed",
     "unclassified_release_failure": "network_failed",
     "unexpected_release_job": "http_mismatch",
+    "job_retirement_failed": "network_failed",
 }
 check_names = {
     "target_revision",
@@ -1753,7 +1813,6 @@ check_names = {
     "release_probe",
     "catalog_job",
     "attachment_worker_job",
-    "media_sync_warmer_job",
     "periodic_assurance_job",
     "bot_health",
     "bot_readiness",

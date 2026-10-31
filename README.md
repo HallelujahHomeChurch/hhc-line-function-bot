@@ -573,10 +573,36 @@ controls disabled until older worker revisions and finite executions are drained
 Catalog-sync and attachment Jobs use a separate Key Vault reference
 `hhc-line-jobs-database-url` for the shared `hhc_line_jobs` login (cap6). The
 API and persistent attachment worker keep their runtime login. Periodic
-assurance, media-sync warmer and release probe do not open PG pools. Provision
+assurance and release probe do not open PG pools. Provision
 the capped credential and narrow secret-read access for both Job identities
 with admission paused before release; metadata preflight rejects a missing
 credential. This source change does not provision credentials or permissions.
+
+### Attachment app meeting warm windows
+
+The persistent attachment app (`hhc-line-bot-attachment-app`) scales to zero
+outside meetings. Five KEDA cron rules in `aca.attachment-worker-app.yaml` keep
+one replica warm from 5 minutes before to 10 minutes after each regular
+meeting (Asia/Taipei), alongside the `attachment-work` queue rule:
+
+| rule           | start          | end            | meeting             |
+| -------------- | -------------- | -------------- | ------------------- |
+| `tue-fri-0625` | `25 6 * * 2,5` | `40 8 * * 2,5` | Tue/Fri 06:30–08:30 |
+| `thu-1155`     | `55 11 * * 4`  | `10 14 * * 4`  | Thu 12:00–14:00     |
+| `fri-1855`     | `55 18 * * 5`  | `40 21 * * 5`  | Fri 19:00–21:30     |
+| `sat-0855`     | `55 8 * * 6`   | `40 11 * * 6`  | Sat 09:00–11:30     |
+| `sun-0855`     | `55 8 * * 0`   | `10 12 * * 0`  | Sun 09:00–12:00     |
+
+These windows are hard-coded in IaC. Changing a meeting time requires editing
+the cron rules and releasing; the per-minute `hhc-line-bot-media-sync-warmer`
+Job is retired and the release deletes it if present (logging its last image).
+The weekly `Meeting Cron Drift` workflow (`.github/workflows/meeting-cron-drift.yml`,
+`scripts/meeting-cron-drift.py`) compares the rules with the public
+`/api/meeting-occurrences` for the next 28 days and opens or updates the issue
+"Meeting cron drift: attachment app" with a suggested rule when a scheduled
+occurrence is not covered. The `media-sync-warm` queue and
+`MEDIA_SYNC_WARM_QUEUE_URL` remain because the worker still drains legacy
+pulses; the Operations sync-window check inside the worker is unchanged.
 
 Redis full/partial/stale loss requires the [bounded recovery procedure](docs/runbooks/redis-loss-recovery.md). The offline planner does not authorize replay; signed-event cutoff and a consistent new namespace retire old one-shot authority while unknown effects remain quarantined. The default recovery configuration is inactive.
 

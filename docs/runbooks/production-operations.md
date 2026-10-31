@@ -325,6 +325,10 @@ Production deploys `hhc-searxng` with internal-only ingress, one replica, `0.25`
 
 Asset returns a durable scan status. `pending` and `scanning` remain retryable; `infected`, `failed`, or any malformed response fails closed. The LINE Job downloads only after creating a service grant and verifies the original hash again before Graph publication.
 
+## Attachment App Warm Windows
+
+The attachment app warm windows are KEDA cron rules in `aca.attachment-worker-app.yaml` (see README, "Attachment app meeting warm windows"). They are hard-coded: when a meeting time changes, edit the cron rules and release. The weekly `Meeting Cron Drift` workflow fails and opens or updates the issue "Meeting cron drift: attachment app" when a scheduled occurrence in the next 28 days is not covered from 5 minutes before start to 10 minutes after end; run it manually with `workflow_dispatch` after changing either side, or locally with `python3 scripts/meeting-cron-drift.py`. The release gate verifies the deployed cron rules match the manifest. The retired `hhc-line-bot-media-sync-warmer` Job is deleted by the release; its last image is printed in the release log, and a failed release recreates it from the pre-release snapshot. To restore it after a successful release, revert the change and release again.
+
 ## Attachment Save Gate
 
 Do not add `image` or `file` to a production profile's `allowedMessageTypes` until all attachment prerequisites are configured:

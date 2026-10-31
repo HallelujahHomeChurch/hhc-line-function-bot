@@ -390,7 +390,7 @@ describe("release assurance shell transaction", () => {
     expect(result.status, diagnostic(result, await fixture.calls())).toBe(0);
     const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
     expect(report.status).toBe("passed");
-  });
+  }, 15_000);
 
   it("keeps catalog freshness outside the deployment rollback transaction", async () => {
     const fixture = await createFixture("catalog_no_recent_success");
@@ -581,6 +581,7 @@ describe("release assurance shell transaction", () => {
     "catalog_hmac_env_mismatch",
     "scan_definition_failure",
     "scan_scaler_mismatch",
+    "scan_cron_mismatch",
     "scan_resources_mismatch",
     "scan_storage_resources_mismatch",
     "scan_extra_resources_mismatch",
@@ -835,6 +836,46 @@ describe("release assurance shell transaction", () => {
     expect(report.rollback.status).toBe("failed");
   }, 15_000);
 
+  it("retires the warmer Job idempotently and logs its image before deletion", async () => {
+    const fixture = await createFixture("warmer_retirement_success");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(0);
+    expect(report.status).toBe("passed");
+    expect(result.stdout).toMatch(
+      /Retiring Job hhc-line-bot-media-sync-warmer: image \S+@sha256:[0-9a-f]{64}/u
+    );
+    expect(result.stdout).toContain(
+      "Retired Job hhc-line-bot-media-sync-warmer is already absent; nothing to delete"
+    );
+    const deletes = calls.filter(
+      (args) => args.includes("delete") && args.includes("hhc-line-bot-media-sync-warmer")
+    );
+    expect(deletes).toHaveLength(1);
+    expect(calls.some((args) => args.includes("create"))).toBe(false);
+  }, 15_000);
+
+  it("recreates the retired warmer Job from its snapshot when the release rolls back", async () => {
+    const fixture = await createFixture("warmer_retirement_rollback");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    expect(report.rollback.status).toBe("restored");
+    expect(calls).toContainEqual(
+      expect.arrayContaining([
+        "job",
+        "create",
+        "--name",
+        "hhc-line-bot-media-sync-warmer",
+        "--yaml"
+      ])
+    );
+  }, 15_000);
+
   it("removes assurance jobs that did not exist in the known-good snapshot", async () => {
     const fixture = await createFixture("absent_assurance_jobs");
     const result = fixture.run();
@@ -933,7 +974,6 @@ async function createDeployFixture(scenario: string) {
         "aca.catalog-sync-job.yaml",
         "aca.attachment-worker-job.yaml",
         "aca.attachment-worker-app.yaml",
-        "aca.media-sync-warmer-job.yaml",
         "aca.release-probe-job.yaml",
         "aca.periodic-assurance-job.yaml"
       ].map((name) => copyFile(path.join(ROOT, name), path.join(directory, name)))
@@ -1236,6 +1276,10 @@ mark_release_job_mutated "hhc-line-bot-attachment-worker"
 mark_release_job_mutated "hhc-line-bot-catalog-sync"
 mark_release_job_mutated "hhc-line-bot-release-probe"
 mark_release_job_mutated "hhc-line-bot-periodic-assurance"
+if [[ "\${FAKE_SCENARIO}" == warmer_retirement* ]]; then
+  retire_release_job "hhc-line-bot-media-sync-warmer"
+  retire_release_job "hhc-line-bot-media-sync-warmer"
+fi
 RELEASE_TARGET_REVISION="bot--target"
 RELEASE_TARGET_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
 RELEASE_TARGET_SCAN_IMAGE="registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}"
@@ -1311,7 +1355,7 @@ function toBashPath(filePath: string): string {
 }
 
 const FAKE_AZ = `#!/usr/bin/env node
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const rawArgs = process.argv.slice(2);
@@ -1386,8 +1430,9 @@ if (command("containerapp", "job", "list")) {
   if (scenario === "job_list_failure") process.exit(106);
   const requestedName = /name=='([^']+)'/.exec(query ?? "")?.[1];
   const absent =
-    scenario === "absent_assurance_jobs" &&
-    ["hhc-line-bot-release-probe", "hhc-line-bot-periodic-assurance"].includes(requestedName);
+    (scenario === "absent_assurance_jobs" &&
+      ["hhc-line-bot-release-probe", "hhc-line-bot-periodic-assurance"].includes(requestedName)) ||
+    existsSync(path.join(state, "deleted-" + requestedName));
   output(absent ? "" : requestedName ?? "");
   process.exit(0);
 }
@@ -1446,7 +1491,28 @@ if (command("containerapp", "show") && name === "hhc-line-bot-attachment-app") {
       max: 1,
       poll: 1,
       cooldown: 120,
-      rules: [{ name: "attachment-work" }, { name: "media-sync-warm" }]
+      rules: [
+        { name: "attachment-work", azureQueue: { queueLength: 1 } },
+        ...[
+          ["tue-fri-0625", "25 6 * * 2,5", "40 8 * * 2,5"],
+          ["thu-1155", "55 11 * * 4", "10 14 * * 4"],
+          ["fri-1855", "55 18 * * 5", "40 21 * * 5"],
+          ["sat-0855", "55 8 * * 6", "40 11 * * 6"],
+          [
+            "sun-0855",
+            scenario === "scan_cron_mismatch" || scenario === "warmer_retirement_rollback"
+              ? "0 9 * * 0"
+              : "55 8 * * 0",
+            "10 12 * * 0"
+          ]
+        ].map(([name, start, end]) => ({
+          name,
+          custom: {
+            type: "cron",
+            metadata: { timezone: "Asia/Taipei", start, end, desiredReplicas: "1" }
+          }
+        }))
+      ]
     });
   } else process.exit(109);
   process.exit(0);
@@ -1655,28 +1721,6 @@ if (command("containerapp", "job", "show")) {
       volumeMounts: [],
       volumes: []
     },
-    "hhc-line-bot-media-sync-warmer": {
-      triggerType: "Schedule",
-      replicaTimeout: 120,
-      replicaRetryLimit: 1,
-      schedule: {
-        cronExpression: "*/1 * * * *",
-        parallelism: 1,
-        replicaCompletionCount: 1
-      },
-      args: ["dist/tools/run-media-sync-warmer.js"],
-      env: [
-        { name: "MEETING_API_BASE_URL", value: "https://meeting.internal.example" },
-        { name: "MEETING_API_AUDIENCE", value: "api://meeting-api" },
-        { name: "MEDIA_SYNC_WARM_QUEUE_URL", value: "https://queue.example/warm" },
-        { name: "MEDIA_SYNC_WARM_LEAD", value: "5m" },
-        { name: "MEDIA_SYNC_WARM_TAIL", value: "10m" },
-        { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" }
-      ],
-      resources: { cpu: 0.25, memory: "0.5Gi", ephemeralStorage: "" },
-      volumeMounts: [],
-      volumes: []
-    },
     "hhc-line-bot-release-probe": {
       triggerType: "Manual",
       replicaTimeout: 300,
@@ -1872,6 +1916,24 @@ if (command("containerapp", "revision", "copy")) {
 if (command("containerapp", "job", "update")) {
   if (!oldImages[name]) process.exit(99);
   if (!args.includes("--yaml")) process.exit(99);
+  writeFileSync(path.join(state, "restored-" + name), "1");
+  process.exit(0);
+}
+
+if (command("containerapp", "job", "delete") && scenario.startsWith("warmer_retirement")) {
+  if (name !== "hhc-line-bot-media-sync-warmer" || !args.includes("--yes")) process.exit(103);
+  writeFileSync(path.join(state, "deleted-" + name), "1");
+  process.exit(0);
+}
+
+if (command("containerapp", "job", "create")) {
+  if (
+    !scenario.startsWith("warmer_retirement") ||
+    name !== "hhc-line-bot-media-sync-warmer" ||
+    !args.includes("--yaml") ||
+    !existsSync(path.join(state, "deleted-" + name))
+  ) process.exit(104);
+  rmSync(path.join(state, "deleted-" + name));
   writeFileSync(path.join(state, "restored-" + name), "1");
   process.exit(0);
 }

@@ -69,7 +69,6 @@ release_probe_job_manifest_template="${script_dir}/../aca.release-probe-job.yaml
 periodic_assurance_job_manifest_template="${script_dir}/../aca.periodic-assurance-job.yaml"
 attachment_worker_job_manifest_template="${script_dir}/../aca.attachment-worker-job.yaml"
 attachment_worker_app_manifest_template="${script_dir}/../aca.attachment-worker-app.yaml"
-media_sync_warmer_job_manifest_template="${script_dir}/../aca.media-sync-warmer-job.yaml"
 bot_manifest="$(mktemp)"
 searxng_manifest="$(mktemp)"
 catalog_job_manifest="$(mktemp)"
@@ -77,7 +76,6 @@ release_probe_job_manifest="$(mktemp)"
 periodic_assurance_job_manifest="$(mktemp)"
 attachment_worker_job_manifest="$(mktemp)"
 attachment_worker_app_manifest="$(mktemp)"
-media_sync_warmer_job_manifest="$(mktemp)"
 RELEASE_CLEANUP_FILES=(
   "${bot_manifest}"
   "${searxng_manifest}"
@@ -86,7 +84,6 @@ RELEASE_CLEANUP_FILES=(
   "${periodic_assurance_job_manifest}"
   "${attachment_worker_job_manifest}"
   "${attachment_worker_app_manifest}"
-  "${media_sync_warmer_job_manifest}"
 )
 
 if [[ ! -f "${bot_manifest_template}" \
@@ -96,8 +93,7 @@ if [[ ! -f "${bot_manifest_template}" \
   || ! -f "${release_probe_job_manifest_template}" \
   || ! -f "${periodic_assurance_job_manifest_template}" \
   || ! -f "${attachment_worker_job_manifest_template}" \
-  || ! -f "${attachment_worker_app_manifest_template}" \
-  || ! -f "${media_sync_warmer_job_manifest_template}" ]]; then
+  || ! -f "${attachment_worker_app_manifest_template}" ]]; then
   echo "Missing deployment configuration"
   exit 1
 fi
@@ -241,7 +237,9 @@ if [[ "$(az role assignment list \
   echo "Attachment Job identity is missing its queue processor, queue reader, or ACR pull role" >&2
   exit 1
 fi
-for warm_role in "Storage Queue Data Message Processor" "Storage Queue Data Reader" "Storage Queue Data Message Sender"; do
+# The attachment worker still drains legacy pulses from the warm queue; only the retired
+# warmer Job needed Message Sender, so that role is no longer a release precondition.
+for warm_role in "Storage Queue Data Message Processor" "Storage Queue Data Reader"; do
   if [[ "$(az role assignment list \
     --scope "${warm_queue_scope}" \
     --assignee-object-id "${attachment_job_principal_id}" \
@@ -888,11 +886,6 @@ render_job_manifest \
   "${ATTACHMENT_WORKER_APP_NAME}" \
   "${image_ref}"
 render_job_manifest \
-  "${media_sync_warmer_job_manifest_template}" \
-  "${media_sync_warmer_job_manifest}" \
-  "${MEDIA_SYNC_WARMER_JOB_NAME}" \
-  "${image_ref}"
-render_job_manifest \
   "${catalog_job_manifest_template}" \
   "${catalog_job_manifest}" \
   "${CATALOG_SYNC_JOB_NAME}" \
@@ -922,8 +915,8 @@ az containerapp create \
   --name "${ATTACHMENT_WORKER_APP_NAME}" \
   --yaml "${attachment_worker_app_manifest}" \
   --only-show-errors --output none
-mark_release_job_mutated "${MEDIA_SYNC_WARMER_JOB_NAME}"
-deploy_job "${MEDIA_SYNC_WARMER_JOB_NAME}" "${media_sync_warmer_job_manifest}" "${attachment_job_identity_id}"
+# Planned retirement: KEDA cron rules on the attachment app replace the per-minute warmer.
+retire_release_job "${MEDIA_SYNC_WARMER_JOB_NAME}"
 mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
 deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
 mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"

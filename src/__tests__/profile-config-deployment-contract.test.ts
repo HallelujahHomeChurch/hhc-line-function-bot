@@ -54,10 +54,7 @@ describe("production profile configuration deployment contract", () => {
     ]) {
       expect(scale).toContain(setting);
     }
-    for (const [name, queue] of [
-      ["attachment-work", "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME"],
-      ["media-sync-warm", "PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME"]
-    ]) {
+    for (const [name, queue] of [["attachment-work", "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME"]]) {
       const rule =
         scale.match(new RegExp(`- name: ${name}\\n([\\s\\S]*?)(?=        - name:|$)`))?.[1] ?? "";
       expect(rule).toMatch(/^ {10}azureQueue:$/m);
@@ -66,6 +63,22 @@ describe("production profile configuration deployment contract", () => {
       expect(rule).toContain(`queueName: ${queue}`);
       expect(rule).toMatch(/^ {12}queueLength: 1$/m);
       expect(rule).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
+    }
+    expect(scale).not.toContain("name: media-sync-warm");
+    for (const [name, start, end] of [
+      ["tue-fri-0625", "25 6 * * 2,5", "40 8 * * 2,5"],
+      ["thu-1155", "55 11 * * 4", "10 14 * * 4"],
+      ["fri-1855", "55 18 * * 5", "40 21 * * 5"],
+      ["sat-0855", "55 8 * * 6", "40 11 * * 6"],
+      ["sun-0855", "55 8 * * 0", "10 12 * * 0"]
+    ]) {
+      const rule =
+        scale.match(new RegExp(`- name: ${name}\\n([\\s\\S]*?)(?=        - name:|$)`))?.[1] ?? "";
+      expect(rule).toMatch(/^ {10}custom:\n {12}type: cron\n {12}metadata:$/m);
+      expect(rule).toContain("timezone: Asia/Taipei");
+      expect(rule).toContain(`start: "${start}"`);
+      expect(rule).toContain(`end: "${end}"`);
+      expect(rule).toContain('desiredReplicas: "1"');
     }
   });
 
@@ -356,7 +369,6 @@ describe("production profile configuration deployment contract", () => {
       "aca.catalog-sync-job.yaml",
       "aca.attachment-worker-job.yaml",
       "aca.attachment-worker-app.yaml",
-      "aca.media-sync-warmer-job.yaml",
       "aca.release-probe-job.yaml",
       "aca.periodic-assurance-job.yaml"
     ]) {
@@ -990,7 +1002,6 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain('RELEASE_TARGET_SCAN_IMAGE="${image_ref}"');
     for (const jobName of [
       "ATTACHMENT_SCAN_JOB_NAME",
-      "MEDIA_SYNC_WARMER_JOB_NAME",
       "CATALOG_SYNC_JOB_NAME",
       "RELEASE_PROBE_JOB_NAME",
       "PERIODIC_ASSURANCE_JOB_NAME"
@@ -1046,11 +1057,18 @@ describe("production profile configuration deployment contract", () => {
     expect(workerApp).toContain("pollingInterval: 1");
     expect(workerApp).toContain("cooldownPeriod: 120");
     expect(workerApp).toContain("name: attachment-work");
-    expect(workerApp).toContain("name: media-sync-warm");
+    expect(workerApp).not.toContain("name: media-sync-warm\n");
+    expect(workerApp).toContain("MEDIA_SYNC_WARM_QUEUE_URL");
     expect(workerApp).toContain("- --loop");
-    const warmer = readProjectFile("aca.media-sync-warmer-job.yaml");
-    expect(warmer).toContain('cronExpression: "*/1 * * * *"');
-    expect(warmer).toContain("dist/tools/run-media-sync-warmer.js");
+    expect(projectFileExists("aca.media-sync-warmer-job.yaml")).toBe(false);
+    expect(deployment).not.toContain("aca.media-sync-warmer-job.yaml");
+    expect(deployment).not.toMatch(/deploy_job\s+"\$\{MEDIA_SYNC_WARMER_JOB_NAME\}"/u);
+    const retirement = deployment.indexOf('retire_release_job "${MEDIA_SYNC_WARMER_JOB_NAME}"');
+    expect(retirement).toBeGreaterThan(
+      deployment.indexOf('--name "${ATTACHMENT_WORKER_APP_NAME}"')
+    );
+    expect(retirement).toBeLessThan(deployment.indexOf("\nrun_release_gates\n"));
+    expect(workflow).not.toContain("aca.media-sync-warmer-job.yaml");
     expect(deployment).not.toContain("az containerapp env storage set");
   });
 

@@ -34,7 +34,6 @@ export type ReleaseCheckName =
   | "release_probe"
   | "catalog_job"
   | "attachment_worker_job"
-  | "media_sync_warmer_job"
   | "periodic_assurance_job"
   | "bot_health"
   | "bot_readiness"
@@ -125,7 +124,6 @@ const releaseChecks = new Set<ReleaseCheckName>([
   "release_probe",
   "catalog_job",
   "attachment_worker_job",
-  "media_sync_warmer_job",
   "periodic_assurance_job",
   "bot_health",
   "bot_readiness",

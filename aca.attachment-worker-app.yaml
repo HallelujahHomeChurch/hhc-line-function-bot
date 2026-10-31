@@ -34,12 +34,48 @@ properties:
             queueName: PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME
             queueLength: 1
             identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
-        - name: media-sync-warm
-          azureQueue:
-            accountName: PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
-            queueName: PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME
-            queueLength: 1
-            identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID
+        # Meeting warm windows (Asia/Taipei): 5 minutes before start to 10 minutes after end.
+        # Hard-coded; meeting-cron-drift.yml checks them against the public meeting occurrences.
+        - name: tue-fri-0625
+          custom:
+            type: cron
+            metadata:
+              timezone: Asia/Taipei
+              start: "25 6 * * 2,5"
+              end: "40 8 * * 2,5"
+              desiredReplicas: "1"
+        - name: thu-1155
+          custom:
+            type: cron
+            metadata:
+              timezone: Asia/Taipei
+              start: "55 11 * * 4"
+              end: "10 14 * * 4"
+              desiredReplicas: "1"
+        - name: fri-1855
+          custom:
+            type: cron
+            metadata:
+              timezone: Asia/Taipei
+              start: "55 18 * * 5"
+              end: "40 21 * * 5"
+              desiredReplicas: "1"
+        - name: sat-0855
+          custom:
+            type: cron
+            metadata:
+              timezone: Asia/Taipei
+              start: "55 8 * * 6"
+              end: "40 11 * * 6"
+              desiredReplicas: "1"
+        - name: sun-0855
+          custom:
+            type: cron
+            metadata:
+              timezone: Asia/Taipei
+              start: "55 8 * * 0"
+              end: "10 12 * * 0"
+              desiredReplicas: "1"
     containers:
       - name: attachment-worker
         image: alive.azurecr.io/alive/hhc-line-function-bot:latest
