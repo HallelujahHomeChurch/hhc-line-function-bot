@@ -88,6 +88,62 @@ async function withJsonFile<T>(
 }
 
 describe("config", () => {
+  it("loads the production Luna profile while keeping main provider-free", () => {
+    const config = loadConfigFromEnv({
+      PROFILE_CONFIG_PATH: "config/profiles.json",
+      LINE_HELPER_CHANNEL_SECRET: "synthetic",
+      LINE_HELPER_CHANNEL_ACCESS_TOKEN: "synthetic",
+      LINE_MAIN_CHANNEL_SECRET: "synthetic",
+      LINE_MAIN_CHANNEL_ACCESS_TOKEN: "synthetic",
+      LINE_HELPER_ACCOUNT_ID: "@synthetic-helper",
+      LINE_MAIN_ACCOUNT_ID: "@synthetic-main",
+      LINE_ACCOUNT_PROVIDER_ID: "1234",
+      OPENAI_API_KEY: "synthetic",
+      DATABASE_URL: "postgres://synthetic.invalid/test",
+      REDIS_URL: "redis://synthetic.invalid:6379"
+    });
+    expect(config.profiles.find((p) => p.name === "helper")?.agent).toMatchObject({
+      provider: "openai",
+      model: "gpt-6-luna",
+      summaryModel: "gpt-6-luna",
+      reasoningEffort: "none"
+    });
+    expect(config.profiles.find((p) => p.name === "main")?.allowedProviders).toEqual([]);
+  });
+
+  it.each(["model", "summaryModel"])(
+    "rejects Luna %s without non-reasoning tool mode",
+    async (slot) => {
+      await withProfileFile(
+        [
+          {
+            name: "helper",
+            webhookPath: "/api/line/webhook/helper",
+            channelSecret: "synthetic",
+            channelAccessToken: "synthetic",
+            allowedProviders: ["deepseek", "openai"],
+            agent: {
+              personaFile: "agents/helper/PERSONA.md",
+              memoryPolicyFile: "agents/helper/MEMORY.md",
+              provider: "openai",
+              model: "synthetic",
+              [slot]: "gpt-6-luna"
+            }
+          }
+        ],
+        async (path) => {
+          const directory = join(path, "..", "agents", "helper");
+          await mkdir(directory, { recursive: true });
+          await writeFile(join(directory, "PERSONA.md"), "synthetic");
+          await writeFile(join(directory, "MEMORY.md"), "synthetic");
+          expect(() =>
+            loadConfigFromEnv({ PROFILE_CONFIG_PATH: path, OPENAI_API_KEY: "synthetic" })
+          ).toThrow("helper_luna_chat_requires_reasoning_none");
+        }
+      );
+    }
+  );
+
   it("validates explicit OpenAI selection against model and profile allowlist", async () => {
     await withProfileFile(
       [

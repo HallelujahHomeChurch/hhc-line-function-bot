@@ -174,6 +174,7 @@ describe("production profile configuration deployment contract", () => {
       ["LINE_MAIN_CHANNEL_ACCESS_TOKEN", "PLACEHOLDER_LINE_MAIN_CHANNEL_ACCESS_TOKEN_SECRET_REF"],
       ["AZURE_OPENAI_EMBEDDING_API_KEY", "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF"],
       ["DEEPSEEK_API_KEY", "PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF"],
+      ["OPENAI_API_KEY", "PLACEHOLDER_OPENAI_API_KEY_SECRET_REF"],
       ["OBSERVABILITY_HMAC_KEY", "PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF"],
       ["DATABASE_URL", "PLACEHOLDER_DATABASE_URL_SECRET_REF"],
       ["REDIS_URL", "PLACEHOLDER_REDIS_URL_SECRET_REF"],
@@ -340,14 +341,33 @@ describe("production profile configuration deployment contract", () => {
     expect(retiredSecretCleanup).toBeLessThan(refreshedEnvSnapshot);
     for (const retiredSecret of [
       "bot-profiles-base64-json",
-      "attachment-scan-queue-connection-string",
-      "openai-api-key"
+      "attachment-scan-queue-connection-string"
     ]) {
       expect(retiredSecretCleanupBlock).toContain(retiredSecret);
     }
+    expect(retiredSecretCleanupBlock).not.toContain("openai-api-key");
     expect(deployment).toContain(
       'ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING="${attachment_scan_queue_connection_string}"'
     );
+  });
+
+  it("keeps OpenAI credentials out of worker and assurance manifests", () => {
+    for (const file of [
+      "aca.catalog-sync-job.yaml",
+      "aca.attachment-worker-job.yaml",
+      "aca.attachment-worker-app.yaml",
+      "aca.media-sync-warmer-job.yaml",
+      "aca.release-probe-job.yaml",
+      "aca.periodic-assurance-job.yaml"
+    ]) {
+      expect(readProjectFile(file)).not.toMatch(/name:\s+OPENAI_API_KEY\b/u);
+    }
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    const required = deployment.slice(
+      deployment.indexOf("required_bot_secrets ="),
+      deployment.indexOf("present = set(json.loads")
+    );
+    expect(required).toContain('"openai-api-key"');
   });
 
   it("explicitly clears bot container and template mounts", () => {

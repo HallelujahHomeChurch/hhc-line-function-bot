@@ -38,9 +38,10 @@
     "agent": {
       "personaFile": "agents/helper/PERSONA.md",
       "memoryPolicyFile": "agents/helper/MEMORY.md",
-      "provider": "deepseek",
-      "model": "deepseek-v4-flash",
-      "summaryModel": "deepseek-v4-flash"
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "summaryModel": "gpt-6-luna",
+      "reasoningEffort": "none"
     },
     "smallTalk": {
       "mode": "llm",
@@ -83,7 +84,7 @@
         }
       ]
     },
-    "allowedProviders": ["deepseek"],
+    "allowedProviders": ["deepseek", "openai"],
     "providerPolicy": {
       "function_routing": {
         "primary": "deepseek"

@@ -61,6 +61,7 @@ const agentPromptFilesSchema = z
     provider: z.enum(MODEL_PROVIDER_NAMES).default("deepseek"),
     model: z.string().trim().min(1).max(128).optional(),
     summaryModel: z.string().trim().min(1).max(128).optional(),
+    reasoningEffort: z.literal("none").optional(),
     personaFile: z.string().regex(/^agents\/[a-z0-9_-]+\/PERSONA\.md$/u),
     memoryPolicyFile: z.string().regex(/^agents\/[a-z0-9_-]+\/MEMORY\.md$/u)
   })
@@ -497,6 +498,7 @@ type NormalizedProfile = Omit<
     provider?: ModelProviderName;
     model?: string;
     summaryModel?: string;
+    reasoningEffort?: "none";
     personaPrompt: string;
     memoryPolicyPrompt: string;
   };
@@ -568,6 +570,7 @@ function readAgentPrompts(
     provider: files.provider,
     model: files.model,
     summaryModel: files.summaryModel,
+    reasoningEffort: files.reasoningEffort,
     personaPrompt: readAgentPrompt(profileDirectory, files.personaFile),
     memoryPolicyPrompt: readAgentPrompt(profileDirectory, files.memoryPolicyFile)
   };
@@ -692,6 +695,12 @@ function validateProviderPolicy(
       throw new Error("helper_provider_not_allowed");
     if (profile.agent?.provider === "openai" && !profile.agent.model)
       throw new Error("helper_openai_model_required");
+    if (
+      profile.agent?.provider === "openai" &&
+      [profile.agent.model, profile.agent.summaryModel].includes("gpt-6-luna") &&
+      profile.agent.reasoningEffort !== "none"
+    )
+      throw new Error("helper_luna_chat_requires_reasoning_none");
     for (const provider of profile.allowedProviders) {
       if (providerCapabilities[provider].subscriptionBased && !profile.allowSubscriptionProviders) {
         throw new Error(`Profile ${profile.name} cannot allow subscription provider ${provider}`);

@@ -11,7 +11,7 @@ describe("production profile configuration", () => {
     expect(result).toEqual({
       profileNames: ["helper", "main"],
       webhookPaths: ["/api/line/webhook/helper", "/api/line/webhook/main"],
-      providerNames: ["deepseek"]
+      providerNames: ["deepseek", "openai"]
     });
   });
 });

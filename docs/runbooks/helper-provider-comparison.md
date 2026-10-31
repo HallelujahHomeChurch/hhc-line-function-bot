@@ -1,21 +1,41 @@
 # Helper provider configuration and comparison
 
-The helper retains one `createAgent` runtime. DeepSeek remains the production
-selection. This delivery does not change secrets, invoke models, merge or deploy.
-`main` retains `allowedProviders: []` and no model/embedding calls.
+The shipped helper profile selects OpenAI `gpt-6-luna` for both responses and
+summaries, with `agent.reasoningEffort: "none"`. It retains one `createAgent`
+runtime. `main` retains `allowedProviders: []` and no model/embedding calls.
 
-For a separately approved OpenAI trial, retain the helper prompt paths and add
-`openai` to its `allowedProviders`. Set `agent.provider` to `openai`, `agent.model`
-to an explicitly chosen tool-capable OpenAI model and `agent.summaryModel` to the
-chosen summary model. Both models use the same provider and shared request budget.
+The [official Luna contract](https://developers.openai.com/api/docs/models/gpt-6-luna)
+requires `reasoning_effort: none` for Chat Completions function calls. The pinned
+SDK does not recognize Luna in its model-name detection, so the existing OpenAI
+adapter sends `reasoning_effort` and the 800-token `max_completion_tokens` explicitly
+without the incompatible legacy `max_tokens` field. This applies to response and
+summary calls. Configuration rejects Luna without the explicit non-reasoning mode.
+
 Keep `LLM_PROVIDER=deepseek` for existing non-agent lanes; helper selection is
-profile-owned. There is no automatic provider fallback. A denied allowlist or
-missing OpenAI model fails configuration validation. `OPENAI_API_KEY` comes only
-from local environment or an ACA secret; never put it in profiles or PostgreSQL.
-The checked-in production selection stays DeepSeek. Explicit `agent.model` and
-`agent.summaryModel` override the legacy helper `DEEPSEEK_MODEL` fallback; compare
-the current runtime model with the reviewed profile before approving a release. Changing provider/model/
-summary model changes the checkpoint policy key before another turn.
+profile-owned. DeepSeek remains allowed for these lanes and reviewed rollback.
+There is no automatic provider fallback. A denied allowlist or missing OpenAI
+model fails configuration validation. `OPENAI_API_KEY` comes only from local
+environment or an ACA secret; never put it in profiles or PostgreSQL. Explicit
+`agent.model` and `agent.summaryModel` override the legacy `DEEPSEEK_MODEL`
+fallback. Provider, model, summary model and reasoning mode participate in the
+checkpoint policy key before another turn.
+
+## Production switch
+
+1. Stage the operator-provided key as the bot's ACA `openai-api-key` secret without
+   printing it. Keep existing secrets intact. The release manifest references it
+   through `OPENAI_API_KEY`; deployment validates its presence and preserves it
+   during retired-secret cleanup. Worker and assurance jobs receive no OpenAI key.
+2. Merge the reviewed profile/runtime/deployment change only after required offline
+   CI succeeds. The authorized production release runs the usual immutable-image,
+   dependency and signed-empty-webhook checks without invoking either model.
+3. Verify the deployed profile uses Luna/none for responses and summaries, the
+   environment uses a secret reference, main stays provider-free, and group history
+   stays disabled. A real LINE/provider turn and paid comparison require their own
+   acceptance; empty webhook checks do not prove provider availability or quality.
+4. Roll back via the normal known-good digest release, or a reviewed explicit
+   DeepSeek profile/model change. Retain the A admission gate, existing data and
+   secrets; never enable an automatic fallback or replay uncertain jobs.
 
 `pnpm test src/__tests__/helper-provider-comparison.test.ts` exercises the same
 strict tool journey through both actual SDK adapters using synthetic HTTP replies.

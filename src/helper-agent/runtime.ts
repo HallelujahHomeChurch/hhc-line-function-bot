@@ -95,6 +95,7 @@ export interface HelperRuntimeOptions {
 export interface HelperModelOptions {
   provider?: "deepseek" | "openai";
   summaryModel?: string;
+  reasoningEffort?: "none";
   apiKey?: string;
   baseUrl: string;
   model: string;
@@ -105,19 +106,25 @@ export interface HelperModelOptions {
 export function createHelperModels(options: HelperModelOptions) {
   const budgetedFetch = createBudgetedFetch(options.fetchImpl);
   if (options.provider === "openai") {
-    const fields = {
-      apiKey: options.apiKey,
-      model: options.model,
-      maxCompletionTokens: 800,
-      maxRetries: 1,
-      timeout: options.timeoutMs,
-      useResponsesApi: false,
-      modelKwargs: { store: false },
-      configuration: { baseURL: options.baseUrl, fetch: budgetedFetch }
-    };
+    const createModel = (model: string) =>
+      new ChatOpenAI({
+        apiKey: options.apiKey,
+        model,
+        // shortcut: pinned SDK misses Luna model detection; remove after SDK support lands.
+        maxCompletionTokens: model === "gpt-6-luna" ? undefined : 800,
+        maxRetries: 1,
+        timeout: options.timeoutMs,
+        useResponsesApi: false,
+        modelKwargs: {
+          store: false,
+          reasoning_effort: options.reasoningEffort,
+          ...(model === "gpt-6-luna" ? { max_completion_tokens: 800 } : {})
+        },
+        configuration: { baseURL: options.baseUrl, fetch: budgetedFetch }
+      });
     return {
-      model: new ChatOpenAI(fields),
-      summaryModel: new ChatOpenAI({ ...fields, model: options.summaryModel ?? options.model })
+      model: createModel(options.model),
+      summaryModel: createModel(options.summaryModel ?? options.model)
     };
   }
   const fields = {
@@ -1160,6 +1167,7 @@ export function helperPolicyKey(profile: BotProfileConfig): string {
         provider: profile.agent?.provider ?? "deepseek",
         model: profile.agent?.model,
         summaryModel: profile.agent?.summaryModel,
+        reasoningEffort: profile.agent?.reasoningEffort,
         persona: profile.agent?.personaPrompt,
         memoryPolicy: profile.agent?.memoryPolicyPrompt,
         contract: "helper-explicit-admission-v8",
