@@ -13,7 +13,7 @@ LINE webhook service for routing selected church bot requests to controlled func
 - Server-owned tool allowlists, live Account authorization, strict schemas, and existing write confirmations around every helper tool call.
 - LINE Quick Reply suggestions for clarification and result selection.
 - Postback-based selection state for multi-result flows, currently used by PPT and sheet music search.
-- Hermes-compatible numeric selection replies, so users can tap a Quick Reply or reply with `1`, `2`, `3`.
+- Numeric selections remain available in direct chat. In groups, use the requester-bound Quick Reply buttons; bare `1`, `2`, `3` do not wake the Bot.
 - Server-owned latest defaults and focused clarification only for genuine ambiguity or missing business input.
 - Friendly intro/help replies for `小哈`, `小哈可以幹嘛`, `help`, and related prompts without exposing internal function names or backing services.
 - Requester-scoped helper checkpoints plus explicit text/resource memories and typed domain handlers.
@@ -199,7 +199,7 @@ Helper side effects are proposal tools. The SDK agent prepares a validated scope
 
 Pasted schedules can contain several months, emoji, reminders and unrelated announcements. The helper organizes structured `entries` while retaining `content` for comparison. Schedule tool identifiers come from the current profile registry; assignee names do not select the domain. The full preview includes every included month, and one approval publishes those monthly records atomically. Other months remain unchanged. Recoverable preparation results allow another authorized attempt within the existing turn budget. Exact structured draft edits preserve untouched entries; invalid edits revoke the old approval without discarding the draft.
 
-Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same selected provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
+Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. In groups, use `/reset`, quote the Bot with `忘記這段對話`, or explicitly say `小哈，忘記這段對話`. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same selected provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
 
 A local sheet-music miss may create requester-scoped consent. Only after atomic consent does the helper receive `search_sheet_music_web` and `read_sheet_music_page`; a per-turn gate separates external research from draft mutation, and research-derived messages are removed before later turns. Search returns opaque invocation-local refs, the reader treats bounded public page text as untrusted, and only detected direct PDF/JPEG/PNG candidates can enter the existing import review. The agent and bot process never download the binary. `src/transport/line/attachment-intake.ts`, the durable outbox, finite worker, Asset scan, clean-only publication, and catalog upsert remain the sole attachment path.
 
@@ -594,3 +594,11 @@ and cannot roll back a healthy release. See the production operations runbook.
 ### Optional bounded group history
 
 Phase B is disabled by default. Same-group members (including later joiners) may read only that group's enabled shared history; no cross-group or private checkpoint disclosure is allowed. See [activation, migration, evidence and restore gates](docs/runbooks/group-history.md). No production collection is enabled by this source change.
+
+### Group conversation follow-up
+
+A fresh explicit address is required for each group text: `小哈，幫我查…`, a bounded greeting such as `Hi 小哈`, a self mention, a valid Bot quote, or a scoped button. Third-person mentions and a previous conversation window do not grant admission. Direct chat does not require a wake word.
+
+Capability questions use the same deterministic menu classifier. Finite domain choices use existing requester-bound one-shot buttons. Structured missing-input replies and unbuttoned questions ending in `?` or `？` include a short quote/reinvoke instruction; ordinary final answers and approval previews are unchanged. This is presentation, not a semantic admission classifier. Model wording without a question mark still relies on the existing prompt instruction; real-provider UX needs separate acceptance.
+
+Active bound group images/files continue through LINE media sync before conversational quota. That burst-protection fix is retained. Non-sync group attachments also bypass chat quota, while the existing requester upload intent, save permission, size validation and worker controls still govern manual intake. Unrelated attachments remain silent. Manual bound video/audio opt-in replies use the same scoped group buttons as image/file replies.

@@ -19,6 +19,10 @@ const identityTriggers = ["小哈", "小哈?", "小哈？", "小哈是誰", "小
 
 const capabilitiesTriggers = [
   "help",
+  "可以幹嘛",
+  "可以做什麼",
+  "會什麼",
+  "你能夠做什麼",
   "功能",
   "使用說明",
   "小哈可以幹嘛",

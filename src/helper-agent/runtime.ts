@@ -7,7 +7,11 @@ import {
   replyProjection,
   safeQuoteText
 } from "../quotes/reply-projection.js";
-import { fitsCompleteWritePreview, buildLineTextMessages } from "../line-reply.js";
+import {
+  fitsCompleteWritePreview,
+  buildLineTextMessages,
+  groupContinuationReply
+} from "../line-reply.js";
 import { REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
 import type { CapabilityName } from "../capabilities/names.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -792,7 +796,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                     },
                     config
                   );
-                  const visible =
+                  let visible =
                     proposedResult ??
                     selectHelperReply(
                       state.messages,
@@ -803,6 +807,8 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                       readFailed,
                       historyTurn?.hasEvidence
                     );
+                  if (pendingClarification) visible.writePreparation = pendingClarification;
+                  visible = groupContinuationReply(visible, input.event.source.type);
                   if (input.quoteContext)
                     input.quoteContext.replyProjection = replyProjection(visible);
                   const content = deliveredContextText(visible.replyText, replyProjection(visible));
@@ -920,7 +926,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           return turn.result;
         }
         const agentState = turn.state;
-        const result = selectHelperReply(
+        let result = selectHelperReply(
           agentState.messages,
           results,
           input.requestId,
@@ -948,6 +954,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         if (pendingClarification) result.writePreparation = pendingClarification;
         else if (results.some((entry) => entry.result.agentResult?.status === "ambiguous"))
           result.writePreparation = "ambiguous";
+        result = groupContinuationReply(result, input.event.source.type);
         result.resultAuthority = profile.enabledFunctions.length
           ? { kind: "capabilities", capabilities: profile.enabledFunctions }
           : { kind: "public" };

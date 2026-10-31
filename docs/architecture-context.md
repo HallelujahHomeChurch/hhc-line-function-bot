@@ -211,3 +211,13 @@ Implementation and consultant dispositions:
 ## Optional bounded group history
 
 `src/history/` owns the disabled-by-default PG source; `src/helper-agent/history-tools.ts` exposes the current group's server-scoped context tool within the existing call budget. Passive collection has its own bounded queue and never grants speaking eligibility. Source keys and policy/restore identity are rechecked at retrieval and delivery; history evidence and derived answers do not enter the next checkpoint. See [the phase-B runbook](runbooks/group-history.md).
+
+### Conversation handoff presentation
+
+`engagement.ts` owns conservative address recognition, including a bounded greeting before the configured wake name. It reuses `intro.ts` for capability/identity classification; transport uses the same normalized text to select the menu variant. Only the exact addressed reset is canonicalized before quote lifecycle processing; ordinary model text and approval text retain their original content.
+
+`line-reply.ts` renders bounded domain clarification choices and quote/reinvoke hints for structured missing-input responses or unbuttoned question-ending replies. `group-replies.ts` converts message actions into requester/source-scoped postbacks, including the early manual media-sync notification path. Presentation never grants admission. Keep signed-webhook journeys in `quoted-continuation.test.ts` for menu-to-button-to-free-text continuation, wrong requester/replay, and ambient silence.
+
+Group media never spends conversational quota. Bound media uses the existing early media-sync intake; other group attachments still require the existing upload intent and authorization to enter manual saving. This does not enable new media bindings, collection, downloads or worker paths.
+
+Device acceptance and rollback: [group conversation handoff acceptance](runbooks/group-conversation-acceptance.md).

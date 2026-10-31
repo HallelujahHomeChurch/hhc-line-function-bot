@@ -48,6 +48,7 @@ import {
 } from "../../application/capabilities/capability-presenters.js";
 import {
   classifyGroupEngagement,
+  explicitAddressedText,
   groupEngagementAllowsReply,
   groupEngagementIgnoredReason
 } from "../../engagement.js";
@@ -711,9 +712,13 @@ async function handleWebhook(
   for (const { event, manual } of mediaSyncOnlyEvents) {
     if (manual && event.replyToken && event.message) {
       const prompt = pendingAttachmentPrompt(event.message);
-      await line.replyText(event.replyToken, prompt.replyText, {
-        quickReplies: prompt.quickReplies
-      });
+      await groupReplyClient(line, sessionStore, profile.name, event).replyText(
+        event.replyToken,
+        prompt.replyText,
+        {
+          quickReplies: prompt.quickReplies
+        }
+      );
     }
   }
   let lineIdentity: LineIdentityClient | undefined;
@@ -834,10 +839,11 @@ async function handleWebhook(
         }
       }
       const requestId = requestIdFactory();
-      const rateLimit = await rateLimiter.check({
-        profileName: profile.name,
-        source: event.source
-      });
+      // Group media uses binding/upload-intent admission, never conversational quota.
+      const rateLimit =
+        event.source.type === "group" && event.message?.type !== "text" && event.type === "message"
+          ? { allowed: true, shouldNotify: false }
+          : await rateLimiter.check({ profileName: profile.name, source: event.source });
       if (!rateLimit.allowed) {
         if (event.replyToken && rateLimit.shouldNotify === true) {
           await replyTextBestEffort(line, event.replyToken, "你傳得太快了，請稍後再試。");
@@ -1002,7 +1008,8 @@ async function handleWebhook(
         continue;
       }
       const eventText = event.type === "message" ? event.message?.text : undefined;
-      const introVariant = eventText ? introVariantForText(eventText) : undefined;
+      const introText = explicitAddressedText(profile, event.message) ?? eventText;
+      const introVariant = introText ? introVariantForText(introText) : undefined;
       const parsedAdminCommand = parseAdminCommand(eventText);
       const functionOwnedCommand = isConfiguredExactFunctionCommand(
         profile,
@@ -1111,6 +1118,13 @@ async function handleWebhook(
       const effectiveProfile = effectiveAccess.profile;
       const capabilityProjection = projectEffectiveCapabilities({ context: effectiveAccess });
       const requesterDisplayName = await resolveRequesterDisplayName(getLineIdentity(), event);
+      if (
+        effectiveProfile.name === "helper" &&
+        event.message?.type === "text" &&
+        explicitAddressedText(effectiveProfile, event.message) === "忘記這段對話"
+      ) {
+        event = { ...event, message: { ...event.message, text: "忘記這段對話" } };
+      }
       if (!(await attachQuoteContext())) continue;
       // Accept same-requester supplements while the first answer is still running.
       const admittedScope = buildConversationWindowScope(effectiveProfile, event);
@@ -1666,6 +1680,7 @@ async function handleWebhook(
       if (groupEngagement?.kind === "intro") {
         const intro = createIntroReply(capabilityProjection, event.message.text, {
           force: true,
+          variant: introVariant,
           profile: effectiveProfile,
           account:
             event.source.type === "user" && accountAuthorizationUsed
