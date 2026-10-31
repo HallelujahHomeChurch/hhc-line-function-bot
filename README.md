@@ -181,7 +181,7 @@ The application resolves this authority once and projects the exact effective ca
 
 ## Routing
 
-The helper profile has one semantic path: `src/helper-agent/runtime.ts` constructs the effective tool set and invokes the sole LangChain/LangGraph agent in `src/helper-agent/agent.ts`. Helper explicitly selects its DeepSeek or OpenAI provider, response model and summary model in profile configuration. The shipped profile uses OpenAI `gpt-6-luna` for both models with `reasoningEffort: "none"`; see [provider deployment and rollback](docs/runbooks/helper-provider-comparison.md). The main profile uses `src/runtime/main-runtime.ts` and makes zero model and embedding requests.
+The helper profile has one semantic path: `src/helper-agent/runtime.ts` constructs the effective tool set and invokes the sole LangChain/LangGraph agent in `src/helper-agent/agent.ts`. Helper explicitly selects its DeepSeek or OpenAI provider, response model and summary model in profile configuration. The shipped profile uses DeepSeek `deepseek-v4-flash` for both models pending OpenAI availability verification from the production region; see [provider deployment and rollback](docs/runbooks/helper-provider-comparison.md). The main profile uses `src/runtime/main-runtime.ts` and makes zero model and embedding requests.
 
 LINE ingress validates the signature, profile, access, engagement, commands, postbacks, and deterministic attachment/selection flows before `src/runtime/profile-runtime.ts` dispatches the turn. There is no compatibility agent, semantic fallback, shadow route, generic pending-function engine, or model router.
 

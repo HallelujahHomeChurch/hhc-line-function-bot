@@ -1,8 +1,9 @@
 # Helper provider configuration and comparison
 
-The shipped helper profile selects OpenAI `gpt-6-luna` for both responses and
-summaries, with `agent.reasoningEffort: "none"`. It retains one `createAgent`
-runtime. `main` retains `allowedProviders: []` and no model/embedding calls.
+The shipped helper profile selects DeepSeek `deepseek-v4-flash` for both responses
+and summaries. The OpenAI adapter and secret reference remain available for a
+reviewed switch after production-origin availability is verified. It retains one
+`createAgent` runtime. `main` retains `allowedProviders: []` and no model/embedding calls.
 
 The [official Luna contract](https://developers.openai.com/api/docs/models/gpt-6-luna)
 requires `reasoning_effort: none` for Chat Completions function calls. The pinned
@@ -22,18 +23,25 @@ checkpoint policy key before another turn.
 
 ## Production switch
 
-1. Stage the operator-provided key as the bot's ACA `openai-api-key` secret without
+1. Before changing the production profile, verify a non-inference model-metadata
+   request from the actual production origin. A local HTTP 200 does not prove
+   production access. The 2026-10-31 rollout returned HTTP 403
+   `unsupported_country_region_territory` from production, so the profile was
+   restored to DeepSeek. Resolve supported deployment-region access before retrying;
+   do not add a proxy or automatic fallback. Metadata success still does not prove
+   inference permissions, credit availability, or answer quality.
+2. Stage the operator-provided key as the bot's ACA `openai-api-key` secret without
    printing it. Keep existing secrets intact. The release manifest references it
    through `OPENAI_API_KEY`; deployment validates its presence and preserves it
    during retired-secret cleanup. Worker and assurance jobs receive no OpenAI key.
-2. Merge the reviewed profile/runtime/deployment change only after required offline
+3. Merge the reviewed profile/runtime/deployment change only after required offline
    CI succeeds. The authorized production release runs the usual immutable-image,
    dependency and signed-empty-webhook checks without invoking either model.
-3. Verify the deployed profile uses Luna/none for responses and summaries, the
+4. Verify the deployed profile uses Luna/none for responses and summaries, the
    environment uses a secret reference, main stays provider-free, and group history
    stays disabled. A real LINE/provider turn and paid comparison require their own
    acceptance; empty webhook checks do not prove provider availability or quality.
-4. Roll back via the normal known-good digest release, or a reviewed explicit
+5. Roll back via the normal known-good digest release, or a reviewed explicit
    DeepSeek profile/model change. Retain the A admission gate, existing data and
    secrets; never enable an automatic fallback or replay uncertain jobs.
 

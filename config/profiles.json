@@ -38,10 +38,9 @@
     "agent": {
       "personaFile": "agents/helper/PERSONA.md",
       "memoryPolicyFile": "agents/helper/MEMORY.md",
-      "provider": "openai",
-      "model": "gpt-6-luna",
-      "summaryModel": "gpt-6-luna",
-      "reasoningEffort": "none"
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash",
+      "summaryModel": "deepseek-v4-flash"
     },
     "smallTalk": {
       "mode": "llm",
