@@ -228,6 +228,7 @@ Testing map:
 ## Helper experience continuation
 
 - Group text must be explicitly addressed on every event before quota, system actions, model/tools or waiting jobs. Active windows, drafts, attachment sessions, generic text handlers and bare numeric choices never grant admission. Member/unknown quotes cannot wake the Bot. Keep safe quote understanding after explicit invocation; do not restore a model engagement classifier.
+- Conversation UX changes must preserve the shared intro classifier and scoped group reply adapter, including early media-sync prompts. Cover the complete prompt/button/quote journey, not only one reply. See `docs/architecture-context.md` (Conversation handoff presentation).
 - Preserve the four-second slow-operation handoff and “查看結果” button for text and review operations. Results require server-owned public or complete capability provenance and requester/source checks on replay; never infer public status from a missing executedAction.
 - Helper attachment purpose/title collection uses a strict draft tool after explicit opt-in; confirmation uses a version-bound opaque postback and atomic compare-and-set. No second upload or worker path.
 - Consented research and draft mutation are mutually exclusive within a turn. Before future writable turns, remove external research tool/model/summary content; persist a dirty-policy marker before research I/O so crashes cannot retain usable tainted checkpoints.

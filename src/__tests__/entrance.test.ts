@@ -6575,7 +6575,7 @@ describe("LINE entrance", () => {
     expect(route).not.toHaveBeenCalled();
   });
 
-  it("handles numeric PPT selections in groups without routing them", async () => {
+  it("ignores unaddressed numeric PPT selections even with an active handler", async () => {
     const route = vi.fn<FunctionRouterPort["route"]>();
     const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
     const matchesNumericSelection = vi.fn().mockReturnValue(true);
@@ -6654,7 +6654,7 @@ describe("LINE entrance", () => {
     expect(replyText).not.toHaveBeenCalled();
   });
 
-  it("dispatches only the owning requester through a pending group review without a wake word", async () => {
+  it("keeps unaddressed group review text silent even for the owning requester", async () => {
     const config = accessConfig();
     const helper = config.profiles[0]!;
     const source = { type: "group" as const, groupId: "Cmain", userId: "Uowner" };
@@ -7539,6 +7539,7 @@ describe("LINE entrance", () => {
         });
       }
       if (authorized) {
+        expect(replyText.mock.calls[0]?.[2]?.quickReplies?.[0]?.action.type).toBe("postback");
         expect(replyText).toHaveBeenCalledWith(
           "reply-media-redelivery-1",
           expect.stringContaining("要我幫忙保存這個檔案嗎？"),
@@ -7848,4 +7849,61 @@ it("wakes on known bot quotes, rejects foreign quote text, and does not index am
   } finally {
     await app.close();
   }
+});
+
+it("does not spend conversation quota for unrelated group attachments", async () => {
+  const config = testConfig();
+  config.profiles[0] = {
+    ...config.profiles[0],
+    allowedMessageTypes: ["text", "image", "file"],
+    enabledFunctions: ["save_resource"]
+  };
+  const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+  const sessionStore = new InMemorySessionStore();
+  const app = createTestApp(config, {
+    router: { route: vi.fn() },
+    rateLimiter: {
+      check: vi.fn(async () => ({
+        allowed: false,
+        shouldNotify: true,
+        remaining: 0,
+        resetAt: new Date().toISOString()
+      }))
+    },
+    sessionStore,
+    accountAdminClient: {
+      authorizeAdministrator: vi.fn(),
+      authorizeFunctions: vi.fn().mockResolvedValue({
+        bound: true,
+        active: true,
+        administrator: false,
+        allowedFunctions: ["save_resource"]
+      }),
+      createBinding: vi.fn(),
+      finalizeBinding: vi.fn()
+    },
+    createLineReplyClient: () => ({ replyText })
+  });
+  const body = lineBody({
+    type: "message",
+    replyToken: "reply-token",
+    source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+    message: { type: "image", id: "image-unrelated" }
+  });
+
+  await app.inject({
+    method: "POST",
+    url: "/api/line/webhook/main",
+    headers: signedHeaders(body, "main-secret"),
+    payload: body
+  });
+
+  expect(replyText).not.toHaveBeenCalled();
+  await expect(
+    sessionStore.findPendingAttachment({
+      profileName: "main",
+      source: { type: "group", groupId: "Cmain", userId: "Uadmin" },
+      requesterUserId: "Uadmin"
+    })
+  ).resolves.toBeUndefined();
 });

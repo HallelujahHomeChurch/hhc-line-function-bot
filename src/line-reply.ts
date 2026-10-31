@@ -1,4 +1,4 @@
-import type { QuickReplyItem } from "./types.js";
+import type { FunctionExecutionResult, QuickReplyItem } from "./types.js";
 
 export function buildPostbackQuickReply(
   label: string,
@@ -55,4 +55,37 @@ export function fitsCompleteWritePreview(text: string): boolean {
       .map((message) => message.text)
       .join("") === text
   );
+}
+
+/** Presentation only: a prompt never grants permission to accept ambient group text. */
+export function groupContinuationReply(
+  result: FunctionExecutionResult,
+  sourceType: string
+): FunctionExecutionResult {
+  if (sourceType !== "group" || result.writePhase || result.quickReplies?.length) return result;
+  const choices = result.agentResult?.clarification?.choices;
+  if (
+    choices?.length &&
+    choices.length <= 13 &&
+    choices.every((choice) => choice.length > 0 && choice.length <= 100)
+  ) {
+    return {
+      ...result,
+      quickReplies: choices.map((choice) => ({
+        label: [...choice].slice(0, 20).join(""),
+        action: {
+          type: "message" as const,
+          label: [...choice].slice(0, 20).join(""),
+          text: `選擇：${choice}`
+        }
+      }))
+    };
+  }
+  const needsInput =
+    result.writePreparation === "needs_input" ||
+    result.writePreparation === "ambiguous" ||
+    result.agentResult?.status === "ambiguous" ||
+    /[?？]\s*$/u.test(result.replyText);
+  if (!needsInput || /引用回覆|引用這則|重新明確呼叫/u.test(result.replyText)) return result;
+  return { ...result, replyText: `${result.replyText}\n請引用回覆這則訊息，或重新明確呼叫我。` };
 }
