@@ -17,7 +17,6 @@ import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js"
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { assetAccessTokenScope, createAssetApiClient } from "../clients/asset-api.js";
-import { createExternalBinaryClient } from "../clients/external-binary.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createLineSdkContentClient } from "../clients/line.js";
 import { createPostgresRuntime } from "../db/postgres.js";
@@ -301,13 +300,10 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
               workStore,
               assets,
               lineContent,
-              externalBinary: createExternalBinaryClient(),
               profiles: config.profiles,
               publisher,
               maxBytes: config.attachments.maxBytes,
               lineDownloadTimeoutMs: config.attachments.lineDownloadTimeoutMs,
-              externalDownloadTimeoutMs: config.externalResources.downloadTimeoutMs,
-              externalMaxRedirects: config.externalResources.maxRedirects,
               scanDeadline: deadlines.scanDeadline,
               publicationDeadline: deadlines.publicationDeadline
             }),

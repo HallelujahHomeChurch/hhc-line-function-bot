@@ -88,9 +88,10 @@ async function stateKey(
   const state = await Promise.all([
     sessions.findPendingAttachment(scope),
     sessions.findActionReview(scope),
-    sessions.findPptSelection(scope),
-    sessions.findExternalSearchConsent({ ...scope, action: "find_sheet_music" }),
-    sessions.findExternalSheetMusicImport(scope)
+    sessions.findPptSelection(scope)
   ]);
-  return createHash("sha256").update(JSON.stringify(state)).digest("hex");
+  // Preserve the v1 hash slots so existing internal-choice buttons stay valid.
+  return createHash("sha256")
+    .update(JSON.stringify([...state, null, null]))
+    .digest("hex");
 }

@@ -53,8 +53,7 @@ function prepare() {
       data: pptxBytes,
       declaredFileName: "OriginalDeck.pptx",
       declaredContentType:
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      sourceKind: "line"
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     },
     target,
     maxBytes: 25 * 1024 * 1024

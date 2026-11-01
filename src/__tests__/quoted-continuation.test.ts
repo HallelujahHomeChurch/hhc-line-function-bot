@@ -440,28 +440,13 @@ it.each(["Hi 大家，小哈今天又亂回", "Hi 小哈今天又亂回", "你�
   }
 );
 
-it("keeps unaddressed retired buttons silent and terminates only the addressed requester's session", async () => {
+it("keeps bare retired research choices silent without waking the model", async () => {
   const f = await fixture([], { active: true, knownBot: false });
   try {
-    await f.sessions.set({
-      id: "retired-group",
-      type: "external_search_consent",
-      action: "sheet_music_external_search",
-      profileName: "helper",
-      source,
-      requesterUserId: source.userId,
-      query: "synthetic",
-      expiresAt: new Date(Date.now() + 600_000).toISOString()
-    });
     await f.send("上網找", { quote: false });
     await f.send("保存", { quote: false });
-    expect(f.replies).toEqual([]);
-    expect(await f.sessions.get("retired-group")).toBeDefined();
     await f.send("上網找", { quote: false, userId: "other" });
-    expect(await f.sessions.get("retired-group")).toBeDefined();
-    await f.send("小哈 上網找", { quote: false });
-    expect(f.replies.at(-1)).toContain("已停用");
-    expect(await f.sessions.get("retired-group")).toBeUndefined();
+    expect(f.replies).toEqual([]);
     expect(f.generate).not.toHaveBeenCalled();
   } finally {
     await f.app.close();

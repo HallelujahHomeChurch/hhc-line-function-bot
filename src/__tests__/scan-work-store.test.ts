@@ -15,6 +15,40 @@ const scope = {
 };
 
 describe("attachment scan work store", () => {
+  it.each(["memory", "redis"] as const)(
+    "rejects external-only and mixed sources at the %s write boundary",
+    async (kind) => {
+      const jobStore = new InMemoryAgentJobStore({ now: () => now });
+      const client = new FakeRedisScanWorkClient();
+      const store =
+        kind === "memory"
+          ? new InMemoryAttachmentScanWorkStore({ jobStore, now: () => now })
+          : new RedisAttachmentScanWorkStore({
+              client,
+              keyPrefix: "test",
+              jobStore,
+              now: () => now
+            });
+      for (const lineMessageId of [undefined, "", "line-message"]) {
+        const input = {
+          jobId: "synthetic",
+          scope,
+          lineMessageId,
+          externalUrl: "https://example.invalid/score.pdf",
+          target: {
+            sourceKey: "ppt_slides",
+            itemKind: "ppt_slide",
+            domain: "presentation",
+            title: "SundayDeck"
+          },
+          ttlMs: 600_000
+        } as unknown as Parameters<typeof store.create>[0];
+        await expect(store.create(input)).rejects.toThrow("attachment_scan_work_source_invalid");
+      }
+      expect(client.evalCalls).toHaveLength(0);
+    }
+  );
+
   it("atomically yields one record to two parallel claim attempts", async () => {
     const client = new FakeRedisScanWorkClient();
     const jobStore = new InMemoryAgentJobStore({ now: () => now });

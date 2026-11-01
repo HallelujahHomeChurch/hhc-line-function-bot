@@ -88,33 +88,6 @@ export interface UploadIntentPromotion {
   replaced?: UploadIntentSession;
 }
 
-export interface ExternalSearchConsentSession {
-  id: string;
-  type: "external_search_consent";
-  action: string;
-  profileName: string;
-  requesterUserId?: string;
-  source: LineSource;
-  query: string;
-  arguments?: JsonRecord;
-  expiresAt: string;
-}
-
-export interface ExternalSheetMusicImportSession {
-  id: string;
-  type: "external_sheet_music_import";
-  stage: "selecting" | "awaiting_target" | "awaiting_confirmation";
-  profileName: string;
-  requesterUserId?: string;
-  source: LineSource;
-  query: string;
-  requestedKind?: "pop_sheet" | "hymn_sheet";
-  items: Array<{ title: string; url: string; snippet?: string }>;
-  selectedIndex?: number;
-  targetKind?: "pop_sheet" | "hymn_sheet";
-  expiresAt: string;
-}
-
 export type HelperWriteToolName =
   "propose_save_schedule" | "propose_save_memory" | "propose_save_resource" | "update_own_profile";
 
@@ -168,8 +141,6 @@ export type ConversationSession =
   | ProfileUpdateSession
   | PendingAttachmentSession
   | UploadIntentSession
-  | ExternalSearchConsentSession
-  | ExternalSheetMusicImportSession
   | ActionReviewSession;
 export type ConversationSessionType = ConversationSession["type"];
 
@@ -185,10 +156,6 @@ export interface PptSelectionLookup {
 }
 
 export interface SelectionLookup extends PptSelectionLookup {
-  action: string;
-}
-
-export interface ExternalSearchConsentLookup extends PptSelectionLookup {
   action: string;
 }
 
@@ -221,12 +188,6 @@ export interface SessionStore {
     pending: PendingAttachmentSession
   ): Promise<UploadIntentPromotion | undefined>;
   restoreUploadIntentPromotion(promotion: UploadIntentPromotion): Promise<boolean>;
-  findExternalSearchConsent(
-    lookup: ExternalSearchConsentLookup
-  ): Promise<ExternalSearchConsentSession | undefined>;
-  findExternalSheetMusicImport(
-    lookup: PptSelectionLookup
-  ): Promise<ExternalSheetMusicImportSession | undefined>;
   findActionReview(lookup: PptSelectionLookup): Promise<ActionReviewSession | undefined>;
   takeActionReview(lookup: ActionReviewLookup): Promise<ActionReviewSession | undefined>;
   summary(): Promise<SessionStoreSummary>;
@@ -437,44 +398,6 @@ export class InMemorySessionStore implements SessionStore {
       this.sessions.set(promotion.replaced.id, promotion.replaced);
     }
     return true;
-  }
-
-  async findExternalSearchConsent(
-    lookup: ExternalSearchConsentLookup
-  ): Promise<ExternalSearchConsentSession | undefined> {
-    const liveSessions = Array.from(this.sessions.values())
-      .map((session) => this.liveSession(session))
-      .filter((session): session is ExternalSearchConsentSession => Boolean(session))
-      .filter((session) => session.type === "external_search_consent")
-      .filter((session) => session.action === lookup.action)
-      .filter((session) => session.profileName === lookup.profileName)
-      .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) =>
-        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
-      );
-
-    return liveSessions.sort(
-      (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
-    )[0];
-  }
-
-  async findExternalSheetMusicImport(
-    lookup: PptSelectionLookup
-  ): Promise<ExternalSheetMusicImportSession | undefined> {
-    const sessions = Array.from(this.sessions.values())
-      .map((session) => this.liveSession(session))
-      .filter(
-        (session): session is ExternalSheetMusicImportSession =>
-          session?.type === "external_sheet_music_import"
-      )
-      .filter((session) => session.profileName === lookup.profileName)
-      .filter((session) => sourceMatches(session.source, lookup.source))
-      .filter((session) =>
-        requesterMatchesForSource(lookup.source, session.requesterUserId, lookup.requesterUserId)
-      );
-    return sessions.sort(
-      (left, right) => new Date(right.expiresAt).getTime() - new Date(left.expiresAt).getTime()
-    )[0];
   }
 
   private liveSession(session: ConversationSession | undefined): ConversationSession | undefined {

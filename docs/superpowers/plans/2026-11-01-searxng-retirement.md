@@ -228,3 +228,19 @@ CLI exit code 0、structured status `SUCCESS`、一個 turn，執行約 37 秒�
 尚未完成：production 唯讀 work/job/outbox/queue 基線、切換後排空、PR2、cloud App 刪除與真實 LINE 驗收。依賴上線的項目不能在未合併 PR1 上假裝完成。
 
 最後補查已修正 capability help 的舊公開搜尋文案，完整測試重跑為 1,859 passed／66 skipped。PG 初始化保留 pre-retirement rollback 需要的兩個舊欄位，且追加真實 PostgreSQL 的舊欄位查詢驗證；移除的研究讀寫方法不恢復。此相容性補強另跑 real-dependency integration，PR CI 會在最終 head 再跑完整 gates。
+
+## 14. 授權、PR1 發布與 PR2 執行記錄
+
+Ray 已明確授權依序完成整個計劃（含 merge、production rollout、排空及單一 App 刪除）；只有無法判斷的非預期狀況才再次確認。先前「尚未授權／尚未發布」敘述為當時記錄，不代表目前狀態。
+
+[PR #146](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/pull/146) 經 required PR CI 通過後 squash merge 為 `ecf0f35c318d2dc0d98c43ca5d9bb748abb7cd21`。[Production Release 41302827867](https://github.com/HallelujahHomeChurch/hhc-line-function-bot/actions/runs/41302827867) 的發布與公開入口驗收全部成功；revision `hhc-line-function-bot--0000251` 為唯一 active revision、100% traffic。Release/acceptance reports 均為 passed，確認 bot internal ingress、Dapr、jobs、readiness 和 helper/main signed empty webhook；attestation 為 DeepSeek/embedding 各零次。此證據不代表真實 LINE 裝置收送。
+
+完整唯讀 Redis 巡檢在 2026-11-01 11:44:33 UTC 及切換後 11:54:53 UTC 均成功完成：work、agent job、legacy session、outbox 及 orphan work 計數皆零，unknown 零。Storage Queue properties 在 11:44:32 與 11:55:18 UTC 的總訊息估計皆零。沒有 active worker execution；發布啟動的有限 worker 已成功結束。未 dequeue、purge、取消工作或改寫 production Redis。最早本機無法連線的嘗試不算排空證據。PR2 上線仍須在涵蓋 35 分鐘 lease／32 分鐘 delivery 的間隔後再次完整巡檢。
+
+已檢查 azure-infra 最新 `origin/main`（`cfbf9d4`）：ACA app/job ownership handoff 已完成，Terraform 不再管理 Container App/Job；SearXNG 僅剩歷史移交文件。因此本任務不需修改 azure-infra、Terraform state、共用診斷或 storage；既有歷史 ownership manifest 保留。若出現需要更動該 repo 的事實，仍先走其既定 planning／PR／plan 流程。
+
+PR2 移除外部下載 client、worker/config/env 與過渡會話 API。維持 work v1 的既有 LINE 欄位、Asset ownership/idempotency、lease、outbox、queue ack、發布及結果語意；TS 與 Redis Lua 均拒絕 external-only/mixed source。群組按鈕保留 v1 state hash 空槽，避免仍有效的內部選擇按鈕跨版失效。舊 PG consent columns 留作 PR1／更舊版本回退相容，不恢復研究 API。既存 `external_link` 和已發布檔案不刪除。
+
+刪除後的 application 回退基準為已驗證 PR1：revision `hhc-line-function-bot--0000251`，resolved image digest `sha256:1686e9d069d768e574d7885a4916b587d97a68de47af25bb623f04bb6efff23d`；此版不需要 SearXNG。若未來另外授權恢復 pre-PR1 功能，最後重建來源為 commit `aed4c6128942f3d3c486f8d99eed1480b89f7a10` 的 `aca.searxng.containerapp.yaml`、`infra/searxng/settings.yml` 及當時的部署 rendering 程序，image pin 為 `docker.io/searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de`。App 只有 Secret 設定掛載，沒有 persistent volume 或專用 identity；設定中的隨機 server key 可於受控重建時重新產生，透過正常 ACA secret 流程注入。保留 internal ingress／既有 environment，不公開 endpoint，不將 secret 值寫回文件或 PR。
+
+PR2 local gates：format、typecheck、lint、build、architecture、profile config、signed synthetic webhook smoke、19 個 offline agent cases 及 retrieval evaluator 均通過。完整 suite 為 163 files passed／1 skipped、1,838 tests passed／66 skipped；skip 不算已驗證，另外 real Redis/PostgreSQL integration 35 tests 及 24 matrix/cleanup checks 通過，包含 raw external-only/mixed work 的 Lua 拒絕及 LINE work 復原。雲端現行 template 盤點涵蓋 alive 內 16 個 Apps、25 個 Jobs，排除待刪目標本身後皆沒有 SearXNG 引用。此階段尚未將 PR2 上線或刪除 cloud App，後續結果另附 PR 發布證據。

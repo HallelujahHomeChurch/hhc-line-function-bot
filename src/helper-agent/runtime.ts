@@ -1,4 +1,3 @@
-import { explicitAddressedText } from "../engagement.js";
 import type { GroupHistory } from "../history/types.js";
 import { createHistoryTurn } from "./history-tools.js";
 import { ChatOpenAI } from "@langchain/openai";
@@ -189,13 +188,6 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         }
         await options.sessions.takePendingAttachment(lookup);
         await options.sessions.takeUploadIntent(lookup);
-        const consent = await options.sessions.findExternalSearchConsent({
-          ...lookup,
-          action: "sheet_music_external_search"
-        });
-        if (consent) await options.sessions.delete(consent.id);
-        const externalImport = await options.sessions.findExternalSheetMusicImport(lookup);
-        if (externalImport) await options.sessions.delete(externalImport.id);
       });
     },
     async recordExternalResult(input, result) {
@@ -256,57 +248,6 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         })
         .catch(() => undefined);
     },
-    // shortcut: terminate only scoped pre-retirement sessions; Ray removes after PR2 drain gate.
-    async handleRetiredSheetMusic(input) {
-      if (input.profile.name !== "helper" || !options.sessions || !input.event.source.userId)
-        return undefined;
-      const lookup = {
-        profileName: input.profile.name,
-        source: input.event.source,
-        requesterUserId: input.event.source.userId
-      };
-      const [consent, imported] = await Promise.all([
-        options.sessions.findExternalSearchConsent({
-          ...lookup,
-          action: "sheet_music_external_search"
-        }),
-        options.sessions.findExternalSheetMusicImport(lookup)
-      ]);
-      const text =
-        explicitAddressedText(input.profile, input.event.message) ??
-        input.event.message?.text?.trim() ??
-        "";
-      const session = imported ?? consent;
-      if (!session) return undefined;
-      const current = await Promise.all([
-        options.sessions.findActionReview(lookup),
-        options.sessions.findPendingAttachment(lookup),
-        options.sessions.findPptSelection(lookup),
-        options.sessions.findSelection({ ...lookup, action: "select_sheet_music" }),
-        options.sessions.findSelection({ ...lookup, action: "select_knowledge_source" })
-      ]);
-      if (current.some(Boolean)) {
-        for (const old of [consent, imported]) if (old) await options.sessions.delete(old.id);
-        return undefined;
-      }
-      const cancel = /^(?:不用|不要|取消|先不要|no|n)$/iu.test(text);
-      const matches =
-        cancel ||
-        (session.type === "external_search_consent"
-          ? /^(?:上網找|同意上網找|可以上網找)[！!。\s]*$/u.test(text)
-          : session.stage === "selecting"
-            ? /^\d{1,2}$/u.test(text)
-            : session.stage === "awaiting_target"
-              ? /^(?:流行歌譜|詩歌歌譜)$/u.test(text)
-              : /^(?:保存|確認|確定|好|yes|y)$/iu.test(text));
-      if (!matches) return undefined;
-      const taken = await options.sessions.take(session.id);
-      if (!taken || taken.type !== session.type) return undefined;
-      for (const old of [consent, imported])
-        if (old && old.id !== session.id) await options.sessions.delete(old.id);
-      return { ok: true, replyText: "公開網路找譜已停用，請改查內部譜庫或上傳檔案。" };
-    },
-
     async handleTextTurn(input) {
       if (input.profile.name !== "helper" || !input.profile.agent) return undefined;
       const text = input.event.message?.text?.trim();

@@ -6723,27 +6723,13 @@ describe("LINE entrance", () => {
     expect(await sessions.get("review-1")).toBeDefined();
   });
 
-  it("terminates retired research while keeping deterministic continuations outside the model", async () => {
+  it("keeps internal selection and attachment continuations outside the model", async () => {
     const config = accessConfig();
     const helper = config.profiles[0]!;
     helper.enabledFunctions = ["find_sheet_music", "find_ppt_slides", "save_resource"];
     helper.permissionRequiredFunctions = [];
     const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
     const handlers = {
-      sheet_music_numeric_selection: {
-        capability: "find_sheet_music" as const,
-        matches: ({ text }: { text: string }) => text === "上網找",
-        handle: vi.fn(async () => ({
-          ok: true,
-          replyText: "外部歌譜",
-          executedAction: "find_sheet_music" as const,
-          agentResource: {
-            resourceType: "sheet_music" as const,
-            title: "歌譜",
-            storage: { provider: "external_link" as const, url: "https://example.test/music.pdf" }
-          }
-        }))
-      },
       ppt_numeric_selection: {
         capability: "find_ppt_slides" as const,
         matches: ({ text }: { text: string }) => text === "1",
@@ -6767,15 +6753,10 @@ describe("LINE entrance", () => {
     const app = createTestApp(config, {
       profileRuntime: createProfileRuntimeDispatcher({
         helper: {
-          handleRetiredSheetMusic: async ({ event }) =>
-            event.message?.text === "上網找"
-              ? { ok: true, replyText: "公開網路找譜已停用。" }
-              : undefined,
           handleTextTurn: profileTurn
         }
       }),
       textMessageHandlers: {
-        sheet_music_numeric_selection: handlers.sheet_music_numeric_selection,
         ppt_numeric_selection: handlers.ppt_numeric_selection
       },
       attachmentTextHandlers: [handlers.pending_attachment_answer],
@@ -6784,7 +6765,7 @@ describe("LINE entrance", () => {
       createLineReplyClient: () => ({ replyText })
     });
 
-    for (const [index, text] of ["上網找", "1", "是"].entries()) {
+    for (const [index, text] of ["1", "是"].entries()) {
       const body = lineBody({
         type: "message",
         replyToken: `continuation-${index}`,
@@ -6800,18 +6781,13 @@ describe("LINE entrance", () => {
       expect(response.statusCode).toBe(200);
     }
 
-    expect(handlers.sheet_music_numeric_selection.handle).not.toHaveBeenCalled();
     expect(handlers.ppt_numeric_selection.handle).toHaveBeenCalledOnce();
     expect(handlers.pending_attachment_answer.handle).toHaveBeenCalledOnce();
     expect(profileTurn).not.toHaveBeenCalled();
     expect(afterFunctionResult).not.toHaveBeenCalled();
     await expect(memoryStore.summary()).resolves.toMatchObject({ resources: 0 });
     expect(complete).toHaveBeenCalledOnce();
-    expect(replyText.mock.calls.map(([, text]) => text)).toEqual([
-      "公開網路找譜已停用。",
-      "投影片 1",
-      "請選用途"
-    ]);
+    expect(replyText.mock.calls.map(([, text]) => text)).toEqual(["投影片 1", "請選用途"]);
   });
 
   it.each(["match", "completion"] as const)(
@@ -6874,49 +6850,6 @@ describe("LINE entrance", () => {
       );
     }
   );
-
-  it("returns a retired sheet-music result without entering continuations or the model", async () => {
-    const config = accessConfig();
-    const helper = config.profiles[0]!;
-    helper.enabledFunctions = ["find_sheet_music"];
-    const profileTurn = vi.fn(async () => ({ ok: true, replyText: "model" }));
-    const continuation = vi.fn(async () => ({ ok: true, replyText: "legacy" }));
-    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
-    const app = createTestApp(config, {
-      profileRuntime: createProfileRuntimeDispatcher({
-        helper: {
-          handleRetiredSheetMusic: async () => ({ ok: true, replyText: "公開網路找譜已停用。" }),
-          handleTextTurn: profileTurn
-        }
-      }),
-      textMessageHandlers: {
-        sheet_music_numeric_selection: {
-          capability: "find_sheet_music",
-          matches: vi.fn(async () => true),
-          handle: continuation
-        }
-      },
-      createLineReplyClient: () => ({ replyText })
-    });
-    const body = lineBody({
-      type: "message",
-      replyToken: "research-cancel",
-      source: { type: "user", userId: "Uroot" },
-      message: { type: "text", text: "不用" }
-    });
-
-    const response = await app.inject({
-      method: "POST",
-      url: helper.webhookPath,
-      headers: signedHeaders(body, helper.channelSecret),
-      payload: body
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(replyText).toHaveBeenCalledWith("research-cancel", "公開網路找譜已停用。");
-    expect(continuation).not.toHaveBeenCalled();
-    expect(profileTurn).not.toHaveBeenCalled();
-  });
 
   it.each([
     ["allowed", true],

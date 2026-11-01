@@ -109,9 +109,9 @@ complete proposal arguments
 
 `src/transport/line/attachment-intake.ts` is the sole executable attachment intake. Direct users must opt in; groups require a requester-scoped two-minute one-shot activation. The helper agent collects and edits purpose/title through a strict draft tool after explicit opt-in. The server renders a version-bound confirmation postback; Redis compare-and-set prevents stale approval and draft resurrection. Other profiles retain deterministic collection. Confirmation enqueues only an opaque work ID through the durable outbox.
 
-The finite attachment worker uses its dedicated managed identity to download accepted LINE or external content, validates size/MIME/hash, and publishes only durable `clean` assets. Asset API is the sole owner of malware scanning and signature freshness. The bot process never downloads or scans the binary. Publishing claims and queue acknowledgement keep their existing idempotent fail-closed rules.
+The finite attachment worker uses its dedicated managed identity to download accepted LINE content, validates size/MIME/hash, and publishes only durable `clean` assets. Asset API is the sole owner of malware scanning and signature freshness. The bot process never downloads or scans the binary. Publishing claims and queue acknowledgement keep their existing idempotent fail-closed rules.
 
-Public sheet-music research and new external imports are retired. Internal catalog search, Wikipedia and explicit user-saved links remain separate. Legacy external binary work stays supported only until the retirement drain gate; the bot cannot create new external work. Untrusted group-history context still uses the durable dirty-policy marker and cannot authorize draft mutations.
+Public sheet-music research and new external imports are retired. Internal catalog search, Wikipedia and explicit user-saved links remain separate. The worker and durable work schema accept only a LINE message ID; raw legacy external work is rejected before Asset access or publication. Untrusted group-history context still uses the durable dirty-policy marker and cannot authorize draft mutations.
 
 ## Persistence And Observability
 

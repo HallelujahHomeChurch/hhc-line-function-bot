@@ -21,9 +21,7 @@ function workerEnv(): NodeJS.ProcessEnv {
     GRAPH_PPT_FOLDER_ITEM_ID: "ppt",
     MAX_ATTACHMENT_BYTES: "26214400",
     MEDIA_SYNC_MAX_BYTES: "209715200",
-    LINE_CONTENT_DOWNLOAD_TIMEOUT_MS: "30000",
-    EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS: "15000",
-    EXTERNAL_RESOURCE_MAX_REDIRECTS: "3"
+    LINE_CONTENT_DOWNLOAD_TIMEOUT_MS: "30000"
   };
 }
 
@@ -46,6 +44,16 @@ describe("attachment scan worker config", () => {
     expect(JSON.stringify(config)).not.toMatch(
       /channelSecret|adminUserId|deepseek|openai|notion/iu
     );
+  });
+
+  it("ignores retired external download settings", () => {
+    expect(
+      loadAttachmentScanWorkerConfigFromEnv({
+        ...workerEnv(),
+        EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS: "invalid",
+        EXTERNAL_RESOURCE_MAX_REDIRECTS: "invalid"
+      })
+    ).not.toHaveProperty("externalResources");
   });
 
   it.each(["0", "209715201", "1.5", "not-a-number"])(

@@ -3,13 +3,15 @@ import { HTTPError, ReadError, RequestError } from "@line/bot-sdk";
 
 import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { runAttachmentAssetWorker } from "../attachments/asset-worker.js";
-import { InMemoryAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
+import {
+  InMemoryAttachmentScanWorkStore,
+  type AttachmentScanWork
+} from "../attachments/scan-work-store.js";
 import {
   createAssetApiClient,
   type AssetApiClient,
   type AssetRecord
 } from "../clients/asset-api.js";
-import { ExternalBinaryReadError } from "../clients/external-binary.js";
 import { LineContentReadError } from "../clients/line.js";
 import type { ResourceBinaryPublisher } from "../functions/resource-binary-publisher.js";
 
@@ -23,6 +25,33 @@ const descriptor = {
 };
 
 describe("attachment asset worker", () => {
+  it.each([false, true])(
+    "rejects raw external work before any source or Asset access (existing asset: %s)",
+    async (existingAsset) => {
+      const fixture = await setup();
+      const claimed = await fixture.store.claim(fixture.workId);
+      const legacy = {
+        ...claimed!,
+        lineMessageId: undefined,
+        externalUrl: "https://example.invalid/score.pdf",
+        ...(existingAsset ? { assetId: "asset-1", uploadDescriptor: descriptor } : {})
+      } as unknown as AttachmentScanWork;
+      vi.spyOn(fixture.store, "claimForProcessing").mockResolvedValueOnce({
+        disposition: "claimed",
+        work: legacy
+      });
+      await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
+        status: "permanent_failure",
+        failureCode: "validation_failed"
+      });
+      expect(fixture.options.lineContent.getMessageContent).not.toHaveBeenCalled();
+      expect(fixture.assets.get).not.toHaveBeenCalled();
+      expect(fixture.assets.createUpload).not.toHaveBeenCalled();
+      expect(fixture.publisher.publishVerifiedResource).not.toHaveBeenCalled();
+      await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBe("failed");
+    }
+  );
+
   it("uploads once, waits for Asset clean status, then publishes verified bytes", async () => {
     const fixture = await setup();
 
@@ -234,64 +263,6 @@ describe("attachment asset worker", () => {
     await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBeUndefined();
   });
 
-  it.each([
-    ["unsafe URL", () => new ExternalBinaryReadError("external_binary_unsafe_address")],
-    [
-      "HTTP 404",
-      () =>
-        new ExternalBinaryReadError("external_binary_http_error", {
-          statusCode: 404
-        })
-    ],
-    [
-      "invalid HTTP 600",
-      () =>
-        new ExternalBinaryReadError("external_binary_http_error", {
-          statusCode: 600
-        })
-    ]
-  ])("makes deterministic external source failure %s durable", async (_label, errorFactory) => {
-    const fixture = await setup({ source: "external" });
-    vi.mocked(fixture.options.externalBinary!.download).mockRejectedValueOnce(errorFactory());
-
-    await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
-      status: "permanent_failure",
-      failureCode: "download_failed"
-    });
-    await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBe("failed");
-
-    await runAttachmentAssetWorker(fixture.workId, fixture.options);
-    expect(fixture.options.externalBinary!.download).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ["timeout", () => new ExternalBinaryReadError("external_binary_timeout")],
-    [
-      "HTTP 429",
-      () =>
-        new ExternalBinaryReadError("external_binary_http_error", {
-          statusCode: 429
-        })
-    ],
-    [
-      "HTTP 503",
-      () =>
-        new ExternalBinaryReadError("external_binary_http_error", {
-          statusCode: 503
-        })
-    ]
-  ])("releases transient external source failure %s for retry", async (_label, errorFactory) => {
-    const fixture = await setup({ source: "external" });
-    vi.mocked(fixture.options.externalBinary!.download).mockRejectedValueOnce(errorFactory());
-
-    await expect(runAttachmentAssetWorker(fixture.workId, fixture.options)).resolves.toEqual({
-      status: "transient_retry",
-      failureCode: "download_failed"
-    });
-    await expect(fixture.store.terminalStatus(fixture.workId)).resolves.toBeUndefined();
-    await expect(fixture.store.claim(fixture.workId)).resolves.toMatchObject({ status: "claimed" });
-  });
-
   it("reports claim contention separately from scan pending", async () => {
     const fixture = await setup();
     await fixture.store.claim(fixture.workId);
@@ -378,7 +349,6 @@ async function setup(
     scanStatus?: AssetRecord["scanStatus"];
     now?: () => Date;
     claimLeaseMs?: number;
-    source?: "line" | "external";
   } = {}
 ) {
   const now = input.now ?? (() => clock);
@@ -394,9 +364,7 @@ async function setup(
   });
   const work = await store.create({
     jobId: job.id,
-    ...(input.source === "external"
-      ? { externalUrl: "https://example.org/Sunday.pdf" }
-      : { lineMessageId: "line-message-1" }),
+    lineMessageId: "line-message-1",
     scope,
     target: {
       sourceKey: "ppt_slides",
@@ -455,14 +423,6 @@ async function setup(
       assets,
       lineContent: {
         getMessageContent: vi.fn().mockResolvedValue({ data: pdf, contentType: "application/pdf" })
-      },
-      externalBinary: {
-        download: vi.fn().mockResolvedValue({
-          data: pdf,
-          finalUrl: "https://example.org/Sunday.pdf",
-          fileName: "Sunday.pdf",
-          contentType: "application/pdf"
-        })
       },
       profiles: [{ name: "helper", channelAccessToken: "token" }],
       publisher,

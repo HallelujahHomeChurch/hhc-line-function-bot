@@ -20,7 +20,6 @@ export interface ResourceBinaryInput {
   data: Uint8Array;
   declaredFileName?: string;
   declaredContentType?: string;
-  sourceKind: "line" | "external";
 }
 
 export interface ResourceBinaryPublisher {

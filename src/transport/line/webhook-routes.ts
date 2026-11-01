@@ -1768,18 +1768,6 @@ async function handleWebhook(
         continue;
       }
 
-      const retiredResult = await profileRuntime.handleRetiredSheetMusic?.(profileTurnInput);
-      if (retiredResult) {
-        await line.replyText(event.replyToken, retiredResult.replyText);
-        await recordConversationReply(
-          conversationWindowStore,
-          effectiveProfile,
-          event,
-          retiredResult,
-          quoteContext?.isCurrent
-        );
-        continue;
-      }
       const attachmentResult = await executeAttachmentTextIntake({
         intake: {
           profile: effectiveProfile,
