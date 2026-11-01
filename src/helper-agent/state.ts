@@ -116,13 +116,16 @@ export function createPostgresHelperAgentState(
           await guardedTask(input, options.checkpointer, input.task);
       }),
     async setup() {
+      // Keep legacy columns for pre-retirement rollback, including fresh databases.
       await options.pool.query(`
         create table if not exists agent_sdk_threads (
           thread_id text primary key,
           expires_at timestamptz not null,
-          policy_key text
+          policy_key text,
+          external_search_expires_at timestamptz
         );
-        alter table agent_sdk_threads add column if not exists policy_key text
+        alter table agent_sdk_threads add column if not exists policy_key text;
+        alter table agent_sdk_threads add column if not exists external_search_query text
       `);
     },
     async run(input) {

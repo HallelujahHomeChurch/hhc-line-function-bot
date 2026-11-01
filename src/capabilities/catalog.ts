@@ -264,7 +264,7 @@ export const CAPABILITY_CATALOG: FunctionDefinition[] = [
       label: "查歌譜",
       command: "小哈 查歌譜"
     },
-    helpText: "查詢已設定的流行歌譜或詩歌歌譜；本地找不到時可詢問是否上網找公開結果。"
+    helpText: "查詢已設定的流行歌譜或詩歌歌譜，找不到時請提供更完整歌名或歌手。"
   },
   {
     name: "find_resource",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { projectEffectiveCapabilities } from "../application/capabilities/effective-capability-projection.js";
+import { getFunctionDefinition } from "../capabilities/catalog.js";
 import { createIntroReply } from "../intro.js";
 import type { BotProfileConfig } from "../types.js";
 
@@ -102,4 +103,11 @@ describe("intro replies", () => {
     expect(result?.replyText).toBe("我是 HHC 家教會小幫手。");
     expect(result?.replyText).not.toContain("小哈");
   });
+});
+
+it("does not advertise retired public research in sheet-music help", () => {
+  const result = createIntroReply(projection(["find_sheet_music"]), "小哈你能做什麼");
+  expect(result?.replyText).toContain("查歌譜");
+  expect(result?.replyText).not.toMatch(/上網|公開搜尋/u);
+  expect(getFunctionDefinition("find_sheet_music")?.helpText).not.toMatch(/上網|公開搜尋/u);
 });

@@ -135,6 +135,10 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
     });
     await checkpointer.setup();
     await state.setup();
+    // The rollback revision still selects these columns on a freshly initialized database.
+    await pool.query(
+      "select external_search_expires_at, external_search_query from agent_sdk_threads limit 0"
+    );
     const direct = state.threadId({
       profileName: PROFILE,
       source: { type: "user", userId: "kernel-direct-user" }

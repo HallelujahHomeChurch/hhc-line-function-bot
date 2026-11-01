@@ -30,7 +30,7 @@
 
 | 邊界                   | 擁有檔案                                                                                                                                                                                               | 退役處理                                                                |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| 查無結果與外部匯入入口 | `src/functions/find-pop-sheet-music.ts`、`src/bootstrap/compose-capabilities.ts`                                                                                                                       | 移除同意提示、候選匯入與新 work 建立；保留內部選擇                      |
+| 查無結果與外部匯入入口 | `src/functions/find-pop-sheet-music.ts`、`src/bootstrap/compose-capabilities.ts`、`src/capabilities/catalog.ts`                                                                                        | 移除同意提示、候選匯入與新 work 建立；保留內部選擇                      |
 | Agent 組合與回合       | `src/helper-agent/sheet-music-tools.ts`、`runtime.ts`、`agent.ts`、`budget.ts`                                                                                                                         | 刪除研究工具、專用模式、研究額度與研究專用互斥／清理分支                |
 | Scoped 狀態與入口      | `src/helper-agent/state.ts`、`src/state/session-store.ts`、`redis-session-store.ts`、`src/runtime/profile-runtime.ts`、`src/transport/line/webhook-routes.ts`                                          | 刪除新同意／匯入能力，過渡期只安全終止已存在的舊 session                |
 | Client、設定與型別     | `src/clients/searxng.ts`、`public-page.ts`、`src/bootstrap/create-production-runtime.ts`、`src/config.ts`、`src/types.ts`                                                                              | 移除專用 client／reader／WebSearch 型別／設定與注入                     |
@@ -223,6 +223,8 @@ CLI exit code 0、structured status `SUCCESS`、一個 turn，執行約 37 秒�
 
 部署不再建立／更新 SearXNG，release probe/report/rollback 解除專用依賴，deployment receipt 嚴格升為 v2。已補上舊 receipt 拒絕和 pre-retirement probe manifest 回復案例；保留舊資源於 production，以供後續受控發布回退。
 
-目前 local typecheck、lint、build、architecture、config validation、offline agent evaluator、retrieval evaluator、隔離 Redis/PG integration 與本機 signed webhook smoke 已通過。完整 test suite 為 164 files passed、1 skipped；1,858 tests passed、66 skipped。另有 19 個 offline agent cases、35 個整合單元測試與 24 個 real-dependency matrix／cleanup checks 通過。66 個 full-suite skip 不算通過證據，涉及本次 helper state 的 PG/Redis 路徑已有獨立整合 gate；PR CI 尚待執行，不能將本段作為 production 證據。沒有 merge、發布、真 provider/LINE 呼叫、Azure mutation 或 azure-infra 修改。
+目前 local typecheck、lint、build、architecture、config validation、offline agent evaluator、retrieval evaluator、隔離 Redis/PG integration 與本機 signed webhook smoke 已通過。完整 test suite 為 164 files passed、1 skipped；1,859 tests passed、66 skipped。另有 19 個 offline agent cases、35 個整合單元測試與 24 個 real-dependency matrix／cleanup checks 通過。66 個 full-suite skip 不算通過證據，涉及本次 helper state 的 PG/Redis 路徑已有獨立整合 gate；PR CI 尚待執行，不能將本段作為 production 證據。沒有 merge、發布、真 provider/LINE 呼叫、Azure mutation 或 azure-infra 修改。
 
 尚未完成：production 唯讀 work/job/outbox/queue 基線、切換後排空、PR2、cloud App 刪除與真實 LINE 驗收。依賴上線的項目不能在未合併 PR1 上假裝完成。
+
+最後補查已修正 capability help 的舊公開搜尋文案，完整測試重跑為 1,859 passed／66 skipped。PG 初始化保留 pre-retirement rollback 需要的兩個舊欄位，且追加真實 PostgreSQL 的舊欄位查詢驗證；移除的研究讀寫方法不恢復。此相容性補強另跑 real-dependency integration，PR CI 會在最終 head 再跑完整 gates。
