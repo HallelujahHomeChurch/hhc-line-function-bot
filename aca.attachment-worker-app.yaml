@@ -25,7 +25,7 @@ properties:
     scale:
       minReplicas: 0
       maxReplicas: 1
-      pollingInterval: 1
+      pollingInterval: 5
       cooldownPeriod: 120
       rules:
         - name: attachment-work

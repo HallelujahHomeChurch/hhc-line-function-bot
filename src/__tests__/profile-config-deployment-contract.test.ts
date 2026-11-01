@@ -48,7 +48,7 @@ describe("production profile configuration deployment contract", () => {
     for (const setting of [
       "minReplicas: 0",
       "maxReplicas: 1",
-      "pollingInterval: 1",
+      "pollingInterval: 5",
       "cooldownPeriod: 120"
     ]) {
       expect(scale).toContain(setting);
@@ -998,7 +998,7 @@ describe("production profile configuration deployment contract", () => {
     );
     const workerApp = readProjectFile("aca.attachment-worker-app.yaml");
     expect(workerApp).toContain("minReplicas: 0");
-    expect(workerApp).toContain("pollingInterval: 1");
+    expect(workerApp).toContain("pollingInterval: 5");
     expect(workerApp).toContain("cooldownPeriod: 120");
     expect(workerApp).toContain("name: attachment-work");
     expect(workerApp).not.toContain("name: media-sync-warm\n");

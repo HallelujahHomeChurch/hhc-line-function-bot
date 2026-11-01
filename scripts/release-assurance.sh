@@ -547,7 +547,7 @@ valid = (
     state.get("image") == os.environ["RELEASE_ATTACHMENT_APP_IMAGE"]
     and state.get("min") == 0
     and state.get("max") == 1
-    and state.get("poll") == 1
+    and state.get("poll") == 5
     and state.get("cooldown") == 120
     and len(names) == len(set(names))
     and set(names) == {"attachment-work", *expected_cron}
