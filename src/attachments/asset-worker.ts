@@ -3,10 +3,6 @@ import {
   type AssetApiClient,
   type AssetRecord
 } from "../clients/asset-api.js";
-import {
-  isExternalBinaryReadError,
-  type ExternalBinaryClient
-} from "../clients/external-binary.js";
 import { lineContentFailureDisposition } from "../clients/line.js";
 import {
   prepareResourceBinary,
@@ -37,14 +33,10 @@ export async function runAttachmentAssetWorker(
     workStore: AttachmentScanWorkStore;
     assets: AssetApiClient;
     lineContent: LineContentClient;
-    // shortcut: pre-retirement work only; Ray removes after PR2 drain gate.
-    externalBinary?: ExternalBinaryClient;
     profiles: AttachmentScanWorkerProfile[];
     publisher: ResourceBinaryPublisher;
     maxBytes: number;
     lineDownloadTimeoutMs: number;
-    externalDownloadTimeoutMs?: number;
-    externalMaxRedirects?: number;
     scanDeadline: Date;
     publicationDeadline?: Date;
     now?: () => Date;
@@ -102,7 +94,7 @@ export async function runAttachmentAssetWorker(
       const created = await options.assets.createUpload({
         idempotencyKey: `line-attachment:${work.id}`,
         ownerType: "line_message",
-        ownerId: work.lineMessageId ?? work.id,
+        ownerId: work.lineMessageId,
         purpose: "resource",
         fileName: descriptor.fileName,
         mimeType: descriptor.mimeType,
@@ -156,8 +148,7 @@ export async function runAttachmentAssetWorker(
       binary: {
         data: clean.data,
         declaredFileName: descriptor.fileName,
-        declaredContentType: asset.detectedMimeType ?? clean.contentType,
-        sourceKind: "external"
+        declaredContentType: asset.detectedMimeType ?? clean.contentType
       },
       target: workTarget(work),
       maxBytes: options.maxBytes
@@ -192,7 +183,7 @@ export async function runAttachmentAssetWorker(
     if (isPermanentAssetApiError(error)) {
       return permanentFailure(options.workStore, work, "scan_unavailable");
     }
-    const sourceDisposition = sourceFailureDisposition(error);
+    const sourceDisposition = lineContentFailureDisposition(error);
     if (sourceDisposition === "permanent") {
       return permanentFailure(options.workStore, work, "download_failed");
     }
@@ -204,57 +195,26 @@ export async function runAttachmentAssetWorker(
   }
 }
 
-function sourceFailureDisposition(error: unknown): "permanent" | "transient" | undefined {
-  const lineDisposition = lineContentFailureDisposition(error);
-  if (lineDisposition) return lineDisposition;
-  if (isExternalBinaryReadError(error)) {
-    return error.transient ? "transient" : "permanent";
-  }
-  return undefined;
-}
-
 async function prepareWorkResource(
   work: AttachmentScanWork,
   options: {
     lineContent: LineContentClient;
-    externalBinary?: ExternalBinaryClient;
     profiles: AttachmentScanWorkerProfile[];
     maxBytes: number;
     lineDownloadTimeoutMs: number;
-    externalDownloadTimeoutMs?: number;
-    externalMaxRedirects?: number;
   }
 ): Promise<PreparedResourceBinary | undefined> {
   const profile = options.profiles.find((candidate) => candidate.name === work.scope.profileName);
   if (!profile || !isResourcePublishItemKind(work.target.itemKind)) return undefined;
-  const content = work.lineMessageId
-    ? {
-        ...(await options.lineContent.getMessageContent(work.lineMessageId, profile, {
-          maxBytes: options.maxBytes,
-          timeoutMs: options.lineDownloadTimeoutMs
-        })),
-        sourceKind: "line" as const
-      }
-    : options.externalBinary
-      ? {
-          ...(await options.externalBinary.download({
-            url: work.externalUrl!,
-            maxBytes: options.maxBytes,
-            timeoutMs: options.externalDownloadTimeoutMs ?? 15_000,
-            maxRedirects: options.externalMaxRedirects ?? 3
-          })),
-          sourceKind: "external" as const
-        }
-      : undefined;
-  if (!content) return undefined;
+  const content = await options.lineContent.getMessageContent(work.lineMessageId, profile, {
+    maxBytes: options.maxBytes,
+    timeoutMs: options.lineDownloadTimeoutMs
+  });
   const prepared = prepareResourceBinary({
     binary: {
       data: content.data,
-      declaredFileName:
-        ("fileName" in content ? content.fileName : undefined) ??
-        inferredFileName(work.target.title, content.contentType),
-      declaredContentType: content.contentType,
-      sourceKind: content.sourceKind
+      declaredFileName: inferredFileName(work.target.title, content.contentType),
+      declaredContentType: content.contentType
     },
     target: {
       profileName: work.scope.profileName,
@@ -331,6 +291,9 @@ function validWorkTarget(
   profiles: AttachmentScanWorkerProfile[]
 ): boolean {
   return (
+    typeof work.lineMessageId === "string" &&
+    work.lineMessageId.trim().length > 0 &&
+    !Object.hasOwn(work, "externalUrl") &&
     profiles.some((candidate) => candidate.name === work.scope.profileName) &&
     isResourcePublishItemKind(work.target.itemKind)
   );

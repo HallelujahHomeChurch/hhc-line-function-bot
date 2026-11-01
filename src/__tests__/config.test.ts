@@ -363,11 +363,10 @@ describe("config", () => {
     });
   });
 
-  it("loads safe external resource download defaults", () => {
-    expect(loadConfigFromEnv(baseEnv()).externalResources).toEqual({
-      downloadTimeoutMs: 15_000,
-      maxRedirects: 3
-    });
+  it("ignores retired external resource download configuration", () => {
+    expect(
+      loadConfigFromEnv({ ...baseEnv(), EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS: "invalid" })
+    ).not.toHaveProperty("externalResources");
   });
 
   it("configures an identifiable Wikimedia API client without a secret", () => {

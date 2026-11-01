@@ -1,13 +1,7 @@
 import { recoveryCutoff } from "../application/recovery/redis-recovery.js";
 import { readFileSync } from "node:fs";
 
-import type {
-  AttachmentConfig,
-  DatabaseConfig,
-  ExternalResourceConfig,
-  GraphConfig,
-  RedisConfig
-} from "../types.js";
+import type { AttachmentConfig, DatabaseConfig, GraphConfig, RedisConfig } from "../types.js";
 import { MEDIA_SYNC_MAX_BYTES } from "../media-sync/worker.js";
 
 export interface AttachmentScanWorkerProfile {
@@ -19,7 +13,6 @@ export interface AttachmentScanWorkerConfig {
   profiles: AttachmentScanWorkerProfile[];
   attachments: AttachmentConfig;
   mediaSyncMaxBytes: number;
-  externalResources: ExternalResourceConfig;
   redis: RedisConfig;
   database: DatabaseConfig;
   graph: GraphConfig;
@@ -75,18 +68,6 @@ export function loadAttachmentScanWorkerConfigFromEnv(
       )
     },
     mediaSyncMaxBytes,
-    externalResources: {
-      downloadTimeoutMs: positiveInt(
-        env.EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS,
-        15_000,
-        "EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS"
-      ),
-      maxRedirects: nonNegativeInt(
-        env.EXTERNAL_RESOURCE_MAX_REDIRECTS,
-        3,
-        "EXTERNAL_RESOURCE_MAX_REDIRECTS"
-      )
-    },
     redis: {
       url: required(env, "REDIS_URL"),
       keyPrefix: env.REDIS_KEY_PREFIX?.trim() || "hhc-line-function-bot"
@@ -124,12 +105,5 @@ function positiveInt(value: string | undefined, fallback: number, name: string):
   if (!value?.trim()) return fallback;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be positive`);
-  return parsed;
-}
-
-function nonNegativeInt(value: string | undefined, fallback: number, name: string): number {
-  if (!value?.trim()) return fallback;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${name} must be non-negative`);
   return parsed;
 }

@@ -851,8 +851,7 @@ async function publishManualResource(input: {
     binary: {
       data: binary.data,
       declaredFileName: safeMediaFileName(input.work.ingest),
-      declaredContentType: binary.contentType ?? input.asset.detectedMimeType,
-      sourceKind: "line"
+      declaredContentType: binary.contentType ?? input.asset.detectedMimeType
     },
     target: {
       profileName: input.work.ingest.profileName,

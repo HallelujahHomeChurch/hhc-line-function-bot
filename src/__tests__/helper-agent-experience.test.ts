@@ -142,7 +142,7 @@ it("reset waits for an in-flight proposal and invalidates the review it creates"
   expect(await app.review()).toBeUndefined();
 });
 
-it("reset invalidates an old attachment approval and scoped research while preserving another requester", async () => {
+it("reset invalidates an old attachment approval while preserving another requester", async () => {
   const app = fixture([[]]);
   const pending: PendingAttachmentSession = {
     id: "attachment",
@@ -158,27 +158,6 @@ it("reset invalidates an old attachment approval and scoped research while prese
   };
   const revision = createHash("sha256").update(JSON.stringify(pending)).digest("hex");
   await app.sessions.set(pending);
-  await app.sessions.set({
-    id: "consent",
-    type: "external_search_consent",
-    action: "sheet_music_external_search",
-    profileName: "helper",
-    source: app.source,
-    requesterUserId: app.source.userId,
-    query: "synthetic",
-    expiresAt: pending.expiresAt
-  });
-  await app.sessions.set({
-    id: "import",
-    type: "external_sheet_music_import",
-    stage: "selecting",
-    profileName: "helper",
-    source: app.source,
-    requesterUserId: app.source.userId,
-    query: "synthetic",
-    items: [],
-    expiresAt: pending.expiresAt
-  });
   const other = {
     ...pending,
     id: "other",
@@ -188,8 +167,6 @@ it("reset invalidates an old attachment approval and scoped research while prese
   await app.sessions.set(other);
   await app.runtime.handleTextTurn(app.turn("忘記這段對話"));
   expect(await app.sessions.get(pending.id)).toBeUndefined();
-  expect(await app.sessions.get("consent")).toBeUndefined();
-  expect(await app.sessions.get("import")).toBeUndefined();
   expect(await app.sessions.get("other")).toBeDefined();
   const handler = createPendingAttachmentPostbackHandler({
     sessionStore: app.sessions

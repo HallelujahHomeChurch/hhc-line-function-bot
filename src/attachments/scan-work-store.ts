@@ -27,8 +27,7 @@ export interface AttachmentScanTarget {
 
 export interface AttachmentScanWorkInput {
   jobId: string;
-  lineMessageId?: string;
-  externalUrl?: string;
+  lineMessageId: string;
   scope: AgentJobScope & { requesterUserId: string };
   target: AttachmentScanTarget;
   ttlMs: number;
@@ -45,8 +44,7 @@ export interface AttachmentScanWork {
   version: 1;
   id: string;
   jobId: string;
-  lineMessageId?: string;
-  externalUrl?: string;
+  lineMessageId: string;
   assetId?: string;
   uploadDescriptor?: AttachmentAssetUploadDescriptor;
   scope: AgentJobScope & { requesterUserId: string };
@@ -142,7 +140,6 @@ local valid =
     id = true,
     jobId = true,
     lineMessageId = true,
-    externalUrl = true,
     assetId = true,
     uploadDescriptor = true,
     scope = true,
@@ -182,10 +179,7 @@ local valid =
       string.len(work.uploadDescriptor.checksumSha256) == 64
     )
   ) and
-  (
-    (isNonEmptyString(work.lineMessageId) and work.externalUrl == nil) or
-    (isNonEmptyString(work.externalUrl) and work.lineMessageId == nil)
-  ) and
+  isNonEmptyString(work.lineMessageId) and
   type(work.scope) == "table" and
   hasOnlyKeys(work.scope, {
     profileName = true,
@@ -549,8 +543,7 @@ export class InMemoryAttachmentScanWorkStore implements AttachmentScanWorkStore 
       version: 1,
       id: this.idFactory(),
       jobId: input.jobId,
-      ...(input.lineMessageId ? { lineMessageId: input.lineMessageId } : {}),
-      ...(input.externalUrl ? { externalUrl: input.externalUrl } : {}),
+      lineMessageId: input.lineMessageId,
       scope: { ...input.scope },
       target: { ...input.target },
       status: "pending_enqueue",
@@ -876,8 +869,7 @@ export class RedisAttachmentScanWorkStore implements AttachmentScanWorkStore {
       version: 1,
       id: this.idFactory(),
       jobId: input.jobId,
-      ...(input.lineMessageId ? { lineMessageId: input.lineMessageId } : {}),
-      ...(input.externalUrl ? { externalUrl: input.externalUrl } : {}),
+      lineMessageId: input.lineMessageId,
       scope: { ...input.scope },
       target: { ...input.target },
       status: "pending_enqueue",
@@ -1143,10 +1135,8 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       work.version !== 1 ||
       work.id !== expectedId ||
       !isNonEmptyString(work.jobId) ||
-      !(
-        (isNonEmptyString(work.lineMessageId) && work.externalUrl === undefined) ||
-        (isNonEmptyString(work.externalUrl) && work.lineMessageId === undefined)
-      ) ||
+      !isNonEmptyString(work.lineMessageId) ||
+      Object.hasOwn(work, "externalUrl") ||
       !work.scope ||
       !isNonEmptyString(work.scope.profileName) ||
       !isNonEmptyString(work.scope.sourceKey) ||
@@ -1176,8 +1166,7 @@ function parseWork(raw: string, expectedId: string): AttachmentScanWork | undefi
       version: 1,
       id: work.id,
       jobId: work.jobId,
-      ...(work.lineMessageId ? { lineMessageId: work.lineMessageId } : {}),
-      ...(work.externalUrl ? { externalUrl: work.externalUrl } : {}),
+      lineMessageId: work.lineMessageId,
       ...(work.assetId ? { assetId: work.assetId } : {}),
       ...(work.uploadDescriptor ? { uploadDescriptor: { ...work.uploadDescriptor } } : {}),
       scope: {
@@ -1332,13 +1321,7 @@ function boundedExpiry(
 }
 
 function assertValidWorkSource(input: AttachmentScanWorkInput): void {
-  if (Boolean(input.lineMessageId?.trim()) === Boolean(input.externalUrl?.trim())) {
+  if (!input.lineMessageId?.trim() || Object.hasOwn(input, "externalUrl")) {
     throw new Error("attachment_scan_work_source_invalid");
-  }
-  if (input.externalUrl) {
-    const url = new URL(input.externalUrl);
-    if (url.protocol !== "https:" || url.username || url.password) {
-      throw new Error("attachment_scan_work_source_invalid");
-    }
   }
 }

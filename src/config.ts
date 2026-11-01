@@ -338,10 +338,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       lineDownloadTimeoutMs: readInt(env.LINE_CONTENT_DOWNLOAD_TIMEOUT_MS, 30_000),
       ...(attachmentScanQueueUrl ? { scanQueueUrl: attachmentScanQueueUrl } : {})
     },
-    externalResources: {
-      downloadTimeoutMs: readInt(env.EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS, 15_000),
-      maxRedirects: readInt(env.EXTERNAL_RESOURCE_MAX_REDIRECTS, 3)
-    },
     profiles: normalizedProfiles.map((profile) => ({
       ...profile,
       enabledFunctions: profile.enabledFunctions as CapabilityName[]

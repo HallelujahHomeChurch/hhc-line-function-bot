@@ -385,8 +385,8 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).toContain('value: "26214400"');
     expect(manifest).toContain("name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS");
     expect(manifest).toContain('value: "30000"');
-    expect(manifest).toContain("name: EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS");
-    expect(manifest).toContain("name: EXTERNAL_RESOURCE_MAX_REDIRECTS");
+    expect(manifest).not.toContain("name: EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS");
+    expect(manifest).not.toContain("name: EXTERNAL_RESOURCE_MAX_REDIRECTS");
     expect(manifest).not.toContain("BOT_PROFILES_BASE64_JSON");
     expect(manifest).not.toContain("bot-profiles-base64-json");
     expect(releaseWorkflow).toContain("- config/**");

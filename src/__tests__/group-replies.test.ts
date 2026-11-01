@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { groupContinuationReply } from "../line-reply.js";
 import { describe, expect, it, vi } from "vitest";
 import { groupReplyClient, takeGroupReply } from "../transport/line/group-replies.js";
@@ -9,6 +10,37 @@ const event = {
   source: { type: "group", groupId: "synthetic-group", userId: "synthetic-user" }
 };
 describe("scoped group message buttons", () => {
+  it("accepts a pre-retirement internal button with its original five-slot state hash", async () => {
+    const sessions = new InMemorySessionStore();
+    await sessions.set({
+      id: "pre-retirement",
+      type: "group_reply",
+      profileName: "helper",
+      source: event.source,
+      requesterUserId: event.source.userId,
+      texts: ["1"],
+      stateKey: createHash("sha256")
+        .update(JSON.stringify([null, null, null, null, null]))
+        .digest("hex"),
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const click = {
+      ...event,
+      type: "postback",
+      postback: { data: "action=group_reply&id=pre-retirement&choice=0" }
+    };
+    expect(
+      await takeGroupReply(sessions, "helper", {
+        ...click,
+        source: { ...event.source, userId: "other" }
+      })
+    ).toBeUndefined();
+    expect(await takeGroupReply(sessions, "helper", click)).toMatchObject({
+      message: { text: "1" }
+    });
+    expect(await takeGroupReply(sessions, "helper", click)).toBeUndefined();
+  });
+
   it("replaces message actions with requester-bound, expiring, single-use postbacks", async () => {
     const sessions = new InMemorySessionStore();
     const replyText = vi.fn<LineReplyClient["replyText"]>(async () => undefined);

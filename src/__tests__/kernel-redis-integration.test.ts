@@ -311,6 +311,21 @@ describe("kernel Redis integration environment", () => {
       ttlMs: 600_000
     });
     await stores[0]!.markEnqueued(work.id);
+    const workKey = `${environment.keyPrefix}:attachment-scan-work:${work.id}`;
+    const original = (await environment.clients[0].get(workKey))!;
+    for (const lineMessageId of [undefined, "line-message-opaque-id"]) {
+      const legacy = JSON.stringify({
+        ...JSON.parse(original),
+        lineMessageId,
+        externalUrl: "https://example.invalid/score.pdf"
+      });
+      await environment.clients[0].set(workKey, legacy, { KEEPTTL: true });
+      await expect(stores[0]!.claimForProcessing(work.id)).resolves.toEqual({
+        disposition: "missing"
+      });
+      expect(await environment.clients[0].get(workKey)).toBe(legacy);
+    }
+    await environment.clients[0].set(workKey, original, { KEEPTTL: true });
     const first = await stores[0]!.claim(work.id);
     const descriptor = {
       fileName: "SundayDeck.pdf",

@@ -41,10 +41,7 @@ vi.mock("../attachments/scan-worker-config.js", () => ({
       lineDownloadTimeoutMs: 30_000
     },
     database: {},
-    externalResources: {
-      downloadTimeoutMs: 30_000,
-      maxRedirects: 3
-    },
+
     graph: {},
     mediaSyncMaxBytes: 200 * 1024 * 1024,
     profiles: [],
@@ -62,9 +59,7 @@ vi.mock("../clients/asset-api.js", () => ({
   assetAccessTokenScope: (audience: string) => `${audience}/.default`,
   createAssetApiClient: mocks.createAssetApiClient
 }));
-vi.mock("../clients/external-binary.js", () => ({
-  createExternalBinaryClient: vi.fn().mockReturnValue({})
-}));
+
 vi.mock("../clients/graph.js", () => ({ createGraphDriveClient: vi.fn().mockReturnValue({}) }));
 vi.mock("../clients/line.js", () => ({ createLineSdkContentClient: vi.fn().mockReturnValue({}) }));
 vi.mock("../db/postgres.js", () => ({

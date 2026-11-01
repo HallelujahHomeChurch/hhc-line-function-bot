@@ -38,7 +38,6 @@ export interface ProfileRuntime {
   readonly observesCompletion?: boolean;
   clearContext?(scope: QuoteScope): Promise<void>;
   recordExternalResult?(input: ProfileTurnInput, result: FunctionExecutionResult): Promise<void>;
-  handleRetiredSheetMusic?(input: ProfileTurnInput): Promise<FunctionExecutionResult | undefined>;
   handleTextTurn(input: ProfileTurnInput): Promise<FunctionExecutionResult | undefined>;
   handleActionReview?(
     input: ProfileActionReviewInput
@@ -58,11 +57,6 @@ export function createProfileRuntimeDispatcher(
     recordExternalResult(input, result) {
       return (
         runtimes[input.profile.name]?.recordExternalResult?.(input, result) ?? Promise.resolve()
-      );
-    },
-    handleRetiredSheetMusic(input) {
-      return (
-        runtimes[input.profile.name]?.handleRetiredSheetMusic?.(input) ?? Promise.resolve(undefined)
       );
     },
     handleTextTurn(input) {

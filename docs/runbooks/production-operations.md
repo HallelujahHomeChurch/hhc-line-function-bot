@@ -319,7 +319,7 @@ Do not paste these into LINE, logs, commits, screenshots, or public issues:
 
 The bot does not perform arbitrary web browsing or maintain an administrator web allowlist. `query_wikipedia` uses the public Wikipedia API only, tries Chinese before English, and passes the selected article introduction to the configured source-bounded summarizer.
 
-Sheet music searches authorized internal catalogs only. Public web search/page reading and new search-result imports are retired. Legacy confirmed external imports continue through the existing worker until the documented drain gate passes. Retired SEARXNG environment variables are ignored by the application; current deployment and release checks no longer configure or require the service.
+Sheet music searches authorized internal catalogs only. Public web search/page reading and new search-result imports are retired. The worker accepts LINE message content only and rejects external work even when it already contains an Asset ID. Retired SEARXNG and EXTERNAL_RESOURCE environment variables are ignored by the application; current deployment and release checks no longer configure or require the service.
 
 The active `hhc-line-bot-attachment-worker` Job has one replica per execution, `0.5` CPU / `1Gi` memory, and uses a dedicated managed identity to call Asset API through authenticated internal ingress. Asset API owns malware scans and signature refresh; LINE has no scanner image or signature mounts. Retiring an existing SearXNG Azure resource is a separate authorized step after the application rollout and work drain, following azure-infra rules when that repository is affected. See [the retirement plan](../superpowers/plans/2026-11-01-searxng-retirement.md).
 

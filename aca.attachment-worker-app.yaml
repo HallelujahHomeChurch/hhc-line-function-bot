@@ -121,10 +121,6 @@ properties:
             value: "209715200"
           - name: LINE_CONTENT_DOWNLOAD_TIMEOUT_MS
             value: "30000"
-          - name: EXTERNAL_RESOURCE_DOWNLOAD_TIMEOUT_MS
-            value: "15000"
-          - name: EXTERNAL_RESOURCE_MAX_REDIRECTS
-            value: "3"
           - name: GRAPH_TENANT_ID
             value: PLACEHOLDER_COPY_FROM_BOT_ENV
           - name: GRAPH_CLIENT_ID

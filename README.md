@@ -71,12 +71,12 @@ Set the LINE webhook URL per bot profile, for example:
 Provider auth callbacks are not exposed by this service. LINE webhook traffic should only use the canonical profile paths above.
 
 Local development starts only the webhook service. Semantic generation and
-embeddings use the configured remote providers; external search and attachment
-scanning are production ACA workloads, not workstation services.
+embeddings use the configured remote providers; attachment
+scanning runs in production ACA workloads.
 
 In production, the public API Gateway forwards those webhook paths through Dapr service invocation to app id `hhc-line-function-bot`. The bot Container App therefore keeps Dapr enabled on HTTP app port 3000 while its own ingress remains internal.
 
-Public web sheet-music research is retired. Sheet-music lookup searches the authorized internal catalogs only. Legacy confirmed external imports retain worker compatibility until the retirement drain gate passes; deployment no longer creates or checks SearXNG. Existing cloud resources are removed separately through the approved infrastructure workflow.
+Public web sheet-music research is retired. Sheet-music lookup searches the authorized internal catalogs only. The attachment worker accepts LINE message content only; public-page reading and external binary imports are removed. Deployment and rollback have no SearXNG dependency.
 
 Health and readiness:
 
@@ -201,7 +201,7 @@ Pasted schedules can contain several months, emoji, reminders and unrelated anno
 
 Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. In groups, use `/reset`, quote the Bot with `忘記這段對話`, or explicitly say `小哈，忘記這段對話`. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same selected provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls.
 
-An internal sheet-music miss returns not-found with local query refinements. No public search, page-reading or external-import proposal tool is exposed. Requester-scoped legacy consent/import sessions can only be terminated; they never enqueue new work or grant permission. Normal turns allow four model and four tool calls.
+An internal sheet-music miss returns not-found with local query refinements. No public search, page-reading or external-import proposal tool is exposed. Normal turns allow four model and four tool calls.
 
 `pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` run the same 19-case deterministic fake-model evaluator. `pnpm eval:sdk-agent --live` is the manual ten-case bounded DeepSeek suite and prints only aggregate case/call/token/latency fields. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies checkpoint restart, expiry, and cleanup.
 
@@ -215,7 +215,7 @@ Each profile may declare `schedulePolicy.meetingReferences` with central Meeting
 
 Redis and PostgreSQL have explicit ownership:
 
-- Redis stores restart-safe requester-scoped sessions, one-shot postbacks, webhook deduplication, research legacy session expiry, recent errors, rate limits, and long-running/durable review results. Without Redis these guarantees are process-local.
+- Redis stores restart-safe requester-scoped sessions, one-shot postbacks, webhook deduplication, recent errors, rate limits, and long-running/durable review results. Without Redis these guarantees are process-local.
 - PostgreSQL stores access/audit, catalog/schedule/knowledge/memory data, the official LangGraph checkpoint, and `agent_sdk_threads` TTL metadata. Helper same-thread execution uses a dedicated PostgreSQL advisory-lock pool. Each shared runtime pool keeps max2 with a two-second connection/checkout timeout; finite job owners may override it with their remaining deadline. This bounds pool queueing, not SQL execution or time spent holding the thread lock.
 - Helper checkpoint idle TTL is fixed at 30 minutes for direct chat and 15 minutes for group/room. Cleanup runs every five minutes. Policy/tool-contract changes and explicit reset delete the checkpoint before reuse.
 - Long-running and reviewed action results are keyed by opaque ID and can be read only by the same profile, LINE source, and requester.
@@ -358,7 +358,7 @@ Production profiles still allow text messages only unless `allowedMessageTypes` 
 
 After opt-in, the bot offers exactly four purposes: `投影片`, `流行歌譜`, `詩歌歌譜`, and `小哈資料庫`. It checks the selected target's write capability, asks the requester to enter a title, and then creates a metadata-only preview with `保存` and `取消`. It does not download or scan the binary during these stages. Only after the requester replies `保存` does the bot atomically claim the pending attachment and persist one opaque work ID in a Redis-backed enqueue outbox. A successful queue send advances that record to `queued`; an ambiguous queue/Redis failure is reported as a scheduled retry, never as a successful queue handoff. The event-driven `hhc-line-bot-attachment-worker` execution leases one queue message and claims the work with a bounded token lease. Expired pre-publication claims are reclaimable and stale claim tokens cannot mutate newer work. A `publishing` lease is not reclaimed: once it expires, the work becomes an observable `publication_abandoned` terminal failure because publication may already have committed externally.
 
-The worker downloads the LINE or authorized external source only until it has durably recorded a non-secret upload descriptor and Asset identity. Redelivery with an Asset identity uses Asset get/wait/grant/download only and validates the persisted checksum, size, and detected MIME before Graph publication. If Asset completion won but recording the identity did not, the worker first replays Asset create with the same work ID and descriptor so Asset idempotency can recover the existing object without another source download. Concurrent duplicate confirmations cannot publish the same session twice. Work completion/failure first wins the fenced terminal state transition and atomically records the bounded requester-job update to apply. Queue deliveries acknowledge only durable completed, permanent-failure, and missing outcomes; transient dependencies, pending scans, and legitimate claim/publication contention remain unacknowledged. The concrete policy is a 10-minute scan deadline, 14-minute publication deadline, 30-minute replica timeout, 1-minute acknowledgement margin, 32-minute queue visibility, 35-minute claim lease, and 90-minute work/job retention. OneDrive upload and catalog upsert remain one logical commit.
+The worker downloads the LINE source only until it has durably recorded a non-secret upload descriptor and Asset identity. Redelivery with an Asset identity uses Asset get/wait/grant/download only and validates the persisted checksum, size, and detected MIME before Graph publication. If Asset completion won but recording the identity did not, the worker first replays Asset create with the same work ID and descriptor so Asset idempotency can recover the existing object without another source download. Concurrent duplicate confirmations cannot publish the same session twice. Work completion/failure first wins the fenced terminal state transition and atomically records the bounded requester-job update to apply. Queue deliveries acknowledge only durable completed, permanent-failure, and missing outcomes; transient dependencies, pending scans, and legitimate claim/publication contention remain unacknowledged. The concrete policy is a 10-minute scan deadline, 14-minute publication deadline, 30-minute replica timeout, 1-minute acknowledgement margin, 32-minute queue visibility, 35-minute claim lease, and 90-minute work/job retention. OneDrive upload and catalog upsert remain one logical commit.
 
 The attachment binary is fetched outbound from the finite attachment worker through the LINE Content API; it is not part of the inbound webhook JSON. API Gateway, Dapr, and Fastify webhook body limits therefore remain unchanged.
 
