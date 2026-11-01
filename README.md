@@ -581,7 +581,8 @@ credential. This source change does not provision credentials or permissions.
 ### Attachment app meeting warm windows
 
 The persistent attachment app (`hhc-line-bot-attachment-app`) scales to zero
-outside meetings. Five KEDA cron rules in `aca.attachment-worker-app.yaml` keep
+outside meetings. App-level KEDA polling is five seconds; worker idle polling
+remains one second. Five KEDA cron rules in `aca.attachment-worker-app.yaml` keep
 one replica warm from 5 minutes before to 10 minutes after each regular
 meeting (Asia/Taipei), alongside the `attachment-work` queue rule:
 

@@ -1435,7 +1435,7 @@ if (command("containerapp", "show") && name === "hhc-line-bot-attachment-app") {
       image: "registry.example/fixture-secret/bot@sha256:${"9".repeat(64)}",
       min: scenario === "scan_scaler_mismatch" ? 1 : 0,
       max: 1,
-      poll: 1,
+      poll: 5,
       cooldown: 120,
       rules: [
         { name: "attachment-work", azureQueue: { queueLength: 1 } },
