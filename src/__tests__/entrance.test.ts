@@ -6723,7 +6723,7 @@ describe("LINE entrance", () => {
     expect(await sessions.get("review-1")).toBeDefined();
   });
 
-  it("routes consented research to helper while keeping other deterministic continuations outside it", async () => {
+  it("terminates retired research while keeping deterministic continuations outside the model", async () => {
     const config = accessConfig();
     const helper = config.profiles[0]!;
     helper.enabledFunctions = ["find_sheet_music", "find_ppt_slides", "save_resource"];
@@ -6767,8 +6767,10 @@ describe("LINE entrance", () => {
     const app = createTestApp(config, {
       profileRuntime: createProfileRuntimeDispatcher({
         helper: {
-          acceptSheetMusicResearch: async ({ event }) =>
-            event.message?.text === "上網找" ? { kind: "accepted" as const } : undefined,
+          handleRetiredSheetMusic: async ({ event }) =>
+            event.message?.text === "上網找"
+              ? { ok: true, replyText: "公開網路找譜已停用。" }
+              : undefined,
           handleTextTurn: profileTurn
         }
       }),
@@ -6801,11 +6803,15 @@ describe("LINE entrance", () => {
     expect(handlers.sheet_music_numeric_selection.handle).not.toHaveBeenCalled();
     expect(handlers.ppt_numeric_selection.handle).toHaveBeenCalledOnce();
     expect(handlers.pending_attachment_answer.handle).toHaveBeenCalledOnce();
-    expect(profileTurn).toHaveBeenCalledOnce();
+    expect(profileTurn).not.toHaveBeenCalled();
     expect(afterFunctionResult).not.toHaveBeenCalled();
     await expect(memoryStore.summary()).resolves.toMatchObject({ resources: 0 });
     expect(complete).toHaveBeenCalledOnce();
-    expect(replyText.mock.calls.map(([, text]) => text)).toEqual(["model", "投影片 1", "請選用途"]);
+    expect(replyText.mock.calls.map(([, text]) => text)).toEqual([
+      "公開網路找譜已停用。",
+      "投影片 1",
+      "請選用途"
+    ]);
   });
 
   it.each(["match", "completion"] as const)(
@@ -6869,7 +6875,7 @@ describe("LINE entrance", () => {
     }
   );
 
-  it("returns a helper research cancellation without entering continuations or the model", async () => {
+  it("returns a retired sheet-music result without entering continuations or the model", async () => {
     const config = accessConfig();
     const helper = config.profiles[0]!;
     helper.enabledFunctions = ["find_sheet_music"];
@@ -6879,10 +6885,7 @@ describe("LINE entrance", () => {
     const app = createTestApp(config, {
       profileRuntime: createProfileRuntimeDispatcher({
         helper: {
-          acceptSheetMusicResearch: async () => ({
-            kind: "handled" as const,
-            result: { ok: true, replyText: "好，我不做外部搜尋。" }
-          }),
+          handleRetiredSheetMusic: async () => ({ ok: true, replyText: "公開網路找譜已停用。" }),
           handleTextTurn: profileTurn
         }
       }),
@@ -6910,7 +6913,7 @@ describe("LINE entrance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(replyText).toHaveBeenCalledWith("research-cancel", "好，我不做外部搜尋。", undefined);
+    expect(replyText).toHaveBeenCalledWith("research-cancel", "公開網路找譜已停用。");
     expect(continuation).not.toHaveBeenCalled();
     expect(profileTurn).not.toHaveBeenCalled();
   });

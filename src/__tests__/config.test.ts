@@ -635,8 +635,8 @@ describe("config", () => {
     expect(config).not.toHaveProperty("clamAv");
   });
 
-  it("loads optional SearXNG web search configuration only when a base URL is set", () => {
-    expect(loadConfigFromEnv(baseEnv()).webSearch).toBeUndefined();
+  it("ignores retired SearXNG configuration", () => {
+    expect(loadConfigFromEnv(baseEnv())).not.toHaveProperty("webSearch");
 
     const config = loadConfigFromEnv({
       ...baseEnv(),
@@ -644,10 +644,7 @@ describe("config", () => {
       SEARXNG_TIMEOUT_MS: "3000"
     });
 
-    expect(config.webSearch).toEqual({
-      searxngBaseUrl: "https://searxng.internal",
-      timeoutMs: 3000
-    });
+    expect(config).not.toHaveProperty("webSearch");
   });
 
   it("does not allow environment variables to widen PPT file types", () => {

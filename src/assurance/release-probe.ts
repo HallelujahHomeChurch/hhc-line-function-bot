@@ -3,7 +3,6 @@ import { signLineBody } from "../line-signature.js";
 export type ReleaseProbeCheckName =
   | "bot_health"
   | "bot_readiness"
-  | "searxng_root"
   | "gateway_helper_signed_empty_webhook"
   | "gateway_main_signed_empty_webhook";
 export type ReleaseProbeCheckStatus = "passed" | "failed" | "warning";
@@ -12,7 +11,6 @@ export type ReleaseProbeFailureCode =
 
 export interface ReleaseProbeInput {
   botBaseUrl: string;
-  searxngBaseUrl: string;
   gatewayWebhookUrl: string;
   gatewayMainWebhookUrl: string;
   lineHelperChannelSecret: string;
@@ -61,7 +59,6 @@ export async function runReleaseProbe(
       timeoutMs,
       isReady
     ),
-    checkSearxng(endpoint(input.searxngBaseUrl, "/"), dependencies, timeoutMs),
     ...(scope === "private"
       ? []
       : [
@@ -101,24 +98,6 @@ async function checkJsonEndpoint(
     return contract(body) ? passed(name) : failed(name, "contract_mismatch");
   } catch (error) {
     return failed(name, failureFrom(error));
-  }
-}
-
-async function checkSearxng(
-  url: string,
-  dependencies: ReleaseProbeDependencies,
-  timeoutMs: number
-): Promise<ReleaseProbeCheckResult> {
-  try {
-    const response = await dependencies.fetch(url, {
-      signal: AbortSignal.timeout(timeoutMs),
-      redirect: "manual"
-    });
-    return response.status >= 200 && response.status < 400
-      ? passed("searxng_root")
-      : failed("searxng_root", "http_mismatch");
-  } catch (error) {
-    return failed("searxng_root", failureFrom(error));
   }
 }
 

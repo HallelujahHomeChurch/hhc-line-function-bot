@@ -162,10 +162,6 @@ properties:
             value: view
           - name: SHEET_MUSIC_ALLOWED_EXTENSIONS
             value: pdf,jpg,jpeg,png
-          - name: SEARXNG_BASE_URL
-            value: PLACEHOLDER_SEARXNG_BASE_URL
-          - name: SEARXNG_TIMEOUT_MS
-            value: "8000"
           - name: NOTION_TOKEN
             secretRef: PLACEHOLDER_NOTION_TOKEN_SECRET_REF
           - name: NOTION_SERVICE_DATABASE_ID

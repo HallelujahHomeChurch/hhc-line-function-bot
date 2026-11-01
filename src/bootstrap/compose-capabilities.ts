@@ -21,7 +21,6 @@ import {
   createSaveMemoryHandler
 } from "../functions/agent-memory-functions.js";
 import {
-  createExternalSheetMusicImportTextMessageHandler,
   createFindPopSheetMusicHandler,
   createFindPopSheetMusicPostbackHandler,
   createFindPopSheetMusicTextMessageHandler
@@ -86,7 +85,6 @@ export interface CapabilityCompositionDependencies {
   now?: () => Date;
   requestIdFactory?: () => string;
   fetchImpl?: typeof fetch;
-  externalResearchEnabled?: boolean;
 }
 
 export interface CapabilityComposition {
@@ -186,7 +184,6 @@ export function composeCapabilities(
       allowedExtensions: config.graph.sheetMusicAllowedExtensions,
       memoryStore: clients.memoryStore,
       sessionStore: clients.sessionStore,
-      externalResearchEnabled: clients.externalResearchEnabled,
       now: clients.now,
       requestIdFactory: clients.requestIdFactory
     });
@@ -239,19 +236,6 @@ export function composeCapabilities(
     textMessages.sheet_music_numeric_selection = createFindPopSheetMusicTextMessageHandler({
       graph: clients.graph,
       sessionStore: clients.sessionStore,
-      catalog: clients.catalog,
-      agentJobStore: clients.agentJobStore,
-      scanQueue: clients.attachmentScanQueue,
-      scanWorkStore: clients.attachmentScanWorkStore,
-      now: clients.now
-    });
-    textMessages.external_sheet_music_import = createExternalSheetMusicImportTextMessageHandler({
-      graph: clients.graph,
-      sessionStore: clients.sessionStore,
-      catalog: clients.catalog,
-      agentJobStore: clients.agentJobStore,
-      scanQueue: clients.attachmentScanQueue,
-      scanWorkStore: clients.attachmentScanWorkStore,
       now: clients.now
     });
   }

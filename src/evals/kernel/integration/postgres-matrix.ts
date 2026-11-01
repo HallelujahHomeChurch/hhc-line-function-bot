@@ -104,7 +104,6 @@ const MATRIX_FAILURE_CODES = new Set([
   "helper_direct_ttl_invalid",
   "helper_group_ttl_invalid",
   "helper_checkpoint_not_deleted",
-  "helper_expired_research_exposed",
   "helper_failed_run_state_lost",
   "helper_failed_run_ttl_invalid",
   "helper_failed_run_did_not_throw",
@@ -127,21 +126,19 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
   try {
     const checkpointer = new PostgresSaver(pool);
     let now = new Date("2026-09-04T00:00:00.000Z");
-    let countObservation = false;
-    let observationCalls = 0;
     const state = createPostgresHelperAgentState({
       pool,
       lockPool: environment.pools[1],
       checkpointer,
       hmacKey: "kernel-helper-agent-state-key",
-      now: () => {
-        if (!countObservation) return now;
-        observationCalls += 1;
-        return new Date(now.getTime() + observationCalls);
-      }
+      now: () => now
     });
     await checkpointer.setup();
     await state.setup();
+    // The rollback revision still selects these columns on a freshly initialized database.
+    await pool.query(
+      "select external_search_expires_at, external_search_query from agent_sdk_threads limit 0"
+    );
     const direct = state.threadId({
       profileName: PROFILE,
       source: { type: "user", userId: "kernel-direct-user" }
@@ -152,7 +149,6 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
     });
     if (!direct || !group) throw new Error("helper_checkpoint_not_deleted");
     const groupSource = { type: "group", groupId: "kernel-group", userId: "kernel-group-user" };
-    await state.allowExternalSheetMusic(group, groupSource, new Date("2026-09-04T00:01:00.000Z"));
 
     const invoke = (threadId: string, source: { type: string; userId: string; groupId?: string }) =>
       state.run({
@@ -172,13 +168,6 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
 
     if (pool.options.max !== 1) throw new Error("helper_data_pool_not_saturated");
     await withinHelperStateTimeout(invoke(direct, { type: "user", userId: "kernel-direct-user" }));
-    const researchAllowed = await state.run({
-      threadId: group,
-      policyKey: "kernel-policy-v1",
-      source: groupSource,
-      task: async (snapshot) => snapshot.externalSheetMusicAllowed
-    });
-    if (!researchAllowed) throw new Error("helper_research_snapshot_not_allowed");
     await invoke(group, groupSource);
     const metadata = await pool.query<{ thread_id: string; expires_at: Date }>(
       "select thread_id, expires_at from agent_sdk_threads where thread_id = any($1::text[])",
@@ -192,29 +181,6 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
       throw new Error("helper_group_ttl_invalid");
     }
     now = new Date("2026-09-04T00:01:00.000Z");
-    const expiredResearchAllowed = await state.run({
-      threadId: group,
-      policyKey: "kernel-policy-v1",
-      source: groupSource,
-      task: async (snapshot) => snapshot.externalSheetMusicAllowed
-    });
-    if (expiredResearchAllowed) throw new Error("helper_research_snapshot_not_expired");
-
-    await state.allowExternalSheetMusic(group, groupSource, new Date("2026-09-04T00:30:00.000Z"));
-    now = new Date("2026-09-04T00:17:00.000Z");
-    countObservation = true;
-    const researchAfterIdleExpiry = await state.run({
-      threadId: group,
-      policyKey: "kernel-policy-v1",
-      source: groupSource,
-      task: async (snapshot) => {
-        if (observationCalls !== 1) throw new Error("helper_observation_instant_invalid");
-        return snapshot.externalSheetMusicAllowed;
-      }
-    });
-    countObservation = false;
-    if (researchAfterIdleExpiry) throw new Error("helper_expired_research_exposed");
-
     await state.reset(group);
     const checkpoint = await pool.query("select 1 from checkpoints where thread_id = $1 limit 1", [
       group
@@ -232,7 +198,6 @@ async function helperAgentSourceTtlAndReset(environment: KernelPostgresEnvironme
       userId: "kernel-failed-user"
     };
     await invoke(failed, failedSource);
-    await state.allowExternalSheetMusic(failed, failedSource, new Date("2026-09-04T00:01:00.000Z"));
     let failureObserved = false;
     const failedAt = now.getTime();
     try {

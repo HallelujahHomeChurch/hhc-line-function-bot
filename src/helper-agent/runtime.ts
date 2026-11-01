@@ -1,3 +1,4 @@
+import { explicitAddressedText } from "../engagement.js";
 import type { GroupHistory } from "../history/types.js";
 import { createHistoryTurn } from "./history-tools.js";
 import { ChatOpenAI } from "@langchain/openai";
@@ -35,7 +36,6 @@ import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
 import { getFunctionDefinition } from "../capabilities/catalog.js";
 import { requestFailedMessage } from "../messages.js";
 import type { LastErrorStore } from "../observability/last-error-store.js";
-import type { PublicPageReader } from "../clients/public-page.js";
 import { emitProductEvent, type ProductResultClass } from "../observability/product-events.js";
 import type {
   ProfileActionReviewResult,
@@ -48,8 +48,7 @@ import type {
   BotProfileConfig,
   FunctionHandlerContext,
   FunctionRegistry,
-  LineSource,
-  WebSearchClient
+  LineSource
 } from "../types.js";
 import { projectToolResult } from "./tool-result.js";
 import { createHelperAttachmentTools, type AttachmentDraftHandler } from "./attachment-tools.js";
@@ -64,11 +63,7 @@ import {
 } from "./conversation-tools.js";
 import { createHelperToolGateway } from "./policy-gateway.js";
 import { createActionReview } from "./review.js";
-import { helperThreadIdleTtlMs, type HelperAgentState } from "./state.js";
-import {
-  createSheetMusicResearchTools,
-  storeSheetMusicImportCandidates
-} from "./sheet-music-tools.js";
+import type { HelperAgentState } from "./state.js";
 import { safeWriteClarification, createHelperWriteTools } from "./write-tools.js";
 
 export interface HelperRuntimeOptions {
@@ -82,8 +77,6 @@ export interface HelperRuntimeOptions {
   sessions?: SessionStore;
   attachmentDraftHandler?: AttachmentDraftHandler;
   jobs?: AgentJobStore;
-  webSearch?: WebSearchClient;
-  pageReader?: PublicPageReader;
   resourceMemory?: ResourceMemoryObserver;
   lastErrorStore?: LastErrorStore;
   traceStore?: AgentTraceStore;
@@ -263,51 +256,55 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         })
         .catch(() => undefined);
     },
-    async acceptSheetMusicResearch(input) {
-      const text = input.event.message?.text?.trim() ?? "";
-      const accepted = /^(?:上網找|同意上網找|可以上網找)[！!。\s]*$/u.test(text);
-      const cancelled = /^(?:不用|不要|取消|先不要|no|n)$/iu.test(text);
-      if (
-        input.profile.name !== "helper" ||
-        !input.profile.agent ||
-        !options.sessions ||
-        !input.event.source.userId ||
-        (!accepted && !cancelled) ||
-        (accepted && (!options.webSearch || !options.pageReader))
-      ) {
+    // shortcut: terminate only scoped pre-retirement sessions; Ray removes after PR2 drain gate.
+    async handleRetiredSheetMusic(input) {
+      if (input.profile.name !== "helper" || !options.sessions || !input.event.source.userId)
         return undefined;
-      }
-      const consent = await options.sessions.findExternalSearchConsent({
-        action: "sheet_music_external_search",
+      const lookup = {
         profileName: input.profile.name,
         source: input.event.source,
         requesterUserId: input.event.source.userId
-      });
-      if (!consent) return undefined;
-      if (cancelled) {
-        const claimed = await options.sessions.take(consent.id);
-        if (claimed?.type !== "external_search_consent") return undefined;
-        return {
-          kind: "handled",
-          result: { ok: true, replyText: "好，我不做外部搜尋。" }
-        };
+      };
+      const [consent, imported] = await Promise.all([
+        options.sessions.findExternalSearchConsent({
+          ...lookup,
+          action: "sheet_music_external_search"
+        }),
+        options.sessions.findExternalSheetMusicImport(lookup)
+      ]);
+      const text =
+        explicitAddressedText(input.profile, input.event.message) ??
+        input.event.message?.text?.trim() ??
+        "";
+      const session = imported ?? consent;
+      if (!session) return undefined;
+      const current = await Promise.all([
+        options.sessions.findActionReview(lookup),
+        options.sessions.findPendingAttachment(lookup),
+        options.sessions.findPptSelection(lookup),
+        options.sessions.findSelection({ ...lookup, action: "select_sheet_music" }),
+        options.sessions.findSelection({ ...lookup, action: "select_knowledge_source" })
+      ]);
+      if (current.some(Boolean)) {
+        for (const old of [consent, imported]) if (old) await options.sessions.delete(old.id);
+        return undefined;
       }
-      const threadId = options.state.threadId({
-        profileName: input.profile.name,
-        source: input.event.source
-      });
-      if (!threadId) return undefined;
-      const profile = await effectiveProfile(input);
-      if (!profile.enabledFunctions.includes("find_sheet_music")) return undefined;
-      const claimed = await options.sessions.take(consent.id);
-      if (claimed?.type !== "external_search_consent") return undefined;
-      await options.state.allowExternalSheetMusic(
-        threadId,
-        input.event.source,
-        new Date(now().getTime() + helperThreadIdleTtlMs(input.event.source)),
-        claimed.query
-      );
-      return { kind: "accepted" };
+      const cancel = /^(?:不用|不要|取消|先不要|no|n)$/iu.test(text);
+      const matches =
+        cancel ||
+        (session.type === "external_search_consent"
+          ? /^(?:上網找|同意上網找|可以上網找)[！!。\s]*$/u.test(text)
+          : session.stage === "selecting"
+            ? /^\d{1,2}$/u.test(text)
+            : session.stage === "awaiting_target"
+              ? /^(?:流行歌譜|詩歌歌譜)$/u.test(text)
+              : /^(?:保存|確認|確定|好|yes|y)$/iu.test(text));
+      if (!matches) return undefined;
+      const taken = await options.sessions.take(session.id);
+      if (!taken || taken.type !== session.type) return undefined;
+      for (const old of [consent, imported])
+        if (old && old.id !== session.id) await options.sessions.delete(old.id);
+      return { ok: true, replyText: "公開網路找譜已停用，請改查內部譜庫或上傳檔案。" };
     },
 
     async handleTextTurn(input) {
@@ -407,19 +404,13 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
             : helperPolicyKey(profile),
           source: input.event.source,
           isCurrent: input.quoteContext?.isCurrent,
-          task: async ({
-            contextReset,
-            externalSheetMusicAllowed: researchAllowed,
-            externalSheetMusicQuery,
-            markContextDirty
-          }) => {
-            let lane: "research" | "write" | undefined;
+          task: async ({ contextReset, markContextDirty }) => {
+            let writeStarted = false;
             const claimWrite = () => {
-              if (lane === "research" || historyTurn?.used) return false;
-              lane = "write";
+              if (historyTurn?.used) return false;
+              writeStarted = true;
               return true;
             };
-            let researchMarker: Promise<void> | undefined;
             const pendingAttachment = profile.enabledFunctions.includes("save_resource")
               ? await options.sessions?.findPendingAttachment({
                   profileName: profile.name,
@@ -432,7 +423,6 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
               source: input.event.source,
               requesterUserId: input.event.source.userId
             });
-            const runMode = researchAllowed ? "sheet_music_research" : "normal";
             const readTools = createHelperReadTools({
               onToolOutcome: (outcome) => {
                 if (outcome.status === "denied" || outcome.status === "unavailable")
@@ -487,7 +477,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                     now,
                     propose: async (toolName, rawArgs) => {
                       if (!claimWrite())
-                        return { status: "denied", reason: "external_research_in_progress" };
+                        return { status: "denied", reason: "history_query_in_progress" };
                       if (proposalStarted)
                         return {
                           status: "denied",
@@ -544,41 +534,12 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                     }
                   })
                 : [];
-            const researchTools =
-              researchAllowed && options.webSearch && options.pageReader
-                ? createSheetMusicResearchTools({
-                    consented: true,
-                    consentQuery: externalSheetMusicQuery,
-                    beforeResearch: async () => {
-                      if (lane === "write") return false;
-                      lane = "research";
-                      researchMarker ??= markContextDirty?.() ?? Promise.resolve();
-                      await researchMarker;
-                      return true;
-                    },
-                    context,
-                    webSearch: options.webSearch,
-                    pageReader: options.pageReader,
-                    authorize,
-                    onDirectFileCandidates: options.sessions
-                      ? (candidates) =>
-                          storeSheetMusicImportCandidates({
-                            sessions: options.sessions!,
-                            context,
-                            requestId: input.requestId,
-                            query: externalSheetMusicQuery!,
-                            candidates,
-                            now: now()
-                          })
-                      : undefined
-                  })
-                : [];
             const attachmentTools = createHelperAttachmentTools({
               context,
               updateDraft: options.attachmentDraftHandler
                 ? async (args, draftContext) => {
                     if (!claimWrite())
-                      return { ok: false, replyText: "請在完成外部搜尋後，另行提出附件保存要求。" };
+                      return { ok: false, replyText: "請在完成歷史查詢後，另行提出附件保存要求。" };
                     if (proposalStarted)
                       return {
                         ok: false,
@@ -678,7 +639,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                   { profileName: profile.name, source: input.event.source },
                   now(),
                   async () => {
-                    if (lane === "write") throw new Error("history_draft_mutation_excluded");
+                    if (writeStarted) throw new Error("history_draft_mutation_excluded");
                     await markContextDirty?.();
                   },
                   input.event.message?.quotedMessageId,
@@ -690,17 +651,15 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
               ...readTools,
               conversationTool,
               ...attachmentTools,
-              ...researchTools,
               ...writeTools
             ];
             return runWithAgentBudget(
-              runMode,
+              "normal",
               async () => {
                 const agent = createHelperAgent({
                   checkpointer: options.state.checkpointer,
                   model: options.model,
                   summaryModel: options.summaryModel,
-                  runMode,
                   systemPrompt:
                     helperSystemPrompt(profile, input.event.source, now()) +
                     (input.quoteContext?.cleared || contextReset
@@ -846,23 +805,6 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                       ]
                     });
                     await markContextDirty?.(false);
-                  }
-                  if (lane === "research") {
-                    await Promise.resolve(
-                      agent.updateState(config, {
-                        messages: [
-                          { role: "remove", content: "", id: REMOVE_ALL_MESSAGES },
-                          ...previousMessages,
-                          new HumanMessage(text),
-                          new AIMessage(
-                            "本次外部歌譜查詢已結束。外部內容不保留為對話指示；候選檔案請透過既有選擇流程處理。"
-                          )
-                        ]
-                      })
-                    ).catch(async (error: unknown) => {
-                      await options.state.checkpointer.deleteThread(threadId);
-                      throw error;
-                    });
                   }
                 }
               },
@@ -1170,7 +1112,7 @@ export function helperPolicyKey(profile: BotProfileConfig): string {
         reasoningEffort: profile.agent?.reasoningEffort,
         persona: profile.agent?.personaPrompt,
         memoryPolicy: profile.agent?.memoryPolicyPrompt,
-        contract: "helper-explicit-admission-v8",
+        contract: "helper-sheet-research-retired-v9",
         scheduleDomains: profile.schedulePolicy?.domains?.map((domain) => ({
           key: domain.key,
           revision: domain.revision,
@@ -1488,8 +1430,6 @@ const HELPER_TOOL_NAMES = new Set([
   "search_knowledge",
   "search_saved_notes",
   "query_wikipedia",
-  "search_sheet_music_web",
-  "read_sheet_music_page",
   "propose_save_schedule",
   "propose_save_memory",
   "propose_save_resource",

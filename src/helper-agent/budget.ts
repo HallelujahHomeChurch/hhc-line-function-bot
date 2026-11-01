@@ -1,12 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-export type AgentRunMode = "normal" | "sheet_music_research";
+export type AgentRunMode = "normal";
 
 type Budget = { modelCalls: number; toolCalls: number; onProviderRequest?: () => void };
 
 const limits: Record<AgentRunMode, Budget> = {
-  normal: { modelCalls: 4, toolCalls: 4 },
-  sheet_music_research: { modelCalls: 6, toolCalls: 6 }
+  normal: { modelCalls: 4, toolCalls: 4 }
 };
 const storage = new AsyncLocalStorage<Budget>();
 

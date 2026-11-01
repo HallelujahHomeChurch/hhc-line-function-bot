@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
-const retiredOfficeAddress = ["172", "16", "65", "5"].join(".");
 
 function readProjectFile(path: string): string {
   return readFileSync(resolve(root, path), "utf8");
@@ -127,52 +126,6 @@ describe("production profile configuration deployment contract", () => {
     );
   });
 
-  it("hosts SearXNG as an internal always-on ACA app without office-network routes", () => {
-    const searxng = readProjectFile("aca.searxng.containerapp.yaml");
-    const bot = readProjectFile("aca.containerapp.yaml");
-    const deployment = readProjectFile("scripts/deploy-aca.sh");
-
-    expect(searxng).toContain("type: Microsoft.App/containerApps");
-    expect(searxng).toContain("external: false");
-    expect(searxng).toContain("targetPort: 8080");
-    expect(searxng).toContain("minReplicas: 1");
-    expect(searxng).toContain("resources:");
-    expect(searxng).toContain("cpu: 0.25");
-    expect(searxng).toContain("memory: 0.5Gi");
-    expect(searxng).toContain("searxng/searxng@sha256:");
-    expect(searxng).toContain("storageType: Secret");
-    expect(searxng).toContain("mountPath: /etc/searxng");
-    expect(searxng).toContain("secretRef: searxng-settings");
-    expect(searxng).not.toContain("storageType: AzureFile");
-    expect(bot).not.toContain("SEARXNG_BASE_URL\n            value: http://");
-
-    for (const path of [
-      "aca.containerapp.yaml",
-      "aca.searxng.containerapp.yaml",
-      "scripts/deploy-aca.sh"
-    ]) {
-      expect(readProjectFile(path)).not.toContain(retiredOfficeAddress);
-    }
-
-    expect(deployment).toContain("SEARXNG_CONTAINER_APP_NAME:=hhc-searxng");
-    expect(deployment).toContain("properties.configuration.ingress.fqdn");
-    expect(deployment).toContain('searxng_base_url="https://${searxng_fqdn}"');
-    expect(deployment).toContain('SEARXNG_BASE_URL="${searxng_base_url}"');
-    expect(deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"')).toBeLessThan(
-      deployment.indexOf('--yaml "${bot_manifest}"')
-    );
-    const searxngUpdateStart = deployment.indexOf(
-      'az containerapp update --yaml "${searxng_manifest}"'
-    );
-    const searxngUpdate = deployment.slice(
-      searxngUpdateStart,
-      deployment.indexOf("\nelse", searxngUpdateStart)
-    );
-    expect(searxngUpdate).toContain('--resource-group "${RESOURCE_GROUP}"');
-    expect(searxngUpdate).toContain('--name "${SEARXNG_CONTAINER_APP_NAME}"');
-    expect(projectFileExists("infra/searxng/settings.yml")).toBe(true);
-  });
-
   it("deploys the bot from a secret-value-free rendered manifest before dependent jobs", () => {
     const manifest = readProjectFile("aca.containerapp.yaml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
@@ -248,7 +201,6 @@ describe("production profile configuration deployment contract", () => {
       '"PLACEHOLDER_CONTAINER_APP_NAME": os.environ["CONTAINER_APP_NAME"]'
     );
 
-    const searxngDeploy = deployment.indexOf('az containerapp update --yaml "${searxng_manifest}"');
     const botRendererStart = deployment.indexOf('BOT_MANIFEST_TEMPLATE="${bot_manifest_template}"');
     const botApplyStart = deployment.indexOf(
       'az containerapp update \\\n  --resource-group "${RESOURCE_GROUP}"',
@@ -271,7 +223,6 @@ describe("production profile configuration deployment contract", () => {
     const catalogDeploy = deployment.indexOf('deploy_job "${CATALOG_SYNC_JOB_NAME}"');
 
     for (const position of [
-      searxngDeploy,
       botRendererStart,
       botApplyStart,
       botDeploy,
@@ -283,7 +234,6 @@ describe("production profile configuration deployment contract", () => {
     ]) {
       expect(position).toBeGreaterThanOrEqual(0);
     }
-    expect(searxngDeploy).toBeLessThan(botDeploy);
     expect(botDeploy).toBeLessThan(refreshedSecretSnapshot);
     expect(botDeploy).toBeLessThan(refreshedEnvSnapshot);
     expect(refreshedSecretSnapshot).toBeLessThan(renderJobs);
@@ -429,7 +379,6 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).not.toContain("name: GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID");
     expect(manifest).not.toContain("name: GRAPH_SHEET_MUSIC_FOLDER_PATH");
     expect(manifest).not.toContain("name: SHEET_MUSIC_DEFAULT_RECURSIVE");
-    expect(manifest).toContain("name: SEARXNG_BASE_URL");
     expect(manifest).toContain("name: MAX_ATTACHMENT_BYTES");
     expect(manifest).toContain("name: OBSERVABILITY_HMAC_KEY");
     expect(manifest).toContain("secretRef: PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF");
@@ -447,7 +396,6 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).not.toContain("--remove-env-vars");
     expect(deployment).not.toContain("az containerapp dapr enable");
     expect(deployment).not.toContain("az containerapp dapr disable");
-    expect(deployment).toContain('SEARXNG_BASE_URL="${searxng_base_url}"');
     expect(deployment).toContain(
       "AZURE_OPENAI_EMBEDDING_RESOURCE_NAME:=bible-text-embedding-resource"
     );
@@ -786,8 +734,6 @@ describe("production profile configuration deployment contract", () => {
     expect(job).not.toContain("LINE_MAIN_CHANNEL_ACCESS_TOKEN");
     expect(job).toContain("name: BOT_BASE_URL");
     expect(job).toContain("value: PLACEHOLDER_BOT_BASE_URL");
-    expect(job).toContain("name: SEARXNG_BASE_URL");
-    expect(job).toContain("value: PLACEHOLDER_SEARXNG_BASE_URL");
     expect(job).toContain("name: GATEWAY_WEBHOOK_URL");
     expect(job).toContain("value: PLACEHOLDER_GATEWAY_WEBHOOK_URL");
     expect(job).toContain("name: GATEWAY_MAIN_WEBHOOK_URL");
@@ -859,11 +805,9 @@ describe("production profile configuration deployment contract", () => {
       'gateway_main_webhook_url="${PUBLIC_WEB_ORIGIN%/}/api/line/webhook/main"'
     );
     expect(deployment).toContain('BOT_BASE_URL="${bot_base_url}"');
-    expect(deployment).toContain('SEARXNG_BASE_URL="${searxng_base_url}"');
     expect(deployment).toContain('GATEWAY_WEBHOOK_URL="${gateway_webhook_url}"');
     expect(deployment).toContain('GATEWAY_MAIN_WEBHOOK_URL="${gateway_main_webhook_url}"');
     expect(deployment).toContain('"PLACEHOLDER_BOT_BASE_URL": os.environ["BOT_BASE_URL"]');
-    expect(deployment).toContain('"PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"]');
     expect(deployment).toContain(
       '"PLACEHOLDER_GATEWAY_WEBHOOK_URL": os.environ["GATEWAY_WEBHOOK_URL"]'
     );

@@ -24,13 +24,11 @@ on:
       - src/**
       - config/**
       - aca.containerapp.yaml
-      - aca.searxng.containerapp.yaml
       - aca.catalog-sync-job.yaml
       - aca.attachment-worker-job.yaml
       - aca.attachment-worker-app.yaml
       - aca.release-probe-job.yaml
       - aca.periodic-assurance-job.yaml
-      - infra/searxng/**
   workflow_dispatch:
     inputs:
       public_expectation:

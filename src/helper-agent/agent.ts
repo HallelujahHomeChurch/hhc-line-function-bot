@@ -16,8 +16,7 @@ import {
 import type { AgentRunMode } from "./budget.js";
 
 const limits: Record<AgentRunMode, number> = {
-  normal: 4,
-  sheet_music_research: 6
+  normal: 4
 };
 
 export const SAFE_SUMMARY_PROMPT = [

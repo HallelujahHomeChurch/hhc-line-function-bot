@@ -21,9 +21,6 @@ async function runRead(command: string, failures = 0, output = "fixture-app") {
 set -euo pipefail
 source scripts/release-assurance.sh
 RESOURCE_GROUP=fixture-rg
-SEARXNG_CONTAINER_APP_NAME=fixture-search
-searxng_manifest=fixture.yaml
-mark_release_searxng_mutated() { printf 'MUTATION:marked\n'; }
 sleep() { printf '%s\n' "$1" >> "$SLEEPS"; }
 az() {
   printf '%s\n' "$*" >> "$CALLS"
@@ -106,34 +103,5 @@ describe("release Azure metadata reads", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("false\n");
     expect(result.calls).toHaveLength(1);
-  });
-
-  async function searxngApplyBlock() {
-    const deployment = await readFile(path.join(ROOT, "scripts/deploy-aca.sh"), "utf8");
-    const check = deployment.indexOf('if [[ -z "${RELEASE_EXPECTED_SEARXNG_IMAGE}" ]]');
-    const start = deployment.indexOf("\nfi\n", check) + "\nfi\n".length;
-    const end = deployment.indexOf('\nsearxng_fqdn="', start);
-    expect(check).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(start);
-    return deployment.slice(start, end);
-  }
-
-  it.each([
-    ["fixture-search", "update"],
-    ["", "create"]
-  ])("keeps the normal %s existence result on the %s path", async (output, operation) => {
-    const result = await runRead(await searxngApplyBlock(), 0, output);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(`MUTATION:marked\nMUTATION:${operation}\n`);
-    expect(result.calls).toHaveLength(2);
-    expect(result.calls[1]).toContain(`containerapp ${operation} `);
-  });
-
-  it("does not turn an unavailable existence read into a create", async () => {
-    const result = await runRead(await searxngApplyBlock(), 3);
-    expect(result.status).not.toBe(0);
-    expect(result.stdout).not.toContain("MUTATION:");
-    expect(result.calls).toHaveLength(3);
-    expect(result.calls.every((call) => call.startsWith("containerapp list "))).toBe(true);
   });
 });

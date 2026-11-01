@@ -16,8 +16,6 @@ interface HelperAgentStateOptions {
 
 export interface HelperAgentRunSnapshot {
   contextReset?: "expired" | "policy_changed";
-  externalSheetMusicAllowed: boolean;
-  externalSheetMusicQuery?: string;
   markContextDirty?(dirty?: boolean): Promise<void>;
 }
 
@@ -37,13 +35,6 @@ export interface HelperAgentState {
     task: (snapshot: HelperAgentRunSnapshot) => Promise<T>;
   }): Promise<T>;
   reset(threadId: string, clearScopedSessions?: () => Promise<void>): Promise<void>;
-  allowExternalSheetMusic(
-    threadId: string,
-    source: LineSource,
-    expiresAt: Date,
-    query?: string
-  ): Promise<void>;
-  externalSheetMusicAllowed(threadId: string): Promise<boolean>;
 }
 
 export interface PostgresHelperAgentState extends HelperAgentState {
@@ -58,8 +49,6 @@ export function helperThreadIdleTtlMs(source: LineSource): number {
 export function createHelperAgentState(options: HelperAgentStateOptions): HelperAgentState {
   const now = options.now ?? (() => new Date());
   const expiresAt = new Map<string, number>();
-  const externalSearchExpiresAt = new Map<string, number>();
-  const externalSearchQueries = new Map<string, string>();
   const policyKeys = new Map<string, string>();
   const locks = new Map<string, Promise<void>>();
 
@@ -81,8 +70,6 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
           policyKeys.has(input.threadId) && policyKeys.get(input.threadId) !== input.policyKey;
         if (expired || policyChanged) {
           await options.checkpointer.deleteThread(input.threadId);
-          externalSearchExpiresAt.delete(input.threadId);
-          externalSearchQueries.delete(input.threadId);
         }
         expiresAt.set(input.threadId, observedAt + helperThreadIdleTtlMs(input.source));
         policyKeys.set(input.threadId, input.policyKey);
@@ -94,10 +81,7 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
                 input.threadId,
                 dirty ? "untrusted-context-in-progress" : input.policyKey
               );
-            },
-            externalSheetMusicQuery: externalSearchQueries.get(input.threadId),
-            externalSheetMusicAllowed:
-              (externalSearchExpiresAt.get(input.threadId) ?? 0) > observedAt
+            }
           })
         );
         policyKeys.set(input.threadId, input.policyKey);
@@ -107,23 +91,11 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
     reset: (threadId, clearScopedSessions) =>
       withMemoryThreadLock(locks, threadId, async () => {
         await clearScopedSessions?.();
-        externalSearchQueries.delete(threadId);
         await clearMemoryThread(options.checkpointer, threadId, {
           expiresAt,
-          externalSearchExpiresAt,
           policyKeys
         });
-      }),
-    allowExternalSheetMusic: (threadId, source, expiration, query) =>
-      withMemoryThreadLock(locks, threadId, async () => {
-        externalSearchExpiresAt.set(threadId, expiration.getTime());
-        if (query) externalSearchQueries.set(threadId, query.slice(0, 300));
-        else externalSearchQueries.delete(threadId);
-        expiresAt.set(threadId, now().getTime() + helperThreadIdleTtlMs(source));
-      }),
-    async externalSheetMusicAllowed(threadId) {
-      return (externalSearchExpiresAt.get(threadId) ?? 0) > now().getTime();
-    }
+      })
   };
 }
 
@@ -144,6 +116,7 @@ export function createPostgresHelperAgentState(
           await guardedTask(input, options.checkpointer, input.task);
       }),
     async setup() {
+      // Keep legacy columns for pre-retirement rollback, including fresh databases.
       await options.pool.query(`
         create table if not exists agent_sdk_threads (
           thread_id text primary key,
@@ -162,10 +135,8 @@ export function createPostgresHelperAgentState(
         const current = await options.pool.query<{
           expires_at: Date;
           policy_key: string | null;
-          external_search_expires_at: Date | null;
-          external_search_query: string | null;
         }>(
-          `select expires_at, policy_key, external_search_expires_at, external_search_query
+          `select expires_at, policy_key
              from agent_sdk_threads where thread_id = $1`,
           [input.threadId]
         );
@@ -210,10 +181,7 @@ export function createPostgresHelperAgentState(
                   "update agent_sdk_threads set policy_key = $2 where thread_id = $1",
                   [input.threadId, dirty ? "untrusted-context-in-progress" : input.policyKey]
                 );
-              },
-              externalSheetMusicQuery: metadata?.external_search_query ?? undefined,
-              externalSheetMusicAllowed:
-                (metadata?.external_search_expires_at?.getTime() ?? 0) > observedAt.getTime()
+              }
             })
           );
           await options.pool.query(
@@ -242,31 +210,6 @@ export function createPostgresHelperAgentState(
         await options.checkpointer.deleteThread(threadId);
         await options.pool.query("delete from agent_sdk_threads where thread_id = $1", [threadId]);
       }),
-    async allowExternalSheetMusic(threadId, source, expiration, query) {
-      await withPgThreadLock(options.lockPool, threadId, () =>
-        options.pool.query(
-          `insert into agent_sdk_threads (thread_id, expires_at, external_search_expires_at, external_search_query)
-         values ($1, $2, $3, $4)
-         on conflict (thread_id) do update
-         set expires_at = excluded.expires_at,
-             external_search_expires_at = excluded.external_search_expires_at,
-             external_search_query = excluded.external_search_query`,
-          [
-            threadId,
-            new Date(now().getTime() + helperThreadIdleTtlMs(source)),
-            expiration,
-            query?.slice(0, 300) ?? null
-          ]
-        )
-      );
-    },
-    async externalSheetMusicAllowed(threadId) {
-      const result = await options.pool.query<{ allowed: boolean }>(
-        "select external_search_expires_at > $2 as allowed from agent_sdk_threads where thread_id = $1",
-        [threadId, now()]
-      );
-      return result.rows[0]?.allowed === true;
-    },
     async cleanupExpired() {
       const expired = await options.pool.query<{ thread_id: string }>(
         "select thread_id from agent_sdk_threads where expires_at <= $1 order by expires_at limit 100",
@@ -312,13 +255,11 @@ async function clearMemoryThread(
   threadId: string,
   stores: {
     expiresAt: Map<string, number>;
-    externalSearchExpiresAt: Map<string, number>;
     policyKeys: Map<string, string>;
   }
 ): Promise<void> {
   await checkpointer.deleteThread(threadId);
   stores.expiresAt.delete(threadId);
-  stores.externalSearchExpiresAt.delete(threadId);
   stores.policyKeys.delete(threadId);
 }
 

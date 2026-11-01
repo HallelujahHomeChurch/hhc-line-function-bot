@@ -20,7 +20,6 @@ export async function runReleaseProbeCli(
 function readInput(env: Record<string, string | undefined>): ReleaseProbeInput {
   return {
     botBaseUrl: required(env, "BOT_BASE_URL"),
-    searxngBaseUrl: required(env, "SEARXNG_BASE_URL"),
     gatewayWebhookUrl: required(env, "GATEWAY_WEBHOOK_URL"),
     gatewayMainWebhookUrl: required(env, "GATEWAY_MAIN_WEBHOOK_URL"),
     lineHelperChannelSecret: required(env, "LINE_HELPER_CHANNEL_SECRET"),

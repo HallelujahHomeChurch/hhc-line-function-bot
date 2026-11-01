@@ -1768,92 +1768,81 @@ async function handleWebhook(
         continue;
       }
 
-      const researchOutcome = await profileRuntime.acceptSheetMusicResearch?.(profileTurnInput);
-      if (researchOutcome?.kind === "handled") {
+      const retiredResult = await profileRuntime.handleRetiredSheetMusic?.(profileTurnInput);
+      if (retiredResult) {
+        await line.replyText(event.replyToken, retiredResult.replyText);
+        await recordConversationReply(
+          conversationWindowStore,
+          effectiveProfile,
+          event,
+          retiredResult,
+          quoteContext?.isCurrent
+        );
+        continue;
+      }
+      const attachmentResult = await executeAttachmentTextIntake({
+        intake: {
+          profile: effectiveProfile,
+          event,
+          requestId,
+          requesterDisplayName,
+          requesterIsAdmin,
+          configuredFunctions: profile.enabledFunctions,
+          authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+          sessionStore,
+          maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
+          now: new Date(),
+          textHandlers: attachmentTextHandlers
+        },
+        completion: {
+          profile: effectiveProfile,
+          event,
+          requestId,
+          requesterDisplayName,
+          requesterIsAdmin,
+          completionObserver,
+          accessStore,
+          resourceMemory,
+          routeObserver,
+          lastRouteStore
+        },
+        lastErrorStore
+      });
+      if (attachmentResult) {
         await line.replyText(
           event.replyToken,
-          researchOutcome.result.replyText,
-          researchOutcome.result.quickReplies
-            ? { quickReplies: researchOutcome.result.quickReplies }
+          attachmentResult.replyText,
+          attachmentResult.quickReplies
+            ? { quickReplies: attachmentResult.quickReplies }
             : undefined
         );
         await recordConversationReply(
           conversationWindowStore,
           effectiveProfile,
           event,
-          researchOutcome.result,
+          attachmentResult,
           quoteContext?.isCurrent
         );
         continue;
       }
-      const researchAccepted = researchOutcome?.kind === "accepted";
-      if (!researchAccepted) {
-        const attachmentResult = await executeAttachmentTextIntake({
-          intake: {
-            profile: effectiveProfile,
-            event,
-            requestId,
-            requesterDisplayName,
-            requesterIsAdmin,
-            configuredFunctions: profile.enabledFunctions,
-            authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-            sessionStore,
-            maxAttachmentBytes: config.attachments?.maxBytes ?? 25 * 1024 * 1024,
-            now: new Date(),
-            textHandlers: attachmentTextHandlers
-          },
-          completion: {
-            profile: effectiveProfile,
-            event,
-            requestId,
-            requesterDisplayName,
-            requesterIsAdmin,
-            completionObserver,
-            accessStore,
-            resourceMemory,
-            routeObserver,
-            lastRouteStore
-          },
-          lastErrorStore
-        });
-        if (attachmentResult) {
-          await line.replyText(
-            event.replyToken,
-            attachmentResult.replyText,
-            attachmentResult.quickReplies
-              ? { quickReplies: attachmentResult.quickReplies }
-              : undefined
-          );
-          await recordConversationReply(
-            conversationWindowStore,
-            effectiveProfile,
-            event,
-            attachmentResult,
-            quoteContext?.isCurrent
-          );
-          continue;
-        }
-      }
 
-      const continuation = researchAccepted
-        ? { matched: false as const }
-        : await executeDeterministicTextContinuation({
-            event,
-            profile: effectiveProfile,
-            configuredFunctions: profile.enabledFunctions,
-            handlers: textMessageHandlers,
-            requesterDisplayName,
-            requesterIsAdmin,
-            authorizeFunctions: turnAccountAuthorization.allowedFunctions,
-            sessionStore,
-            resourceMemory,
-            completionObserver,
-            accessStore,
-            routeObserver,
-            lastErrorStore,
-            lastRouteStore,
-            requestId
-          });
+      const continuation = await executeDeterministicTextContinuation({
+        event,
+        profile: effectiveProfile,
+        configuredFunctions: profile.enabledFunctions,
+        handlers: textMessageHandlers,
+        requesterDisplayName,
+        requesterIsAdmin,
+        authorizeFunctions: turnAccountAuthorization.allowedFunctions,
+        sessionStore,
+        resourceMemory,
+        completionObserver,
+        accessStore,
+        routeObserver,
+        lastErrorStore,
+        lastRouteStore,
+        requestId
+      });
       if (continuation.matched) {
         if (continuation.result) {
           await profileRuntime.recordExternalResult?.(profileTurnInput, continuation.result);
@@ -1876,7 +1865,6 @@ async function handleWebhook(
       }
 
       const routingAllowed =
-        Boolean(researchAccepted) ||
         Boolean(pendingActionReview) ||
         !groupEngagement ||
         groupEngagementAllowsReply(groupEngagement) ||

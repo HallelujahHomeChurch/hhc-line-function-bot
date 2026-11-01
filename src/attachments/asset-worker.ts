@@ -37,6 +37,7 @@ export async function runAttachmentAssetWorker(
     workStore: AttachmentScanWorkStore;
     assets: AssetApiClient;
     lineContent: LineContentClient;
+    // shortcut: pre-retirement work only; Ray removes after PR2 drain gate.
     externalBinary?: ExternalBinaryClient;
     profiles: AttachmentScanWorkerProfile[];
     publisher: ResourceBinaryPublisher;

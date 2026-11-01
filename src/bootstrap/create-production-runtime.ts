@@ -52,8 +52,6 @@ import { createAssetApiClient } from "../clients/asset-api.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
-import { createSearxngClient } from "../clients/searxng.js";
-import { createPublicPageReader } from "../clients/public-page.js";
 import { createWikipediaClient } from "../wikipedia/client.js";
 import { createDependencyDiagnostics } from "../diagnostics/dependencies.js";
 import { createPostgresPool, createPostgresRuntime } from "../db/postgres.js";
@@ -176,19 +174,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   const graph = config.graph ? createGraphDriveClient(config.graph) : undefined;
   const notion = config.notion ? createNotionDatabaseClient(config.notion) : undefined;
   const wikipedia = config.wikipedia ? createWikipediaClient(config.wikipedia) : undefined;
-  const webSearch = config.webSearch?.searxngBaseUrl
-    ? createSearxngClient({
-        baseUrl: config.webSearch.searxngBaseUrl,
-        timeoutMs: config.webSearch.timeoutMs
-      })
-    : undefined;
-  const publicPageReader = webSearch
-    ? createPublicPageReader({
-        maxBytes: 512 * 1024,
-        maxRedirects: config.externalResources.maxRedirects,
-        timeoutMs: config.externalResources.downloadTimeoutMs
-      })
-    : undefined;
   const registrationInviteCodeStore = redis
     ? new RedisRegistrationInviteCodeStore({ client: redis.client, keyPrefix: redis.keyPrefix })
     : new InMemoryRegistrationInviteCodeStore();
@@ -334,7 +319,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     attachmentScanWorkStore,
     attachmentScanQueue,
     mediaSyncStore: postgres?.mediaSyncStore,
-    externalResearchEnabled: Boolean(webSearch && publicPageReader),
     wikipediaSummarizer: createWikipediaSummarizer({
       primary: wikipediaSummaryPrimary
     })
@@ -444,8 +428,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       attachmentDraftHandler: createPendingAttachmentDraftHandler({ sessionStore, catalog }),
       sessions: sessionStore,
       jobs: agentJobStore,
-      webSearch,
-      pageReader: publicPageReader,
       resourceMemory,
       lastErrorStore,
       traceStore: agentTraceStore,

@@ -20,7 +20,6 @@ RELEASE_WARMER_JOB_MUTATED="${RELEASE_WARMER_JOB_MUTATED:-false}"
 RELEASE_ATTACHMENT_APP_MUTATED="${RELEASE_ATTACHMENT_APP_MUTATED:-false}"
 RELEASE_PROBE_JOB_MUTATED="${RELEASE_PROBE_JOB_MUTATED:-false}"
 RELEASE_PERIODIC_JOB_MUTATED="${RELEASE_PERIODIC_JOB_MUTATED:-false}"
-RELEASE_SEARXNG_MUTATED="${RELEASE_SEARXNG_MUTATED:-false}"
 RELEASE_STATE_DOWNGRADE_BLOCKED="${RELEASE_STATE_DOWNGRADE_BLOCKED:-false}"
 RELEASE_PROVIDER_CONTRACT_VERIFIED=false
 RELEASE_PUBLIC_ACCEPTANCE_PENDING=false
@@ -148,7 +147,6 @@ capture_known_good_state() {
   : "${MEDIA_SYNC_WARMER_JOB_NAME:?MEDIA_SYNC_WARMER_JOB_NAME is required}"
   : "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"
   : "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"
-  : "${SEARXNG_CONTAINER_APP_NAME:?SEARXNG_CONTAINER_APP_NAME is required}"
 
   if ! RELEASE_KNOWN_GOOD_REVISION="$(
     release_containerapp_read show \
@@ -192,48 +190,7 @@ capture_known_good_state() {
     RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE="$(release_containerapp_read show --resource-group "${RESOURCE_GROUP}" --name "${ATTACHMENT_WORKER_APP_NAME}" --query properties.template.containers[0].image --output tsv --only-show-errors)" || return 1
     RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE="$(resolve_release_image "${RELEASE_KNOWN_GOOD_ATTACHMENT_APP_IMAGE}")" || return 1
   fi
-  local searxng_exists
-  if ! searxng_exists="$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")"; then
-    set_release_failure known_good_snapshot_failed
-    return 1
-  fi
-  if [[ "${searxng_exists}" == "true" ]]; then
-    if ! RELEASE_KNOWN_GOOD_SEARXNG_REVISION="$(
-      release_containerapp_read show \
-        --resource-group "${RESOURCE_GROUP}" \
-        --name "${SEARXNG_CONTAINER_APP_NAME}" \
-        --query properties.latestReadyRevisionName \
-        --output tsv \
-        --only-show-errors
-    )"; then
-      set_release_failure known_good_snapshot_failed
-      return 1
-    fi
-    if [[ -z "${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" ]]; then
-      set_release_failure known_good_snapshot_failed
-      return 1
-    fi
-    RELEASE_KNOWN_GOOD_SEARXNG_EXISTS=true
-    if ! RELEASE_KNOWN_GOOD_SEARXNG_IMAGE="$(
-      az containerapp revision show \
-        --resource-group "${RESOURCE_GROUP}" \
-        --name "${SEARXNG_CONTAINER_APP_NAME}" \
-        --revision "${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" \
-        --query properties.template.containers[0].image \
-        --output tsv \
-        --only-show-errors
-    )" || [[ -z "${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}" ]] \
-      || ! RELEASE_KNOWN_GOOD_SEARXNG_IMAGE="$(
-        resolve_release_image "${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}"
-      )"; then
-      set_release_failure known_good_snapshot_failed
-      return 1
-    fi
-  else
-    RELEASE_KNOWN_GOOD_SEARXNG_EXISTS=false
-    RELEASE_KNOWN_GOOD_SEARXNG_REVISION=""
-    RELEASE_KNOWN_GOOD_SEARXNG_IMAGE=""
-  fi
+
 }
 
 resolve_release_image() {
@@ -418,11 +375,6 @@ mark_release_mutated() {
   RELEASE_MUTATED=true
 }
 
-mark_release_searxng_mutated() {
-  RELEASE_SEARXNG_MUTATED=true
-  mark_release_mutated
-}
-
 mark_release_attachment_app_mutated() {
   RELEASE_ATTACHMENT_APP_MUTATED=true
   mark_release_mutated
@@ -503,7 +455,6 @@ complete_release_transaction() {
 run_release_gates() {
   RELEASE_PROVIDER_CONTRACT_VERIFIED=false
   RELEASE_PUBLIC_ACCEPTANCE_PENDING=false
-  : "${SEARXNG_CONTAINER_APP_NAME:?SEARXNG_CONTAINER_APP_NAME is required}"
   : "${RELEASE_PROBE_JOB_NAME:?RELEASE_PROBE_JOB_NAME is required}"
   : "${PERIODIC_ASSURANCE_JOB_NAME:?PERIODIC_ASSURANCE_JOB_NAME is required}"
   : "${RELEASE_TARGET_REVISION:?RELEASE_TARGET_REVISION is required}"
@@ -511,12 +462,10 @@ run_release_gates() {
   : "${RELEASE_TARGET_SCAN_IMAGE:?RELEASE_TARGET_SCAN_IMAGE is required}"
   : "${RELEASE_TARGET_ATTACHMENT_IMAGE:?RELEASE_TARGET_ATTACHMENT_IMAGE is required}"
   : "${RELEASE_TARGET_ATTACHMENT_APP_IMAGE:?RELEASE_TARGET_ATTACHMENT_APP_IMAGE is required}"
-  : "${RELEASE_EXPECTED_SEARXNG_IMAGE:?RELEASE_EXPECTED_SEARXNG_IMAGE is required}"
   : "${RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME:?RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME is required}"
 
   release_wait_for_target || return
   release_check_account_preflight || return
-  release_check_searxng || return
   release_check_job_definition \
     "${ATTACHMENT_SCAN_JOB_NAME}" Manual 1800 1 manual \
     "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_worker_job worker_definition_mismatch false || return
@@ -809,57 +758,6 @@ PY
   fi
 }
 
-release_check_searxng() {
-  local state_json
-  if ! state_json="$(
-    release_containerapp_read show \
-      --resource-group "${RESOURCE_GROUP}" \
-      --name "${SEARXNG_CONTAINER_APP_NAME}" \
-      --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,image:properties.template.containers[0].image}" \
-      --output json \
-      --only-show-errors
-  )" || ! RELEASE_SEARXNG_STATE="${state_json}" \
-    RELEASE_EXPECTED_SEARXNG_IMAGE="${RELEASE_EXPECTED_SEARXNG_IMAGE}" \
-    python3 - <<'PY'
-import json
-import os
-
-state = json.loads(os.environ["RELEASE_SEARXNG_STATE"])
-image = state.get("image")
-revision = state.get("latestRevision")
-traffic = state.get("traffic")
-traffic_ok = (
-    isinstance(traffic, list)
-    and len(traffic) == 1
-    and traffic[0].get("weight") == 100
-    and (
-        traffic[0].get("revisionName") == revision
-        or traffic[0].get("latestRevision") is True
-    )
-)
-valid = (
-    revision
-    and revision == state.get("latestReadyRevision")
-    and state.get("runningStatus") == "Running"
-    and traffic_ok
-    and state.get("external") is False
-    and state.get("targetPort") == 8080
-    and str(state.get("transport") or "").lower() == "http"
-    and state.get("minReplicas") == 1
-    and state.get("maxReplicas") == 1
-    and state.get("cpu") == 0.25
-    and state.get("memory") == "0.5Gi"
-    and image == os.environ["RELEASE_EXPECTED_SEARXNG_IMAGE"]
-)
-raise SystemExit(0 if valid else 1)
-PY
-  then
-    fail_release_check searxng_deployment searxng_definition_mismatch http_mismatch
-    return
-  fi
-  record_release_check searxng_deployment passed none
-}
-
 release_check_job_definition() {
   local job_name="$1"
   local trigger_type="$2"
@@ -996,7 +894,6 @@ elif check_name == "release_probe":
             env,
             {
                 "BOT_BASE_URL": {"value": None},
-                "SEARXNG_BASE_URL": {"value": None},
                 "GATEWAY_WEBHOOK_URL": {"value": None},
                 "GATEWAY_MAIN_WEBHOOK_URL": {"value": None},
                 "LINE_HELPER_CHANNEL_SECRET": {
@@ -1222,7 +1119,6 @@ check_codes = {
         "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
         "contract_mismatch",
     },
-    "searxng_root": {"none", "timeout", "http_mismatch", "network_failed"},
     "gateway_helper_signed_empty_webhook": {
         "none", "timeout", "http_mismatch", "malformed_json", "network_failed",
         "contract_mismatch",
@@ -1477,9 +1373,6 @@ PY
     fi
   fi
 
-  if [[ "${RELEASE_SEARXNG_MUTATED}" == "true" ]]; then
-    restore_known_good_searxng || rollback_ok=false
-  fi
   if [[ "${RELEASE_CATALOG_JOB_MUTATED}" == "true" ]]; then
     restore_changed_job \
       "${CATALOG_SYNC_JOB_NAME}" \
@@ -1529,107 +1422,6 @@ PY
     return 0
   fi
   RELEASE_ROLLBACK_STATUS=failed
-  return 1
-}
-
-restore_known_good_searxng() {
-  local verified_revision
-  local state_json
-  local image
-  if [[ "${RELEASE_KNOWN_GOOD_SEARXNG_EXISTS}" == "false" ]]; then
-    az containerapp delete \
-      --resource-group "${RESOURCE_GROUP}" \
-      --name "${SEARXNG_CONTAINER_APP_NAME}" \
-      --yes \
-      --only-show-errors \
-      --output none || return
-    if [[ "$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")" != "false" ]]; then
-      return 1
-    fi
-    return 0
-  fi
-  if ! az containerapp revision copy \
-      --resource-group "${RESOURCE_GROUP}" \
-      --name "${SEARXNG_CONTAINER_APP_NAME}" \
-      --from-revision "${RELEASE_KNOWN_GOOD_SEARXNG_REVISION}" \
-      --image "${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}" \
-      --output none \
-      --only-show-errors
-  then
-    return 1
-  fi
-  for ((attempt = 1; attempt <= RELEASE_POLL_ATTEMPTS; attempt += 1)); do
-    if state_json="$(
-      release_containerapp_read show \
-        --resource-group "${RESOURCE_GROUP}" \
-        --name "${SEARXNG_CONTAINER_APP_NAME}" \
-        --query "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory}" \
-        --output json \
-        --only-show-errors
-    )" && verified_revision="$(
-      RELEASE_SEARXNG_ROLLBACK_STATE="${state_json}" python3 - <<'PY'
-import json
-import os
-import re
-
-state = json.loads(os.environ["RELEASE_SEARXNG_ROLLBACK_STATE"])
-active = state.get("latestRevision")
-if not isinstance(active, str) or not re.fullmatch(r"[a-z0-9-]+", active):
-    raise SystemExit(1)
-print(active)
-PY
-    )" && image="$(
-      az containerapp revision show \
-        --resource-group "${RESOURCE_GROUP}" \
-        --name "${SEARXNG_CONTAINER_APP_NAME}" \
-        --revision "${verified_revision}" \
-        --query properties.template.containers[0].image \
-        --output tsv \
-        --only-show-errors
-    )" && RELEASE_SEARXNG_ROLLBACK_STATE="${state_json}" \
-      RELEASE_SEARXNG_ROLLBACK_REVISION="${verified_revision}" \
-      RELEASE_SEARXNG_ROLLBACK_IMAGE="${image}" \
-      RELEASE_SEARXNG_EXPECTED_IMAGE="${RELEASE_KNOWN_GOOD_SEARXNG_IMAGE}" \
-      python3 - <<'PY'
-import json
-import os
-
-state = json.loads(os.environ["RELEASE_SEARXNG_ROLLBACK_STATE"])
-revision = os.environ["RELEASE_SEARXNG_ROLLBACK_REVISION"]
-traffic = state.get("traffic")
-traffic_ok = (
-    isinstance(traffic, list)
-    and len(traffic) == 1
-    and traffic[0].get("weight") == 100
-    and (
-        traffic[0].get("revisionName") == revision
-        or traffic[0].get("latestRevision") is True
-    )
-)
-valid = (
-    state.get("latestRevision") == revision
-    and state.get("latestReadyRevision") == revision
-    and state.get("runningStatus") == "Running"
-    and traffic_ok
-    and state.get("external") is False
-    and state.get("targetPort") == 8080
-    and str(state.get("transport") or "").lower() == "http"
-    and state.get("minReplicas") == 1
-    and state.get("maxReplicas") == 1
-    and state.get("cpu") == 0.25
-    and state.get("memory") == "0.5Gi"
-    and os.environ["RELEASE_SEARXNG_ROLLBACK_IMAGE"]
-    == os.environ["RELEASE_SEARXNG_EXPECTED_IMAGE"]
-)
-raise SystemExit(0 if valid else 1)
-PY
-    then
-      return 0
-    fi
-    if ((attempt < RELEASE_POLL_ATTEMPTS)); then
-      sleep "${RELEASE_POLL_INTERVAL_SECONDS}"
-    fi
-  done
   return 1
 }
 
@@ -1776,7 +1568,6 @@ failure_map = {
     "account_preflight_failed": "http_mismatch",
     "gateway_maintenance_failed": "http_mismatch",
     "malformed_target_state": "malformed_json",
-    "searxng_definition_mismatch": "http_mismatch",
     "worker_definition_mismatch": "http_mismatch",
     "catalog_definition_mismatch": "http_mismatch",
     "catalog_recent_success_missing": "timeout",
@@ -1793,7 +1584,6 @@ failure_map = {
     "release_probe_status_mismatch": "http_mismatch",
     "bot_health_failed": "bot_health_failed",
     "bot_readiness_failed": "bot_readiness_failed",
-    "searxng_root_failed": "searxng_root_failed",
     "gateway_helper_signed_empty_webhook_failed": "gateway_webhook_failed",
     "gateway_main_signed_empty_webhook_failed": "gateway_webhook_failed",
     "report_write_failed": "network_failed",
@@ -1809,14 +1599,12 @@ check_names = {
     "bot_dapr",
     "account_preflight",
     "gateway_maintenance",
-    "searxng_deployment",
     "release_probe",
     "catalog_job",
     "attachment_worker_job",
     "periodic_assurance_job",
     "bot_health",
     "bot_readiness",
-    "searxng_root",
     "gateway_helper_signed_empty_webhook",
     "gateway_main_signed_empty_webhook",
 }
@@ -1862,7 +1650,7 @@ if os.environ["RELEASE_REPORT_STATUS"] == "passed" and not {
     raise SystemExit("passed release missing signed webhook check")
 
 if os.environ["RELEASE_REPORT_STATUS"] == "private_verified_public_pending":
-    if not {"gateway_maintenance", "bot_health", "bot_readiness", "searxng_root"} <= observed_check_names or any(
+    if not {"gateway_maintenance", "bot_health", "bot_readiness"} <= observed_check_names or any(
         name.startswith("gateway_") and name != "gateway_maintenance" for name in observed_check_names
     ):
         raise SystemExit("invalid private pending release checks")
@@ -1947,7 +1735,6 @@ write_deployment_receipt() {
   RELEASE_REPORT_WRITTEN=false
   if RELEASE_TARGET_REVISION="$RELEASE_TARGET_REVISION" \
   RELEASE_TARGET_IMAGE="$RELEASE_TARGET_IMAGE" \
-  RELEASE_EXPECTED_SEARXNG_IMAGE="$RELEASE_EXPECTED_SEARXNG_IMAGE" \
   RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME="$RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME" \
   RELEASE_STARTED_AT="$RELEASE_STARTED_AT" \
   RELEASE_KNOWN_GOOD_REVISION="$RELEASE_KNOWN_GOOD_REVISION" \

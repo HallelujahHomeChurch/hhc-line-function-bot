@@ -341,11 +341,6 @@ export interface WikipediaConfig {
   timeoutMs: number;
 }
 
-export interface WebSearchConfig {
-  searxngBaseUrl?: string;
-  timeoutMs: number;
-}
-
 export interface AppConfig {
   redisRecoveryCutoffMs?: number;
   serviceName: string;
@@ -363,7 +358,6 @@ export interface AppConfig {
   graph?: GraphConfig;
   notion?: NotionConfig;
   wikipedia?: WikipediaConfig;
-  webSearch?: WebSearchConfig;
   redis?: RedisConfig;
   database?: DatabaseConfig;
   access?: AccessConfig;
@@ -680,22 +674,6 @@ export interface LineContentClient {
     messageId: string,
     profile: Pick<BotProfileConfig, "name" | "channelAccessToken">
   ): Promise<"processing" | "succeeded" | "failed">;
-}
-
-export interface WebSearchInput {
-  query: string;
-  language?: string;
-  limit?: number;
-}
-
-export interface WebSearchResult {
-  title: string;
-  snippet?: string;
-  url: string;
-}
-
-export interface WebSearchClient {
-  search(input: WebSearchInput): Promise<WebSearchResult[]>;
 }
 
 export interface NotionPage {
