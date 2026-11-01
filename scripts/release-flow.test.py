@@ -15,7 +15,6 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 IMAGE = 'registry.invalid/bot@sha256:' + 'a' * 64
-SEARXNG = 'registry.invalid/search@sha256:' + 'b' * 64
 NOW = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
 START = (NOW - dt.timedelta(minutes=2)).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
@@ -112,10 +111,12 @@ class PublicAcceptance(unittest.TestCase):
             root = Path(directory)
             report, receipt, calls = root / 'report.json', root / 'deployment.json', root / 'calls.jsonl'
             report.write_text(json.dumps({'status': 'private_verified_public_pending', 'failureCode': 'none'}))
-            env = {**os.environ, 'RESOURCE_GROUP': 'fixture', 'CONTAINER_APP_NAME': 'bot', 'ATTACHMENT_WORKER_APP_NAME': 'attachment-app', 'ATTACHMENT_SCAN_JOB_NAME': 'attachment', 'CATALOG_SYNC_JOB_NAME': 'catalog', 'GITHUB_SHA': 'c' * 40, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'RELEASE_REPORT_PATH': str(report), 'RELEASE_RECEIPT_PATH': str(receipt), 'RELEASE_TARGET_REVISION': 'bot--new', 'RELEASE_TARGET_IMAGE': IMAGE, 'RELEASE_EXPECTED_SEARXNG_IMAGE': SEARXNG, 'RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME': 'attachment-exec', 'RELEASE_STARTED_AT': START, 'RELEASE_KNOWN_GOOD_REVISION': 'bot--old', 'RELEASE_KNOWN_GOOD_IMAGE': IMAGE, 'DEPLOYED_REVISION': 'bot--new', 'DEPLOYED_IMAGE': IMAGE, 'DEPLOYMENT_ATTEMPT': '2', 'RELEASE_PUBLIC_EXPECTATION': 'maintenance', 'RELEASE_POLL_ATTEMPTS': '1', 'CALLS': str(calls), 'IMAGE': IMAGE}
+            env = {**os.environ, 'RESOURCE_GROUP': 'fixture', 'CONTAINER_APP_NAME': 'bot', 'ATTACHMENT_WORKER_APP_NAME': 'attachment-app', 'ATTACHMENT_SCAN_JOB_NAME': 'attachment', 'CATALOG_SYNC_JOB_NAME': 'catalog', 'GITHUB_SHA': 'c' * 40, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'RELEASE_REPORT_PATH': str(report), 'RELEASE_RECEIPT_PATH': str(receipt), 'RELEASE_TARGET_REVISION': 'bot--new', 'RELEASE_TARGET_IMAGE': IMAGE, 'RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME': 'attachment-exec', 'RELEASE_STARTED_AT': START, 'RELEASE_KNOWN_GOOD_REVISION': 'bot--old', 'RELEASE_KNOWN_GOOD_IMAGE': IMAGE, 'DEPLOYED_REVISION': 'bot--new', 'DEPLOYED_IMAGE': IMAGE, 'DEPLOYMENT_ATTEMPT': '2', 'RELEASE_PUBLIC_EXPECTATION': 'maintenance', 'RELEASE_POLL_ATTEMPTS': '1', 'CALLS': str(calls), 'IMAGE': IMAGE}
             with patch.dict(os.environ, env), patch.object(sys, 'argv', ['release-receipt.py', 'write']), patch.object(module, 'az', lambda *args: fence):
                 module.main()
             original = json.loads(receipt.read_text())
+            self.assertEqual(original["version"], 2)
+            self.assertNotIn("searxngImage", original)
             binary = root / 'bin'; binary.mkdir()
             (binary / 'az').write_text('''#!/usr/bin/env python3
 import json, os, sys
@@ -143,11 +144,12 @@ print('503',end='')
 ''')
             for file in binary.iterdir(): file.chmod(0o700)
             env['PATH'] = str(binary) + os.pathsep + os.environ['PATH']
-            for fault in ('', 'image', 'fence', 'http', 'source', 'run', 'attempt'):
+            for fault in ('', 'image', 'fence', 'http', 'source', 'run', 'attempt', 'legacy'):
                 value = dict(original)
                 if fault == 'source': value['commit'] = 'd' * 40
                 if fault == 'run': value['runId'] = '999'
                 if fault == 'attempt': value['deploymentAttempt'] = 1
+                if fault == 'legacy': value.update(version=1, searxngImage=IMAGE)
                 receipt.write_text(json.dumps(value))
                 with self.subTest(fault=fault):
                     result = subprocess.run(['bash', str(ROOT / 'scripts/accept-release.sh')], env={**env, 'FAULT': fault}, capture_output=True, text=True, timeout=15)

@@ -292,7 +292,6 @@ describe("release assurance shell transaction", () => {
       expect.arrayContaining([
         "bot_health",
         "bot_readiness",
-        "searxng_root",
         "gateway_helper_signed_empty_webhook",
         "gateway_main_signed_empty_webhook"
       ])
@@ -315,7 +314,7 @@ describe("release assurance shell transaction", () => {
     expect(report.failureCode).toBe("network_failed");
     expect(report.rollback.status).toBe("restored");
     expect(() => buildAssuranceReport(report)).not.toThrow();
-  });
+  }, 15_000);
 
   it("captures known-good state, runs live gates, and writes an allowlisted digest-only report", async () => {
     const fixture = await createFixture("success");
@@ -546,7 +545,7 @@ describe("release assurance shell transaction", () => {
     }
   );
 
-  it.each(["job_list_failure", "searxng_list_failure"])(
+  it.each(["job_list_failure"])(
     "fails safely when resource existence cannot be established for %s",
     async (scenario) => {
       const fixture = await createFixture(scenario);
@@ -570,11 +569,6 @@ describe("release assurance shell transaction", () => {
     "bot_ingress_transport_mismatch",
     "bot_dapr_mismatch",
     "release_probe_failure",
-    "searxng_definition_failure",
-    "searxng_traffic_mismatch",
-    "searxng_transport_mismatch",
-    "searxng_scale_mismatch",
-    "searxng_image_mismatch",
     "catalog_definition_failure",
     "catalog_cron_mismatch",
     "catalog_image_mismatch",
@@ -612,7 +606,6 @@ describe("release assurance shell transaction", () => {
       if (
         scenario.startsWith("target_") ||
         scenario.startsWith("bot_") ||
-        scenario.startsWith("searxng_") ||
         scenario.includes("definition") ||
         scenario.includes("_cron_") ||
         scenario.includes("_image_") ||
@@ -784,58 +777,6 @@ describe("release assurance shell transaction", () => {
     expect(report.rollback.status).toBe("failed");
   }, 15_000);
 
-  it("restores the snapshotted SearXNG revision before reporting rollback restored", async () => {
-    const fixture = await createFixture("searxng_restore");
-    const result = fixture.run();
-    const calls = await fixture.calls();
-    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
-
-    expect(result.status, diagnostic(result, calls)).toBe(42);
-    expect(report.rollback.status).toBe("restored");
-    expect(calls).toContainEqual(
-      expect.arrayContaining([
-        "revision",
-        "copy",
-        "--name",
-        "fixture-searxng",
-        "--from-revision",
-        "searx--ready",
-        "--image",
-        `docker.io/searxng/searxng@sha256:${"5".repeat(64)}`
-      ])
-    );
-  }, 15_000);
-
-  it("accepts Azure's no-op copy when the snapshotted SearXNG revision remains fully restored", async () => {
-    const fixture = await createFixture("searxng_restore_noop");
-    const result = fixture.run();
-    const calls = await fixture.calls();
-    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
-
-    expect(result.status, diagnostic(result, calls)).toBe(42);
-    expect(report.rollback.status).toBe("restored");
-    expect(calls).toContainEqual(
-      expect.arrayContaining([
-        "revision",
-        "show",
-        "--name",
-        "fixture-searxng",
-        "--revision",
-        "searx--ready"
-      ])
-    );
-  }, 15_000);
-
-  it("does not report restored when the copied SearXNG contract is wrong", async () => {
-    const fixture = await createFixture("searxng_restore_contract_mismatch");
-    const result = fixture.run();
-    const calls = await fixture.calls();
-    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
-
-    expect(result.status, diagnostic(result, calls)).toBe(42);
-    expect(report.rollback.status).toBe("failed");
-  }, 15_000);
-
   it("retires the warmer Job idempotently and logs its image before deletion", async () => {
     const fixture = await createFixture("warmer_retirement_success");
     const result = fixture.run();
@@ -919,6 +860,19 @@ describe("release assurance shell transaction", () => {
     expect(report.failureCode).toBe(expectedCode);
   });
 
+  it("restores a pre-retirement probe manifest without requiring its retired service in the new release", async () => {
+    const fixture = await createFixture("release_probe_failure");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as AssuranceReportInput;
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    expect(report.rollback.status).toBe("restored");
+    const restored = await fixture.restoredManifest("hhc-line-bot-release-probe");
+    expect(restored).toContain("SEARXNG_BASE_URL");
+    expect(restored).toContain("https://legacy-search.internal.invalid");
+    expect(calls.flat().join(" ")).not.toMatch(/searxng/i);
+  });
+
   it("fails closed instead of silently mapping an unknown reason", async () => {
     const fixture = await createFixture("unknown_failure_reason");
     const result = fixture.run();
@@ -966,21 +920,15 @@ async function createDeployFixture(scenario: string) {
     scenario === "provider_console_mismatch" ||
     scenario === "missing_jobs_database_credential"
   ) {
-    await mkdir(path.join(directory, "infra/searxng"), { recursive: true });
     await Promise.all(
       [
         "aca.containerapp.yaml",
-        "aca.searxng.containerapp.yaml",
         "aca.catalog-sync-job.yaml",
         "aca.attachment-worker-job.yaml",
         "aca.attachment-worker-app.yaml",
         "aca.release-probe-job.yaml",
         "aca.periodic-assurance-job.yaml"
       ].map((name) => copyFile(path.join(ROOT, name), path.join(directory, name)))
-    );
-    await copyFile(
-      path.join(ROOT, "infra/searxng/settings.yml"),
-      path.join(directory, "infra/searxng/settings.yml")
     );
   }
   await writeFile(
@@ -1216,7 +1164,6 @@ export RESOURCE_GROUP="fixture-resource-group"
 export ACR_NAME="fixture-acr"
 export ACR_LOGIN_SERVER="registry.example"
 export CONTAINER_APP_NAME="fixture-bot"
-export SEARXNG_CONTAINER_APP_NAME="fixture-searxng"
 export CATALOG_SYNC_JOB_NAME="hhc-line-bot-catalog-sync"
 export ATTACHMENT_SCAN_JOB_NAME="hhc-line-bot-attachment-worker"
 export ATTACHMENT_WORKER_APP_NAME="hhc-line-bot-attachment-app"
@@ -1229,7 +1176,6 @@ export RELEASE_ID="fixture-release-17"
 export RELEASE_COMMIT_SHA="${"a".repeat(40)}"
 export RELEASE_POLL_ATTEMPTS="3"
 export RELEASE_POLL_INTERVAL_SECONDS="1"
-export RELEASE_EXPECTED_SEARXNG_IMAGE="docker.io/searxng/searxng@sha256:${"5".repeat(64)}"
 export RELEASE_PROVIDER_CONTRACT_VERIFIED="${scenario === "preseeded_provider_contract_pre_mutation_failure" ? "true" : "false"}"
 source "${toBashPath(path.join(ROOT, "scripts/release-assurance.sh"))}"
 trap 'release_assurance_on_exit "$?"' EXIT
@@ -1269,9 +1215,6 @@ if [[ "\${FAKE_SCENARIO}" == "pre_mutation_failure" ]] \
   exit 23
 fi
 mark_release_mutated
-if [[ "\${FAKE_SCENARIO}" == searxng_restore* ]]; then
-  mark_release_searxng_mutated
-fi
 mark_release_job_mutated "hhc-line-bot-attachment-worker"
 mark_release_job_mutated "hhc-line-bot-catalog-sync"
 mark_release_job_mutated "hhc-line-bot-release-probe"
@@ -1314,6 +1257,8 @@ fi
   return {
     reportPath,
     reportFlagPath,
+    restoredManifest: (name: string) =>
+      readFile(path.join(stateDirectory, "restored-manifest-" + name), "utf8"),
     run: () => spawnSync("bash", [toBashPath(driverPath)], { cwd: ROOT, encoding: "utf8" }),
     calls: async (): Promise<string[][]> => {
       const text = await readFile(callLogPath, "utf8").catch(() => "");
@@ -1339,6 +1284,7 @@ function expectForbiddenCallsAbsent(calls: string[][]): void {
   const flattened = calls.map((args) => args.join(" ")).join("\n");
   expect(flattened).not.toMatch(/chat.?completion/iu);
   expect(flattened).not.toMatch(/embedding/iu);
+  expect(flattened).not.toMatch(/searxng/iu);
   expect(calls.some((args) => isJobStart(args, "hhc-line-bot-catalog-sync"))).toBe(false);
   expect(flattened).not.toContain("missing_line_signature");
   expect(flattened).not.toMatch(/\bcurl\b/iu);
@@ -1355,7 +1301,7 @@ function toBashPath(filePath: string): string {
 }
 
 const FAKE_AZ = `#!/usr/bin/env node
-import { appendFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const rawArgs = process.argv.slice(2);
@@ -1364,6 +1310,7 @@ while (rawArgs[0]?.startsWith("--fake-")) {
   control[rawArgs.shift()] = rawArgs.shift();
 }
 const args = rawArgs;
+if (args.some((arg) => /searxng/i.test(arg))) process.exit(119);
 appendFileSync(control["--fake-log"], JSON.stringify(args) + "\\n");
 const scenario = control["--fake-scenario"];
 const state = control["--fake-state"];
@@ -1421,7 +1368,6 @@ if (command("containerapp", "exec")) {
 }
 
 if (command("containerapp", "list")) {
-  if (scenario === "searxng_list_failure") process.exit(105);
   output(/name=='([^']+)'/.exec(query ?? "")?.[1] ?? "");
   process.exit(0);
 }
@@ -1521,12 +1467,7 @@ if (command("containerapp", "show") && name === "hhc-line-bot-attachment-app") {
 if (command("containerapp", "revision", "show")) {
   if (query !== "properties.template.containers[0].image") process.exit(92);
   const revision = value("--revision");
-  if (
-    name === "fixture-searxng" &&
-    (revision === "searx--ready" || revision === "searx--rollback")
-  ) {
-    output("docker.io/searxng/searxng@sha256:${"5".repeat(64)}");
-  } else if (revision === "bot--known-good") {
+  if (revision === "bot--known-good") {
     output(
       scenario === "known_good_tag"
         ? "registry.example/alive/hhc-line-function-bot:main-legacy"
@@ -1555,53 +1496,6 @@ if (command("acr", "manifest", "show-metadata")) {
     query !== "digest"
   ) process.exit(101);
   output("${GOOD_BOT_DIGEST}");
-  process.exit(0);
-}
-
-if (command("containerapp", "show") && name === "fixture-searxng") {
-  if (query === "properties.latestReadyRevisionName") {
-    output("searx--ready");
-    process.exit(0);
-  }
-  if (query === "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory}") {
-    const restoredRevision =
-      scenario === "searxng_restore_noop" ? "searx--ready" : "searx--rollback";
-    output({
-      latestRevision: restoredRevision,
-      latestReadyRevision: restoredRevision,
-      runningStatus: "Running",
-      traffic: [{ latestRevision: true, weight: 100 }],
-      external: false,
-      targetPort: 8080,
-      transport: scenario === "searxng_restore_contract_mismatch" ? "Auto" : "Http",
-      minReplicas: 1,
-      maxReplicas: 1,
-      cpu: 0.25,
-      memory: "0.5Gi"
-    });
-    process.exit(0);
-  }
-  if (query !== "{latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,runningStatus:properties.runningStatus,traffic:properties.configuration.ingress.traffic,external:properties.configuration.ingress.external,targetPort:properties.configuration.ingress.targetPort,transport:properties.configuration.ingress.transport,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,image:properties.template.containers[0].image}") process.exit(94);
-  output({
-    latestRevision: "searx--ready",
-    latestReadyRevision: "searx--ready",
-    runningStatus: "Running",
-    traffic:
-      scenario === "searxng_traffic_mismatch"
-        ? [{ revisionName: "searx--old", weight: 100 }]
-        : [{ revisionName: "searx--ready", weight: 100 }],
-    external: false,
-    targetPort: 8080,
-    transport: scenario === "searxng_transport_mismatch" ? "Auto" : "Http",
-    minReplicas: scenario === "searxng_scale_mismatch" ? 0 : 1,
-    maxReplicas: 1,
-    cpu: scenario === "searxng_definition_failure" ? 1 : 0.25,
-    memory: "0.5Gi",
-    image:
-      scenario === "searxng_image_mismatch"
-        ? "docker.io/searxng/searxng@sha256:${"6".repeat(64)}"
-        : "docker.io/searxng/searxng@sha256:${"5".repeat(64)}"
-  });
   process.exit(0);
 }
 
@@ -1671,7 +1565,7 @@ if (command("containerapp", "job", "show")) {
               name: "fixture-job",
               image: firstObservation || restored ? oldImages[name] : targetImages[name],
               args: ["fixture.js"],
-              env: [],
+              env: name === "hhc-line-bot-release-probe" ? [{ name: "SEARXNG_BASE_URL", value: "https://legacy-search.internal.invalid" }] : [],
               resources: { cpu: 0.25, memory: "0.5Gi" }
             }
           ],
@@ -1729,7 +1623,6 @@ if (command("containerapp", "job", "show")) {
       args: ["dist/tools/run-release-probe.js"],
       env: [
         { name: "BOT_BASE_URL", value: "https://bot.internal.example" },
-        { name: "SEARXNG_BASE_URL", value: "https://searx.internal.example" },
         {
           name: "GATEWAY_WEBHOOK_URL",
           value: "https://gateway.example/api/line/webhook/helper"
@@ -1811,7 +1704,6 @@ if (command("containerapp", "job", "logs", "show")) {
   const checks = [
     { name: "bot_health", status: scenario === "release_probe_child_failure" ? "failed" : "passed", code: scenario === "release_probe_child_failure" ? "http_mismatch" : "none" },
     { name: "bot_readiness", status: "passed", code: "none" },
-    { name: "searxng_root", status: "passed", code: "none" },
     { name: "gateway_helper_signed_empty_webhook", status: "passed", code: "none" },
     { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" }
   ];
@@ -1847,7 +1739,6 @@ if (command("monitor", "log-analytics", "query")) {
         scenario === "release_probe_child_failure" ? "http_mismatch" : "none"
     },
     { name: "bot_readiness", status: "passed", code: "none" },
-    { name: "searxng_root", status: "passed", code: "none" },
     { name: "gateway_helper_signed_empty_webhook", status: "passed", code: "none" },
     { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" }
   ];
@@ -1873,9 +1764,6 @@ if (command("containerapp", "job", "execution", "show")) {
       scenario === "job_restore_definition_mismatch" ||
       scenario === "worker_restore_definition_mismatch" ||
       scenario === "job_restore_image_mismatch" ||
-      scenario === "searxng_restore" ||
-      scenario === "searxng_restore_noop" ||
-      scenario === "searxng_restore_contract_mismatch" ||
       scenario === "absent_assurance_jobs"
         ? "Failed"
         : "Succeeded"
@@ -1903,10 +1791,6 @@ if (command("containerapp", "job", "execution", "list")) {
 }
 
 if (command("containerapp", "revision", "copy")) {
-  if (name === "fixture-searxng") {
-    output("fixture-searxng");
-    process.exit(0);
-  }
   if (scenario === "rollback_copy_failure") process.exit(73);
   writeFileSync(path.join(state, "rollback"), "1");
   output("fixture-bot");
@@ -1917,6 +1801,7 @@ if (command("containerapp", "job", "update")) {
   if (!oldImages[name]) process.exit(99);
   if (!args.includes("--yaml")) process.exit(99);
   writeFileSync(path.join(state, "restored-" + name), "1");
+  writeFileSync(path.join(state, "restored-manifest-" + name), readFileSync(value("--yaml"), "utf8"));
   process.exit(0);
 }
 

@@ -19,10 +19,8 @@ import type {
   FunctionRegistry,
   JsonRecord,
   LineSource,
-  ScheduleDomainConfig,
-  WebSearchClient
+  ScheduleDomainConfig
 } from "../types.js";
-import type { PublicPageReader } from "../clients/public-page.js";
 import { extractProviderUsage } from "./provider-usage.js";
 
 export interface EvalMetrics {
@@ -114,8 +112,6 @@ interface FixtureOptions {
   jobs?: InMemoryAgentJobStore;
   state?: HelperAgentState;
   lastErrorStore?: InMemoryLastErrorStore;
-  webSearch?: WebSearchClient;
-  pageReader?: PublicPageReader;
   now?: () => Date;
 }
 
@@ -160,8 +156,6 @@ export function createSyntheticRuntimeFixture(options: FixtureOptions) {
     handlers,
     sessions,
     jobs,
-    webSearch: options.webSearch,
-    pageReader: options.pageReader,
     lastErrorStore: options.lastErrorStore,
     now
   });

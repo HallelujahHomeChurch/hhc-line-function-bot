@@ -40,14 +40,14 @@ A malformed group/direct event without `source.userId` does not receive a helper
 
 `src/helper-agent/agent.ts` is the sole LangChain `createAgent` composition. Helper explicitly selects DeepSeek or OpenAI in its profile; response and summary models use that same provider. It uses official context editing, summarization, model-call, and tool-call middleware plus exact duplicate-tool-call rejection.
 
-`src/helper-agent/state.ts` owns HMAC-derived thread identity, checkpoint access, same-thread serialization, idle metadata, explicit reset, cleanup, and consented sheet-music mode.
+`src/helper-agent/state.ts` owns HMAC-derived thread identity, checkpoint access, same-thread serialization, idle metadata, explicit reset, cleanup,.
 
-| Boundary     |                    Normal | Consented sheet-music research |
-| ------------ | ------------------------: | -----------------------------: |
-| Model calls  |                         4 |                              6 |
-| Tool calls   |                         4 |                              6 |
-| Model output |                800 tokens |                     800 tokens |
-| Tool result  | 2,000 chars or 10 records |      2,000 chars or 10 records |
+| Boundary     |               Normal turn |
+| ------------ | ------------------------: |
+| Model calls  |                         4 |
+| Tool calls   |                         4 |
+| Model output |                800 tokens |
+| Tool result  | 2,000 chars or 10 records |
 
 Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. Cleanup runs every five minutes. `/reset` and `忘記這段對話` delete only the current requester thread. A provider/model/reasoning, persona, memory-policy, safety-policy, or tool-contract change changes the policy key and clears the old checkpoint before another model call.
 
@@ -111,11 +111,11 @@ complete proposal arguments
 
 The finite attachment worker uses its dedicated managed identity to download accepted LINE or external content, validates size/MIME/hash, and publishes only durable `clean` assets. Asset API is the sole owner of malware scanning and signature freshness. The bot process never downloads or scans the binary. Publishing claims and queue acknowledgement keep their existing idempotent fail-closed rules.
 
-SearXNG is only a sheet-music fallback after a proven internal miss and atomic requester consent. After consent the helper can choose research or ordinary tools. A per-turn gate acquired before I/O excludes writes after research begins and research after draft mutation begins. External research messages and generated summaries are discarded before the next turn, restoring the pre-research conversation plus a bounded status; a durable dirty-policy marker forces cleanup after interrupted execution. Search results become invocation-local `web-N` references. The reader accepts only those refs, revalidates public HTTPS DNS/redirects, caps content, strips active markup, and marks page text untrusted. Page instructions cannot change tools, permission, or approval. Only a detected direct PDF/JPEG/PNG candidate can enter the existing import review and Asset-scanned attachment path.
+Public sheet-music research and new external imports are retired. Internal catalog search, Wikipedia and explicit user-saved links remain separate. Legacy external binary work stays supported only until the retirement drain gate; the bot cannot create new external work. Untrusted group-history context still uses the durable dirty-policy marker and cannot authorize draft mutations.
 
 ## Persistence And Observability
 
-Redis owns restart-safe sessions, one-shot postbacks, research consent, webhook idempotency, rate limits, recent errors, and long-running/review result jobs. Without Redis these guarantees are process-local.
+Redis owns restart-safe sessions, one-shot postbacks, webhook idempotency, rate limits, recent errors, and long-running/review result jobs. Without Redis these guarantees are process-local.
 
 PostgreSQL owns access/audit, catalog/schedule/knowledge/explicit-memory data, the official LangGraph checkpoint, and the existing `agent_sdk_threads` TTL metadata. Same-thread helper execution uses a dedicated advisory-lock pool so checkpoint queries do not consume the lock connection.
 
@@ -131,7 +131,6 @@ Operational traces allow only opaque request/thread correlation, source type, pr
 - Review, replay, revision, or durable result: `src/helper-agent/review.ts`, `src/runtime/action-executor.ts`, and helper review/runtime tests.
 - Main Weekly Paper or profile update: `src/runtime/main-runtime.ts` and main runtime/direct-function tests.
 - Attachment intake: `src/transport/line/attachment-intake.ts`; worker failures: `src/tools/run-attachment-worker.ts` and attachment worker tests.
-- Public page validation: `src/clients/public-page.ts` and `src/__tests__/public-page.test.ts`.
 - Need sanitized turn evidence: admin direct-chat `/last-agent-turns`, `/last-errors`, `/last-routes`, and `/diag`.
 
 ## Verification

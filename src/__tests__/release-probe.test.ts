@@ -11,7 +11,6 @@ const mainEmptyWebhookSignature = createHmac("sha256", "main-channel-secret")
   .digest("base64");
 const input = {
   botBaseUrl: "http://bot.internal",
-  searxngBaseUrl: "http://searxng.internal",
   gatewayWebhookUrl: "https://gateway.invalid/api/line/webhook/helper",
   gatewayMainWebhookUrl: "https://gateway.invalid/api/line/webhook/main",
   lineHelperChannelSecret: "test-channel-secret",
@@ -34,19 +33,14 @@ describe("runReleaseProbe", () => {
           database: { postgres: { status: "ok" }, redis: { status: "ok" } }
         });
       }
-      if (String(url) === "http://searxng.internal/") return new Response(null, { status: 200 });
       throw new Error("public webhook must remain untested during maintenance");
     }) as unknown as typeof globalThis.fetch;
 
     const result = await runReleaseProbe(input, dependencies(fetch), "private");
 
     expect(result.status).toBe("passed");
-    expect(result.checks.map((check) => check.name)).toEqual([
-      "bot_health",
-      "bot_readiness",
-      "searxng_root"
-    ]);
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(result.checks.map((check) => check.name)).toEqual(["bot_health", "bot_readiness"]);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("passes the provider-free release gates and returns only allowlisted observations", async () => {
@@ -70,9 +64,6 @@ describe("runReleaseProbe", () => {
           }
         });
       }
-      if (String(url) === "http://searxng.internal/") {
-        return new Response(null, { status: 302, headers: { location: "/search" } });
-      }
       return Response.json({ ok: true, ignored: true });
     }) as unknown as typeof fetch;
 
@@ -83,12 +74,11 @@ describe("runReleaseProbe", () => {
       checks: [
         { name: "bot_health", status: "passed", code: "none" },
         { name: "bot_readiness", status: "passed", code: "none" },
-        { name: "searxng_root", status: "passed", code: "none" },
         { name: "gateway_helper_signed_empty_webhook", status: "passed", code: "none" },
         { name: "gateway_main_signed_empty_webhook", status: "passed", code: "none" }
       ]
     });
-    expect(requests).toHaveLength(5);
+    expect(requests).toHaveLength(4);
     expect(requests.map((request) => request.url)).not.toContainEqual(
       expect.stringMatching(/deepseek|embedding/u)
     );
@@ -166,9 +156,6 @@ describe("runReleaseProbe", () => {
             database: { postgres: { status: "ok" }, redis: { status: "ok" } }
           });
         }
-        if (requestUrl === "http://searxng.internal/") {
-          return new Response(null, { status: 200 });
-        }
         if (requestUrl === webhookUrl) {
           return new Response(null, { status, headers: { location: redirectUrl } });
         }
@@ -215,14 +202,12 @@ describe("runReleaseProbe", () => {
           database: { postgres: { status: "ok" }, redis: { status: "ok" } }
         });
       }
-      if (String(url) === "http://searxng.internal/") return new Response(null, { status: 200 });
       return Response.json({ ok: true, ignored: true });
     }) as unknown as typeof fetch;
 
     const exitCode = await runReleaseProbeCli(
       {
         BOT_BASE_URL: input.botBaseUrl,
-        SEARXNG_BASE_URL: input.searxngBaseUrl,
         GATEWAY_WEBHOOK_URL: input.gatewayWebhookUrl,
         GATEWAY_MAIN_WEBHOOK_URL: input.gatewayMainWebhookUrl,
         LINE_HELPER_CHANNEL_SECRET: input.lineHelperChannelSecret,

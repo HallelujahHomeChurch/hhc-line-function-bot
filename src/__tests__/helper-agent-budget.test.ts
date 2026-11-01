@@ -16,30 +16,10 @@ describe("helper agent budget", () => {
     expect(upstream).toHaveBeenCalledTimes(4);
   });
 
-  it("allows six requests only in consented research mode", async () => {
-    const upstream = vi.fn(async () => new Response("{}", { status: 200 }));
-    const budgetedFetch = createBudgetedFetch(upstream);
-
-    await runWithAgentBudget("sheet_music_research", async () => {
-      for (let index = 0; index < 6; index += 1) await budgetedFetch("https://api.test");
-    });
-
-    expect(upstream).toHaveBeenCalledTimes(6);
-  });
-
   it("stops the fifth normal tool call", async () => {
     await expect(
       runWithAgentBudget("normal", async () => {
         for (let index = 0; index < 4; index += 1) takeToolCall();
-        takeToolCall();
-      })
-    ).rejects.toThrow("agent_tool_budget_exceeded");
-  });
-
-  it("allows six tool calls only in consented research mode", async () => {
-    await expect(
-      runWithAgentBudget("sheet_music_research", async () => {
-        for (let index = 0; index < 6; index += 1) takeToolCall();
         takeToolCall();
       })
     ).rejects.toThrow("agent_tool_budget_exceeded");

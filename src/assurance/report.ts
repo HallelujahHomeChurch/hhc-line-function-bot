@@ -6,7 +6,6 @@ export type AssuranceFailureCode =
   | "none"
   | "bot_health_failed"
   | "bot_readiness_failed"
-  | "searxng_root_failed"
   | "gateway_webhook_failed"
   | "graph_metadata_failed"
   | "notion_query_failed"
@@ -22,7 +21,7 @@ export type AssuranceFailureCode =
   | "malformed_json"
   | "rollback_failed";
 export type AssuranceResourceName =
-  "bot" | "searxng" | "catalog_sync" | "attachment_worker" | "release_probe" | "periodic_assurance";
+  "bot" | "catalog_sync" | "attachment_worker" | "release_probe" | "periodic_assurance";
 export type ReleaseCheckName =
   | "target_revision"
   | "target_traffic"
@@ -30,14 +29,12 @@ export type ReleaseCheckName =
   | "bot_dapr"
   | "account_preflight"
   | "gateway_maintenance"
-  | "searxng_deployment"
   | "release_probe"
   | "catalog_job"
   | "attachment_worker_job"
   | "periodic_assurance_job"
   | "bot_health"
   | "bot_readiness"
-  | "searxng_root"
   | "gateway_helper_signed_empty_webhook"
   | "gateway_main_signed_empty_webhook";
 export type PeriodicCheckName =
@@ -89,7 +86,6 @@ const failureCodes = new Set<AssuranceFailureCode>([
   "none",
   "bot_health_failed",
   "bot_readiness_failed",
-  "searxng_root_failed",
   "gateway_webhook_failed",
   "graph_metadata_failed",
   "notion_query_failed",
@@ -107,7 +103,6 @@ const failureCodes = new Set<AssuranceFailureCode>([
 ]);
 const resources = new Set<AssuranceResourceName>([
   "bot",
-  "searxng",
   "catalog_sync",
   "attachment_worker",
   "release_probe",
@@ -120,14 +115,12 @@ const releaseChecks = new Set<ReleaseCheckName>([
   "bot_dapr",
   "account_preflight",
   "gateway_maintenance",
-  "searxng_deployment",
   "release_probe",
   "catalog_job",
   "attachment_worker_job",
   "periodic_assurance_job",
   "bot_health",
   "bot_readiness",
-  "searxng_root",
   "gateway_helper_signed_empty_webhook",
   "gateway_main_signed_empty_webhook"
 ]);
@@ -217,7 +210,7 @@ export function buildAssuranceReport(input: AssuranceReportInput): AssuranceRepo
   if (
     status === "private_verified_public_pending" &&
     (kind !== "release" ||
-      ["gateway_maintenance", "bot_health", "bot_readiness", "searxng_root"].some(
+      ["gateway_maintenance", "bot_health", "bot_readiness"].some(
         (name) => !reportCheckNames.has(name as AssuranceCheckName)
       ) ||
       reportChecks.some(

@@ -386,9 +386,9 @@ describe("private deployment pending public acceptance", () => {
   function pending(): AssuranceReportInput {
     const input = validReleaseReport();
     input.status = "private_verified_public_pending";
-    input.checks = (
-      ["gateway_maintenance", "bot_health", "bot_readiness", "searxng_root"] as const
-    ).map((name) => ({ name, status: "passed", observedAt: timestamp, code: "none" }));
+    input.checks = (["gateway_maintenance", "bot_health", "bot_readiness"] as const).map(
+      (name) => ({ name, status: "passed", observedAt: timestamp, code: "none" })
+    );
     return input;
   }
   it("records private-only success without claiming signed webhook success", () => {

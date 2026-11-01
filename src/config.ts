@@ -367,12 +367,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       userAgent: env.WIKIMEDIA_USER_AGENT || "HHCLineBot/1.0 (https://alive.org.tw/contact)",
       timeoutMs: readInt(env.WIKIPEDIA_TIMEOUT_MS, 8000)
     },
-    webSearch: env.SEARXNG_BASE_URL?.trim()
-      ? {
-          searxngBaseUrl: env.SEARXNG_BASE_URL.trim(),
-          timeoutMs: readInt(env.SEARXNG_TIMEOUT_MS, 8000)
-        }
-      : undefined,
     redisRecoveryCutoffMs: recoveryCutoff(env),
     redis: env.REDIS_URL?.trim()
       ? {

@@ -89,9 +89,9 @@ When adding or changing an admin action:
 - `src/runtime/main-runtime.ts`: deterministic Weekly Paper and own-profile behavior with zero model or embedding calls.
 - `src/helper-agent/runtime.ts`: helper turn construction, effective capability projection, review resume, authoritative result selection, and bounded error response.
 - `src/helper-agent/agent.ts`: the sole `createAgent` composition and context/call middleware.
-- `src/helper-agent/state.ts`: HMAC thread scope, 30-minute direct and 15-minute group idle TTL, reset, cleanup, research consent, and same-thread serialization.
+- `src/helper-agent/state.ts`: HMAC thread scope, 30-minute direct and 15-minute group idle TTL, reset, cleanup, and same-thread serialization.
 - `src/helper-agent/policy-gateway.ts`: strict arguments, source policy, per-call authorization, bounded typed projection, and tool budget.
-- `src/helper-agent/read-tools.ts` and `sheet-music-tools.ts`: separate authority-specific read tools and consented public research.
+- `src/helper-agent/read-tools.ts`: separate authority-specific read tools; public research is retired.
 - `src/helper-agent/write-tools.ts` and `review.ts`: ordinary SDK draft tools and opaque one-shot server approval state.
 - `src/runtime/action-executor.ts`: live authorization, policy/revision checks, idempotent execution, and durable result persistence.
 - `src/capabilities/catalog.ts`: canonical capability metadata and definitions.
@@ -174,7 +174,7 @@ The retired SDK compatibility wrapper, turn-state engine, generic pending/slot/r
 - Long-running job result retrieval follows the same requester/source rule. A group user must not be able to fetch another user's job result.
 - Soft display-name personalization is for task-state replies such as "what title?" or "please choose"; avoid adding names to final data-heavy function results unless the user asks.
 - Conversational bot-authored self-reference uses first person (`我`), not third-person `小哈`. Keep `小哈` only where it is the product identity (`我是小哈`), a wake word or user-facing example, a registration phrase, or a proper destination name such as `小哈資料庫`.
-- SearXNG is only a sheet-music not-found fallback after requester consent. It must not become a general web browsing function or save results automatically. The helper agent may read only bounded public HTTPS pages referenced by the current search result; every DNS result and redirect is revalidated/pinned, and page text is untrusted. An authorized requester may explicitly select and confirm a detected direct PDF/JPEG/PNG result. The bot queues only the confirmed opaque work ID; the finite attachment worker owns the safe file download, rejects HTML/private addresses/unsafe redirects/authentication, and publishes through the sole Asset-scanned binary path.
+- Public sheet-music web search, page reading and new external-result imports are retired. Do not restore research tools or consent-based execution. Preserve legacy confirmed external work through the Asset-scanned worker until the retirement drain gate passes; retain user-saved `external_link` records.
 
 ## Workflow
 
@@ -221,7 +221,7 @@ Testing map:
 - Runtime configuration and secrets belong in Azure Container Apps/Azure secrets, not in the repository.
 - This repository is public. Never commit real `.env` files, credentials, tokens, sensitive LINE or church user data, private operational exports, or secrets in source, tests, fixtures, documentation, commits, pull requests, issues, or Actions output.
 - Production LINE callback traffic enters through the public `api-gateway`, whose Nginx route invokes Dapr app id `hhc-line-function-bot` at `/v1.0/invoke/hhc-line-function-bot/method/api/line/webhook/{profileName}`. The bot Container App must keep Dapr enabled with `appId=hhc-line-function-bot`, `appPort=3000`, and `appProtocol=http`; do not disable Dapr while this gateway route exists.
-- The consent-only sheet-music SearXNG fallback runs in the separate `hhc-searxng` ACA app. Keep its ingress internal, its pinned image/configuration mount in `aca.searxng.containerapp.yaml`, and let `scripts/deploy-aca.sh` resolve its internal FQDN before updating the bot; never restore an office-network or public SearXNG route.
+- Deployment and release checks must not create or require SearXNG. Remove the existing cloud App only after the retirement plan gates and explicit authorization; if azure-infra needs changes, first follow that repository's required workflow. Do not alter shared infrastructure from this application deployment.
 - Production deployment uses one LINE runtime image and must keep every LINE workload free of retired model/scanner endpoint families, office-network addresses, scanner ports, ClamAV packages, and signature mounts. The attachment worker must use its minimal loader and secret set; do not give it storage keys, queue connection strings, channel secrets, admin IDs, LLM/Notion credentials, or observability keys.
 - Keep the bot's own ingress internal. After any Dapr or ingress change, POST an unsigned JSON body through the public API Gateway webhook path and verify the response comes from the bot as `400 {"ok":false,"error":"missing_line_signature"}`.
 
@@ -231,7 +231,7 @@ Testing map:
 - Conversation UX changes must preserve the shared intro classifier and scoped group reply adapter, including early media-sync prompts. Cover the complete prompt/button/quote journey, not only one reply. See `docs/architecture-context.md` (Conversation handoff presentation).
 - Preserve the four-second slow-operation handoff and “查看結果” button for text and review operations. Results require server-owned public or complete capability provenance and requester/source checks on replay; never infer public status from a missing executedAction.
 - Helper attachment purpose/title collection uses a strict draft tool after explicit opt-in; confirmation uses a version-bound opaque postback and atomic compare-and-set. No second upload or worker path.
-- Consented research and draft mutation are mutually exclusive within a turn. Before future writable turns, remove external research tool/model/summary content; persist a dirty-policy marker before research I/O so crashes cannot retain usable tainted checkpoints.
+- Keep group-history reads and draft mutation mutually exclusive. Preserve the durable dirty-policy marker so interrupted untrusted-history reads cannot leave usable tainted checkpoints.
 - Short-lived requester context may be retained for explicit resumption, but its TTL never grants group speaking eligibility. Prompt free-text follow-ups to quote the Bot or explicitly invoke it; use existing buttons for finite choices.
 
 ## Structured draft contract

@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { InMemoryAgentJobStore } from "../agent/jobs.js";
 import { InMemoryAgentMemoryStore } from "../agent/memory-store.js";
-import { matchTextContinuation } from "../transport/line/webhook-routes.js";
-import { InMemoryAttachmentScanQueue } from "../attachments/scan-queue.js";
-import { InMemoryAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { InMemoryCatalogStore } from "../catalog/store.js";
 import {
   createFindPopSheetMusicHandler,
@@ -12,9 +8,7 @@ import {
   createFindPopSheetMusicTextMessageHandler
 } from "../functions/find-pop-sheet-music.js";
 import { InMemorySessionStore } from "../state/session-store.js";
-import { createTestFunctionRegistries } from "../testing/create-test-function-registries.js";
 import type {
-  AppConfig,
   BotProfileConfig,
   FunctionHandlerContext,
   GraphDriveClient,
@@ -35,34 +29,6 @@ function profile(): BotProfileConfig {
     acceptMention: true,
     enabledFunctions: ["find_sheet_music"],
     permissionRequiredFunctions: []
-  };
-}
-
-function registryConfig(): AppConfig {
-  return {
-    serviceName: "hhc-line-function-bot",
-    host: "127.0.0.1",
-    port: 3000,
-    timeZone: "Asia/Taipei",
-    healthPath: "/healthz",
-    maxBodyBytes: 32_768,
-    profiles: [{ ...profile(), enabledFunctions: ["find_sheet_music", "save_resource"] }],
-    llm: {
-      deepseekBaseUrl: "https://api.deepseek.com",
-      deepseekModel: "deepseek-v4-flash",
-      deepseekTimeoutMs: 8_000
-    },
-    graph: {
-      tenantId: "tenant",
-      clientId: "client",
-      clientSecret: "secret",
-      driveId: "drive-1",
-      sheetMusicAllowedExtensions: [".pdf"],
-      allowedExtensions: [".pptx"],
-      defaultIncludePdf: false,
-      linkType: "view",
-      linkScope: "anonymous"
-    }
   };
 }
 
@@ -90,7 +56,7 @@ async function currentItemById(_driveId: string, itemId: string) {
 }
 
 describe("find_sheet_music", () => {
-  it("offers requester-scoped external research consent only when research is configured", async () => {
+  it("returns local not-found without creating external research consent", async () => {
     const now = new Date("2026-09-05T10:00:00.000Z");
     const sessions = new InMemorySessionStore({ now: () => now });
     const handler = createFindPopSheetMusicHandler({
@@ -98,7 +64,6 @@ describe("find_sheet_music", () => {
       driveId: "drive-id",
       folderItemId: "folder-id",
       allowedExtensions: [".pdf"],
-      externalResearchEnabled: true,
       sessionStore: sessions,
       now: () => now,
       requestIdFactory: () => "consent-1"
@@ -106,19 +71,12 @@ describe("find_sheet_music", () => {
 
     const result = await handler({ query: "missing song", fileType: "pdf" }, handlerContext());
 
-    expect(result.replyText).toContain("要不要上網找公開搜尋結果");
-    expect(result.quickReplies?.map(({ label }) => label)).toEqual(["上網找", "不用"]);
-    await expect(sessions.get("consent-1")).resolves.toMatchObject({
-      type: "external_search_consent",
-      action: "sheet_music_external_search",
-      requesterUserId: "U1",
-      query: "missing song",
-      arguments: { query: "missing song", fileType: "pdf" },
-      expiresAt: "2026-09-05T10:10:00.000Z"
-    });
+    expect(result.replyText).not.toContain("上網找");
+    expect(result.quickReplies?.map(({ label }) => label)).not.toContain("上網找");
+    await expect(sessions.summary()).resolves.toMatchObject({ total: 0 });
   });
 
-  it("keeps plain not-found when external research or requester identity is unavailable", async () => {
+  it("keeps local not-found with or without requester identity", async () => {
     const sessions = new InMemorySessionStore();
     const graph = { listFolderChildren: vi.fn().mockResolvedValue([]), createSharingLink: vi.fn() };
     const disabled = createFindPopSheetMusicHandler({
@@ -133,7 +91,6 @@ describe("find_sheet_music", () => {
       driveId: "drive-id",
       folderItemId: "folder-id",
       allowedExtensions: [".pdf"],
-      externalResearchEnabled: true,
       sessionStore: sessions
     });
 
@@ -570,7 +527,7 @@ describe("find_sheet_music", () => {
     const result = await handler({ query: "No Such Song" }, handlerContext());
 
     expect(result.ok).toBe(true);
-    expect(result.replyText).toBe("找不到符合的流行歌曲樂譜，請提供更完整英文歌名或歌手。");
+    expect(result.replyText).toBe("找不到符合的流行歌曲樂譜，請提供更完整歌名或歌手。");
     expect(result.quickReplies).toEqual([
       {
         label: "重新查歌譜",
@@ -583,151 +540,6 @@ describe("find_sheet_music", () => {
     ]);
     expect(graph.createSharingLink).not.toHaveBeenCalled();
   });
-
-  it("queues an authorized selected direct result for worker-side download and publication", async () => {
-    const now = new Date("2026-07-04T10:00:00.000Z");
-    const sessionStore = new InMemorySessionStore({ now: () => now });
-    await sessionStore.set({
-      id: "external-import-1",
-      type: "external_sheet_music_import",
-      stage: "selecting",
-      profileName: "main",
-      requesterUserId: "U1",
-      source: handlerContext().event.source,
-      query: "Amazing Grace",
-      items: [{ title: "Amazing Grace.pdf", url: "https://example.org/amazing-grace.pdf" }],
-      expiresAt: "2026-07-04T10:10:00.000Z"
-    });
-    const catalog = new InMemoryCatalogStore();
-    await catalog.upsertSource({
-      profileName: "main",
-      sourceKey: "pop_sheet_music",
-      adapterType: "onedrive",
-      domain: "sheet_music",
-      defaultItemKind: "pop_sheet",
-      rootLocation: { driveId: "drive-1", folderItemId: "pop-root" },
-      enabled: true,
-      syncPolicy: { mode: "scheduled", intervalMinutes: 15 },
-      capabilities: { read: ["main"], write: ["main:pop_sheet:write"] }
-    });
-    const agentJobStore = new InMemoryAgentJobStore({ now: () => now });
-    const scanWorkStore = new InMemoryAttachmentScanWorkStore({
-      jobStore: agentJobStore,
-      now: () => now
-    });
-    const scanQueue = new InMemoryAttachmentScanQueue();
-    const graph = { listFolderChildren: vi.fn(), createSharingLink: vi.fn() };
-    const registries = createTestFunctionRegistries(registryConfig(), {
-      graph,
-      sessionStore,
-      catalog,
-      agentJobStore,
-      attachmentScanWorkStore: scanWorkStore,
-      attachmentScanQueue: scanQueue,
-      now: () => now
-    });
-    expect(registries.textMessages.external_sheet_music_import?.capability).toBe("save_resource");
-    const effectiveProfile = profile();
-    const authorizeFunctions = vi.fn().mockResolvedValue(["save_resource"]);
-    const handleTurn = async (text: string) => {
-      const event = { ...handlerContext().event, message: { type: "text" as const, text } };
-      const matched = await matchTextContinuation(
-        event,
-        effectiveProfile,
-        registries.textMessages,
-        undefined,
-        false,
-        authorizeFunctions,
-        ["find_sheet_music", "save_resource"]
-      );
-      expect(matched?.profile.enabledFunctions).toContain("save_resource");
-      return matched?.handler.handle(
-        { text },
-        { profile: matched.profile, event, requesterIsAdmin: true }
-      );
-    };
-
-    await expect(handleTurn("1")).resolves.toMatchObject({
-      replyText: expect.stringContaining("流行歌譜還是詩歌歌譜")
-    });
-    await expect(handleTurn("流行歌譜")).resolves.toMatchObject({
-      replyText: expect.stringContaining("教會可以保存並使用")
-    });
-    const result = await handleTurn("保存");
-
-    expect(result?.replyText).toContain("查看結果");
-    expect(authorizeFunctions).toHaveBeenCalledTimes(3);
-    expect(authorizeFunctions).toHaveBeenNthCalledWith(1, ["save_resource"]);
-    expect(scanQueue.workIds).toHaveLength(1);
-    const work = await scanWorkStore.claim(scanQueue.workIds[0]!);
-    expect(work).toMatchObject({
-      externalUrl: "https://example.org/amazing-grace.pdf",
-      expiresAt: "2026-07-04T11:30:00.000Z",
-      target: {
-        sourceKey: "pop_sheet_music",
-        itemKind: "pop_sheet",
-        domain: "sheet_music",
-        title: "Amazing Grace.pdf"
-      }
-    });
-    await expect(
-      sessionStore.findExternalSheetMusicImport({
-        profileName: "main",
-        source: handlerContext().event.source,
-        requesterUserId: "U1"
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it.each([
-    { label: "non-admin", authorize: vi.fn().mockResolvedValue([]) },
-    { label: "Account unavailable", authorize: vi.fn().mockRejectedValue(new Error("offline")) }
-  ])(
-    "preserves an external import selection when $label cannot save_resource",
-    async ({ authorize }) => {
-      const now = new Date("2026-07-04T10:00:00.000Z");
-      const sessionStore = new InMemorySessionStore({ now: () => now });
-      const session = {
-        id: "external-import-denied",
-        type: "external_sheet_music_import" as const,
-        stage: "selecting" as const,
-        profileName: "main",
-        requesterUserId: "U1",
-        source: handlerContext().event.source,
-        query: "Amazing Grace",
-        items: [{ title: "Amazing Grace.pdf", url: "https://example.org/amazing-grace.pdf" }],
-        expiresAt: "2026-07-04T10:10:00.000Z"
-      };
-      await sessionStore.set(session);
-      const registries = createTestFunctionRegistries(registryConfig(), {
-        graph: { listFolderChildren: vi.fn(), createSharingLink: vi.fn() },
-        sessionStore,
-        now: () => now
-      });
-      const event = { ...handlerContext().event, message: { type: "text" as const, text: "1" } };
-
-      const matched = await matchTextContinuation(
-        event,
-        profile(),
-        registries.textMessages,
-        undefined,
-        false,
-        authorize,
-        ["find_sheet_music", "save_resource"]
-      );
-
-      expect(matched).toBeUndefined();
-      expect(authorize).toHaveBeenCalledOnce();
-      expect(authorize).toHaveBeenCalledWith(["save_resource"]);
-      await expect(
-        sessionStore.findExternalSheetMusicImport({
-          profileName: "main",
-          source: event.source,
-          requesterUserId: "U1"
-        })
-      ).resolves.toEqual(session);
-    }
-  );
 
   it("stores multiple candidates in a generic selection session", async () => {
     const graph: GraphDriveClient = {

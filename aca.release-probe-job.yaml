@@ -29,8 +29,6 @@ properties:
         env:
           - name: BOT_BASE_URL
             value: PLACEHOLDER_BOT_BASE_URL
-          - name: SEARXNG_BASE_URL
-            value: PLACEHOLDER_SEARXNG_BASE_URL
           - name: GATEWAY_WEBHOOK_URL
             value: PLACEHOLDER_GATEWAY_WEBHOOK_URL
           - name: GATEWAY_MAIN_WEBHOOK_URL

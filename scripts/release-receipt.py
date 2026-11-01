@@ -39,13 +39,13 @@ def state_fence(revision):
 
 
 def validate(value):
-    require(set(value) == {"version", "commit", "runId", "deploymentAttempt", "revision", "image", "searxngImage", "attachmentExecution", "startedAt", "publicState", "redisFenceSha256", "knownGoodRevision", "knownGoodImage"})
-    require(value["version"] == 1 and value["commit"] == os.environ["GITHUB_SHA"] and re.fullmatch(r"[a-f0-9]{40}", value["commit"]))
+    require(set(value) == {"version", "commit", "runId", "deploymentAttempt", "revision", "image", "attachmentExecution", "startedAt", "publicState", "redisFenceSha256", "knownGoodRevision", "knownGoodImage"})
+    require(value["version"] == 2 and value["commit"] == os.environ["GITHUB_SHA"] and re.fullmatch(r"[a-f0-9]{40}", value["commit"]))
     require(value["runId"] == os.environ["GITHUB_RUN_ID"] and value["runId"].isdigit())
     require(type(value["deploymentAttempt"]) is int and 1 <= value["deploymentAttempt"] <= int(os.environ["GITHUB_RUN_ATTEMPT"]))
     for key in ("revision", "attachmentExecution", "knownGoodRevision"):
         require(isinstance(value[key], str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,200}", value[key]))
-    for key in ("image", "knownGoodImage", "searxngImage"):
+    for key in ("image", "knownGoodImage"):
         require(isinstance(value[key], str) and re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", value[key]))
     require(value["publicState"] in {"accepted", "pending"})
     require(isinstance(value["startedAt"], str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", value["startedAt"]))
@@ -60,7 +60,7 @@ def main():
         fence, _ = state_fence(os.environ["RELEASE_TARGET_REVISION"])
         report = json.loads(Path(os.environ["RELEASE_REPORT_PATH"]).read_text())
         require(report["status"] in {"passed", "private_verified_public_pending"} and report["failureCode"] == "none")
-        value = validate({"version": 1, "commit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"], "deploymentAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "revision": os.environ["RELEASE_TARGET_REVISION"], "image": os.environ["RELEASE_TARGET_IMAGE"], "searxngImage": os.environ["RELEASE_EXPECTED_SEARXNG_IMAGE"], "attachmentExecution": os.environ["RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME"], "startedAt": os.environ["RELEASE_STARTED_AT"], "publicState": "pending" if report["status"] == "private_verified_public_pending" else "accepted", "redisFenceSha256": fence, "knownGoodRevision": os.environ["RELEASE_KNOWN_GOOD_REVISION"], "knownGoodImage": os.environ["RELEASE_KNOWN_GOOD_IMAGE"]})
+        value = validate({"version": 2, "commit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"], "deploymentAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "revision": os.environ["RELEASE_TARGET_REVISION"], "image": os.environ["RELEASE_TARGET_IMAGE"], "attachmentExecution": os.environ["RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME"], "startedAt": os.environ["RELEASE_STARTED_AT"], "publicState": "pending" if report["status"] == "private_verified_public_pending" else "accepted", "redisFenceSha256": fence, "knownGoodRevision": os.environ["RELEASE_KNOWN_GOOD_REVISION"], "knownGoodImage": os.environ["RELEASE_KNOWN_GOOD_IMAGE"]})
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value, separators=(",", ":")) + "\n")
     elif action == "read":
@@ -69,7 +69,7 @@ def main():
         require(value["deploymentAttempt"] == int(os.environ["DEPLOYMENT_ATTEMPT"]))
         fence, selected = state_fence(value["revision"])
         require(fence == value["redisFenceSha256"])
-        mapping = {"RELEASE_TARGET_REVISION": "revision", "RELEASE_TARGET_IMAGE": "image", "RELEASE_TARGET_SCAN_IMAGE": "image", "RELEASE_TARGET_ATTACHMENT_IMAGE": "image", "RELEASE_TARGET_ATTACHMENT_APP_IMAGE": "image", "RELEASE_EXPECTED_SEARXNG_IMAGE": "searxngImage", "RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME": "attachmentExecution", "RELEASE_STARTED_AT": "startedAt", "RELEASE_KNOWN_GOOD_REVISION": "knownGoodRevision", "RELEASE_KNOWN_GOOD_IMAGE": "knownGoodImage", "DEPLOYED_PUBLIC_STATE": "publicState"}
+        mapping = {"RELEASE_TARGET_REVISION": "revision", "RELEASE_TARGET_IMAGE": "image", "RELEASE_TARGET_SCAN_IMAGE": "image", "RELEASE_TARGET_ATTACHMENT_IMAGE": "image", "RELEASE_TARGET_ATTACHMENT_APP_IMAGE": "image", "RELEASE_ATTACHMENT_BOOTSTRAP_EXECUTION_NAME": "attachmentExecution", "RELEASE_STARTED_AT": "startedAt", "RELEASE_KNOWN_GOOD_REVISION": "knownGoodRevision", "RELEASE_KNOWN_GOOD_IMAGE": "knownGoodImage", "DEPLOYED_PUBLIC_STATE": "publicState"}
         for key, field in mapping.items():
             print(key + "=" + str(value[field]))
         print("RELEASE_RECOVERY_ENV_JSON=" + json.dumps(selected, separators=(",", ":")))

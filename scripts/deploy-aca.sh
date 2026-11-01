@@ -42,7 +42,6 @@ else
   require_gateway_mode off
 fi
 
-: "${SEARXNG_CONTAINER_APP_NAME:=hhc-searxng}"
 : "${PUBLIC_WEB_ORIGIN:=https://www.alive.org.tw}"
 : "${CONTAINER_APP_JOB_IDENTITY_NAME:=hhc-line-bot-jobs}"
 : "${ATTACHMENT_JOB_IDENTITY_NAME:=hhc-line-bot-attachment}"
@@ -62,15 +61,12 @@ fi
 echo "Deploying ${image_ref} to ${CONTAINER_APP_NAME}"
 
 bot_manifest_template="${script_dir}/../aca.containerapp.yaml"
-searxng_manifest_template="${script_dir}/../aca.searxng.containerapp.yaml"
-searxng_settings_template="${script_dir}/../infra/searxng/settings.yml"
 catalog_job_manifest_template="${script_dir}/../aca.catalog-sync-job.yaml"
 release_probe_job_manifest_template="${script_dir}/../aca.release-probe-job.yaml"
 periodic_assurance_job_manifest_template="${script_dir}/../aca.periodic-assurance-job.yaml"
 attachment_worker_job_manifest_template="${script_dir}/../aca.attachment-worker-job.yaml"
 attachment_worker_app_manifest_template="${script_dir}/../aca.attachment-worker-app.yaml"
 bot_manifest="$(mktemp)"
-searxng_manifest="$(mktemp)"
 catalog_job_manifest="$(mktemp)"
 release_probe_job_manifest="$(mktemp)"
 periodic_assurance_job_manifest="$(mktemp)"
@@ -78,7 +74,6 @@ attachment_worker_job_manifest="$(mktemp)"
 attachment_worker_app_manifest="$(mktemp)"
 RELEASE_CLEANUP_FILES=(
   "${bot_manifest}"
-  "${searxng_manifest}"
   "${catalog_job_manifest}"
   "${release_probe_job_manifest}"
   "${periodic_assurance_job_manifest}"
@@ -87,8 +82,6 @@ RELEASE_CLEANUP_FILES=(
 )
 
 if [[ ! -f "${bot_manifest_template}" \
-  || ! -f "${searxng_manifest_template}" \
-  || ! -f "${searxng_settings_template}" \
   || ! -f "${catalog_job_manifest_template}" \
   || ! -f "${release_probe_job_manifest_template}" \
   || ! -f "${periodic_assurance_job_manifest_template}" \
@@ -463,79 +456,12 @@ az containerapp secret set \
   --only-show-errors \
   --output none
 
-searxng_secret_key="$(openssl rand -hex 32)"
-SEARXNG_MANIFEST_TEMPLATE="${searxng_manifest_template}" \
-SEARXNG_SETTINGS_TEMPLATE="${searxng_settings_template}" \
-SEARXNG_MANIFEST="${searxng_manifest}" \
-MANAGED_ENVIRONMENT_ID="${managed_environment_id}" \
-SEARXNG_CONTAINER_APP_NAME="${SEARXNG_CONTAINER_APP_NAME}" \
-CONTAINER_APP_LOCATION="${container_app_location}" \
-SEARXNG_SECRET_KEY="${searxng_secret_key}" \
-python3 - <<'PY'
-from pathlib import Path
-import os
-
-manifest = Path(os.environ["SEARXNG_MANIFEST_TEMPLATE"]).read_text()
-settings = Path(os.environ["SEARXNG_SETTINGS_TEMPLATE"]).read_text()
-settings = settings.replace("PLACEHOLDER_SEARXNG_SECRET_KEY", os.environ["SEARXNG_SECRET_KEY"])
-if "PLACEHOLDER_SEARXNG_SECRET_KEY" in settings:
-    raise SystemExit("SearXNG settings secret placeholder was not replaced")
-
-rendered_settings = "\n".join(f"          {line}" for line in settings.splitlines())
-manifest = manifest.replace("PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID", os.environ["MANAGED_ENVIRONMENT_ID"])
-manifest = manifest.replace("PLACEHOLDER_AZURE_REGION", os.environ["CONTAINER_APP_LOCATION"])
-manifest = manifest.replace("name: hhc-searxng", f"name: {os.environ['SEARXNG_CONTAINER_APP_NAME']}", 1)
-manifest = manifest.replace("          PLACEHOLDER_SEARXNG_SETTINGS", rendered_settings)
-if "PLACEHOLDER_SEARXNG_SETTINGS" in manifest:
-    raise SystemExit("SearXNG settings placeholder was not replaced")
-
-Path(os.environ["SEARXNG_MANIFEST"]).write_text(manifest)
-PY
-unset searxng_secret_key
-RELEASE_EXPECTED_SEARXNG_IMAGE="$(
-  awk '$1 == "image:" {print $2; exit}' "${searxng_manifest}"
-)"
-if [[ -z "${RELEASE_EXPECTED_SEARXNG_IMAGE}" ]]; then
-  set_release_failure preflight_failed
-  echo "Could not resolve the expected SearXNG image from its rendered manifest" >&2
-  exit 1
-fi
-
-searxng_exists="$(release_containerapp_exists "${SEARXNG_CONTAINER_APP_NAME}")"
-if [[ "${searxng_exists}" == "true" ]]; then
-  mark_release_searxng_mutated
-  az containerapp update --yaml "${searxng_manifest}" \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${SEARXNG_CONTAINER_APP_NAME}" \
-    --only-show-errors \
-    --output none
-else
-  mark_release_searxng_mutated
-  az containerapp create --yaml "${searxng_manifest}" \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${SEARXNG_CONTAINER_APP_NAME}" \
-    --only-show-errors \
-    --output none
-fi
-
-searxng_fqdn="$(release_containerapp_read show \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${SEARXNG_CONTAINER_APP_NAME}" \
-  --query "properties.configuration.ingress.fqdn" \
-  --output tsv)"
-if [[ -z "${searxng_fqdn}" ]]; then
-  echo "Could not resolve the internal SearXNG FQDN"
-  exit 1
-fi
-searxng_base_url="https://${searxng_fqdn}"
-
 BOT_MANIFEST_TEMPLATE="${bot_manifest_template}" \
 BOT_MANIFEST="${bot_manifest}" \
 CONTAINER_APP_NAME="${CONTAINER_APP_NAME}" \
 MANAGED_ENVIRONMENT_ID="${managed_environment_id}" \
 CONTAINER_APP_LOCATION="${container_app_location}" \
 BOT_IMAGE="${image_ref}" \
-SEARXNG_BASE_URL="${searxng_base_url}" \
 AZURE_OPENAI_EMBEDDING_ENDPOINT="${azure_openai_embedding_endpoint}" \
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}" \
 AZURE_OPENAI_EMBEDDING_API_VERSION="${AZURE_OPENAI_EMBEDDING_API_VERSION}" \
@@ -583,7 +509,6 @@ substitutions = {
     "PLACEHOLDER_CONTAINER_APP_ENVIRONMENT_ID": os.environ["MANAGED_ENVIRONMENT_ID"],
     "PLACEHOLDER_AZURE_REGION": os.environ["CONTAINER_APP_LOCATION"],
     "PLACEHOLDER_BOT_IMAGE": os.environ["BOT_IMAGE"],
-    "PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"],
     "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_ENDPOINT": os.environ[
         "AZURE_OPENAI_EMBEDDING_ENDPOINT"
     ],
@@ -719,7 +644,6 @@ render_job_manifest() {
   BOT_ENV_JSON="${bot_env_json}" \
   ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING="${attachment_scan_queue_connection_string}" \
   BOT_BASE_URL="${bot_base_url}" \
-  SEARXNG_BASE_URL="${searxng_base_url}" \
   GATEWAY_WEBHOOK_URL="${gateway_webhook_url}" \
   GATEWAY_MAIN_WEBHOOK_URL="${gateway_main_webhook_url}" \
   python3 - <<'PY'
@@ -802,13 +726,11 @@ substitutions = {
         "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING"
     ],
     "PLACEHOLDER_BOT_BASE_URL": os.environ["BOT_BASE_URL"],
-    "PLACEHOLDER_SEARXNG_BASE_URL": os.environ["SEARXNG_BASE_URL"],
     "PLACEHOLDER_GATEWAY_WEBHOOK_URL": os.environ["GATEWAY_WEBHOOK_URL"],
     "PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL": os.environ["GATEWAY_MAIN_WEBHOOK_URL"],
 }
 strict_assurance_placeholders = {
     "PLACEHOLDER_BOT_BASE_URL",
-    "PLACEHOLDER_SEARXNG_BASE_URL",
     "PLACEHOLDER_GATEWAY_WEBHOOK_URL",
     "PLACEHOLDER_GATEWAY_MAIN_WEBHOOK_URL",
 }

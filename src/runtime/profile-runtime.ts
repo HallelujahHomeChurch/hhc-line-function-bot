@@ -29,9 +29,6 @@ export interface ProfileActionReviewResult {
   freshExecution: boolean;
 }
 
-export type ProfileSheetMusicResearchOutcome =
-  { kind: "accepted" } | { kind: "handled"; result: FunctionExecutionResult };
-
 export interface ProfileRuntime {
   recordDeliveredReply?(input: {
     scope: QuoteScope;
@@ -41,9 +38,7 @@ export interface ProfileRuntime {
   readonly observesCompletion?: boolean;
   clearContext?(scope: QuoteScope): Promise<void>;
   recordExternalResult?(input: ProfileTurnInput, result: FunctionExecutionResult): Promise<void>;
-  acceptSheetMusicResearch?(
-    input: ProfileTurnInput
-  ): Promise<ProfileSheetMusicResearchOutcome | undefined>;
+  handleRetiredSheetMusic?(input: ProfileTurnInput): Promise<FunctionExecutionResult | undefined>;
   handleTextTurn(input: ProfileTurnInput): Promise<FunctionExecutionResult | undefined>;
   handleActionReview?(
     input: ProfileActionReviewInput
@@ -65,10 +60,9 @@ export function createProfileRuntimeDispatcher(
         runtimes[input.profile.name]?.recordExternalResult?.(input, result) ?? Promise.resolve()
       );
     },
-    acceptSheetMusicResearch(input) {
+    handleRetiredSheetMusic(input) {
       return (
-        runtimes[input.profile.name]?.acceptSheetMusicResearch?.(input) ??
-        Promise.resolve(undefined)
+        runtimes[input.profile.name]?.handleRetiredSheetMusic?.(input) ?? Promise.resolve(undefined)
       );
     },
     handleTextTurn(input) {

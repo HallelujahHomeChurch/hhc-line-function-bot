@@ -76,7 +76,7 @@ scanning are production ACA workloads, not workstation services.
 
 In production, the public API Gateway forwards those webhook paths through Dapr service invocation to app id `hhc-line-function-bot`. The bot Container App therefore keeps Dapr enabled on HTTP app port 3000 while its own ingress remains internal.
 
-The consent-only sheet-music fallback uses the separate `hhc-searxng` Container App with `0.25` CPU and `0.5Gi` memory. Its ingress is internal-only; the release script deploys it before the bot and supplies `SEARXNG_BASE_URL` from its ACA internal FQDN. Do not configure production with an office-network or public SearXNG endpoint.
+Public web sheet-music research is retired. Sheet-music lookup searches the authorized internal catalogs only. Legacy confirmed external imports retain worker compatibility until the retirement drain gate passes; deployment no longer creates or checks SearXNG. Existing cloud resources are removed separately through the approved infrastructure workflow.
 
 Health and readiness:
 
@@ -199,9 +199,9 @@ Helper side effects are proposal tools. The SDK agent prepares a validated scope
 
 Pasted schedules can contain several months, emoji, reminders and unrelated announcements. The helper organizes structured `entries` while retaining `content` for comparison. Schedule tool identifiers come from the current profile registry; assignee names do not select the domain. The full preview includes every included month, and one approval publishes those monthly records atomically. Other months remain unchanged. Recoverable preparation results allow another authorized attempt within the existing turn budget. Exact structured draft edits preserve untouched entries; invalid edits revoke the old approval without discarding the draft.
 
-Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. In groups, use `/reset`, quote the Bot with `忘記這段對話`, or explicitly say `小哈，忘記這段對話`. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same selected provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls; consented sheet-music research allows six of each.
+Thread IDs are HMAC-derived from profile, LINE source, and requester. Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. `/reset` and `忘記這段對話` delete only that requester's current checkpoint. In groups, use `/reset`, quote the Bot with `忘記這段對話`, or explicitly say `小哈，忘記這段對話`. Each new turn invalidates historical tool payloads and re-queries current facts. At about 8K input tokens old tool outputs clear while retaining the two newest; at about 16K the same selected provider creates a bounded summary while retaining six recent messages; at 24K after reduction the run stops and asks the requester to narrow or reset. Normal turns allow four model and four tool calls.
 
-A local sheet-music miss may create requester-scoped consent. Only after atomic consent does the helper receive `search_sheet_music_web` and `read_sheet_music_page`; a per-turn gate separates external research from draft mutation, and research-derived messages are removed before later turns. Search returns opaque invocation-local refs, the reader treats bounded public page text as untrusted, and only detected direct PDF/JPEG/PNG candidates can enter the existing import review. The agent and bot process never download the binary. `src/transport/line/attachment-intake.ts`, the durable outbox, finite worker, Asset scan, clean-only publication, and catalog upsert remain the sole attachment path.
+An internal sheet-music miss returns not-found with local query refinements. No public search, page-reading or external-import proposal tool is exposed. Requester-scoped legacy consent/import sessions can only be terminated; they never enqueue new work or grant permission. Normal turns allow four model and four tool calls.
 
 `pnpm eval:agent`, `pnpm eval:sdk-agent`, and `pnpm eval:kernel` run the same 19-case deterministic fake-model evaluator. `pnpm eval:sdk-agent --live` is the manual ten-case bounded DeepSeek suite and prints only aggregate case/call/token/latency fields. `pnpm eval:kernel:integration` owns disposable Redis/PostgreSQL dependencies and verifies checkpoint restart, expiry, and cleanup.
 
@@ -215,7 +215,7 @@ Each profile may declare `schedulePolicy.meetingReferences` with central Meeting
 
 Redis and PostgreSQL have explicit ownership:
 
-- Redis stores restart-safe requester-scoped sessions, one-shot postbacks, webhook deduplication, research consent, recent errors, rate limits, and long-running/durable review results. Without Redis these guarantees are process-local.
+- Redis stores restart-safe requester-scoped sessions, one-shot postbacks, webhook deduplication, research legacy session expiry, recent errors, rate limits, and long-running/durable review results. Without Redis these guarantees are process-local.
 - PostgreSQL stores access/audit, catalog/schedule/knowledge/memory data, the official LangGraph checkpoint, and `agent_sdk_threads` TTL metadata. Helper same-thread execution uses a dedicated PostgreSQL advisory-lock pool. Each shared runtime pool keeps max2 with a two-second connection/checkout timeout; finite job owners may override it with their remaining deadline. This bounds pool queueing, not SQL execution or time spent holding the thread lock.
 - Helper checkpoint idle TTL is fixed at 30 minutes for direct chat and 15 minutes for group/room. Cleanup runs every five minutes. Policy/tool-contract changes and explicit reset delete the checkpoint before reuse.
 - Long-running and reviewed action results are keyed by opaque ID and can be read only by the same profile, LINE source, and requester.
@@ -293,7 +293,7 @@ still have no proven overall bound and cannot be assumed to contribute zero conn
 
 ## Agent Runtime And Memory
 
-`src/helper-agent/runtime.ts` is the only helper runtime. It projects the effective capabilities before entering `src/helper-agent/state.ts`, then builds authority-specific reads, proposal-only writes, or the isolated consented sheet-music research tools. Every protected tool call asks Account again; checkpoint content never grants permission or source freshness.
+`src/helper-agent/runtime.ts` is the only helper runtime. It projects the effective capabilities before entering `src/helper-agent/state.ts`, then builds authority-specific reads, proposal-only writes, with public sheet-music research retired. Every protected tool call asks Account again; checkpoint content never grants permission or source freshness.
 
 The checked-in helper `PERSONA.md` and `MEMORY.md` are read-only prompt policy. Runtime conversation stays in short-lived requester checkpoints. Long-term text memory remains explicit, previewed, confirmed, PostgreSQL-backed, and 30-day retained. Group-visible memory requires an authorized requester and explicit group sharing; normal group chat is never ingested or used for named-member profiling.
 
