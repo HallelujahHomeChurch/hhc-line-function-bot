@@ -24,6 +24,7 @@ import {
   type RememberAgentAliasInput,
   type SaveAgentScheduleMemoryInput,
   type SaveAgentTextMemoryInput,
+  type UpdateAgentTextMemoryInput,
   type SearchAgentScheduleEntriesInput,
   type ListAgentScheduleMemoriesInput,
   type SearchAgentResourcesInput,
@@ -255,6 +256,33 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
     return mapTextMemory(result.rows[0]);
   }
 
+  async updateTextMemory(
+    input: UpdateAgentTextMemoryInput
+  ): Promise<AgentTextMemoryRecord | undefined> {
+    const scope = scopeFromSource(input.source);
+    const result = await this.db.query(
+      `update agent_text_memories
+      set content = $7, query_text = null, embedding = $8::vector,
+          revision = revision + 1, updated_at = now(), updated_by = $6
+      where profile_name = $1 and scope_type = $2 and scope_id = $3 and id = $4
+        and deleted_at is null and expires_at > now() and revision = $9
+        and ($5::boolean = true or created_by = $6)
+      returning *`,
+      [
+        input.profileName,
+        scope.type,
+        scope.id,
+        input.id,
+        input.isAdmin ?? false,
+        input.deletedBy ?? null,
+        input.content,
+        input.embedding ? vectorParameter(input.embedding) : null,
+        input.expectedRevision
+      ]
+    );
+    return result.rows[0] ? mapTextMemory(result.rows[0]) : undefined;
+  }
+
   async searchTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]> {
     const scope = scopeFromSource(input.source);
     const limit = Math.max(1, Math.min(input.limit ?? 5, 20));
@@ -317,7 +345,7 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
     limit: number
   ): Promise<AgentTextMemoryEmbeddingCandidate[]> {
     const result = await this.db.query(
-      `select id, title, content
+      `select id, title, content, revision
        from agent_text_memories
        where embedding is null and deleted_at is null and expires_at > now()
        order by created_at asc
@@ -327,17 +355,23 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
     return result.rows.map((row) => ({
       id: String(row.id),
       title: optionalString(row.title),
-      content: String(row.content)
+      content: String(row.content),
+      revision: Number(row.revision ?? 1)
     }));
   }
 
-  async updateTextMemoryEmbedding(id: string, embedding: number[]): Promise<boolean> {
+  async updateTextMemoryEmbedding(
+    id: string,
+    embedding: number[],
+    expectedRevision?: number
+  ): Promise<boolean> {
     const result = await this.db.query(
       `update agent_text_memories
        set embedding = $2::vector
        where id = $1 and embedding is null and deleted_at is null and expires_at > now()
+         and ($3::integer is null or revision = $3)
        returning id`,
-      [id, vectorParameter(embedding)]
+      [id, vectorParameter(embedding), expectedRevision ?? null]
     );
     return result.rows.length > 0;
   }
@@ -614,7 +648,8 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
         and scope_type = $2
         and scope_id = $3
         and id = $4
-        and deleted_at is null
+        and deleted_at is null and expires_at > now()
+        and ($7::integer is null or revision = $7)
         and ($5::boolean = true or created_by = $6)
       returning id
       `,
@@ -624,7 +659,8 @@ export class PostgresAgentMemoryStore implements AgentMemoryStore {
         scope.id,
         input.id,
         input.isAdmin ?? false,
-        input.deletedBy ?? null
+        input.deletedBy ?? null,
+        input.expectedRevision ?? null
       ]
     );
     return result.rows.length > 0;
@@ -777,6 +813,9 @@ function mapResource(row: Record<string, unknown>): AgentResourceRecord {
 function mapTextMemory(row: Record<string, unknown>): AgentTextMemoryRecord {
   return {
     id: String(row.id),
+    revision: Number(row.revision ?? 1),
+    updatedAt: optionalIso(row.updated_at),
+    updatedBy: optionalString(row.updated_by),
     profileName: String(row.profile_name),
     scope: mapScope(row),
     visibility: memoryVisibility(row.visibility),

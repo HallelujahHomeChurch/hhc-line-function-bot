@@ -42,6 +42,10 @@ export interface FunctionExecutionResult {
   resultAuthority?: (
     { kind: "public" } | { kind: "capabilities"; capabilities: CapabilityName[] }
   ) & { expiresAt?: string };
+  /** Server-prepared immutable arguments; never project to the model. */
+  reviewArguments?: JsonRecord;
+  /** Deliver bounded server-owned text without model rewriting. */
+  authoritativeReply?: boolean;
   writePhase?: "preview" | "commit";
   writePreparation?: "needs_input" | "ambiguous" | "denied" | "revision_conflict" | "unavailable";
   quickReplies?: QuickReplyItem[];

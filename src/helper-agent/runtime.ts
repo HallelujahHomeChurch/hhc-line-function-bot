@@ -470,7 +470,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                           clarification: "請先完成這一項預覽，其餘目標留待下一輪。"
                         };
                       proposalStarted = true;
-                      const args = actionExecutor.prepare(toolName, rawArgs, context);
+                      let args = actionExecutor.prepare(toolName, rawArgs, context);
                       await invalidateCurrentApproval();
                       const preview = await actionExecutor.preview(toolName, args, context);
                       if (!preview)
@@ -489,6 +489,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                         }
                         return { status, clarification: safeWriteClarification(preview.replyText) };
                       }
+                      args = preview.reviewArguments ?? args;
                       const review = await createActionReview({
                         contextToken: input.quoteContext?.token,
                         proposal: { toolName, args, operationId: randomUUID() },
@@ -953,6 +954,69 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
       }
     },
 
+    async prepareActionReview(input) {
+      if (!options.sessions || !options.jobs || !input.event.source.userId) return undefined;
+      const profile = await effectiveProfile(input);
+      const threadId = options.state.threadId({
+        profileName: profile.name,
+        source: input.event.source
+      });
+      if (!threadId) return undefined;
+      return options.state.run({
+        threadId,
+        source: input.event.source,
+        policyKey: input.quoteContext
+          ? `${helperPolicyKey(profile)}:${input.quoteContext.token.generation}`
+          : helperPolicyKey(profile),
+        isCurrent: input.quoteContext?.isCurrent,
+        task: async () => {
+          const context: FunctionHandlerContext = {
+            profile,
+            event: input.event,
+            requestId: input.requestId,
+            requesterIsAdmin: input.accountAdministrator?.() || input.requesterIsAdmin
+          };
+          const executor = createActionExecutor({
+            handlers: options.handlers,
+            jobs: options.jobs!,
+            now,
+            authorize: async (name) =>
+              Boolean((await input.authorizeFunctions?.([name]))?.includes(name)),
+            currentPolicyKey: async () => helperPolicyKey(await effectiveProfile(input))
+          });
+          const old = await options.sessions!.findActionReview({
+            profileName: profile.name,
+            source: input.event.source,
+            requesterUserId: input.event.source.userId!
+          });
+          if (old) {
+            await options.sessions!.set({ ...old, approvalExpiresAt: now().toISOString() });
+            await options.jobs!.fail(old.resultJobId, "review_revised");
+          }
+          const preview = await executor.preview(input.toolName, input.arguments, context);
+          if (!preview || preview.writePhase !== "preview") return preview;
+          const review = await createActionReview({
+            contextToken: input.quoteContext?.token,
+            proposal: {
+              toolName: input.toolName,
+              args: preview.reviewArguments ?? input.arguments,
+              operationId: randomUUID()
+            },
+            sessions: options.sessions!,
+            jobs: options.jobs!,
+            profileName: profile.name,
+            source: input.event.source,
+            requesterUserId: input.event.source.userId!,
+            threadId,
+            policyKey: helperPolicyKey(profile),
+            now: now(),
+            preview: async () => preview.replyText
+          });
+          return review.status === "review" ? review.result : undefined;
+        }
+      });
+    },
+
     async handleActionReview(input) {
       if (
         input.profile.name !== "helper" ||
@@ -1125,7 +1189,7 @@ export function helperPolicyKey(profile: BotProfileConfig): string {
           : {}),
         persona: profile.agent?.personaPrompt,
         memoryPolicy: profile.agent?.memoryPolicyPrompt,
-        contract: "helper-sheet-research-retired-v9",
+        contract: "helper-notes-revision-v10",
         scheduleDomains: profile.schedulePolicy?.domains?.map((domain) => ({
           key: domain.key,
           revision: domain.revision,
@@ -1170,6 +1234,7 @@ function isResetMessage(text: string): boolean {
 
 function isAuthoritativeResult(result: FunctionExecutionResult): boolean {
   return Boolean(
+    result.authoritativeReply ||
     result.writePhase ||
     result.quickReplies?.length ||
     result.agentResource ||

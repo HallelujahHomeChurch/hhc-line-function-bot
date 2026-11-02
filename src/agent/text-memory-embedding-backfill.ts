@@ -31,7 +31,8 @@ export async function backfillAgentTextMemoryEmbeddings(input: {
     const vector = vectors[index];
     if (!vector?.length) continue;
     try {
-      if (await input.store.updateTextMemoryEmbedding(candidate.id, vector)) updated += 1;
+      if (await input.store.updateTextMemoryEmbedding(candidate.id, vector, candidate.revision))
+        updated += 1;
     } catch {
       // Continue the bounded batch without exposing memory content.
     }

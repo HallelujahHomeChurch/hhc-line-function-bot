@@ -8,6 +8,7 @@ export interface MemoryCommandHandler {
     text: string;
     context: FunctionHandlerContext;
     isAdmin: boolean;
+    previewDeletion?: (id: string) => Promise<FunctionExecutionResult | undefined>;
   }): Promise<FunctionExecutionResult | undefined>;
 }
 
@@ -48,15 +49,20 @@ export function createMemoryCommandHandler(options: {
       }
       const id = parsed.args[0];
       if (!id) return { ok: true, replyText: "Usage: /forget-memory <id>" };
-      const removed = await options.memoryStore.forgetMemory({
+      const [target] = await options.memoryStore.searchTextMemories({
         profileName: input.context.profile.name,
         source: input.context.event.source,
-        id,
-        deletedBy: input.context.event.source.userId,
-        isAdmin: input.isAdmin
+        requesterUserId: input.context.event.source.userId,
+        memoryId: id,
+        limit: 1
       });
-      if (removed) await recordMemoryAudit(options.accessStore, input);
-      return { ok: true, replyText: removed ? "已移除這段記憶。" : "找不到這段記憶。" };
+      if (!target) return { ok: true, replyText: "找不到這段記憶。" };
+      return (
+        (await input.previewDeletion?.(id)) ?? {
+          ok: false,
+          replyText: "目前無法建立刪除預覽，請稍後再試；尚未刪除。"
+        }
+      );
     }
   };
 }
@@ -82,18 +88,4 @@ function parseMemoryCommand(text: string): { command: string; args: string[] } |
 function formatTextMemory(memory: { id: string; title?: string; content: string }): string {
   const title = memory.title?.trim() || memory.content.slice(0, 16);
   return `- ${title} (${memory.id})\n${memory.content}`;
-}
-
-async function recordMemoryAudit(
-  accessStore: AccessStore | undefined,
-  input: Parameters<MemoryCommandHandler["handleCommand"]>[0]
-): Promise<void> {
-  const actorUserId = input.context.event.source.userId;
-  if (!accessStore || !actorUserId) return;
-  await accessStore.recordAudit({
-    profileName: input.context.profile.name,
-    actorUserId,
-    action: "memory.delete",
-    targetType: "agent_memory"
-  });
 }

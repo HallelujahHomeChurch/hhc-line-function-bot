@@ -624,14 +624,17 @@ describe("agent memory", () => {
         context: context(),
         isAdmin: false
       })
-    ).resolves.toMatchObject({ replyText: "已移除這段記憶。" });
+    ).resolves.toMatchObject({
+      ok: false,
+      replyText: "目前無法建立刪除預覽，請稍後再試；尚未刪除。"
+    });
     await expect(
       store.listTextMemories({
         profileName: "helper",
         source: context().event.source,
         requesterUserId: "U1"
       })
-    ).resolves.toEqual([]);
+    ).resolves.toHaveLength(1);
   });
 
   it("maps external link resources from the Postgres memory store", async () => {

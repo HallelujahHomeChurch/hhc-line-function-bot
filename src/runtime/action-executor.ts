@@ -2,6 +2,7 @@ import type { CapabilityName } from "../capabilities/names.js";
 import { createHash } from "node:crypto";
 
 import {
+  saveMemoryArgumentsSchema,
   saveMemoryAgentArgumentsSchema,
   saveResourceAgentArgumentsSchema,
   saveScheduleAgentArgumentsSchema,
@@ -26,7 +27,7 @@ const actions = {
   },
   propose_save_memory: {
     capability: "save_memory",
-    schema: saveMemoryAgentArgumentsSchema
+    schema: saveMemoryArgumentsSchema.omit({ confirm: true, cancel: true }).strict()
   },
   propose_save_resource: {
     capability: "save_resource",
@@ -66,6 +67,10 @@ export type ActionExecution =
 export function createActionExecutor(options: ActionExecutorOptions) {
   return {
     prepare(toolName: string, args: JsonRecord, context: FunctionHandlerContext): JsonRecord {
+      if (toolName === "propose_save_memory" && (!args.operation || args.operation === "create")) {
+        const parsed = saveMemoryAgentArgumentsSchema.safeParse(args);
+        return parsed.success ? (parsed.data as JsonRecord) : args;
+      }
       if (toolName === "propose_save_schedule") {
         const schedule = saveScheduleAgentArgumentsSchema.safeParse(args);
         if (!schedule.success) return args;

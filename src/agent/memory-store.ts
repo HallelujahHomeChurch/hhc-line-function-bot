@@ -26,6 +26,9 @@ export interface AgentResourceRecord extends AgentResourceReference {
 }
 
 export interface AgentTextMemoryRecord {
+  revision: number;
+  updatedAt?: string;
+  updatedBy?: string;
   id: string;
   profileName: string;
   scope: AgentMemoryScope;
@@ -213,6 +216,7 @@ export interface SearchAgentTextMemoriesInput {
 }
 
 export interface AgentTextMemoryEmbeddingCandidate {
+  revision: number;
   id: string;
   title?: string;
   content: string;
@@ -234,6 +238,13 @@ export interface ForgetAgentMemoryInput {
   id: string;
   deletedBy?: string;
   isAdmin?: boolean;
+  expectedRevision?: number;
+}
+
+export interface UpdateAgentTextMemoryInput extends ForgetAgentMemoryInput {
+  expectedRevision: number;
+  content: string;
+  embedding?: number[];
 }
 
 export interface AgentMemoryPurgeResult {
@@ -260,10 +271,15 @@ export interface AgentMemoryStore {
     input: FindAgentResourceByAliasInput
   ): Promise<AgentResourceRecord | undefined>;
   saveTextMemory(input: SaveAgentTextMemoryInput): Promise<AgentTextMemoryRecord>;
+  updateTextMemory(input: UpdateAgentTextMemoryInput): Promise<AgentTextMemoryRecord | undefined>;
   searchTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]>;
   listTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]>;
   listTextMemoriesMissingEmbedding(limit: number): Promise<AgentTextMemoryEmbeddingCandidate[]>;
-  updateTextMemoryEmbedding(id: string, embedding: number[]): Promise<boolean>;
+  updateTextMemoryEmbedding(
+    id: string,
+    embedding: number[],
+    expectedRevision?: number
+  ): Promise<boolean>;
   saveScheduleMemory(input: SaveAgentScheduleMemoryInput): Promise<AgentScheduleMemoryRecord>;
   saveScheduleMemories(
     inputs: SaveAgentScheduleMemoryInput[]
@@ -417,6 +433,7 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
 
   async saveTextMemory(input: SaveAgentTextMemoryInput): Promise<AgentTextMemoryRecord> {
     const record: AgentTextMemoryRecord = {
+      revision: 1,
       id: randomUUID(),
       profileName: input.profileName,
       scope: scopeFromSource(input.source),
@@ -431,6 +448,31 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
     this.textMemories.set(record.id, record);
     if (input.embedding?.length) this.textMemoryEmbeddings.set(record.id, [...input.embedding]);
     return record;
+  }
+
+  async updateTextMemory(
+    input: UpdateAgentTextMemoryInput
+  ): Promise<AgentTextMemoryRecord | undefined> {
+    const record = this.textMemories.get(input.id);
+    if (
+      !record ||
+      !this.textMemoryMatches(record, input.profileName, scopeFromSource(input.source)) ||
+      !canDelete(record, input) ||
+      record.revision !== input.expectedRevision
+    )
+      return undefined;
+    const updated = {
+      ...record,
+      content: input.content,
+      query: undefined,
+      revision: record.revision + 1,
+      updatedAt: this.now().toISOString(),
+      updatedBy: input.deletedBy
+    };
+    this.textMemories.set(record.id, updated);
+    this.textMemoryEmbeddings.delete(record.id);
+    if (input.embedding?.length) this.textMemoryEmbeddings.set(record.id, [...input.embedding]);
+    return updated;
   }
 
   async searchTextMemories(input: SearchAgentTextMemoriesInput): Promise<AgentTextMemoryRecord[]> {
@@ -467,11 +509,23 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
       .filter((record) => !record.deletedAt && Date.parse(record.expiresAt) > this.now().getTime())
       .sort(descendingCreatedAt)
       .slice(0, Math.max(0, limit))
-      .map(({ id, title, content }) => ({ id, title, content }));
+      .map(({ id, title, content, revision }) => ({ id, title, content, revision }));
   }
 
-  async updateTextMemoryEmbedding(id: string, embedding: number[]): Promise<boolean> {
-    if (!this.textMemories.has(id) || !embedding.length) return false;
+  async updateTextMemoryEmbedding(
+    id: string,
+    embedding: number[],
+    expectedRevision?: number
+  ): Promise<boolean> {
+    const record = this.textMemories.get(id);
+    if (
+      !record ||
+      !embedding.length ||
+      !this.active(record) ||
+      (expectedRevision !== undefined && record.revision !== expectedRevision) ||
+      this.textMemoryEmbeddings.has(id)
+    )
+      return false;
     this.textMemoryEmbeddings.set(id, [...embedding]);
     return true;
   }
@@ -657,7 +711,9 @@ export class InMemoryAgentMemoryStore implements AgentMemoryStore {
       !record ||
       record.profileName !== input.profileName ||
       !sameScope(record.scope, scope) ||
-      !canDelete(record, input)
+      !canDelete(record, input) ||
+      !this.active(record) ||
+      (input.expectedRevision !== undefined && record.revision !== input.expectedRevision)
     ) {
       return false;
     }

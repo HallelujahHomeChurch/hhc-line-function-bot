@@ -259,3 +259,12 @@ Testing map:
 - Follow `docs/runbooks/redis-loss-recovery.md`; `scripts/redis-recovery.py` is offline evidence validation, never a replay or production mutation tool.
 - Preserve the deployment cutoff and recovered namespace across releases and compatible rollback. Unknown effects and missing attachment work remain quarantined; never infer no effect from a missing receipt.
 - Redis namespace retirement does not delete PostgreSQL conversation context or prove queue/provider reconciliation. Require reviewed writer drain, queue quarantine and independent durable journal evidence before reopening.
+
+## Helper note lifecycle
+
+- General conversation does not require topic-specific functions, a classifier call or implicit saving.
+- `save_memory` supports create/update/delete proposals. Model arguments cannot provide internal memory IDs or revisions; the domain binds the uniquely resolved record and revision into server-only review arguments. Mutations recheck ownership/admin, source, expiry and revision in the store.
+- Preserve source content on updates: unique exact replacement or explicitly user-provided full replacement; never rebuild from bounded search evidence. Full reads render authorized server text without another summarizer. Group-visible previews are not private.
+- `/forget-memory` must use the same review/action executor; no immediate-delete compatibility path. Do not change default 30-day retention or extend expiry on edits.
+- Embedding backfill must compare the content revision, and updates must clear stale query text/embedding atomically. Rollback to old writers requires drain and approval invalidation; additive columns alone do not make mixed writers safe.
+- P0–P2 acceptance is documented in `docs/runbooks/helper-conversation-notes-acceptance.md`; offline fixtures do not prove live model quality, spend or LINE delivery. P3 search is deferred.

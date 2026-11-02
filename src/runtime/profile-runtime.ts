@@ -1,7 +1,8 @@
 import type { QuoteContext, QuoteScope } from "../quotes/types.js";
 import type { CapabilityName } from "../capabilities/names.js";
 import type { FunctionExecutionResult } from "../application/contracts/function-execution.js";
-import type { BotProfileConfig, LineEvent } from "../types.js";
+import type { HelperWriteToolName } from "../state/session-store.js";
+import type { BotProfileConfig, LineEvent, JsonRecord } from "../types.js";
 
 export interface ProfileTurnInput {
   operationId?: string;
@@ -30,6 +31,9 @@ export interface ProfileActionReviewResult {
 }
 
 export interface ProfileRuntime {
+  prepareActionReview?(
+    input: ProfileTurnInput & { toolName: HelperWriteToolName; arguments: JsonRecord }
+  ): Promise<FunctionExecutionResult | undefined>;
   recordDeliveredReply?(input: {
     scope: QuoteScope;
     quoteContext: QuoteContext;
@@ -48,6 +52,11 @@ export function createProfileRuntimeDispatcher(
   runtimes: Partial<Record<string, ProfileRuntime>>
 ): ProfileRuntime {
   return {
+    prepareActionReview(input) {
+      return (
+        runtimes[input.profile.name]?.prepareActionReview?.(input) ?? Promise.resolve(undefined)
+      );
+    },
     recordDeliveredReply(input) {
       return runtimes[input.scope.profileName]?.recordDeliveredReply?.(input) ?? Promise.resolve();
     },

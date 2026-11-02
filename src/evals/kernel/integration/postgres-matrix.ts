@@ -1,6 +1,7 @@
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { FakeToolCallingModel } from "langchain";
 import { Pool } from "pg";
+import { PostgresAgentMemoryStore } from "../../../agent/postgres-memory-store.js";
 
 import { runAccessMigrations } from "../../../access/migrations.js";
 import { runAgentMemoryMigrations } from "../../../agent/migrations.js";
@@ -28,6 +29,11 @@ export async function runPostgresIntegrationMatrix(
     boundary: KernelBoundary;
     run: () => Promise<void>;
   }> = [
+    {
+      caseId: "postgres/memory/revision-and-backfill",
+      boundary: "state_lifecycle",
+      run: () => memoryRevision(environment)
+    },
     {
       caseId: "postgres/helper/fallback-pin-restart",
       boundary: "state_lifecycle",
@@ -860,4 +866,62 @@ async function fallbackPinRestart(environment: KernelPostgresEnvironment): Promi
   await reconnected.reset(input.threadId);
   if (await reconnected.run({ ...input, task: async (snapshot) => snapshot.fallbackPinned }))
     throw new Error("helper_checkpoint_not_deleted");
+}
+
+async function memoryRevision(environment: KernelPostgresEnvironment): Promise<void> {
+  const [left, right] = environment.pools;
+  await runAgentMemoryMigrations(left);
+  await runAgentMemoryMigrations(left);
+  const a = new PostgresAgentMemoryStore(left);
+  const b = new PostgresAgentMemoryStore(right);
+  const source = { type: "user" as const, userId: "synthetic-note-owner" };
+  const note = await a.saveTextMemory({
+    profileName: "note-matrix",
+    source,
+    createdBy: source.userId,
+    content: "原文",
+    title: "合成筆記",
+    expiresAt: new Date(Date.now() + 86400000).toISOString()
+  });
+  const target = {
+    profileName: "note-matrix",
+    source,
+    id: note.id,
+    deletedBy: source.userId,
+    expectedRevision: 1
+  };
+  const winners = await Promise.all([
+    a.updateTextMemory({ ...target, content: "甲" }),
+    b.updateTextMemory({ ...target, content: "乙" })
+  ]);
+  if (winners.filter(Boolean).length !== 1) throw new Error("note_multiple_winners");
+  const vector = Array(1536).fill(0);
+  vector[0] = 1;
+  if (await b.updateTextMemoryEmbedding(note.id, vector, 1))
+    throw new Error("note_stale_embedding");
+  if (await b.forgetMemory(target)) throw new Error("note_stale_delete");
+  if (
+    await a.updateTextMemory({
+      ...target,
+      expectedRevision: 2,
+      deletedBy: "other",
+      content: "denied"
+    })
+  )
+    throw new Error("note_foreign_update");
+  if (
+    (await a.searchTextMemories({ profileName: "other-profile", source, memoryId: note.id })).length
+  )
+    throw new Error("note_wrong_profile");
+  const [current] = await a.searchTextMemories({
+    profileName: "note-matrix",
+    source,
+    memoryId: note.id
+  });
+  if (current?.revision !== 2 || current.expiresAt !== note.expiresAt)
+    throw new Error("note_revision_or_expiry");
+  if (!(await a.forgetMemory({ ...target, expectedRevision: 2 })))
+    throw new Error("note_delete_failed");
+  if ((await a.searchTextMemories({ profileName: "note-matrix", source })).length)
+    throw new Error("note_deleted_visible");
 }

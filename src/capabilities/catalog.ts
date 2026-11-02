@@ -366,7 +366,8 @@ export const CAPABILITY_CATALOG: FunctionDefinition[] = [
     grantPolicy: { principals: ["user"] },
     agentCapability: {
       intents: ["幫我記住", "記住這個", "幫我保存", "幫我儲存", "保存這段資訊"],
-      semanticDescription: "保存使用者明確要求記住的文字資訊。",
+      semanticDescription:
+        "明確要求時建立、修改或刪除文字筆記，必須預覽確認；以 query 唯一查找，修改保留未變動原文。",
       operations: []
     },
     clarificationPrompt: "請直接告訴我要記住的內容。",
@@ -377,7 +378,7 @@ export const CAPABILITY_CATALOG: FunctionDefinition[] = [
       label: "記住資訊",
       command: "小哈幫我記住："
     },
-    helpText: "保存你明確交代我記住的文字資訊，預設只保留一段時間。"
+    helpText: "保存你明確交代我記住的筆記，也能修改或刪除；預覽確認後執行，保存 30 天。"
   },
   {
     name: "save_resource",
@@ -453,7 +454,8 @@ export const CAPABILITY_CATALOG: FunctionDefinition[] = [
     sideEffectLevel: "read",
     agentCapability: {
       intents: ["查我記住的", "查我保存的", "查我儲存的", "查記住的資訊"],
-      semanticDescription: "查詢目前來源中可見且未過期的明確文字記憶。",
+      semanticDescription:
+        "查詢目前來源可見且未過期的文字筆記。operation=search 回傳有界證據，list 列出名稱，read 將唯一符合 query 的完整原文直接顯示給使用者，不把全文交給模型。",
       retrievalEvidence: {
         provider: "memory",
         queryStopWords: ["記憶", "記住的資訊", "已記住的資訊", "保存的資訊", "已保存的資訊"]
