@@ -29,6 +29,11 @@ export async function runPostgresIntegrationMatrix(
     run: () => Promise<void>;
   }> = [
     {
+      caseId: "postgres/helper/fallback-pin-restart",
+      boundary: "state_lifecycle",
+      run: async () => fallbackPinRestart(environment)
+    },
+    {
       caseId: "postgres/migrations/fresh-idempotent",
       boundary: "deployment_configuration",
       run: async () => freshMigrations(environment)
@@ -811,4 +816,48 @@ function knowledgeDocument(externalId: string, contentHash: string, content: str
 
 function assert(condition: unknown, failureCode: string): asserts condition {
   if (!condition) throw new Error(failureCode);
+}
+
+async function fallbackPinRestart(environment: KernelPostgresEnvironment): Promise<void> {
+  const [pool, lockPool] = environment.pools;
+  const checkpointer = new PostgresSaver(pool);
+  await checkpointer.setup();
+  const makeState = () =>
+    createPostgresHelperAgentState({ pool, lockPool, checkpointer, hmacKey: "synthetic" });
+  const state = makeState();
+  await state.setup();
+  await state.setup();
+  const input = {
+    threadId: "fallback-pin-synthetic",
+    policyKey: "pair-v1",
+    source: { type: "user", userId: "synthetic" }
+  };
+  let failed = false;
+  try {
+    await state.run({
+      ...input,
+      task: async (snapshot) => {
+        await snapshot.pinFallback!();
+        throw new Error("synthetic");
+      }
+    });
+  } catch {
+    failed = true;
+  }
+  if (!failed) throw new Error("helper_failed_run_did_not_throw");
+  const reconnected = makeState();
+  if (!(await reconnected.run({ ...input, task: async (snapshot) => snapshot.fallbackPinned })))
+    throw new Error("helper_failed_run_state_lost");
+  if (
+    await reconnected.run({
+      ...input,
+      policyKey: "pair-v2",
+      task: async (snapshot) => snapshot.fallbackPinned
+    })
+  )
+    throw new Error("helper_checkpoint_not_deleted");
+  await reconnected.run({ ...input, task: async (snapshot) => snapshot.pinFallback!() });
+  await reconnected.reset(input.threadId);
+  if (await reconnected.run({ ...input, task: async (snapshot) => snapshot.fallbackPinned }))
+    throw new Error("helper_checkpoint_not_deleted");
 }

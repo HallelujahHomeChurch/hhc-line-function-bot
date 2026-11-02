@@ -1,3 +1,9 @@
+import {
+  FailoverChatOpenAI,
+  withProviderFailover,
+  type FallbackReason,
+  type ProviderCircuit
+} from "./provider-failover.js";
 import type { GroupHistory } from "../history/types.js";
 import { createHistoryTurn } from "./history-tools.js";
 import { ChatOpenAI } from "@langchain/openai";
@@ -66,6 +72,7 @@ import type { HelperAgentState } from "./state.js";
 import { safeWriteClarification, createHelperWriteTools } from "./write-tools.js";
 
 export interface HelperRuntimeOptions {
+  providerCircuit?: ProviderCircuit;
   history?: GroupHistory;
   timeZone?: string;
   readMediaState?(input: ProfileTurnInput): Promise<ConversationStateSnapshot["media"]>;
@@ -93,30 +100,66 @@ export interface HelperModelOptions {
   model: string;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
+  maxRetries?: 0;
+  modelRole?: "response" | "summary";
+  fallback?: {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+    summaryModel: string;
+    fetchImpl?: typeof fetch;
+  };
 }
 
-export function createHelperModels(options: HelperModelOptions) {
-  const budgetedFetch = createBudgetedFetch(options.fetchImpl);
+export function createHelperModels(options: HelperModelOptions): {
+  model: ChatOpenAI | ChatDeepSeek;
+  summaryModel: ChatOpenAI | ChatDeepSeek;
+} {
+  const budgetedFetch = createBudgetedFetch(
+    options.fetchImpl,
+    options.provider ?? "deepseek",
+    options.modelRole
+  );
   if (options.provider === "openai") {
-    const createModel = (model: string) =>
-      new ChatOpenAI({
+    const createModel = (model: string, summary = false) => {
+      const fields = {
         apiKey: options.apiKey,
         model,
         // shortcut: pinned SDK misses Luna model detection; remove after SDK support lands.
         maxCompletionTokens: model === "gpt-6-luna" ? undefined : 800,
-        maxRetries: 1,
-        timeout: options.timeoutMs,
+        maxRetries: options.fallback ? 0 : 1,
+        timeout: options.fallback ? Math.min(options.timeoutMs, 8_000) : options.timeoutMs,
         useResponsesApi: false,
         modelKwargs: {
           store: false,
           reasoning_effort: options.reasoningEffort,
           ...(model === "gpt-6-luna" ? { max_completion_tokens: 800 } : {})
         },
-        configuration: { baseURL: options.baseUrl, fetch: budgetedFetch }
+        configuration: {
+          baseURL: options.baseUrl,
+          fetch: options.fallback
+            ? createBudgetedFetch(options.fetchImpl, "openai", summary ? "summary" : "response")
+            : budgetedFetch
+        }
+      } as const;
+      if (!options.fallback) return new ChatOpenAI(fields);
+      const fallback = createHelperModels({
+        provider: "deepseek",
+        ...options.fallback,
+        model: summary ? options.fallback.summaryModel : options.fallback.model,
+        timeoutMs: Math.min(options.timeoutMs, 8_000),
+        maxRetries: 0,
+        modelRole: summary ? "summary" : "response"
       });
+      return new FailoverChatOpenAI(
+        fields,
+        fallback.model as ChatDeepSeek,
+        summary ? "summary" : "response"
+      );
+    };
     return {
       model: createModel(options.model),
-      summaryModel: createModel(options.summaryModel ?? options.model)
+      summaryModel: createModel(options.summaryModel ?? options.model, true)
     };
   }
   const fields = {
@@ -124,7 +167,7 @@ export function createHelperModels(options: HelperModelOptions) {
     model: options.model,
     temperature: 0,
     maxTokens: 800,
-    maxRetries: 1,
+    maxRetries: options.maxRetries ?? 1,
     modelKwargs: { thinking: { type: "disabled" } },
     timeout: options.timeoutMs,
     configuration: { baseURL: options.baseUrl, fetch: budgetedFetch }
@@ -345,7 +388,8 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
             : helperPolicyKey(profile),
           source: input.event.source,
           isCurrent: input.quoteContext?.isCurrent,
-          task: async ({ contextReset, markContextDirty }) => {
+          task: async (snapshot) => {
+            const { contextReset, markContextDirty } = snapshot;
             let writeStarted = false;
             const claimWrite = () => {
               if (historyTurn?.used) return false;
@@ -685,17 +729,38 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                       return { kind: "complete" as const, state: { messages: [unavailable] } };
                     }
                   }
-                  const state = await agent.invoke(
-                    {
-                      messages: [
-                        {
-                          role: "user",
-                          content: quotedUserMessage(text, quoted) + referenceEvidence
+                  const invoke = () =>
+                    agent.invoke(
+                      {
+                        messages: [
+                          {
+                            role: "user",
+                            content: quotedUserMessage(text, quoted) + referenceEvidence
+                          }
+                        ]
+                      },
+                      config
+                    );
+                  const state = options.providerCircuit
+                    ? await withProviderFailover(
+                        snapshot,
+                        options.providerCircuit,
+                        invoke,
+                        (reason) => {
+                          metrics.fallbackReason = reason;
+                        },
+                        async () => {
+                          if (
+                            (input.quoteContext && !(await input.quoteContext.isCurrent())) ||
+                            (historyTurn?.used && !(await historyTurn.valid())) ||
+                            helperPolicyKey(await effectiveProfile(input)) !==
+                              helperPolicyKey(profile)
+                          ) {
+                            throw new Error("fallback_context_invalidated");
+                          }
                         }
-                      ]
-                    },
-                    config
-                  );
+                      )
+                    : await invoke();
                   let visible =
                     proposedResult ??
                     selectHelperReply(
@@ -749,7 +814,11 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
                   }
                 }
               },
-              () => {
+              (provider, role) => {
+                if (provider) {
+                  metrics.providerUsage[provider].requests++;
+                  if (role === "summary") metrics.summaryUsage[provider].requests++;
+                }
                 metrics.providerRequestCount = (metrics.providerRequestCount ?? 0) + 1;
               }
             );
@@ -1051,6 +1120,9 @@ export function helperPolicyKey(profile: BotProfileConfig): string {
         model: profile.agent?.model,
         summaryModel: profile.agent?.summaryModel,
         reasoningEffort: profile.agent?.reasoningEffort,
+        ...(profile.agent?.fallback
+          ? { fallback: profile.agent.fallback, fallbackContract: "context-safe-v1" }
+          : {}),
         persona: profile.agent?.personaPrompt,
         memoryPolicy: profile.agent?.memoryPolicyPrompt,
         contract: "helper-sheet-research-retired-v9",
@@ -1220,6 +1292,12 @@ async function reviewJobResult(
 }
 
 interface HelperMetrics {
+  fallbackReason?: FallbackReason;
+  providerUsage: Record<
+    "openai" | "deepseek",
+    { requests: number; responses: number; input: number; output: number; cached: number }
+  >;
+  summaryUsage: HelperMetrics["providerUsage"];
   providerRequestCount?: number;
   historyEvidenceBytes?: number;
   historyLookupCount?: number;
@@ -1238,6 +1316,14 @@ interface HelperMetrics {
 
 function createMetrics(): HelperMetrics {
   const metrics: HelperMetrics = {
+    providerUsage: {
+      openai: { requests: 0, responses: 0, input: 0, output: 0, cached: 0 },
+      deepseek: { requests: 0, responses: 0, input: 0, output: 0, cached: 0 }
+    },
+    summaryUsage: {
+      openai: { requests: 0, responses: 0, input: 0, output: 0, cached: 0 },
+      deepseek: { requests: 0, responses: 0, input: 0, output: 0, cached: 0 }
+    },
     modelCallCount: 0,
     toolCallCount: 0,
     estimatedInputTokens: 0,
@@ -1262,6 +1348,23 @@ function createMetrics(): HelperMetrics {
         for (const message of messages) {
           const usage = AIMessage.isInstance(message) ? message.usage_metadata : undefined;
           if (!usage) continue;
+          const provider = (message.response_metadata as Record<string, unknown>)?.helper_provider;
+          if (provider === "openai" || provider === "deepseek") {
+            const detail = metrics.providerUsage[provider];
+            detail.responses++;
+            detail.input += usage.input_tokens;
+            detail.output += usage.output_tokens;
+            detail.cached += usage.input_token_details?.cache_read ?? 0;
+            if (
+              (message.response_metadata as Record<string, unknown>).helper_model_role === "summary"
+            ) {
+              const summary = metrics.summaryUsage[provider];
+              summary.responses++;
+              summary.input += usage.input_tokens;
+              summary.output += usage.output_tokens;
+              summary.cached += usage.input_token_details?.cache_read ?? 0;
+            }
+          }
           metrics.inputTokens = (metrics.inputTokens ?? 0) + usage.input_tokens;
           metrics.outputTokens = (metrics.outputTokens ?? 0) + usage.output_tokens;
           metrics.cachedInputTokens =
@@ -1311,11 +1414,49 @@ async function recordHelperObservability(
       profileName: input.profile.name,
       sourceType: input.event.source.type,
       steps: [
+        ...(input.profile.agent?.fallback
+          ? (["openai", "deepseek"] as const)
+              .filter((provider) => metrics.providerUsage[provider].requests > 0)
+              .flatMap((provider) => {
+                const total = metrics.providerUsage[provider];
+                const summary = metrics.summaryUsage[provider];
+                return (["response", "summary"] as const)
+                  .map((modelRole) => {
+                    const usage =
+                      modelRole === "summary"
+                        ? summary
+                        : {
+                            requests: total.requests - summary.requests,
+                            responses: total.responses - summary.responses,
+                            input: total.input - summary.input,
+                            output: total.output - summary.output,
+                            cached: total.cached - summary.cached
+                          };
+                    return {
+                      phase: "route" as const,
+                      provider,
+                      modelRole,
+                      providerRequestCount: usage.requests,
+                      inputTokens: usage.input,
+                      outputTokens: usage.output,
+                      cachedInputTokens: usage.cached,
+                      usageMissingRequestCount: usage.requests - usage.responses
+                    };
+                  })
+                  .filter((step) => step.providerRequestCount > 0);
+              })
+          : []),
         {
           phase: "route",
           outcome: finalStatus === "error" ? "unavailable" : "respond",
-          provider: input.profile.agent?.provider ?? "deepseek",
+          provider:
+            metrics.providerUsage.deepseek.requests && metrics.providerUsage.openai.requests
+              ? "mixed"
+              : metrics.providerUsage.deepseek.requests
+                ? "deepseek"
+                : (input.profile.agent?.provider ?? "deepseek"),
           durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          reason: metrics.fallbackReason,
           providerRequestCount: metrics.providerRequestCount,
           modelCallCount: metrics.modelCallCount,
           toolCallCount: metrics.toolCallCount,

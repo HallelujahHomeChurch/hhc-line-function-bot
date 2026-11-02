@@ -176,6 +176,7 @@ describe("kernel Redis integration environment", () => {
     const results = await runRedisIntegrationMatrix(environment);
 
     expect(results.map((result) => result.caseId)).toEqual([
+      "redis/helper/provider-circuit",
       "redis/rate-limit/atomic-window-notification",
       "redis/webhook/lease-owner-and-uncertain",
       "redis/job/pre-dispatch-operation",
