@@ -1,3 +1,8 @@
+import {
+  createPublicSearchHandler,
+  createSearchResultReader,
+  type PublicSearchDependencies
+} from "../functions/public-web-search.js";
 import type { ReadMeetingOccurrences } from "../clients/meeting-occurrences.js";
 import type { AccountAdminClient } from "../account/account-admin-client.js";
 import type { AccessStore } from "../access/types.js";
@@ -63,6 +68,7 @@ import type { WikipediaClient } from "../wikipedia/client.js";
 import { createWikipediaLookupHandler, type WikipediaSummarizer } from "../wikipedia/lookup.js";
 
 export interface CapabilityCompositionDependencies {
+  publicSearch?: PublicSearchDependencies;
   readMeetingOccurrences?: ReadMeetingOccurrences;
   accountAdminClient?: AccountAdminClient;
   accessStore?: AccessStore;
@@ -147,6 +153,9 @@ export function composeCapabilities(
       now: clients.now
     }),
     save_memory: createSaveMemoryHandler({
+      readSearchResult: clients.publicSearch
+        ? createSearchResultReader(clients.publicSearch)
+        : undefined,
       memoryStore: clients.memoryStore,
       accessStore: clients.accessStore,
       now: clients.now,
@@ -163,6 +172,9 @@ export function composeCapabilities(
       textGenerator: clients.knowledgeTextGenerator
     })
   };
+
+  if (clients.publicSearch)
+    functions.query_public_web = createPublicSearchHandler(clients.publicSearch);
 
   if (config.graph && clients.graph) {
     functions.find_ppt_slides = createFindPptSlidesHandler({

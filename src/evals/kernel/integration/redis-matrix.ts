@@ -1,5 +1,6 @@
 import { createRedisProviderCircuit } from "../../../helper-agent/provider-failover.js";
 import { createRateLimiter } from "../../../rate-limit.js";
+import { createPublicSearchQuota } from "../../../state/public-search-quota.js";
 import type { KernelBoundary } from "../contracts.js";
 import { RedisConfirmationStore } from "../../../actions/confirmation-store.js";
 import { RedisAgentJobStore } from "../../../agent/jobs.js";
@@ -48,6 +49,11 @@ export async function runRedisIntegrationMatrix(
     boundary: KernelBoundary;
     run: () => Promise<void>;
   }> = [
+    {
+      caseId: "redis/public-search/atomic-quota",
+      boundary: "external_dependency",
+      run: async () => publicSearchQuota(environment)
+    },
     {
       caseId: "redis/helper/provider-circuit",
       boundary: "state_lifecycle",
@@ -127,6 +133,29 @@ export async function runRedisIntegrationMatrix(
   return results;
 }
 
+async function publicSearchQuota(environment: KernelRedisEnvironment): Promise<void> {
+  const stores = environment.clients.map((client) =>
+    createPublicSearchQuota({
+      client,
+      keyPrefix: environment.keyPrefix,
+      hmacKey: "synthetic",
+      now: () => NOW
+    })
+  );
+  const requester = await Promise.all(
+    Array.from({ length: 12 }, (_, i) => stores[i % 2]!("quota-requester", "one", `event-${i}`))
+  );
+  if (requester.filter(Boolean).length !== 3) throw new Error("requester_quota_invalid");
+  const profile = await Promise.all(
+    Array.from({ length: 30 }, (_, i) => stores[i % 2]!("quota-profile", `user-${i}`, `event-${i}`))
+  );
+  if (profile.filter(Boolean).length !== 20) throw new Error("profile_quota_invalid");
+  const duplicate = await Promise.all(
+    stores.map((reserve) => reserve("quota-dedup", "user", "same-event"))
+  );
+  if (duplicate.filter(Boolean).length !== 1) throw new Error("quota_dedup_invalid");
+}
+
 const RESTART_SCOPE = {
   profileName: "kernel-restart",
   sourceKey: "group:restart",
@@ -148,7 +177,16 @@ export async function prepareRedisServerRestartState(
     label: "synthetic",
     ttlMs: 60_000
   });
-  await jobStore.complete(job.id, { ok: true, replyText: "synthetic" });
+  await jobStore.complete(
+    job.id,
+    {
+      ok: true,
+      replyText: "synthetic external evidence",
+      contextPolicy: "status_only",
+      externalSearch: { kind: "web_search", resultId: job.id }
+    },
+    "query_public_web"
+  );
 
   await new RedisWebhookEventStore(client, environment.keyPrefix).tryStart(
     "kernel-restart",
@@ -193,6 +231,20 @@ export async function verifyRedisServerRestartState(
   const [leftClient, rightClient] = environment.clients;
   const cases: Array<{ caseId: string; boundary: KernelBoundary; run: () => Promise<void> }> = [
     {
+      caseId: "redis/restart/public-search-quota",
+      boundary: "external_dependency",
+      run: async () => {
+        const reserve = createPublicSearchQuota({
+          client: rightClient,
+          keyPrefix: environment.keyPrefix,
+          hmacKey: "synthetic",
+          now: () => NOW
+        });
+        assert(!(await reserve("quota-requester", "one", "after-restart")));
+        assert(!(await reserve("quota-dedup", "user", "same-event")));
+      }
+    },
+    {
       caseId: "redis/restart/job-durable",
       boundary: "external_dependency",
       run: async () => {
@@ -201,7 +253,12 @@ export async function verifyRedisServerRestartState(
           keyPrefix: environment.keyPrefix,
           now: () => NOW
         });
-        assert((await store.get("restart-job", RESTART_SCOPE))?.status === "completed");
+        const job = await store.get("restart-job", RESTART_SCOPE);
+        assert(job?.status === "completed");
+        assert(job.capability === "query_public_web");
+        assert(job.result?.contextPolicy === "status_only");
+        assert(job.result?.externalSearch?.resultId === job.id);
+        assert(job.result?.replyText === "synthetic external evidence");
       }
     },
     {

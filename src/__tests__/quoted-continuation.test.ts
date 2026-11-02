@@ -313,6 +313,32 @@ describe("explicit helper group admission", () => {
     }
   });
 
+  it("keeps external delayed results out of quote and checkpoint context", async () => {
+    const f = await fixture([]);
+    try {
+      const job = await f.jobs.createPending({ scope, label: "公開搜尋", ttlMs: 60000 });
+      await f.jobs.complete(job.id, {
+        ok: true,
+        replyText: "synthetic external evidence",
+        resultAuthority: { kind: "public" },
+        contextPolicy: "status_only"
+      });
+      await f.click(`action=agent_job_result&jobId=${job.id}`);
+      expect(f.replies).toEqual(["synthetic external evidence"]);
+      expect(f.store.recordReply).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ contextPolicy: "status_only" })
+      );
+      expect(JSON.stringify((await f.history()) ?? [])).not.toContain(
+        "synthetic external evidence"
+      );
+      expect(f.generate).not.toHaveBeenCalled();
+    } finally {
+      await f.app.close();
+    }
+  });
+
   it("keeps the slow-operation result button for an explicit request", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {

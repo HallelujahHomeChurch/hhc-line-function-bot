@@ -354,6 +354,7 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         }
         const profile = await effectiveProfile(input);
         const context: FunctionHandlerContext = {
+          quoteContext: input.quoteContext,
           profile,
           event: input.event,
           requestId: input.requestId,
@@ -391,8 +392,9 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
           task: async (snapshot) => {
             const { contextReset, markContextDirty } = snapshot;
             let writeStarted = false;
+            let isolatedReadStarted = false;
             const claimWrite = () => {
-              if (historyTurn?.used) return false;
+              if (historyTurn?.used || isolatedReadStarted) return false;
               writeStarted = true;
               return true;
             };
@@ -409,6 +411,11 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
               requesterUserId: input.event.source.userId
             });
             const readTools = createHelperReadTools({
+              claimIsolatedRead: () => {
+                if (writeStarted || isolatedReadStarted) return false;
+                isolatedReadStarted = true;
+                return true;
+              },
               onToolOutcome: (outcome) => {
                 if (outcome.status === "denied" || outcome.status === "unavailable")
                   readFailed = true;
@@ -908,9 +915,14 @@ export function createHelperRuntime(options: HelperRuntimeOptions): ProfileRunti
         else if (results.some((entry) => entry.result.agentResult?.status === "ambiguous"))
           result.writePreparation = "ambiguous";
         result = groupContinuationReply(result, input.event.source.type);
+        const resultExpiry = result.resultAuthority?.expiresAt;
         result.resultAuthority = profile.enabledFunctions.length
-          ? { kind: "capabilities", capabilities: profile.enabledFunctions }
-          : { kind: "public" };
+          ? {
+              kind: "capabilities",
+              capabilities: profile.enabledFunctions,
+              ...(resultExpiry ? { expiresAt: resultExpiry } : {})
+            }
+          : { kind: "public", ...(resultExpiry ? { expiresAt: resultExpiry } : {}) };
         metrics.contextEdited = agentState.messages.some(
           (message) =>
             ToolMessage.isInstance(message) &&
@@ -1272,7 +1284,18 @@ function selectHelperReply(
   if (authoritative.length && results.length > 1)
     return {
       ok: results.every((entry) => entry.result.ok),
+      resultAuthority: {
+        kind: "public",
+        expiresAt: results
+          .flatMap((entry) =>
+            entry.result.resultAuthority?.expiresAt ? [entry.result.resultAuthority.expiresAt] : []
+          )
+          .sort()[0]
+      },
       replyText: results.map((entry) => entry.result.replyText).join("\n\n"),
+      ...(results.some((entry) => entry.result.contextPolicy === "status_only")
+        ? { contextPolicy: "status_only" as const }
+        : {}),
       quickReplies: results.flatMap((entry) => entry.result.quickReplies ?? []).slice(0, 13)
     };
   if (authoritative[0]) return authoritative[0].result;
@@ -1310,6 +1333,7 @@ function publicReadReference(
     source.type !== "group" ||
     !entry ||
     !entry.result.ok ||
+    entry.result.contextPolicy === "status_only" ||
     entry.result.agentResult?.status !== "success" ||
     entry.name === "retrieve_memory" ||
     !isUnrestrictedRead(profile, entry.name)

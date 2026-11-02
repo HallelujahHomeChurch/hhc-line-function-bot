@@ -1,3 +1,6 @@
+import { createPublicWebSearch } from "../clients/public-web-search.js";
+import { createPublicSearchQuota } from "../state/public-search-quota.js";
+import { createBudgetedFetch } from "../helper-agent/budget.js";
 import { createOpenAiProxyTransport } from "../clients/openai-proxy.js";
 import { createRedisProviderCircuit } from "../helper-agent/provider-failover.js";
 import { loadHistoryConfig } from "../history/config.js";
@@ -300,31 +303,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     redis,
     config: config.rateLimit ?? { enabled: true, windowMs: 60_000, maxRequests: 20 }
   });
-  const registries = composeCapabilities(config, {
-    readMeetingOccurrences: createMeetingOccurrenceReader({
-      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/operations-api/method"
-    }),
-    accountAdminClient,
-    graph,
-    notion,
-    wikipedia,
-    sessionStore,
-    cache,
-    catalog,
-    scheduleStore,
-    knowledgeStore,
-    embedding: knowledgeEmbedding,
-    knowledgeTextGenerator: smartTalkPrimary,
-    memoryStore,
-    accessStore,
-    agentJobStore,
-    attachmentScanWorkStore,
-    attachmentScanQueue,
-    mediaSyncStore: postgres?.mediaSyncStore,
-    wikipediaSummarizer: createWikipediaSummarizer({
-      primary: wikipediaSummaryPrimary
-    })
-  });
   const resourceMemory = createResourceMemoryObserver({ memoryStore });
   const memoryCommands = createMemoryCommandHandler({ memoryStore, accessStore });
   const helperProfile = config.profiles.find(
@@ -346,7 +324,58 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     ? setInterval(() => void quoteStore.cleanupExpired().catch(() => undefined), 300_000)
     : undefined;
   quoteCleanupTimer?.unref();
-  let openaiProxy: ReturnType<typeof createOpenAiProxyTransport> | undefined;
+  const openaiProxy =
+    helperProfile &&
+    config.llm.openaiProxyUrl &&
+    (helperProfile.agent?.provider === "openai" ||
+      helperProfile.enabledFunctions.includes("query_public_web"))
+      ? createOpenAiProxyTransport(config.llm.openaiProxyUrl)
+      : undefined;
+  const registries = composeCapabilities(config, {
+    readMeetingOccurrences: createMeetingOccurrenceReader({
+      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/operations-api/method"
+    }),
+    publicSearch:
+      helperProfile?.enabledFunctions.includes("query_public_web") &&
+      redis &&
+      quoteStore &&
+      config.llm.openaiApiKey
+        ? {
+            search: createPublicWebSearch({
+              apiKey: config.llm.openaiApiKey,
+              fetchImpl: createBudgetedFetch(openaiProxy?.fetch, "openai")
+            }),
+            reserve: createPublicSearchQuota({
+              client: redis.client,
+              keyPrefix: redis.keyPrefix,
+              hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
+            }),
+            jobs: agentJobStore,
+            isCurrent: (token) => quoteStore.isCurrent(token)
+          }
+        : undefined,
+    accountAdminClient,
+    graph,
+    notion,
+    wikipedia,
+    sessionStore,
+    cache,
+    catalog,
+    scheduleStore,
+    knowledgeStore,
+    embedding: knowledgeEmbedding,
+    knowledgeTextGenerator: smartTalkPrimary,
+    memoryStore,
+    accessStore,
+    agentJobStore,
+    attachmentScanWorkStore,
+    attachmentScanQueue,
+    mediaSyncStore: postgres?.mediaSyncStore,
+    wikipediaSummarizer: createWikipediaSummarizer({
+      primary: wikipediaSummaryPrimary
+    })
+  });
+
   let stopSdkStateCleanup: (() => void) | undefined;
   let helperStateLockPool: ReturnType<typeof createPostgresPool> | undefined;
   const runtimes: Partial<Record<string, ProfileRuntime>> = {};
@@ -396,9 +425,6 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     const fallback = helperProfile.agent?.fallback;
     if (fallback && (!redis || !config.llm.deepseekApiKey || !config.llm.openaiApiKey)) {
       throw new Error("helper_fallback_requires_redis_and_both_api_keys");
-    }
-    if (helperProvider === "openai" && config.llm.openaiProxyUrl) {
-      openaiProxy = createOpenAiProxyTransport(config.llm.openaiProxyUrl);
     }
     const helperModels = createHelperModels({
       fetchImpl: openaiProxy?.fetch,

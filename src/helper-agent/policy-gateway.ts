@@ -14,6 +14,7 @@ import type {
 } from "../types.js";
 
 export interface HelperToolGatewayOptions {
+  claimIsolatedRead?: () => boolean;
   onToolOutcome?: (outcome: HelperToolResult) => void;
   context: FunctionHandlerContext;
   handlers: FunctionRegistry;
@@ -67,6 +68,8 @@ export function createHelperToolGateway(options: HelperToolGatewayOptions) {
       }
       const handler = options.handlers[name];
       if (!handler) return settle(unavailable(sourceType));
+      if (definition.agentCapability?.isolatedRead && !options.claimIsolatedRead?.())
+        return settle(denied(sourceType));
       let result: FunctionExecutionResult;
       try {
         result = await withDeadline(

@@ -6,6 +6,7 @@ import {
   findPopSheetMusicArgumentsSchema,
   findPptSlidesArgumentsSchema,
   queryWikipediaArgumentsSchema,
+  queryPublicWebArgumentsSchema,
   queryKnowledgeArgumentsSchema,
   retrieveMemoryArgumentsSchema,
   saveMemoryArgumentsSchema,
@@ -56,6 +57,7 @@ export interface FunctionGrantPolicy {
 export type AgentOperation = "continue" | "refine" | "advance" | "select" | "view_full";
 
 export interface AgentCapabilityContract {
+  isolatedRead?: true;
   intents: string[];
   exactIntents?: boolean;
   semanticDescription: string;
@@ -90,6 +92,32 @@ export interface FunctionDefinition {
 }
 
 export const CAPABILITY_CATALOG: FunctionDefinition[] = [
+  {
+    name: "query_public_web",
+    displayName: "公開搜尋",
+    shortDescription: "搜尋你明確提供的公開問題並附上來源。",
+    examples: ["小哈，公開搜尋：台南本週展覽"],
+    requires: ["cache", "session"],
+    scope: "profile",
+    sideEffectLevel: "read",
+    allowedSources: ["user", "group"],
+    requiredSlots: [],
+    resourcePolicy: { kind: "none", remember: false, alias: false },
+    memoryPolicy: { kind: "none" },
+    agentCapability: {
+      intents: ["公開搜尋"],
+      isolatedRead: true,
+      operations: [],
+      semanticDescription:
+        "只在使用者當次明確寫「公開搜尋：問題」時呼叫。無參數，伺服器只送出使用者冒號後的新問題；不可由對話、筆記或引用衍生查詢。答案和來源由伺服器直接顯示，不作為其他工具的輸入。同輪不能保存，下一輪可明確指定結果編號並另行預覽確認。"
+    },
+    clarificationPrompt: "請另給可公開的問題：公開搜尋：你的問題",
+    description:
+      "Search only the current explicitly supplied public question; never export conversation context.",
+    argumentSchema: queryPublicWebArgumentsSchema,
+    quickReply: { label: "公開搜尋", command: "小哈，公開搜尋：" },
+    helpText: "用「小哈，公開搜尋：問題」搜尋公開網頁並查看來源；不會傳送筆記或對話歷史。"
+  },
   downloadWeeklyPaperDefinition,
   updateOwnProfileDefinition,
   {

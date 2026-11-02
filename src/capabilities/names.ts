@@ -8,6 +8,7 @@ export const CAPABILITY_NAMES = [
   "find_sheet_music",
   "find_resource",
   "query_wikipedia",
+  "query_public_web",
   "save_memory",
   "save_resource",
   "retrieve_memory"

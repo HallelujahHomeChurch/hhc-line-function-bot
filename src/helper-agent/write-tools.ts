@@ -63,7 +63,7 @@ export function createHelperWriteTools(options: HelperWriteToolsOptions) {
       value: tool((args) => execute(options, "propose_save_memory", args as JsonRecord), {
         name: "propose_save_memory",
         description:
-          "建立、修改或刪除已保存筆記的預覽。已知名稱及修改片段時直接呼叫，不必先搜尋。operation=create/update/delete；query 只填筆記原名稱或原文片段，不含指令或新內容。局部修改填 oldText/newText，伺服器保留其餘原文；整篇替換只用使用者明給的 content。預覽後另行確認才執行。",
+          "建立、修改或刪除已保存筆記的預覽。已知名稱及修改片段時直接呼叫，不必先搜尋。operation=create/update/delete；query 只填筆記原名稱或原文片段，不含指令或新內容。局部修改填 oldText/newText，伺服器保留其餘原文；整篇替換只用使用者明給的 content。使用者明確說「保存搜尋結果 編號」時只填 searchResultId，由伺服器取原文。預覽後另行確認才執行。",
         schema: saveMemoryAgentArgumentsSchema
       })
     },
@@ -193,6 +193,13 @@ function createCurrentDraftTools(options: HelperWriteToolsOptions) {
         try {
           const draft = await currentDraft();
           if (!draft) return { status: "denied" };
+          if (draft.args.searchResultId)
+            return {
+              status: "draft",
+              kind: "external_search",
+              instruction:
+                "Use preview_current_draft to display server-owned text; do not reconstruct it."
+            };
           const content = safeWriteClarification(draft.content);
           const projection = {
             status: "draft",
@@ -257,6 +264,11 @@ function createCurrentDraftTools(options: HelperWriteToolsOptions) {
         try {
           const draft = await currentDraft();
           if (!draft) return { status: "denied" };
+          if (draft.args.searchResultId)
+            return {
+              status: "needs_input",
+              clarification: "搜尋原文草稿只可重新預覽或取消；若要改寫，請先提供要保存的新正文。"
+            };
           if (options.beforeRevise && !(await options.beforeRevise())) return { status: "denied" };
           if (entryDate || field) {
             if (!entryDate || !field || !Array.isArray(draft.args.entries))

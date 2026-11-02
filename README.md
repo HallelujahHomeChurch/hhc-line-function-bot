@@ -38,6 +38,7 @@ LINE webhook service for routing selected church bot requests to controlled func
   - `find_sheet_music`: canonical sheet-music lookup for configured pop and hymn sheet sources.
   - `find_resource`: generic authorized church catalog lookup for non-schedule, non-slide, non-sheet-music resources such as future weekly report audio.
   - `query_wikipedia`: reads a matching Wikipedia introduction and returns a source-bounded summary.
+  - `query_public_web`: searches a freshly supplied public question and displays source citations.
   - `save_schedule`: previews and manages the helper profile's shared canonical text-only service schedules with one-year retention.
   - `save_resource`: validates, scans, confirms, publishes, and indexes authorized LINE attachments.
 
@@ -652,3 +653,21 @@ user-provided content; truncated search excerpts never reconstruct authoritative
 Group previews are visible to the group even when later note retrieval is private.
 
 See [P0–P2 acceptance and rollback](docs/runbooks/helper-conversation-notes-acceptance.md).
+
+### Explicit public web search
+
+Send `小哈，公開搜尋：台南本週展覽` (or the same prefix in direct chat). Only the
+new question after the colon goes to public search; private notes, quotes and conversation
+history are not sent. General conversation does not automatically search. The current
+limits are three searches per requester and twenty per helper profile per UTC day.
+A timeout or unknown completion consumes the reserved quota; there is no automatic retry.
+
+Search results include clickable sources and are retained for ten minutes in the current
+requester's source. To save one, send the displayed `小哈，保存搜尋結果 <result ID>`
+line and confirm the complete preview. Existing Account write permissions apply. Reset,
+expiry or revoked access prevents recovering the result. Group replies and previews are
+visible to group members. Saved notes still expire after thirty days.
+
+The OpenAI-only search adapter uses the existing API key and scoped proxy, with no
+provider fallback. It requires Redis and PostgreSQL quote state and fails closed when
+they are unavailable. See [search bounds and cost observation](docs/runbooks/helper-public-search.md).

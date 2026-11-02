@@ -30,6 +30,9 @@ export interface AgentResourceReference {
 }
 
 export interface FunctionExecutionResult {
+  /** Server-only external result provenance; raw text never enters model context. */
+  contextPolicy?: "status_only";
+  externalSearch?: { kind: "web_search"; resultId: string };
   /** Historical read locator only; never grants authority or records a write approval. */
   contextReference?: ConversationReadReference;
   /** Transient credentials may be delivered once but must never enter stored job results. */
