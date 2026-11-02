@@ -88,7 +88,7 @@ async function withJsonFile<T>(
 }
 
 describe("config", () => {
-  it("loads the production DeepSeek profile while keeping main provider-free", () => {
+  it("loads the reviewed proxy primary and fallback while keeping main provider-free", () => {
     const config = loadConfigFromEnv({
       PROFILE_CONFIG_PATH: "config/profiles.json",
       LINE_HELPER_CHANNEL_SECRET: "synthetic",
@@ -103,9 +103,15 @@ describe("config", () => {
       REDIS_URL: "redis://synthetic.invalid:6379"
     });
     expect(config.profiles.find((p) => p.name === "helper")?.agent).toMatchObject({
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
-      summaryModel: "deepseek-v4-flash"
+      provider: "openai",
+      model: "gpt-6-luna",
+      summaryModel: "gpt-6-luna",
+      reasoningEffort: "none",
+      fallback: {
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        summaryModel: "deepseek-v4-flash"
+      }
     });
     expect(config.profiles.find((p) => p.name === "main")?.allowedProviders).toEqual([]);
   });
