@@ -78,6 +78,8 @@ properties:
             value: "16"
           - name: EMBEDDING_TIMEOUT_MS
             value: "30000"
+          - name: OPENAI_PROXY_URL
+            secretRef: PLACEHOLDER_OPENAI_PROXY_URL_SECRET_REF
           - name: OPENAI_API_KEY
             secretRef: PLACEHOLDER_OPENAI_API_KEY_SECRET_REF
           - name: DEEPSEEK_API_KEY

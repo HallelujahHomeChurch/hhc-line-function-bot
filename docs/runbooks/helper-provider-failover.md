@@ -1,7 +1,12 @@
-# Helper provider failover (default off)
+# Helper provider failover (explicit opt-in)
 
-Production profiles are unchanged. This feature is not deployed or live-accepted.
-Only helper may explicitly opt into an OpenAI primary / DeepSeek fallback pair:
+The checked-in production helper profile selects the reviewed OpenAI primary /
+DeepSeek fallback pair below. Merge/deployment must wait for the dedicated Windows
+service, bastion relay, actual-origin metadata check and both ACA key references
+to pass. CI is not live acceptance. `openai-proxy-url` holds the private CONNECT
+origin and is referenced only by the bot manifest, never worker/assurance jobs.
+The deployment script requires the proxy secret before applying the manifest;
+validate its non-empty origin value during the actual-origin preflight. Only helper may opt into this pair:
 
 ```json
 {

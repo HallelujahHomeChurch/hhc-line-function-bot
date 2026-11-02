@@ -141,6 +141,7 @@ describe("production profile configuration deployment contract", () => {
       ["AZURE_OPENAI_EMBEDDING_API_KEY", "PLACEHOLDER_AZURE_OPENAI_EMBEDDING_API_KEY_SECRET_REF"],
       ["DEEPSEEK_API_KEY", "PLACEHOLDER_DEEPSEEK_API_KEY_SECRET_REF"],
       ["OPENAI_API_KEY", "PLACEHOLDER_OPENAI_API_KEY_SECRET_REF"],
+      ["OPENAI_PROXY_URL", "PLACEHOLDER_OPENAI_PROXY_URL_SECRET_REF"],
       ["OBSERVABILITY_HMAC_KEY", "PLACEHOLDER_OBSERVABILITY_HMAC_KEY_SECRET_REF"],
       ["DATABASE_URL", "PLACEHOLDER_DATABASE_URL_SECRET_REF"],
       ["REDIS_URL", "PLACEHOLDER_REDIS_URL_SECRET_REF"],
@@ -322,7 +323,7 @@ describe("production profile configuration deployment contract", () => {
       "aca.release-probe-job.yaml",
       "aca.periodic-assurance-job.yaml"
     ]) {
-      expect(readProjectFile(file)).not.toMatch(/name:\s+OPENAI_API_KEY\b/u);
+      expect(readProjectFile(file)).not.toMatch(/name:\s+OPENAI_(API_KEY|PROXY_URL)\b/u);
     }
     const deployment = readProjectFile("scripts/deploy-aca.sh");
     const required = deployment.slice(
@@ -330,6 +331,7 @@ describe("production profile configuration deployment contract", () => {
       deployment.indexOf("present = set(json.loads")
     );
     expect(required).toContain('"openai-api-key"');
+    expect(required).toContain('"openai-proxy-url"');
   });
 
   it("explicitly clears bot container and template mounts", () => {
