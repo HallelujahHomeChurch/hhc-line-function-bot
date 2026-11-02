@@ -4,6 +4,12 @@ Baseline: `08832350d8cd79e849dc658bd37b6f4df6a0a73e`. This change is pre-release
 offline contracts are not proof of model quality, real token savings or LINE delivery.
 No live model requests or deployment are part of this implementation.
 
+Continuation authorization (2026-11-02): synthetic live API comparison may spend at
+most US$5 total; isolated test-environment deployment is allowed. Production deployment
+remains prohibited. No paid requests have been made: the local environment has no
+OpenAI key, and a separate LINE test bot/environment has not yet been identified.
+Do not substitute production deployment for this missing test setup.
+
 ## Fixed scope and limits
 
 Reuse the one helper agent; main remains provider-free. No new routing model,
@@ -95,6 +101,38 @@ rollback; do not mix old and new mutation writers. Do not drop columns or replay
 unknown effects after Redis loss. Follow `redis-loss-recovery.md` for recovery.
 
 ## Local verification record
+
+### Synthetic database measurement (2026-11-02)
+
+An isolated PostgreSQL 16 / pgvector 0.8.1 container ran the current migrations and
+the actual `PostgresAgentMemoryStore.searchTextMemories` query. It contained 10,000
+synthetic group-visible notes across 100 groups (100 notes per scope), with Chinese
+text and 400 characters of padding per note, no embeddings, and future expiry.
+After `ANALYZE`, 30 sequential searches for `台南` returned the bounded five results:
+client p50 2.00 ms, p95 2.61 ms. This is a small warm local sample, not a production SLO.
+
+`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` on the captured store SQL showed
+`agent_text_memories_lookup_idx` selecting the 100 authorized scope rows, followed
+by the lexical filter and top-N sort; execution 1.20 ms, 102 shared buffer hits,
+zero reads. The full-text GIN index was not used by this lexical query. Exact Chinese
+substring lookup worked; the synonym `府城` returned zero without embeddings.
+This does not measure semantic recall or justify a new index/schema.
+
+The actual `createPostgresHelperAgentState.run` path was measured with a two-connection
+lock pool, six concurrent turns and a synthetic 100 ms task. Distinct threads completed
+in about 115–328 ms (entry wait 12–223 ms); the same thread serialized in about
+106–640 ms (entry wait 3–535 ms). Task hold time was 99–102 ms. Entry wait includes
+pool acquisition, lock acquisition and metadata work; it is not an isolated lock metric.
+These results confirm that slow turns consume lock-pool capacity; they do not establish
+production capacity or justify changing the lock mechanism. The test container and
+schema were removed. No production data or paid model calls were used.
+
+Next gates, in order: identify safe OpenAI credentials and isolated test Bot/environment;
+run baseline/candidate synthetic journeys under the US$5 total cap with retries disabled
+and conservative per-request cost reservation; deploy only to that test environment;
+complete user LINE acceptance; then evaluate P3 compatibility, provenance and search
+cost gates. Stop paid requests if pricing, usage or a conservative bound is unavailable.
+P3 remains disabled until the preceding gates pass.
 
 Baseline offline evaluator: 19/19 cases, 34 fake model calls and 20 fake tool calls.
 Candidate preserves those totals; token fields are unavailable in these stubs.
