@@ -54,6 +54,9 @@ export function fallbackError(error: unknown): "transient" | "permanent" | undef
     if (
       [
         "ECONNRESET",
+        "ECONNREFUSED",
+        "ENETUNREACH",
+        "EHOSTUNREACH",
         "ETIMEDOUT",
         "ENOTFOUND",
         "EAI_AGAIN",
@@ -66,6 +69,8 @@ export function fallbackError(error: unknown): "transient" | "permanent" | undef
       return "transient";
     cause = cause.cause;
   }
+  // The pinned LangChain adapter maps SDK request timeouts to TimeoutError.
+  if (error.name === "TimeoutError") return "transient";
   const status = (error as Error & { status?: number }).status;
   if (status === 401 || status === 403) return "permanent";
   if (status === 429)
@@ -76,7 +81,11 @@ export function fallbackError(error: unknown): "transient" | "permanent" | undef
       : "transient";
   if (status === 408 || (status !== undefined && status >= 500 && status <= 599))
     return "transient";
-  if (["APIConnectionError", "APIConnectionTimeoutError", "APITimeoutError"].includes(error.name))
+  if (
+    ["APIConnectionError", "APIConnectionTimeoutError", "APITimeoutError"].includes(
+      error.constructor.name
+    )
+  )
     return "transient";
 }
 
@@ -101,8 +110,16 @@ export class FailoverChatOpenAI extends ChatOpenAI {
       const lease = await session.circuit.acquire();
       if (lease === undefined) session.onSwitch?.("circuit_open");
       if (lease !== undefined) {
+        let result;
         try {
-          const result = await super._generate(...args);
+          result = await super._generate(...args);
+        } catch (error) {
+          const category = fallbackError(error);
+          if (!category || args[1].signal?.aborted) throw error;
+          await session.circuit.fail(lease, category === "permanent");
+          session.onSwitch?.(category);
+        }
+        if (result) {
           for (const generation of result.generations)
             generation.message.response_metadata = {
               ...generation.message.response_metadata,
@@ -111,11 +128,6 @@ export class FailoverChatOpenAI extends ChatOpenAI {
             };
           await session.circuit.succeed(lease);
           return result;
-        } catch (error) {
-          const category = fallbackError(error);
-          if (!category || args[1].signal?.aborted) throw error;
-          await session.circuit.fail(lease, category === "permanent");
-          session.onSwitch?.(category);
         }
       }
       // Persist before sending to the fallback, including when that request fails.

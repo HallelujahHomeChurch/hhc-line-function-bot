@@ -51,14 +51,14 @@ function circuit(): ProviderCircuit {
     succeed: vi.fn(async () => {})
   };
 }
-function models(primary: typeof fetch, secondary: typeof fetch) {
+function models(primary: typeof fetch, secondary: typeof fetch, timeoutMs = 1000) {
   return createHelperModels({
     provider: "openai",
     apiKey: "synthetic",
     baseUrl: "https://openai.invalid/v1",
     model: "synthetic",
     summaryModel: "synthetic-summary",
-    timeoutMs: 1000,
+    timeoutMs,
     fetchImpl: primary,
     fallback: {
       apiKey: "synthetic",
@@ -71,6 +71,57 @@ function models(primary: typeof fetch, secondary: typeof fetch) {
 }
 
 describe("context-safe provider failover", () => {
+  it("does not reroute a circuit storage timeout after successful inference", async () => {
+    const secondary = vi.fn<typeof fetch>(async () => completion());
+    const selected = models(async () => completion(), secondary);
+    const gate = circuit();
+    gate.succeed = async () => {
+      throw Object.assign(new Error("synthetic storage timeout"), { name: "TimeoutError" });
+    };
+    await expect(
+      withProviderFailover({ pinFallback: async () => {} }, gate, () =>
+        selected.model.invoke([new HumanMessage("synthetic request")])
+      )
+    ).rejects.toThrow("synthetic storage timeout");
+    expect(secondary).not.toHaveBeenCalled();
+  });
+  it("switches on the SDK request timeout while preserving caller cancellation", async () => {
+    const selected = models(
+      async (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("synthetic timeout"), { name: "AbortError" })),
+            { once: true }
+          );
+        }),
+      async () => completion("timeout fallback"),
+      20
+    );
+    const result = await withProviderFailover({ pinFallback: async () => {} }, circuit(), () =>
+      selected.model.invoke([new HumanMessage("synthetic request")])
+    );
+    expect(result.content).toBe("timeout fallback");
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await expect(
+      withProviderFailover({ pinFallback: async () => {} }, circuit(), () =>
+        selected.model.invoke([new HumanMessage("synthetic request")], { signal: cancelled.signal })
+      )
+    ).rejects.toThrow();
+  });
+  it("switches on an actual SDK connection-refused error without relying on Error.name", async () => {
+    const selected = models(
+      async () => {
+        throw Object.assign(new Error("synthetic refused"), { code: "ECONNREFUSED" });
+      },
+      async () => completion("fallback reachable")
+    );
+    const result = await withProviderFailover({ pinFallback: async () => {} }, circuit(), () =>
+      selected.model.invoke([new HumanMessage("synthetic request")])
+    );
+    expect(result.content).toBe("fallback reachable");
+  });
   it("continues after a completed tool without rerunning it, pins summary and later turns, and shares budget", async () => {
     const primary = vi
       .fn<typeof fetch>()
