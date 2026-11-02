@@ -33,6 +33,7 @@ Read these first when starting work:
 - Administrator authority comes from a current linked Account administrator role and is rechecked for each protected operation. Legacy bootstrap or allowlist fields should not be reintroduced.
 - Production profile source is `config/profiles.json`, loaded from `PROFILE_CONFIG_PATH=/app/config/profiles.json`. It must use `channelSecretEnv` and `channelAccessTokenEnv`; do not put real LINE credentials or user IDs in the file.
 - The LINE bot must not expose provider OAuth callback routes. Do not add `/api/line/llm-auth/*`; use API keys from ACA/local secrets for remote providers.
+- Optional `OPENAI_PROXY_URL` is a helper OpenAI-only CONNECT transport. Never set global proxy/dispatcher settings or reuse Codex/other agent credentials. Proxy support alone does not enable provider fallback.
 - Remote API providers `openai` and `deepseek` are profile-scoped; `main` intentionally keeps an empty provider allowlist. Provider switching and Luna Chat Completions requirements are in `docs/runbooks/helper-provider-comparison.md`.
 - Helper persona and memory rules come from `config/agents/helper/PERSONA.md` and `MEMORY.md`, loaded through restricted profile-relative paths. Treat them as read-only prompt policy and never append runtime content. Keep house-church quote/golden-sentence behavior out of the persona; it should become a separate function if needed.
 

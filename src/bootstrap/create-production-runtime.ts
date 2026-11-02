@@ -1,3 +1,4 @@
+import { createOpenAiProxyTransport } from "../clients/openai-proxy.js";
 import { loadHistoryConfig } from "../history/config.js";
 import { PostgresGroupHistory } from "../history/postgres.js";
 import { PostgresQuoteStore } from "../quotes/postgres-store.js";
@@ -344,6 +345,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     ? setInterval(() => void quoteStore.cleanupExpired().catch(() => undefined), 300_000)
     : undefined;
   quoteCleanupTimer?.unref();
+  let openaiProxy: ReturnType<typeof createOpenAiProxyTransport> | undefined;
   let stopSdkStateCleanup: (() => void) | undefined;
   let helperStateLockPool: ReturnType<typeof createPostgresPool> | undefined;
   const runtimes: Partial<Record<string, ProfileRuntime>> = {};
@@ -390,7 +392,11 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       });
     }
     const helperProvider = helperProfile.agent?.provider ?? "deepseek";
+    if (helperProvider === "openai" && config.llm.openaiProxyUrl) {
+      openaiProxy = createOpenAiProxyTransport(config.llm.openaiProxyUrl);
+    }
     const helperModels = createHelperModels({
+      fetchImpl: openaiProxy?.fetch,
       provider: helperProvider,
       apiKey: helperProvider === "openai" ? config.llm.openaiApiKey : config.llm.deepseekApiKey,
       baseUrl:
@@ -500,6 +506,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
         if (result.status === "rejected") errors.push(result.reason);
       }
       for (const close of [
+        () => openaiProxy?.close(),
         () => historyPool?.end(),
         () => redis?.close(),
         () => helperStateLockPool?.end(),
