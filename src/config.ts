@@ -62,6 +62,14 @@ const agentPromptFilesSchema = z
     model: z.string().trim().min(1).max(128).optional(),
     summaryModel: z.string().trim().min(1).max(128).optional(),
     reasoningEffort: z.literal("none").optional(),
+    fallback: z
+      .object({
+        provider: z.literal("deepseek"),
+        model: z.string().trim().min(1).max(128),
+        summaryModel: z.string().trim().min(1).max(128)
+      })
+      .strict()
+      .optional(),
     personaFile: z.string().regex(/^agents\/[a-z0-9_-]+\/PERSONA\.md$/u),
     memoryPolicyFile: z.string().regex(/^agents\/[a-z0-9_-]+\/MEMORY\.md$/u)
   })
@@ -490,6 +498,7 @@ type NormalizedProfile = Omit<
     model?: string;
     summaryModel?: string;
     reasoningEffort?: "none";
+    fallback?: { provider: "deepseek"; model: string; summaryModel: string };
     personaPrompt: string;
     memoryPolicyPrompt: string;
   };
@@ -562,6 +571,7 @@ function readAgentPrompts(
     model: files.model,
     summaryModel: files.summaryModel,
     reasoningEffort: files.reasoningEffort,
+    fallback: files.fallback,
     personaPrompt: readAgentPrompt(profileDirectory, files.personaFile),
     memoryPolicyPrompt: readAgentPrompt(profileDirectory, files.memoryPolicyFile)
   };
@@ -696,6 +706,14 @@ function validateProviderPolicy(
       if (providerCapabilities[provider].subscriptionBased && !profile.allowSubscriptionProviders) {
         throw new Error(`Profile ${profile.name} cannot allow subscription provider ${provider}`);
       }
+    }
+    if (
+      profile.agent?.fallback &&
+      (profile.name !== "helper" ||
+        profile.agent.provider !== "openai" ||
+        !profile.allowedProviders.includes("deepseek"))
+    ) {
+      throw new Error("Helper fallback requires primary OpenAI and explicitly allowed DeepSeek");
     }
     if (
       profile.allowedProviders.length > 0 &&

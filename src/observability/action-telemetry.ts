@@ -45,6 +45,8 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       return allowedString(value, SOURCE_TYPES);
     case "phase":
       return allowedString(value, PHASES);
+    case "modelRole":
+      return allowedString(value, new Set(["response", "summary"]));
     case "provider":
     case "fallbackProvider":
       return allowedString(value, PROVIDERS);
@@ -132,6 +134,7 @@ function sanitizeTelemetryValueForKey(key: string, value: unknown): unknown {
       );
     case "clarificationCountBucket":
       return allowedString(value, new Set(["zero", "one", "multiple"]));
+    case "usageMissingRequestCount":
     case "providerRequestCount":
     case "modelCallCount":
     case "toolCallCount":
@@ -282,7 +285,7 @@ const PHASES = new Set([
   "admin_route",
   "admin_action"
 ]);
-const PROVIDERS = new Set([...MODEL_PROVIDER_NAMES, "keyword", "router"]);
+const PROVIDERS = new Set([...MODEL_PROVIDER_NAMES, "keyword", "router", "mixed"]);
 const LANES = new Set(["function_routing", "admin_routing", "smart_talk", "web_summarization"]);
 const OUTCOMES = new Set([
   "execute",
@@ -324,6 +327,10 @@ const OUTCOMES = new Set([
 ]);
 const AGENT_TRACE_DISPOSITIONS = new Set([...AGENT_PLAN_DISPOSITIONS, "collect"]);
 const REASONS = new Set([
+  "pinned",
+  "circuit_open",
+  "transient",
+  "permanent",
   "active_task_refinement",
   "active_task_unavailable",
   "admin_action_disabled",

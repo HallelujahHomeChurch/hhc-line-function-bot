@@ -15,6 +15,8 @@ interface HelperAgentStateOptions {
 }
 
 export interface HelperAgentRunSnapshot {
+  fallbackPinned?: boolean;
+  pinFallback?(): Promise<void>;
   contextReset?: "expired" | "policy_changed";
   markContextDirty?(dirty?: boolean): Promise<void>;
 }
@@ -50,6 +52,7 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
   const now = options.now ?? (() => new Date());
   const expiresAt = new Map<string, number>();
   const policyKeys = new Map<string, string>();
+  const fallbackPins = new Set<string>();
   const locks = new Map<string, Promise<void>>();
 
   return {
@@ -69,12 +72,17 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
         const policyChanged =
           policyKeys.has(input.threadId) && policyKeys.get(input.threadId) !== input.policyKey;
         if (expired || policyChanged) {
+          fallbackPins.delete(input.threadId);
           await options.checkpointer.deleteThread(input.threadId);
         }
         expiresAt.set(input.threadId, observedAt + helperThreadIdleTtlMs(input.source));
         policyKeys.set(input.threadId, input.policyKey);
         const result = await guardedTask(input, options.checkpointer, async () =>
           input.task({
+            fallbackPinned: fallbackPins.has(input.threadId),
+            pinFallback: async () => {
+              fallbackPins.add(input.threadId);
+            },
             contextReset: expired ? "expired" : policyChanged ? "policy_changed" : undefined,
             markContextDirty: async (dirty = true) => {
               policyKeys.set(
@@ -90,6 +98,7 @@ export function createHelperAgentState(options: HelperAgentStateOptions): Helper
       }),
     reset: (threadId, clearScopedSessions) =>
       withMemoryThreadLock(locks, threadId, async () => {
+        fallbackPins.delete(threadId);
         await clearScopedSessions?.();
         await clearMemoryThread(options.checkpointer, threadId, {
           expiresAt,
@@ -125,6 +134,7 @@ export function createPostgresHelperAgentState(
           external_search_expires_at timestamptz
         );
         alter table agent_sdk_threads add column if not exists policy_key text;
+        alter table agent_sdk_threads add column if not exists fallback_pinned boolean not null default false;
         alter table agent_sdk_threads add column if not exists external_search_query text
       `);
     },
@@ -135,8 +145,9 @@ export function createPostgresHelperAgentState(
         const current = await options.pool.query<{
           expires_at: Date;
           policy_key: string | null;
+          fallback_pinned: boolean;
         }>(
-          `select expires_at, policy_key
+          `select expires_at, policy_key, fallback_pinned
              from agent_sdk_threads where thread_id = $1`,
           [input.threadId]
         );
@@ -176,6 +187,13 @@ export function createPostgresHelperAgentState(
           const result = await guardedTask(input, options.checkpointer, async () =>
             input.task({
               contextReset,
+              fallbackPinned: metadata?.fallback_pinned ?? false,
+              pinFallback: async () => {
+                await options.pool.query(
+                  "update agent_sdk_threads set fallback_pinned=true where thread_id=$1",
+                  [input.threadId]
+                );
+              },
               markContextDirty: async (dirty = true) => {
                 await options.pool.query(
                   "update agent_sdk_threads set policy_key = $2 where thread_id = $1",

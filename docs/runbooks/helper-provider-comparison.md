@@ -14,7 +14,8 @@ summary calls. Configuration rejects Luna without the explicit non-reasoning mod
 
 Keep `LLM_PROVIDER=deepseek` for existing non-agent lanes; helper selection is
 profile-owned. DeepSeek remains allowed for these lanes and reviewed rollback.
-There is no automatic provider fallback. A denied allowlist or missing OpenAI
+Automatic provider fallback is default-off; only the explicitly configured helper
+pair described in [fallback operations](helper-provider-failover.md) is supported. A denied allowlist or missing OpenAI
 model fails configuration validation. `OPENAI_API_KEY` comes only from local
 environment or an ACA secret; never put it in profiles or PostgreSQL. Explicit
 `agent.model` and `agent.summaryModel` override the legacy `DEEPSEEK_MODEL`
@@ -45,7 +46,7 @@ checkpoint policy key before another turn.
    acceptance; empty webhook checks do not prove provider availability or quality.
 5. Roll back via the normal known-good digest release, or a reviewed explicit
    DeepSeek profile/model change. Retain the A admission gate, existing data and
-   secrets; never enable an automatic fallback or replay uncertain jobs.
+   secrets; disable fallback on rollback and never replay uncertain jobs.
 
 `pnpm test src/__tests__/helper-provider-comparison.test.ts` exercises the same
 strict tool journey through both actual SDK adapters using synthetic HTTP replies.

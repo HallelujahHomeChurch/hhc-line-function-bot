@@ -48,6 +48,9 @@ Disabled, unknown, unclear, or explicitly denied actions are denied. There is no
 Helper OpenAI requests may use an optional dedicated `OPENAI_PROXY_URL` CONNECT
 transport; it is off by default and does not change any other client or system proxy.
 See [provider operations](docs/runbooks/helper-provider-comparison.md).
+Helper supports an explicitly configured, default-off OpenAI-to-DeepSeek model-call
+fallback. It preserves scoped context and existing budgets without replaying tools.
+See [fallback operations](docs/runbooks/helper-provider-failover.md).
 
 ## Architecture
 

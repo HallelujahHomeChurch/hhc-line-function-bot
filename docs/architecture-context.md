@@ -18,7 +18,8 @@ LINE webhook
 
 Cross-capability execution and routing contracts remain under `src/application/contracts/`; product behavior and definitions remain under `src/capabilities/`.
 
-Ingress never selects a semantic function. It validates the event and completes narrowly owned deterministic work before dispatch. Each configured profile maps to exactly one runtime; there is no runtime switch, shadow agent, or fallback semantic route.
+Ingress never selects a semantic function. It validates the event and completes narrowly owned deterministic work before dispatch. Each configured profile maps to exactly one runtime; there is no runtime switch, shadow agent, or fallback semantic route. An explicitly
+configured helper provider pair may retry only the failed model call using the same agent.
 
 ## Profile Runtimes
 
@@ -49,7 +50,7 @@ A malformed group/direct event without `source.userId` does not receive a helper
 | Model output |                800 tokens |
 | Tool result  | 2,000 chars or 10 records |
 
-Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. Cleanup runs every five minutes. `/reset` and `忘記這段對話` delete only the current requester thread. A provider/model/reasoning, persona, memory-policy, safety-policy, or tool-contract change changes the policy key and clears the old checkpoint before another model call.
+Direct threads expire after 30 minutes idle; group/room threads after 15 minutes. Cleanup runs every five minutes. `/reset` and `忘記這段對話` delete only the current requester thread. A configured provider/model/reasoning or fallback-pair, persona, memory-policy, safety-policy, or tool-contract change changes the policy key and clears the old checkpoint before another model call. Runtime switching inside that preauthorized pair preserves the checkpoint. `fallback_pinned` in `agent_sdk_threads` retains the DeepSeek choice until reset, policy change or idle expiry, including across restarts.
 
 Context reduction is ordered:
 
