@@ -41,6 +41,7 @@
     "langchain": "1.5.10",
     "pg": "^8.22.0",
     "redis": "^6.1.0",
+    "undici": "^7.30.1",
     "zod": "^4.1.13"
   },
   "devDependencies": {
