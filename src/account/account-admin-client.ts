@@ -110,6 +110,7 @@ export interface MediaSyncAclSubjectSearchResult {
 }
 
 export interface AccountAdminClient {
+  verifySearchSettingsPermission?(input: VerifyAccountPermissionInput): Promise<boolean>;
   verifyPermission(input: VerifyAccountPermissionInput): Promise<boolean>;
   searchMediaSyncAclSubjects?(
     input: SearchMediaSyncAclSubjectsInput
@@ -181,6 +182,16 @@ export function createAccountAdminClient(options: {
   }
 
   return {
+    async verifySearchSettingsPermission(input) {
+      const payload = await post(
+        "/priv/account/v1/line/search-settings/authorize",
+        { userId: input.userId, permission: "*" },
+        { "x-hhc-request-id": input.requestId }
+      );
+      if (!isExactRecord(payload, ["allowed"]) || typeof payload.allowed !== "boolean")
+        throw new AccountApiError("account_api_invalid_permission_decision", false);
+      return payload.allowed;
+    },
     async verifyPermission(input) {
       const payload = await post(
         "/priv/account/v1/permissions/verify",

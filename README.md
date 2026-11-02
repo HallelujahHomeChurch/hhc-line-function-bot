@@ -659,7 +659,10 @@ See [P0–P2 acceptance and rollback](docs/runbooks/helper-conversation-notes-ac
 Send `小哈，公開搜尋：台南本週展覽` (or the same prefix in direct chat). Only the
 new question after the colon goes to public search; private notes, quotes and conversation
 history are not sent. General conversation does not automatically search. The current
-limits are three searches per requester and twenty per helper profile per UTC day.
+limits default to 60 searches per direct user and 300 shared per group per Asia/Taipei day.
+Full administrators can change both limits or disable search at Admin Console → Helper search settings
+(`/operations/helper-search`). Settings persist in PostgreSQL, take effect on new reservations,
+and never reset Redis usage. Groups do not consume direct-user quotas.
 A timeout or unknown completion consumes the reserved quota; there is no automatic retry.
 
 Search results include clickable sources and are retained for ten minutes in the current

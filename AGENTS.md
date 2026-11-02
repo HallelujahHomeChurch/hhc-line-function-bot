@@ -268,7 +268,7 @@ Testing map:
 - Preserve source content on updates: unique exact replacement or explicitly user-provided full replacement; never rebuild from bounded search evidence. Full reads render authorized server text without another summarizer. Group-visible previews are not private.
 - `/forget-memory` must use the same review/action executor; no immediate-delete compatibility path. Do not change default 30-day retention or extend expiry on edits.
 - Embedding backfill must compare the content revision, and updates must clear stale query text/embedding atomically. Rollback to old writers requires drain and approval invalidation; additive columns alone do not make mixed writers safe.
-- P0–P2 acceptance is documented in `docs/runbooks/helper-conversation-notes-acceptance.md`; offline fixtures do not prove live model quality, spend or LINE delivery. P3 search is deferred.
+- P0–P2 acceptance is documented in `docs/runbooks/helper-conversation-notes-acceptance.md`; offline fixtures do not prove live model quality, spend or LINE delivery. P3 search is documented in `docs/runbooks/helper-public-search.md`.
 
 ## Explicit public search
 
@@ -276,5 +276,5 @@ Testing map:
 - One isolated read per turn, mutually exclusive with writing. The narrow Responses adapter receives no internal tools or history, has one hosted tool-call limit, 800 output tokens, an eight-second timeout and no retries/fallback. Main remains provider-free.
 - `contextPolicy: status_only` keeps external raw replies out of checkpoints, quotes, summaries and group-history ingestion. Preserve the marker and expiry when combining or replaying results. Never weaken URL sanitization for internal tools.
 - Search results use existing scoped job storage for ten minutes, with quote-generation validation. Saving requires an explicit result ID on a later turn, server-owned original text, current access and normal preview/confirmation. Expiry, reset, missing provenance or scope mismatch denies recovery. External draft raw text is not exposed by draft-reading tools.
-- Production search requires Redis and PostgreSQL quote state. Quota reservation atomically checks profile/requester daily counts and event dedup; failures and unknown completion do not refund quota. Disable search during Redis-loss recovery until durable quota state is restored. Do not infer that missing state permits replay.
+- Production search requires Redis and PostgreSQL quote state. Search settings belong to PostgreSQL, with revision CAS and transactional audit; full-admin changes use the dedicated Account check. Quota reservation atomically checks source-scoped Asia/Taipei daily counts (60/direct user, 300/shared group by default) and event dedup; failures and unknown completion do not refund quota. Disable search during Redis-loss recovery until durable quota state is restored. Do not infer that missing state permits replay.
 - Log only bounded status, usage counts and duration; never public questions, result bodies, citation URLs, keys or identifiers. No live API tests are required by CI.

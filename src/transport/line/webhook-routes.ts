@@ -1,3 +1,5 @@
+import { registerSearchSettingsRoutes } from "../../search-settings/http-routes.js";
+import type { SearchSettingsStore } from "../../search-settings/contracts.js";
 import { groupReplyClient, takeGroupReply } from "./group-replies.js";
 import type { GroupHistory } from "../../history/types.js";
 import { createHistoryCollector } from "../../history/collector.js";
@@ -151,6 +153,7 @@ export interface AppDependencies {
   accountAdminClient: AccountAdminClient;
   mediaSyncStore?: PostgresMediaSyncStore;
   mediaSyncManagementService?: MediaSyncManagementService;
+  searchSettings?: SearchSettingsStore;
 }
 
 interface AllowResult {
@@ -270,6 +273,17 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   });
 
   registerHealthRoutes(app, config, diagnostics);
+  if (deps.searchSettings && config.mediaSync) {
+    registerSearchSettingsRoutes(app, {
+      store: deps.searchSettings,
+      gatewayCallerAppId: config.mediaSync.gatewayCallerAppId,
+      appApiToken: config.mediaSync.appApiToken,
+      authorize: async (userId, requestId) =>
+        (await deps.accountAdminClient.verifySearchSettingsPermission?.({ userId, requestId })) ===
+        true
+    });
+  }
+
   if (deps.mediaSyncManagementService && config.mediaSync) {
     registerMediaSyncRoutes(app, {
       ...config.mediaSync,

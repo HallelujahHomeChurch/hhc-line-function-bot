@@ -1,7 +1,7 @@
 import { buildAgentJobScope, type AgentJobStore } from "../agent/jobs.js";
 import type { PublicSearchAnswer } from "../clients/public-web-search.js";
 import type { QuoteToken } from "../quotes/types.js";
-import type { FunctionHandler, FunctionHandlerContext } from "../types.js";
+import type { FunctionHandler, FunctionHandlerContext, LineSource } from "../types.js";
 
 export function explicitPublicQuestion(text: string | undefined): string | undefined {
   const question = /^(?:@?小哈[，,\s]*)?公開搜尋[:：]\s*([^\r\n]+)$/u
@@ -12,7 +12,7 @@ export function explicitPublicQuestion(text: string | undefined): string | undef
 
 export interface PublicSearchDependencies {
   search(question: string): Promise<PublicSearchAnswer>;
-  reserve(profile: string, requester: string, eventId: string): Promise<boolean>;
+  reserve(profile: string, source: LineSource, eventId: string): Promise<boolean>;
   jobs: AgentJobStore;
   isCurrent(token: QuoteToken): Promise<boolean>;
   now?: () => Date;
@@ -49,9 +49,9 @@ export function createPublicSearchHandler(options: PublicSearchDependencies): Fu
       !(await options.isCurrent(token))
     )
       return unavailable("這次搜尋上下文已失效，請重新明確提出公開問題。");
-    if (!(await options.reserve(context.profile.name, context.event.source.userId, eventId)))
+    if (!(await options.reserve(context.profile.name, context.event.source, eventId)))
       return unavailable(
-        "本次公開搜尋未執行：可能已處理、今日額度已用完，或額度服務暫時不可用。請勿重複提交。"
+        "本次公開搜尋未執行：可能已處理、這個對話的今日額度已用完，或搜尋暫時關閉／不可用。請勿重複提交。"
       );
     const now = options.now?.() ?? new Date();
     const job = await options.jobs.createPending({

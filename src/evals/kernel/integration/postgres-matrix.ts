@@ -1,3 +1,4 @@
+import { PostgresSearchSettingsStore } from "../../../search-settings/store.js";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { FakeToolCallingModel } from "langchain";
 import { Pool } from "pg";
@@ -29,6 +30,11 @@ export async function runPostgresIntegrationMatrix(
     boundary: KernelBoundary;
     run: () => Promise<void>;
   }> = [
+    {
+      caseId: "postgres/search-settings/concurrency-and-audit",
+      boundary: "state_lifecycle",
+      run: async () => searchSettingsLifecycle(environment)
+    },
     {
       caseId: "postgres/memory/revision-and-backfill",
       boundary: "state_lifecycle",
@@ -924,4 +930,49 @@ async function memoryRevision(environment: KernelPostgresEnvironment): Promise<v
     throw new Error("note_delete_failed");
   if ((await a.searchTextMemories({ profileName: "note-matrix", source })).length)
     throw new Error("note_deleted_visible");
+}
+
+async function searchSettingsLifecycle(environment: KernelPostgresEnvironment): Promise<void> {
+  const db = environment.pools[0];
+  const store = new PostgresSearchSettingsStore(db);
+  await store.setup();
+  await store.setup();
+  const current = await store.get();
+  if (current.directDailyLimit !== 60 || current.groupDailyLimit !== 300)
+    throw new Error("settings_defaults");
+  const actor = "018f0c1f-18d0-7e81-9f6f-69c456db7003";
+  const input = {
+    enabled: true,
+    directDailyLimit: 80,
+    groupDailyLimit: 400,
+    revision: current.revision
+  };
+  const result = await Promise.all([
+    store.update(input, actor),
+    new PostgresSearchSettingsStore(environment.pools[1]).update(input, actor)
+  ]);
+  if (result.filter(Boolean).length !== 1) throw new Error("settings_multiple_winners");
+  const history = await store.history();
+  if (
+    history.length !== 1 ||
+    history[0]!.before.directDailyLimit !== 60 ||
+    history[0]!.after.directDailyLimit !== 80 ||
+    history[0]!.changedBy !== actor
+  )
+    throw new Error("settings_audit");
+  await store.setup();
+  if ((await new PostgresSearchSettingsStore(db).get()).directDailyLimit !== 80)
+    throw new Error("settings_restart_reset");
+  await db.query(
+    "ALTER TABLE helper_search_settings_audit ADD CONSTRAINT reject_synthetic_audit CHECK (revision < 3)"
+  );
+  let failed = false;
+  try {
+    await store.update({ ...input, revision: 2, enabled: false }, actor);
+  } catch {
+    failed = true;
+  }
+  if (!failed || !(await store.get()).enabled || (await store.get()).revision !== 2)
+    throw new Error("settings_audit_not_atomic");
+  await db.query("ALTER TABLE helper_search_settings_audit DROP CONSTRAINT reject_synthetic_audit");
 }
