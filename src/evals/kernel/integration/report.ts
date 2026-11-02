@@ -6,6 +6,8 @@ import { z } from "zod";
 import type { KernelIntegrationCaseResult } from "./redis-matrix.js";
 
 export const KERNEL_INTEGRATION_CASE_CONTRACTS = [
+  { caseId: "redis/restart/public-search-quota", boundary: "external_dependency" },
+  { caseId: "redis/public-search/atomic-quota", boundary: "external_dependency" },
   { caseId: "postgres/memory/revision-and-backfill", boundary: "state_lifecycle" },
   { caseId: "redis/helper/provider-circuit", boundary: "state_lifecycle" },
   { caseId: "postgres/helper/fallback-pin-restart", boundary: "state_lifecycle" },

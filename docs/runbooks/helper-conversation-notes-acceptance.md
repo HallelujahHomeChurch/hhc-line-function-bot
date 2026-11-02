@@ -1,8 +1,9 @@
 # Helper conversation and notes acceptance (P0–P2)
 
-Baseline: `08832350d8cd79e849dc658bd37b6f4df6a0a73e`. This change is pre-release:
-offline contracts are not proof of model quality, real token savings or LINE delivery.
-Initial implementation did not include live requests or deployment.
+Baseline: `08832350d8cd79e849dc658bd37b6f4df6a0a73e`. P0–P2 shipped in PR #153
+(squash `ba2332545e537650cd13affb25f462f06f43868f`, production revision `0000257`).
+Offline contracts and release probes are not proof of model quality or LINE delivery.
+P3 implementation and manual observation are tracked in [public search](helper-public-search.md).
 
 Continuation authorization (2026-11-02): synthetic live comparison was authorized up
 to US$5. The user then authorized production deployment, stopped further live/device
@@ -11,7 +12,7 @@ offline CI and release health checks still apply. There is no separate test Bot.
 
 ## Fixed scope and limits
 
-Reuse the one helper agent; main remains provider-free. No new routing model,
+P0–P2 reuse the one helper agent; main remains provider-free. They add no routing model,
 web search, output-budget increase, long-term retention option, generic pagination,
 new database, content-history service or billing system. Current model output is
 800 tokens with four model/four tool calls per turn. Existing summary/retry limits apply.

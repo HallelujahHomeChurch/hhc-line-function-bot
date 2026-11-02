@@ -54,9 +54,13 @@ export async function prepareQuoteContext(input: {
         const result = await input.line.replyText(...args);
         // LINE has accepted the reply; an index failure must never resend it.
         if (result) {
-          await input
-            .recordHistoryReply?.(result.sentMessages, context.replyProjection?.historyDependencies)
-            .catch(() => undefined);
+          if (context.replyProjection?.contextPolicy !== "status_only")
+            await input
+              .recordHistoryReply?.(
+                result.sentMessages,
+                context.replyProjection?.historyDependencies
+              )
+              .catch(() => undefined);
           await (
             context.replyProjection
               ? store.recordReply(turn, result.sentMessages, context.replyProjection)

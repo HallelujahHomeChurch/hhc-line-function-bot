@@ -47,6 +47,7 @@ The first-class functions are:
 - `find_sheet_music`: search the catalog-backed pop and hymn sheet-music sources and return temporary sharing links.
 - `find_resource`: search authorized general church catalog sources without competing with explicit schedule, slide, or sheet-music intent.
 - `query_wikipedia`: query Wikipedia for supported factual lookups.
+- `query_public_web`: explicit fresh public questions only, bounded OpenAI Responses web search, server-delivered citations, atomic Redis quotas and scoped ten-minute result records. See `docs/runbooks/helper-public-search.md`.
 - `query_knowledge`: query admin-registered, profile-shared Notion knowledge through PostgreSQL full-text plus pgvector retrieval and a grounded LLM answer; do not create travel/SOP-specific variants.
 - `save_schedule`: preview and manage profile-shared structured service schedules with one-year retention.
 - `save_resource`: controlled LINE image/file attachment intake with purpose, validation, ClamAV scanning, confirmation, OneDrive publication, catalog upsert, and audit. It is enabled on `helper`, but write-function policy keeps it Account-admin/permission only.
@@ -93,7 +94,7 @@ When adding or changing an admin action:
 - `src/helper-agent/agent.ts`: the sole `createAgent` composition and context/call middleware.
 - `src/helper-agent/state.ts`: HMAC thread scope, 30-minute direct and 15-minute group idle TTL, reset, cleanup, and same-thread serialization.
 - `src/helper-agent/policy-gateway.ts`: strict arguments, source policy, per-call authorization, bounded typed projection, and tool budget.
-- `src/helper-agent/read-tools.ts`: separate authority-specific read tools; public research is retired.
+- `src/helper-agent/read-tools.ts`: separate authority-specific read tools; legacy sheet-music research is retired. Explicit public search uses its own restricted capability.
 - `src/helper-agent/write-tools.ts` and `review.ts`: ordinary SDK draft tools and opaque one-shot server approval state.
 - `src/runtime/action-executor.ts`: live authorization, policy/revision checks, idempotent execution, and durable result persistence.
 - `src/capabilities/catalog.ts`: canonical capability metadata and definitions.
@@ -176,7 +177,7 @@ The retired SDK compatibility wrapper, turn-state engine, generic pending/slot/r
 - Long-running job result retrieval follows the same requester/source rule. A group user must not be able to fetch another user's job result.
 - Soft display-name personalization is for task-state replies such as "what title?" or "please choose"; avoid adding names to final data-heavy function results unless the user asks.
 - Conversational bot-authored self-reference uses first person (`我`), not third-person `小哈`. Keep `小哈` only where it is the product identity (`我是小哈`), a wake word or user-facing example, a registration phrase, or a proper destination name such as `小哈資料庫`.
-- Public sheet-music web search, page reading and new external-result imports are retired. Do not restore research tools or consent-based execution. External binary downloads and legacy research sessions are removed. Attachment work requires a LINE message ID and rejects an external URL. Retain user-saved `external_link` records.
+- Legacy public sheet-music search, arbitrary page reading and external binary imports are retired. Do not restore legacy research tools or consent-based execution. The separately authorized `query_public_web` is limited to fresh explicit public questions; it cannot download or publish files. External binary downloads and legacy research sessions are removed. Attachment work requires a LINE message ID and rejects an external URL. Retain user-saved `external_link` records.
 
 ## Workflow
 
@@ -268,3 +269,12 @@ Testing map:
 - `/forget-memory` must use the same review/action executor; no immediate-delete compatibility path. Do not change default 30-day retention or extend expiry on edits.
 - Embedding backfill must compare the content revision, and updates must clear stale query text/embedding atomically. Rollback to old writers requires drain and approval invalidation; additive columns alone do not make mixed writers safe.
 - P0–P2 acceptance is documented in `docs/runbooks/helper-conversation-notes-acceptance.md`; offline fixtures do not prove live model quality, spend or LINE delivery. P3 search is deferred.
+
+## Explicit public search
+
+- `query_public_web` sends only the literal question after the current user's `公開搜尋：` prefix. Its agent tool has no query argument. Never derive outbound text from checkpoints, notes, quotes, or other tool results.
+- One isolated read per turn, mutually exclusive with writing. The narrow Responses adapter receives no internal tools or history, has one hosted tool-call limit, 800 output tokens, an eight-second timeout and no retries/fallback. Main remains provider-free.
+- `contextPolicy: status_only` keeps external raw replies out of checkpoints, quotes, summaries and group-history ingestion. Preserve the marker and expiry when combining or replaying results. Never weaken URL sanitization for internal tools.
+- Search results use existing scoped job storage for ten minutes, with quote-generation validation. Saving requires an explicit result ID on a later turn, server-owned original text, current access and normal preview/confirmation. Expiry, reset, missing provenance or scope mismatch denies recovery. External draft raw text is not exposed by draft-reading tools.
+- Production search requires Redis and PostgreSQL quote state. Quota reservation atomically checks profile/requester daily counts and event dedup; failures and unknown completion do not refund quota. Disable search during Redis-loss recovery until durable quota state is restored. Do not infer that missing state permits replay.
+- Log only bounded status, usage counts and duration; never public questions, result bodies, citation URLs, keys or identifiers. No live API tests are required by CI.

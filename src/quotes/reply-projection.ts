@@ -5,6 +5,8 @@ export function deliveredContextText(
   text: string,
   projection?: QuoteReplyProjection
 ): string | null {
+  if (projection?.contextPolicy === "status_only")
+    return "公開搜尋已結束；原文不在對話上下文內，需以仍有效的結果編號重新預覽。";
   if (projection?.history) return null;
   if (projection?.kind === "preview") return "已顯示待確認預覽，尚未保存；修改時須讀取目前草稿。";
   const redacted = text.replace(/https?:\/\/[^\s<>]+/giu, "[連結省略]");
@@ -14,6 +16,7 @@ export function deliveredContextText(
 
 export function replyProjection(result: FunctionExecutionResult): QuoteReplyProjection {
   return {
+    ...(result.contextPolicy ? { contextPolicy: result.contextPolicy } : {}),
     ...(result.historyDependencies !== undefined
       ? { history: true as const, historyDependencies: result.historyDependencies }
       : {}),

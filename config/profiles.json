@@ -23,6 +23,7 @@
       "find_sheet_music",
       "find_resource",
       "query_wikipedia",
+      "query_public_web",
       "save_schedule",
       "save_resource",
       "save_memory",

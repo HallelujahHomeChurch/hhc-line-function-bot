@@ -1,7 +1,7 @@
 import { fitsCompleteWritePreview } from "../line-reply.js";
 import { retrieveMemoryArgumentsSchema, saveMemoryArgumentsSchema } from "../function-arguments.js";
 import type { AgentMemoryStore, AgentTextMemoryRecord } from "../agent/memory-store.js";
-import type { FunctionHandler } from "../types.js";
+import type { FunctionHandler, FunctionHandlerContext } from "../types.js";
 import type { EmbeddingClient } from "../clients/embedding.js";
 import type { AccessStore } from "../access/types.js";
 import type { TextGenerationProvider } from "../types.js";
@@ -9,6 +9,7 @@ import type { TextGenerationProvider } from "../types.js";
 const TEXT_MEMORY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface AgentMemoryFunctionOptions {
+  readSearchResult?: (id: string, context: FunctionHandlerContext) => Promise<string | undefined>;
   memoryStore: AgentMemoryStore;
   now?: () => Date;
   embedding?: EmbeddingClient;
@@ -20,6 +21,31 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
   const now = options.now ?? (() => new Date());
   return async (rawArgs, context) => {
     const args = saveMemoryArgumentsSchema.parse(rawArgs);
+    if (args.searchResultId) {
+      const explicit = /^(?:@?小哈[，,\s]*)?保存搜尋結果\s+([a-f0-9-]{36})$/iu.exec(
+        context.event.message?.text?.trim() ?? ""
+      )?.[1];
+      if (
+        (args.operation && args.operation !== "create") ||
+        (!args.searchResultBound && explicit !== args.searchResultId)
+      )
+        return {
+          ok: false,
+          writePreparation: "denied",
+          replyText: "請另傳「保存搜尋結果 結果編號」，再確認完整預覽。"
+        };
+      const original = await options.readSearchResult?.(args.searchResultId, context);
+      if (!original)
+        return {
+          ok: false,
+          writePreparation: "unavailable",
+          replyText: "搜尋結果已過期、重設或無權讀取，請重新搜尋。"
+        };
+      args.content = original;
+      args.title = "公開搜尋筆記";
+      args.query = undefined;
+      args.searchResultBound = true;
+    }
     if (args.operation === "update" || args.operation === "delete") {
       const candidates = await options.memoryStore.searchTextMemories({
         profileName: context.profile.name,
@@ -185,6 +211,18 @@ export function createSaveMemoryHandler(options: AgentMemoryFunctionOptions): Fu
         ok: true,
         writePhase: "preview",
         replyText: preview,
+        ...(args.searchResultId
+          ? {
+              reviewArguments: {
+                searchResultId: args.searchResultId,
+                searchResultBound: true,
+                content,
+                title,
+                visibility
+              },
+              contextPolicy: "status_only" as const
+            }
+          : {}),
         quickReplies: [
           { label: "保存", action: { type: "message", label: "保存", text: "保存" } },
           { label: "取消", action: { type: "message", label: "取消", text: "取消" } }

@@ -7,6 +7,7 @@ export interface ConversationReadReference {
   arguments: JsonRecord;
 }
 export interface QuoteReplyProjection {
+  contextPolicy?: "status_only";
   history?: true;
   historyDependencies?: HistoryDependency[];
   kind: "conversation" | "read" | "preview" | "commit" | "status";

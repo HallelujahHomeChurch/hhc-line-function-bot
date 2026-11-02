@@ -205,6 +205,8 @@ export const queryKnowledgeAgentArgumentsSchema = queryKnowledgeArgumentsSchema
 
 export const saveMemoryArgumentsSchema = z
   .object({
+    searchResultId: z.string().uuid().optional(),
+    searchResultBound: z.boolean().optional(),
     operation: z.enum(["create", "update", "delete"]).optional(),
     memoryId: z.string().uuid().optional(),
     expectedRevision: z.number().int().positive().optional(),
@@ -219,7 +221,13 @@ export const saveMemoryArgumentsSchema = z
   })
   .strip();
 export const saveMemoryAgentArgumentsSchema = saveMemoryArgumentsSchema
-  .omit({ confirm: true, cancel: true, memoryId: true, expectedRevision: true })
+  .omit({
+    confirm: true,
+    cancel: true,
+    memoryId: true,
+    expectedRevision: true,
+    searchResultBound: true
+  })
   .safeExtend({
     title: z.string().trim().optional(),
     content: z.string().trim().optional().default(""),
@@ -262,6 +270,8 @@ export const queryWikipediaArgumentsSchema = z
   })
   .strip();
 export const queryWikipediaAgentArgumentsSchema = queryWikipediaArgumentsSchema.strict();
+
+export const queryPublicWebArgumentsSchema = z.object({}).strict();
 
 export const scheduleEntryArgumentsSchema = z
   .object({
@@ -409,6 +419,7 @@ export function parseFunctionArguments(
     find_sheet_music: findPopSheetMusicArgumentsSchema,
     find_resource: findResourceArgumentsSchema,
     query_wikipedia: queryWikipediaArgumentsSchema,
+    query_public_web: queryPublicWebArgumentsSchema,
     save_memory: saveMemoryArgumentsSchema,
     save_resource: saveResourceArgumentsSchema,
     retrieve_memory: retrieveMemoryArgumentsSchema

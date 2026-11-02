@@ -28,6 +28,28 @@ function fakeStore(): QuoteStore {
   };
 }
 describe("quote context boundary", () => {
+  it("does not copy external search replies into group history", async () => {
+    const recordHistoryReply = vi.fn(async () => undefined);
+    const prepared = await prepareQuoteContext({
+      store: fakeStore(),
+      scope,
+      runtime: { handleTextTurn: async () => undefined },
+      event: {
+        type: "message",
+        source: scope.source,
+        message: { type: "text", text: "公開搜尋：問題" }
+      },
+      recordHistoryReply,
+      line: {
+        replyText: async () => ({
+          sentMessages: [{ id: "search-reply", text: "untrusted external body" }]
+        })
+      }
+    });
+    prepared!.context.replyProjection = { kind: "read", contextPolicy: "status_only" };
+    await prepared!.line.replyText("reply-token", "untrusted external body");
+    expect(recordHistoryReply).not.toHaveBeenCalled();
+  });
   it("keeps credentials, URLs and commands out of retained text", () => {
     for (const text of [
       "https://example.test/private",

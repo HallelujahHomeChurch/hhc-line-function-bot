@@ -75,6 +75,7 @@ import { formatLastErrors, type LastErrorStore } from "../../observability/last-
 import { formatLastRoutes, type LastRouteStore } from "../../observability/last-route-store.js";
 import type { RateLimiter } from "../../rate-limit.js";
 import type { SessionStore } from "../../state/session-store.js";
+import { replyProjection } from "../../quotes/reply-projection.js";
 import type {
   AppConfig,
   AppDiagnostics,
@@ -1319,6 +1320,7 @@ async function handleWebhook(
             completedResult
           );
         }
+        if (quoteContext) quoteContext.replyProjection = replyProjection(completedResult);
         await emitRouteEvent(routeObserver, {
           kind: "postback",
           profileName: profile.name,

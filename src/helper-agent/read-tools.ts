@@ -12,6 +12,7 @@ import {
   queryKnowledgeAgentArgumentsSchema,
   queryScheduleAgentArgumentsSchema,
   queryWikipediaAgentArgumentsSchema,
+  queryPublicWebArgumentsSchema,
   retrieveMemoryAgentArgumentsSchema
 } from "../function-arguments.js";
 import { getFunctionDefinition } from "../capabilities/catalog.js";
@@ -20,6 +21,12 @@ import { createHelperToolGateway, type HelperToolGatewayOptions } from "./policy
 import type { HelperToolSourceType } from "./tool-result.js";
 
 const readToolDefinitions = [
+  {
+    name: "search_public_web",
+    capability: "query_public_web",
+    sourceType: "public",
+    schema: queryPublicWebArgumentsSchema
+  },
   {
     name: "get_official_schedule",
     capability: "query_schedule",
