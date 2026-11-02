@@ -29,6 +29,62 @@ x-hhc-asset-error-responses: &assetErrorResponses
   "502": { $ref: "#/components/responses/BadGateway" }
   "503": { $ref: "#/components/responses/Unavailable" }
 paths:
+  /api/line/search-settings:
+    get:
+      operationId: getSearchSettings
+      summary: Read helper search limits and recent changes
+      description: Requires a trusted Gateway caller and a fresh Account full-administrator decision. Returns current settings and the latest 50 changes; no search questions or results. Query parameters are rejected.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security: [{ gatewayCaller: [], appApiToken: [], trustedUser: [] }]
+      responses:
+        "200":
+          description: Current settings and bounded history; private, no-store.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [settings, history]
+                properties:
+                  settings: { $ref: "#/components/schemas/SearchSettings" }
+                  history:
+                    type: array
+                    maxItems: 50
+                    items: { $ref: "#/components/schemas/SearchSettingsChange" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    patch:
+      operationId: updateSearchSettings
+      summary: Change helper search limits without resetting usage
+      description: Fresh full-administrator authorization, strict input, expected revision and transactional audit are required. Conflict or unknown outcome must be reloaded, never blindly retried. Zero disables that source type. Body limit is 2048 bytes.
+      tags: [Admin]
+      x-hhc-visibility: admin
+      x-hhc-callers: [admin-fe]
+      security: [{ gatewayCaller: [], appApiToken: [], trustedUser: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchSettingsInput" }
+      responses:
+        "200":
+          description: Persisted settings; private, no-store.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [settings]
+                properties:
+                  settings: { $ref: "#/components/schemas/SearchSettings" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { description: Body exceeds 2048 bytes. }
+        "503": { $ref: "#/components/responses/Unavailable" }
   /healthz:
     get:
       operationId: getHealth
@@ -967,6 +1023,34 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
   schemas:
+    SearchSettingsInput:
+      type: object
+      additionalProperties: false
+      required: [enabled, directDailyLimit, groupDailyLimit, revision]
+      properties:
+        enabled: { type: boolean }
+        directDailyLimit: { type: integer, minimum: 0, maximum: 10000 }
+        groupDailyLimit: { type: integer, minimum: 0, maximum: 10000 }
+        revision: { type: integer, minimum: 1, maximum: 2147483646 }
+    SearchSettings:
+      type: object
+      required: [enabled, directDailyLimit, groupDailyLimit, revision, updatedAt, updatedBy]
+      properties:
+        enabled: { type: boolean }
+        directDailyLimit: { type: integer, minimum: 0, maximum: 10000 }
+        groupDailyLimit: { type: integer, minimum: 0, maximum: 10000 }
+        revision: { type: integer, minimum: 1 }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: [string, "null"], format: uuid }
+    SearchSettingsChange:
+      type: object
+      required: [revision, changedAt, changedBy, before, after]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        changedAt: { type: string, format: date-time }
+        changedBy: { type: string, format: uuid }
+        before: { $ref: "#/components/schemas/SearchSettingsInput" }
+        after: { $ref: "#/components/schemas/SearchSettingsInput" }
     MediaSyncBindingMutationRequest:
       type: object
       additionalProperties: false

@@ -36,6 +36,8 @@ type OpenApiDocument = {
 const methods = new Set(["delete", "get", "patch", "post", "put"]);
 const visibilities = new Set(["public", "admin", "private", "operations"]);
 const expectedOperations = [
+  "GET /api/line/search-settings",
+  "PATCH /api/line/search-settings",
   "POST /api/line/media-sync/collections/{collectionId}/work/{workId}/retry",
   "GET /api/line/media-sync/collections/{collectionId}/binding",
   "POST /api/line/media-sync/collections/{collectionId}/binding/pause",

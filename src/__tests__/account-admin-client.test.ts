@@ -63,6 +63,37 @@ describe("account admin client", () => {
     );
   });
 
+  it("verifies full administrator authority only through its dedicated LINE endpoint with the propagated request ID", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ allowed: true }));
+    const client = createAccountAdminClient({
+      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
+      timeoutMs: 1000,
+      fetchImpl
+    });
+
+    await expect(
+      client.verifySearchSettingsPermission!({
+        userId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+        requestId: "request-1"
+      })
+    ).resolves.toBe(true);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://127.0.0.1:3500/v1.0/invoke/account-api/method/priv/account/v1/line/search-settings/authorize",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-hhc-request-id": "request-1"
+        },
+        body: JSON.stringify({
+          userId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
+          permission: "*"
+        }),
+        redirect: "manual"
+      })
+    );
+  });
+
   it("searches ACL subjects through the exact internal Account contract", async () => {
     const payload = {
       subjects: [

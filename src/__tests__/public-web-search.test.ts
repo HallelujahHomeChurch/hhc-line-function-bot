@@ -154,24 +154,32 @@ describe("public search outbound boundary", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     }
   });
-  it("reserves an atomic requester/profile/event quota and refuses storage failure", async () => {
+  it("reserves an atomic source/event quota and refuses storage failure", async () => {
     const evalFn = vi.fn(async () => 1);
     const reserve = createPublicSearchQuota({
       client: { eval: evalFn },
       keyPrefix: "test",
-      hmacKey: "synthetic"
+      hmacKey: "synthetic",
+      settings: async () => ({
+        enabled: true,
+        directDailyLimit: 60,
+        groupDailyLimit: 300,
+        revision: 1
+      })
     });
-    expect(await reserve("helper", "private-user", "private-event")).toBe(true);
+    expect(await reserve("helper", { type: "user", userId: "private-user" }, "private-event")).toBe(
+      true
+    );
     const input = evalFn.mock.calls[0] as unknown as [
       string,
       { keys: string[]; arguments: string[] }
     ];
-    expect(input[1].keys).toHaveLength(3);
-    expect(input[1].arguments).toEqual(["20", "3"]);
+    expect(input[1].keys).toHaveLength(4);
+    expect(input[1].arguments).toEqual(["60"]);
     expect(JSON.stringify(input)).not.toContain("private-user");
     expect(JSON.stringify(input)).not.toContain("private-event");
     evalFn.mockRejectedValueOnce(new Error("offline"));
-    expect(await reserve("helper", "u", "e")).toBe(false);
+    expect(await reserve("helper", { type: "user", userId: "u" }, "e")).toBe(false);
   });
 });
 

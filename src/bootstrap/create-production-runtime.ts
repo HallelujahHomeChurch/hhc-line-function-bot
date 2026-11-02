@@ -1,3 +1,4 @@
+import { PostgresSearchSettingsStore } from "../search-settings/store.js";
 import { createPublicWebSearch } from "../clients/public-web-search.js";
 import { createPublicSearchQuota } from "../state/public-search-quota.js";
 import { createBudgetedFetch } from "../helper-agent/budget.js";
@@ -119,6 +120,11 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     ? setInterval(() => void history.purge().catch(() => undefined), 300000)
     : undefined;
   historyPurgeTimer?.unref();
+  const searchSettings =
+    postgres && config.profiles.some((profile) => profile.name === "helper")
+      ? new PostgresSearchSettingsStore(postgres.pool)
+      : undefined;
+  await searchSettings?.setup();
   const accountAdminClient = createAccountAdminClient({
     baseUrl: config.account?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
     timeoutMs: config.account?.timeoutMs ?? 3000
@@ -339,6 +345,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       helperProfile?.enabledFunctions.includes("query_public_web") &&
       redis &&
       quoteStore &&
+      searchSettings &&
       config.llm.openaiApiKey
         ? {
             search: createPublicWebSearch({
@@ -348,6 +355,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
             reserve: createPublicSearchQuota({
               client: redis.client,
               keyPrefix: redis.keyPrefix,
+              settings: () => searchSettings.get(),
               hmacKey: config.observability?.hmacKey ?? helperProfile.channelSecret
             }),
             jobs: agentJobStore,
@@ -531,7 +539,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     completionObserver,
     accountAdminClient,
     mediaSyncStore: postgres?.mediaSyncStore,
-    mediaSyncManagementService
+    mediaSyncManagementService,
+    searchSettings
   });
 
   return {

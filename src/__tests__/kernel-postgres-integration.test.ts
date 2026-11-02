@@ -357,6 +357,7 @@ describe("Kernel v1 PostgreSQL integration environment", () => {
     try {
       const results = await runPostgresIntegrationMatrix(matrixEnvironment);
       expect(results.map(({ caseId }) => caseId)).toEqual([
+        "postgres/search-settings/concurrency-and-audit",
         "postgres/memory/revision-and-backfill",
         "postgres/helper/fallback-pin-restart",
         "postgres/migrations/fresh-idempotent",

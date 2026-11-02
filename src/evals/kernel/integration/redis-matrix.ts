@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { createRedisProviderCircuit } from "../../../helper-agent/provider-failover.js";
 import { createRateLimiter } from "../../../rate-limit.js";
 import { createPublicSearchQuota } from "../../../state/public-search-quota.js";
@@ -134,26 +135,70 @@ export async function runRedisIntegrationMatrix(
 }
 
 async function publicSearchQuota(environment: KernelRedisEnvironment): Promise<void> {
+  let settings = { enabled: true, directDailyLimit: 60, groupDailyLimit: 300, revision: 1 };
+  let clock = NOW;
   const stores = environment.clients.map((client) =>
     createPublicSearchQuota({
       client,
       keyPrefix: environment.keyPrefix,
       hmacKey: "synthetic",
-      now: () => NOW
+      settings: async () => settings,
+      now: () => clock
     })
   );
+  const direct = { type: "user", userId: "quota-user" };
   const requester = await Promise.all(
-    Array.from({ length: 12 }, (_, i) => stores[i % 2]!("quota-requester", "one", `event-${i}`))
+    Array.from({ length: 65 }, (_, i) => stores[i % 2]!("helper", direct, `direct-${i}`))
   );
-  if (requester.filter(Boolean).length !== 3) throw new Error("requester_quota_invalid");
-  const profile = await Promise.all(
-    Array.from({ length: 30 }, (_, i) => stores[i % 2]!("quota-profile", `user-${i}`, `event-${i}`))
+  assert(requester.filter(Boolean).length === 60);
+  const group = await Promise.all(
+    Array.from({ length: 310 }, (_, i) =>
+      stores[i % 2]!(
+        "helper",
+        { type: "group", groupId: "quota-group", userId: `member-${i}` },
+        `group-${i}`
+      )
+    )
   );
-  if (profile.filter(Boolean).length !== 20) throw new Error("profile_quota_invalid");
+  assert(group.filter(Boolean).length === 300);
+  assert(
+    await stores[0]!(
+      "helper",
+      { type: "group", groupId: "other-group", userId: direct.userId },
+      "other-group"
+    )
+  );
+  assert(await stores[0]!("helper", { type: "user", userId: "member-1" }, "member-direct"));
   const duplicate = await Promise.all(
-    stores.map((reserve) => reserve("quota-dedup", "user", "same-event"))
+    stores.map((reserve) => reserve("helper", { type: "user", userId: "dedup" }, "same-event"))
   );
-  if (duplicate.filter(Boolean).length !== 1) throw new Error("quota_dedup_invalid");
+  assert(duplicate.filter(Boolean).length === 1);
+  settings = { ...settings, directDailyLimit: 59, revision: 2 };
+  assert(!(await stores[0]!("helper", direct, "lowered")));
+  settings = { ...settings, directDailyLimit: 61, revision: 3 };
+  assert(await stores[1]!("helper", direct, "raised"));
+  assert(!(await stores[0]!("helper", direct, "raised-full")));
+  settings = { ...settings, enabled: false, revision: 4 };
+  assert(!(await stores[0]!("helper", { type: "user", userId: "new" }, "disabled")));
+  settings = { ...settings, enabled: true, directDailyLimit: 1, revision: 5 };
+  const digest = createHmac("sha256", "synthetic").update("helper").digest("hex");
+  const prefix = `${environment.keyPrefix}:legacy-quota`;
+  await environment.clients[0].setEx(`${prefix}:public-search:${digest}:2026-11-02`, 172800, "2");
+  const legacy = createPublicSearchQuota({
+    client: environment.clients[0],
+    keyPrefix: prefix,
+    hmacKey: "synthetic",
+    settings: async () => ({ ...settings, directDailyLimit: 3 }),
+    now: () => new Date("2026-11-03T01:00:00Z")
+  });
+  assert(await legacy("helper", { type: "user", userId: "legacy" }, "legacy-one"));
+  assert(!(await legacy("helper", { type: "user", userId: "legacy" }, "legacy-two")));
+  clock = new Date("2026-11-03T15:59:59.999Z");
+  assert(await stores[0]!("helper", direct, "before-midnight"));
+  assert(!(await stores[0]!("helper", direct, "same-day")));
+  clock = new Date("2026-11-03T16:00:00Z");
+  assert(await stores[0]!("helper", direct, "after-midnight"));
+  assert(!(await stores[0]!("helper", direct, "after-midnight")));
 }
 
 const RESTART_SCOPE = {
@@ -238,10 +283,16 @@ export async function verifyRedisServerRestartState(
           client: rightClient,
           keyPrefix: environment.keyPrefix,
           hmacKey: "synthetic",
+          settings: async () => ({
+            enabled: true,
+            directDailyLimit: 60,
+            groupDailyLimit: 300,
+            revision: 1
+          }),
           now: () => NOW
         });
-        assert(!(await reserve("quota-requester", "one", "after-restart")));
-        assert(!(await reserve("quota-dedup", "user", "same-event")));
+        assert(!(await reserve("helper", { type: "user", userId: "quota-user" }, "after-restart")));
+        assert(!(await reserve("helper", { type: "user", userId: "dedup" }, "same-event")));
       }
     },
     {
