@@ -148,6 +148,7 @@ export function composeCapabilities(
     }),
     save_memory: createSaveMemoryHandler({
       memoryStore: clients.memoryStore,
+      accessStore: clients.accessStore,
       now: clients.now,
       embedding: clients.embedding
     }),

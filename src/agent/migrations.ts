@@ -104,6 +104,10 @@ const migrations = [
     deleted_at timestamptz
   )
   `,
+  `alter table agent_text_memories
+    add column if not exists revision integer not null default 1,
+    add column if not exists updated_at timestamptz,
+    add column if not exists updated_by text`,
   `
   create index if not exists agent_text_memories_lookup_idx
   on agent_text_memories (profile_name, scope_type, scope_id, created_at desc)

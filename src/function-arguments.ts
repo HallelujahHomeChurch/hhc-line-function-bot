@@ -205,6 +205,11 @@ export const queryKnowledgeAgentArgumentsSchema = queryKnowledgeArgumentsSchema
 
 export const saveMemoryArgumentsSchema = z
   .object({
+    operation: z.enum(["create", "update", "delete"]).optional(),
+    memoryId: z.string().uuid().optional(),
+    expectedRevision: z.number().int().positive().optional(),
+    oldText: z.string().min(1).optional(),
+    newText: z.string().optional(),
     title: z.string().optional(),
     content: z.string().optional().default(""),
     query: z.string().optional(),
@@ -214,7 +219,7 @@ export const saveMemoryArgumentsSchema = z
   })
   .strip();
 export const saveMemoryAgentArgumentsSchema = saveMemoryArgumentsSchema
-  .omit({ confirm: true, cancel: true })
+  .omit({ confirm: true, cancel: true, memoryId: true, expectedRevision: true })
   .safeExtend({
     title: z.string().trim().optional(),
     content: z.string().trim().optional().default(""),
@@ -244,6 +249,7 @@ export const saveResourceAgentArgumentsSchema = saveResourceArgumentsSchema
 
 export const retrieveMemoryArgumentsSchema = z
   .object({
+    operation: z.enum(["search", "list", "read"]).optional(),
     query: z.string().optional().default(""),
     memoryId: z.string().optional()
   })

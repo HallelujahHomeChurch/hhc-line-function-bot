@@ -1,3 +1,4 @@
+import { createMemoryCommandHandler } from "../transport/line/memory-commands.js";
 import { PostgresAccessStore } from "../access/postgres-access-store.js";
 import { runAccessMigrations } from "../access/migrations.js";
 import { MediaSyncManagementService } from "../media-sync/service.js";
@@ -1420,6 +1421,66 @@ describe("LINE entrance", () => {
       expect(String(replyText.mock.calls.at(-1)?.[1])).toContain(expectedReply);
     }
   );
+
+  it("routes a signed legacy note deletion to a scoped preview without deleting", async () => {
+    const config = testConfig();
+    config.profiles[0]!.enabledFunctions.push("save_memory");
+    config.profiles[0]!.permissionRequiredFunctions = ["save_memory"];
+    const memoryStore = new InMemoryAgentMemoryStore();
+    const source = { type: "user" as const, userId: "Uallowed" };
+    const note = await memoryStore.saveTextMemory({
+      profileName: "main",
+      source,
+      createdBy: source.userId,
+      content: "synthetic note"
+    });
+    const prepareActionReview = vi
+      .fn()
+      .mockResolvedValue({ ok: true, writePhase: "preview", replyText: "請確認刪除" });
+    const replyText = vi.fn<LineReplyClient["replyText"]>().mockResolvedValue(undefined);
+    const app = createTestApp(config, {
+      accountAdminClient: {
+        authorizeFunctions: async () => ({
+          bound: true,
+          active: true,
+          administrator: false,
+          allowedFunctions: ["save_memory"]
+        })
+      },
+      memoryCommands: createMemoryCommandHandler({ memoryStore }),
+      profileRuntime: { handleTextTurn: vi.fn(), prepareActionReview },
+      createLineReplyClient: () => ({ replyText })
+    });
+    try {
+      const body = lineBody({
+        type: "message",
+        source,
+        replyToken: "synthetic-preview",
+        message: { type: "text", text: `/forget-memory ${note.id}` }
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/line/webhook/main",
+            headers: signedHeaders(body, "main-secret"),
+            payload: body
+          })
+        ).statusCode
+      ).toBe(200);
+      expect(prepareActionReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "propose_save_memory",
+          arguments: { operation: "delete", memoryId: note.id },
+          event: expect.objectContaining({ source })
+        })
+      );
+      expect(replyText.mock.calls.at(-1)?.[1]).toBe("請確認刪除");
+      expect(await memoryStore.listTextMemories({ profileName: "main", source })).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
 
   it("accepts an explicit save_memory Account grant for /forget-memory", async () => {
     const config = testConfig();

@@ -188,7 +188,7 @@ The application resolves this authority once and projects the exact effective ca
 
 ## Routing
 
-The helper profile has one semantic path: `src/helper-agent/runtime.ts` constructs the effective tool set and invokes the sole LangChain/LangGraph agent in `src/helper-agent/agent.ts`. Helper explicitly selects its DeepSeek or OpenAI provider, response model and summary model in profile configuration. The shipped profile uses DeepSeek `deepseek-v4-flash` for both models pending OpenAI availability verification from the production region; see [provider deployment and rollback](docs/runbooks/helper-provider-comparison.md). The main profile uses `src/runtime/main-runtime.ts` and makes zero model and embedding requests.
+The helper profile has one semantic path: `src/helper-agent/runtime.ts` constructs the effective tool set and invokes the sole LangChain/LangGraph agent in `src/helper-agent/agent.ts`. Helper explicitly selects its DeepSeek or OpenAI provider, response model and summary model in profile configuration. The shipped profile selects OpenAI `gpt-6-luna` with explicitly configured DeepSeek fallback; see [provider deployment and rollback](docs/runbooks/helper-provider-comparison.md). The main profile uses `src/runtime/main-runtime.ts` and makes zero model and embedding requests.
 
 LINE ingress validates the signature, profile, access, engagement, commands, postbacks, and deterministic attachment/selection flows before `src/runtime/profile-runtime.ts` dispatches the turn. There is no compatibility agent, semantic fallback, shadow route, generic pending-function engine, or model router.
 
@@ -636,3 +636,19 @@ A fresh explicit address is required for each group text: `小哈，幫我查…
 Capability questions use the same deterministic menu classifier. Finite domain choices use existing requester-bound one-shot buttons. Structured missing-input replies and unbuttoned questions ending in `?` or `？` include a short quote/reinvoke instruction; ordinary final answers and approval previews are unchanged. This is presentation, not a semantic admission classifier. Model wording without a question mark still relies on the existing prompt instruction; real-provider UX needs separate acceptance.
 
 Active bound group images/files continue through LINE media sync before conversational quota. That burst-protection fix is retained. Non-sync group attachments also bypass chat quota, while the existing requester upload intent, save permission, size validation and worker controls still govern manual intake. Unrelated attachments remain silent. Manual bound video/audio opt-in replies use the same scoped group buttons as image/file replies.
+
+## Helper conversation and saved notes
+
+Helper supports general explanation, analysis, comparison, planning, writing, translation
+and organization without a topic-specific function or automatic saving. Follow-ups retain
+only the admitted requester's short-lived context; group messages still need invocation,
+a valid Bot quote or a scoped button. No additional classifier or web search is enabled.
+
+Ask to list saved notes, show one note in full, replace a unique original phrase, or delete
+a note. Changes and deletions (including `/forget-memory`) require a preview and explicit
+confirmation, current Account permission and ownership/admin authority. Updates preserve
+the original 30-day expiry and reject concurrent revisions. Whole-note replacement requires
+user-provided content; truncated search excerpts never reconstruct authoritative text.
+Group previews are visible to the group even when later note retrieval is private.
+
+See [P0–P2 acceptance and rollback](docs/runbooks/helper-conversation-notes-acceptance.md).

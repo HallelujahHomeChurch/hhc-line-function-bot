@@ -62,7 +62,8 @@ export function createHelperWriteTools(options: HelperWriteToolsOptions) {
       capability: "save_memory" as const,
       value: tool((args) => execute(options, "propose_save_memory", args as JsonRecord), {
         name: "propose_save_memory",
-        description: "只在使用者明確要求記住文字時提出保存內容與可見範圍，交由使用者預覽確認。",
+        description:
+          "建立、修改或刪除已保存筆記的預覽。已知名稱及修改片段時直接呼叫，不必先搜尋。operation=create/update/delete；query 只填筆記原名稱或原文片段，不含指令或新內容。局部修改填 oldText/newText，伺服器保留其餘原文；整篇替換只用使用者明給的 content。預覽後另行確認才執行。",
         schema: saveMemoryAgentArgumentsSchema
       })
     },

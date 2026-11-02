@@ -1445,6 +1445,12 @@ async function handleWebhook(
         }
         const agentCommandResult = await memoryCommands?.handleCommand({
           text: event.message.text,
+          previewDeletion: async (id) =>
+            profileRuntime.prepareActionReview?.({
+              ...profileTurnInput,
+              toolName: "propose_save_memory",
+              arguments: { operation: "delete", memoryId: id }
+            }),
           context: { profile: agentCommandProfile, event, requestId, requesterDisplayName },
           isAdmin: memoryCommandFunction
             ? agentCommandIsAdmin
