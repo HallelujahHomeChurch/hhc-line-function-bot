@@ -30,6 +30,7 @@ export interface AgentTurnTraceStep {
   outcome?: string;
   action?: string;
   provider?: string;
+  modelRole?: "response" | "summary";
   lane?: string;
   reason?: string;
   query?: "present" | "empty" | "missing";
@@ -55,6 +56,7 @@ export interface AgentTurnTraceStep {
   queryFingerprint?: string;
   referenceFingerprint?: string;
   providerRequestCount?: number;
+  usageMissingRequestCount?: number;
   modelCallCount?: number;
   toolCallCount?: number;
   historyEvidenceBytes?: number;
