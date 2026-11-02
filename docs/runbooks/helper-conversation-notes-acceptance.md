@@ -2,13 +2,12 @@
 
 Baseline: `08832350d8cd79e849dc658bd37b6f4df6a0a73e`. This change is pre-release:
 offline contracts are not proof of model quality, real token savings or LINE delivery.
-No live model requests or deployment are part of this implementation.
+Initial implementation did not include live requests or deployment.
 
-Continuation authorization (2026-11-02): synthetic live API comparison may spend at
-most US$5 total; isolated test-environment deployment is allowed. Production deployment
-remains prohibited. No paid requests have been made: the local environment has no
-OpenAI key, and a separate LINE test bot/environment has not yet been identified.
-Do not substitute production deployment for this missing test setup.
+Continuation authorization (2026-11-02): synthetic live comparison was authorized up
+to US$5. The user then authorized production deployment, stopped further live/device
+acceptance work, and chose manual testing plus ongoing cost observation. Required
+offline CI and release health checks still apply. There is no separate test Bot.
 
 ## Fixed scope and limits
 
@@ -127,15 +126,39 @@ These results confirm that slow turns consume lock-pool capacity; they do not es
 production capacity or justify changing the lock mechanism. The test container and
 schema were removed. No production data or paid model calls were used.
 
-Next gates, in order: identify safe OpenAI credentials and isolated test Bot/environment;
-run baseline/candidate synthetic journeys under the US$5 total cap with retries disabled
-and conservative per-request cost reservation; deploy only to that test environment;
-complete user LINE acceptance; then evaluate P3 compatibility, provenance and search
-cost gates. Stop paid requests if pricing, usage or a conservative bound is unavailable.
-P3 remains disabled until the preceding gates pass.
+### Bounded live findings (2026-11-02)
+
+Using synthetic identities/data and the configured `gpt-6-luna`, Chat Completions,
+reasoning `none`, 800 output tokens, no retries and no fallback, 89 model requests were
+made across baseline, candidate and diagnostic iterations before the user stopped live
+acceptance. Total reported input/output/cache tokens: 163,121 / 4,758 / 136,530.
+At the [standard model rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
+the token estimate is US$0.0064034 (not an account invoice). All attempts and failed
+journeys are included. The test guard reserved conservatively before each request;
+no production data, embeddings, web searches or LINE sends were used.
+
+The six conversation journeys initially exposed unnecessary `get_conversation_state`
+calls during comparison, planning and writing follow-ups. Narrowing the state tool and
+prompt to execution progress removed those calls in the final sample: baseline 16 model
+calls / 26,651 total tokens; final candidate 12 calls / 21,515 tokens, zero tool calls.
+Median per-journey tokens fell from 4,854 to 3,484. This is one small sample, not a
+statistical claim or proof that every task costs less. Prompt additions were shortened.
+
+Note probes exposed searches containing instructions and replacement text; tool contracts
+now specify a literal original title/fragment and direct update/delete proposals.
+Create/next-day recall, listing, full read and exact update each succeeded in at least
+one sample, but full read and delete tool selection remained inconsistent. The live
+conflict probe had a harness argument error (`memoryId` instead of store `id`) and is
+invalid evidence; the offline two-connection PostgreSQL conflict test remains the valid
+concurrency check. No further live probes were run after the stop request.
+
+The 11/12 live acceptance threshold and three-pain-point proof are **not established**.
+Manual LINE validation is now user-owned; do not label this release product-accepted.
+P3 must still enforce its server-side privacy, provenance and cost bounds, even though
+the user waived the pre-release live/device gates.
 
 Baseline offline evaluator: 19/19 cases, 34 fake model calls and 20 fake tool calls.
 Candidate preserves those totals; token fields are unavailable in these stubs.
 The six new conversation probes use one fake model call per turn and zero tools.
 See the PR for exact commands/results and CI. Real provider quality/cost, production
-load and LINE acceptance remain pending; merge triggers production and is not authorized.
+load and LINE acceptance remain pending; production release is now explicitly authorized.

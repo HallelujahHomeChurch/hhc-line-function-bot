@@ -455,7 +455,7 @@ export const CAPABILITY_CATALOG: FunctionDefinition[] = [
     agentCapability: {
       intents: ["查我記住的", "查我保存的", "查我儲存的", "查記住的資訊"],
       semanticDescription:
-        "查詢目前來源可見且未過期的文字筆記。operation=search 回傳有界證據，list 列出名稱，read 將唯一符合 query 的完整原文直接顯示給使用者，不把全文交給模型。",
+        "查詢可見且未過期的筆記。query 只填原名稱或一段原文，不含查詢指令或尚未寫入的新文字，不拼接多個關鍵詞。operation=search 回傳有界證據，list 列名稱，read 直接顯示唯一筆記全文。修改／刪除用 propose_save_memory，不用本工具執行。",
       retrievalEvidence: {
         provider: "memory",
         queryStopWords: ["記憶", "記住的資訊", "已記住的資訊", "保存的資訊", "已保存的資訊"]
