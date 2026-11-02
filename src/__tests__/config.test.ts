@@ -180,6 +180,43 @@ describe("config", () => {
     );
   });
 
+  it("requires an explicit allowed OpenAI-to-DeepSeek helper fallback pair", async () => {
+    const profile = {
+      name: "helper",
+      webhookPath: "/api/line/webhook/helper",
+      channelSecret: "synthetic",
+      channelAccessToken: "synthetic",
+      allowedProviders: ["deepseek", "openai"],
+      agent: {
+        personaFile: "agents/helper/PERSONA.md",
+        memoryPolicyFile: "agents/helper/MEMORY.md",
+        provider: "openai",
+        model: "synthetic",
+        summaryModel: "synthetic",
+        fallback: {
+          provider: "deepseek",
+          model: "synthetic-fallback",
+          summaryModel: "synthetic-summary"
+        }
+      }
+    };
+    await withProfileFile([profile], async (path) => {
+      const directory = join(path, "..", "agents", "helper");
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, "PERSONA.md"), "synthetic");
+      await writeFile(join(directory, "MEMORY.md"), "synthetic");
+      const load = () => loadConfigFromEnv({ PROFILE_CONFIG_PATH: path });
+      expect(load().profiles[0]!.agent!.fallback).toEqual(profile.agent.fallback);
+      await writeFile(path, JSON.stringify([{ ...profile, allowedProviders: ["openai"] }]));
+      expect(load).toThrow("DeepSeek must be listed in allowedProviders");
+      await writeFile(
+        path,
+        JSON.stringify([{ ...profile, agent: { ...profile.agent, provider: "deepseek" } }])
+      );
+      expect(load).toThrow("Helper fallback requires");
+    });
+  });
+
   it("loads helper persona and memory policy from bounded profile files", async () => {
     await withProfileFile(
       [

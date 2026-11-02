@@ -1,3 +1,4 @@
+import { createRedisProviderCircuit } from "../../../helper-agent/provider-failover.js";
 import { createRateLimiter } from "../../../rate-limit.js";
 import type { KernelBoundary } from "../contracts.js";
 import { RedisConfirmationStore } from "../../../actions/confirmation-store.js";
@@ -47,6 +48,11 @@ export async function runRedisIntegrationMatrix(
     boundary: KernelBoundary;
     run: () => Promise<void>;
   }> = [
+    {
+      caseId: "redis/helper/provider-circuit",
+      boundary: "state_lifecycle",
+      run: async () => providerCircuit(environment)
+    },
     {
       caseId: "redis/rate-limit/atomic-window-notification",
       boundary: "entrance_access",
@@ -665,4 +671,29 @@ async function jobExecutionClaim(environment: KernelRedisEnvironment): Promise<v
   });
   await stores[1]!.complete(jobs[0]!.id, { ok: true, replyText: "late overwrite" });
   assert((await stores[0]!.get(jobs[0]!.id, scope))?.result?.replyText === "known result");
+}
+
+async function providerCircuit(environment: KernelRedisEnvironment): Promise<void> {
+  const prefix = `${environment.keyPrefix}:provider-circuit`;
+  const a = createRedisProviderCircuit(environment.clients[0], prefix);
+  const b = createRedisProviderCircuit(environment.clients[1], prefix);
+  assert((await a.acquire()) === "closed");
+  await a.fail("closed", false);
+  assert((await b.acquire()) === undefined);
+  await a.succeed("closed");
+  assert((await b.acquire()) === undefined);
+  await environment.clients[0].del(`${prefix}:cooldown`);
+  const leases = await Promise.all([a.acquire(), b.acquire()]);
+  const lease = leases.find((value) => value !== undefined)!;
+  assert(leases.filter(Boolean).length === 1 && lease !== "closed");
+  await a.succeed("stale-owner");
+  assert((await b.acquire()) === undefined);
+  await b.succeed(lease);
+  assert((await a.acquire()) === "closed");
+  await a.fail("closed", true);
+  assert((await environment.clients[0].pTTL(`${prefix}:cooldown`)) > 3_500_000);
+  await environment.reconnectReplica(1);
+  assert(
+    (await createRedisProviderCircuit(environment.clients[1], prefix).acquire()) === undefined
+  );
 }

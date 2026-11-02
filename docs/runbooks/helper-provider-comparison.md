@@ -14,7 +14,8 @@ summary calls. Configuration rejects Luna without the explicit non-reasoning mod
 
 Keep `LLM_PROVIDER=deepseek` for existing non-agent lanes; helper selection is
 profile-owned. DeepSeek remains allowed for these lanes and reviewed rollback.
-There is no automatic provider fallback. A denied allowlist or missing OpenAI
+Automatic provider fallback is default-off; only the explicitly configured helper
+pair described in [fallback operations](helper-provider-failover.md) is supported. A denied allowlist or missing OpenAI
 model fails configuration validation. `OPENAI_API_KEY` comes only from local
 environment or an ACA secret; never put it in profiles or PostgreSQL. Explicit
 `agent.model` and `agent.summaryModel` override the legacy `DEEPSEEK_MODEL`
@@ -28,7 +29,9 @@ checkpoint policy key before another turn.
    production access. The 2026-10-31 rollout returned HTTP 403
    `unsupported_country_region_territory` from production, so the profile was
    restored to DeepSeek. Resolve supported deployment-region access before retrying;
-   do not add a proxy or automatic fallback. Metadata success still does not prove
+   a dedicated, explicitly configured proxy is now supported, but requires its own
+   deployment approval and supported-region eligibility check. Automatic fallback
+   is not enabled by proxy configuration. Metadata success still does not prove
    inference permissions, credit availability, or answer quality.
 2. Stage the operator-provided key as the bot's ACA `openai-api-key` secret without
    printing it. Keep existing secrets intact. The release manifest references it
@@ -43,7 +46,7 @@ checkpoint policy key before another turn.
    acceptance; empty webhook checks do not prove provider availability or quality.
 5. Roll back via the normal known-good digest release, or a reviewed explicit
    DeepSeek profile/model change. Retain the A admission gate, existing data and
-   secrets; never enable an automatic fallback or replay uncertain jobs.
+   secrets; disable fallback on rollback and never replay uncertain jobs.
 
 `pnpm test src/__tests__/helper-provider-comparison.test.ts` exercises the same
 strict tool journey through both actual SDK adapters using synthetic HTTP replies.
@@ -80,3 +83,27 @@ Caching is counted input, not free stored memory. See the official
 Deployment and real LINE delivery need separate approval and acceptance. Rollback
 selects the reviewed prior provider/models and rotates checkpoint identity; it
 never enables a fallback router. Do not roll back phase A's admission gate.
+
+## Dedicated OpenAI CONNECT transport (default off)
+
+`OPENAI_PROXY_URL` optionally selects an HTTP(S) private relay origin for helper's
+OpenAI response and summary clients. Credentials, paths, queries and fragments in
+the URL are rejected. It never sets global proxy variables or a global dispatcher.
+DeepSeek, LINE, Graph, Asset, embedding and provider-free main are unaffected.
+The client permits only `https://api.openai.com:443`, rejects redirects and retains
+normal TLS certificate validation. Proxy failure fails closed, without direct
+OpenAI retry outside the configured path. Connections are bounded and destroyed
+on runtime shutdown. No keys or decrypted content belong on the relay.
+
+Before enabling, deploy the separately reviewed private bastion relay and Windows
+service; restrict ACA-to-relay and bastion-to-Windows access and CONNECT targets.
+Do not expose an unauthenticated relay publicly. Windows must use its own directory,
+service identity and port, with Tailscale unattended and automatic service recovery;
+never change Codex/other agent settings, system proxy, exit-node or default routing.
+Validate denied sources/targets, TLS, proxy failure, and Windows boot before login
+separately. Configuration inspection is not reboot acceptance. Deployment, reboot,
+paid inference and real LINE tests are not part of offline CI.
+
+Rollback: leave helper explicitly on DeepSeek or unset the optional proxy only
+when direct OpenAI access is approved. Remove only dedicated relay/service rules.
+No database migration or production profile change is required by this feature.

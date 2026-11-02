@@ -62,6 +62,14 @@ const agentPromptFilesSchema = z
     model: z.string().trim().min(1).max(128).optional(),
     summaryModel: z.string().trim().min(1).max(128).optional(),
     reasoningEffort: z.literal("none").optional(),
+    fallback: z
+      .object({
+        provider: z.literal("deepseek"),
+        model: z.string().trim().min(1).max(128),
+        summaryModel: z.string().trim().min(1).max(128)
+      })
+      .strict()
+      .optional(),
     personaFile: z.string().regex(/^agents\/[a-z0-9_-]+\/PERSONA\.md$/u),
     memoryPolicyFile: z.string().regex(/^agents\/[a-z0-9_-]+\/MEMORY\.md$/u)
   })
@@ -345,6 +353,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     llm: {
       provider: llmProvider,
       openaiApiKey: env.OPENAI_API_KEY || undefined,
+      openaiProxyUrl: readOpenAiProxyUrl(env.OPENAI_PROXY_URL),
       deepseekApiKey: env.DEEPSEEK_API_KEY || undefined,
       deepseekBaseUrl: env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
       deepseekModel: env.DEEPSEEK_MODEL || "deepseek-v4-flash",
@@ -489,6 +498,7 @@ type NormalizedProfile = Omit<
     model?: string;
     summaryModel?: string;
     reasoningEffort?: "none";
+    fallback?: { provider: "deepseek"; model: string; summaryModel: string };
     personaPrompt: string;
     memoryPolicyPrompt: string;
   };
@@ -561,6 +571,7 @@ function readAgentPrompts(
     model: files.model,
     summaryModel: files.summaryModel,
     reasoningEffort: files.reasoningEffort,
+    fallback: files.fallback,
     personaPrompt: readAgentPrompt(profileDirectory, files.personaFile),
     memoryPolicyPrompt: readAgentPrompt(profileDirectory, files.memoryPolicyFile)
   };
@@ -695,6 +706,14 @@ function validateProviderPolicy(
       if (providerCapabilities[provider].subscriptionBased && !profile.allowSubscriptionProviders) {
         throw new Error(`Profile ${profile.name} cannot allow subscription provider ${provider}`);
       }
+    }
+    if (
+      profile.agent?.fallback &&
+      (profile.name !== "helper" ||
+        profile.agent.provider !== "openai" ||
+        !profile.allowedProviders.includes("deepseek"))
+    ) {
+      throw new Error("Helper fallback requires primary OpenAI and explicitly allowed DeepSeek");
     }
     if (
       profile.allowedProviders.length > 0 &&
@@ -1060,4 +1079,25 @@ function readGraphLinkType(value: string | undefined): "view" | "edit" | "embed"
 
 function readGraphLinkScope(value: string | undefined): "anonymous" | "organization" {
   return value === "organization" ? "organization" : "anonymous";
+}
+
+export function readOpenAiProxyUrl(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const url = new URL(value.trim());
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    )
+      throw new Error();
+    return url.origin;
+  } catch {
+    throw new Error(
+      "OPENAI_PROXY_URL must be an HTTP(S) origin without credentials, path, query or fragment"
+    );
+  }
 }

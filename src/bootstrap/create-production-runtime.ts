@@ -1,3 +1,5 @@
+import { createOpenAiProxyTransport } from "../clients/openai-proxy.js";
+import { createRedisProviderCircuit } from "../helper-agent/provider-failover.js";
 import { loadHistoryConfig } from "../history/config.js";
 import { PostgresGroupHistory } from "../history/postgres.js";
 import { PostgresQuoteStore } from "../quotes/postgres-store.js";
@@ -344,6 +346,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     ? setInterval(() => void quoteStore.cleanupExpired().catch(() => undefined), 300_000)
     : undefined;
   quoteCleanupTimer?.unref();
+  let openaiProxy: ReturnType<typeof createOpenAiProxyTransport> | undefined;
   let stopSdkStateCleanup: (() => void) | undefined;
   let helperStateLockPool: ReturnType<typeof createPostgresPool> | undefined;
   const runtimes: Partial<Record<string, ProfileRuntime>> = {};
@@ -390,7 +393,24 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       });
     }
     const helperProvider = helperProfile.agent?.provider ?? "deepseek";
+    const fallback = helperProfile.agent?.fallback;
+    if (fallback && (!redis || !config.llm.deepseekApiKey || !config.llm.openaiApiKey)) {
+      throw new Error("helper_fallback_requires_redis_and_both_api_keys");
+    }
+    if (helperProvider === "openai" && config.llm.openaiProxyUrl) {
+      openaiProxy = createOpenAiProxyTransport(config.llm.openaiProxyUrl);
+    }
     const helperModels = createHelperModels({
+      fetchImpl: openaiProxy?.fetch,
+      ...(fallback
+        ? {
+            fallback: {
+              ...fallback,
+              apiKey: config.llm.deepseekApiKey!,
+              baseUrl: config.llm.deepseekBaseUrl
+            }
+          }
+        : {}),
       provider: helperProvider,
       apiKey: helperProvider === "openai" ? config.llm.openaiApiKey : config.llm.deepseekApiKey,
       baseUrl:
@@ -401,6 +421,14 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       timeoutMs: config.llm.deepseekTimeoutMs
     });
     runtimes.helper = createHelperRuntime({
+      ...(fallback
+        ? {
+            providerCircuit: createRedisProviderCircuit(
+              redis!.client,
+              `${redis!.keyPrefix}:helper:openai-circuit`
+            )
+          }
+        : {}),
       history,
       timeZone: config.timeZone,
       ...helperModels,
@@ -500,6 +528,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
         if (result.status === "rejected") errors.push(result.reason);
       }
       for (const close of [
+        () => openaiProxy?.close(),
         () => historyPool?.end(),
         () => redis?.close(),
         () => helperStateLockPool?.end(),

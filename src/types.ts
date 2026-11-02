@@ -286,6 +286,7 @@ export interface BotProfileConfig extends ProfileFunctionPolicy {
     model?: string;
     summaryModel?: string;
     reasoningEffort?: "none";
+    fallback?: { provider: "deepseek"; model: string; summaryModel: string };
     personaPrompt: string;
     memoryPolicyPrompt: string;
   };
@@ -300,6 +301,7 @@ export interface BotProfileConfig extends ProfileFunctionPolicy {
 
 export interface LlmConfig {
   openaiApiKey?: string;
+  openaiProxyUrl?: string;
   provider?: ModelProviderName;
   deepseekApiKey?: string;
   deepseekBaseUrl: string;
