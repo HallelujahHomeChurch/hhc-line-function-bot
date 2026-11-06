@@ -27,13 +27,51 @@ const memberAccessSchema = z
 export type MemberAccessSnapshot = z.infer<typeof memberAccessSchema>;
 export type MemberAccessPresentation = MemberAccessSnapshot | "unavailable";
 
+export const MEMBER_CMS_DAPR_BASE_URL = "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method";
+
+export function createMemberCMSFetch(
+  privateCMS?: { baseUrl: string; token: string },
+  fetchImpl: typeof fetch = fetch
+): typeof fetch {
+  if (!privateCMS) return fetchImpl;
+  const { baseUrl, token } = privateCMS;
+  if (
+    !/^https:\/\/hhc-web-api\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$/u.test(
+      baseUrl
+    ) ||
+    !/^[a-f0-9]{64}$/u.test(token)
+  ) {
+    throw new Error("member_cms_https_config_invalid");
+  }
+  return async (input, init) => {
+    if (
+      typeof input !== "string" ||
+      !input.startsWith(MEMBER_CMS_DAPR_BASE_URL + "/") ||
+      (init?.method ?? "GET") !== "GET"
+    )
+      throw new Error("member_cms_route_invalid");
+    const target = new URL(input.slice(MEMBER_CMS_DAPR_BASE_URL.length), baseUrl);
+    if (
+      target.origin !== baseUrl ||
+      (target.pathname !== "/priv/line/member-access" &&
+        target.pathname !== "/api/member/bulletins/online")
+    ) {
+      throw new Error("member_cms_route_invalid");
+    }
+    const headers = new Headers(init?.headers);
+    headers.set("x-hhc-cms-service-caller", "hhc-line-function-bot");
+    headers.set("x-hhc-cms-service-token", token);
+    return fetchImpl(target, { ...init, headers, redirect: "error" });
+  };
+}
+
 export async function readMemberAccess(
   fetchImpl: typeof fetch,
   subjectId: string,
   requestId?: string
 ): Promise<MemberAccessSnapshot> {
   const response = await fetchImpl(
-    "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method/priv/line/member-access?locale=zh-Hant",
+    MEMBER_CMS_DAPR_BASE_URL + "/priv/line/member-access?locale=zh-Hant",
     {
       headers: {
         "X-HHC-User-ID": subjectId,

@@ -30,7 +30,8 @@ describe("search settings management", () => {
       store,
       authorize,
       gatewayCallerAppId: "api-gateway",
-      appApiToken: "synthetic"
+      appApiToken: "synthetic",
+      gatewayPrivateToken: "a".repeat(64)
     });
     try {
       expect((await app.inject({ url: "/api/line/search-settings" })).statusCode).toBe(403);
@@ -38,6 +39,30 @@ describe("search settings management", () => {
       expect(
         (await app.inject({ url: "/api/line/search-settings", headers })).json().settings
       ).toEqual(settings);
+      const privateHeaders = {
+        "x-hhc-line-gateway-token": "a".repeat(64),
+        "x-hhc-user-id": actor
+      };
+      expect(
+        (await app.inject({ url: "/api/line/search-settings", headers: privateHeaders })).json()
+          .settings
+      ).toEqual(settings);
+      expect(
+        (
+          await app.inject({
+            url: "/api/line/search-settings",
+            headers: { ...headers, ...privateHeaders }
+          })
+        ).statusCode
+      ).toBe(403);
+      expect(
+        (
+          await app.inject({
+            url: "/api/line/search-settings",
+            headers: { ...headers, "x-hhc-line-gateway-token": "b".repeat(64) }
+          })
+        ).statusCode
+      ).toBe(403);
       authorize.mockResolvedValue(false);
       expect(
         (

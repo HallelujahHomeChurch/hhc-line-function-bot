@@ -1013,6 +1013,7 @@ else if (command("acr", "manifest", "show-metadata")) output("sha256:${"1".repea
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "properties.managedEnvironmentId") output("/subscriptions/fixture/managedEnvironments/fixture-env");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "location") output("eastasia");
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "identity.principalId") output("bot-principal");
+else if (command("containerapp", "show") && name === "fixture-bot" && query === "properties.configuration.dapr.enabled") output("true");
 else if (command("identity", "show") && query === "id") output("/identities/fixture-jobs");
 else if (command("identity", "show")) output({ id: "/identities/fixture-attachment", clientId: "attachment-client", principalId: "attachment-principal" });
 else if (command("containerapp", "show") && name === "asset-api") output("asset.internal.example");

@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { TextDecoder } from "node:util";
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { verifyPrivateGateway } from "../access/private-gateway.js";
 
 import type { AccountAdminClient } from "../account/account-admin-client.js";
 import { AccountApiError } from "../account/account-admin-client.js";
@@ -13,6 +14,7 @@ type MediaSyncRouteDependencies = {
   lifecycleEnabled?: boolean;
   gatewayCallerAppId: string;
   appApiToken: string;
+  gatewayPrivateToken?: string;
   requestIdFactory: () => string;
   accountAdminClient: AccountAdminClient;
   service: MediaSyncManagementService;
@@ -32,7 +34,11 @@ export function registerMediaSyncRoutes(
     reply.header("x-hhc-request-id", requestId);
     const caller = header(request, "dapr-caller-app-id")?.trim();
     const token = header(request, "dapr-api-token");
-    if (caller !== deps.gatewayCallerAppId || !sameToken(token, deps.appApiToken)) {
+    const privateGateway = verifyPrivateGateway(request.headers, deps.gatewayPrivateToken);
+    if (!(
+      privateGateway ??
+      (caller === deps.gatewayCallerAppId && sameToken(token, deps.appApiToken))
+    )) {
       return sendError(reply, 403, "forbidden");
     }
 

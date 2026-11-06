@@ -103,6 +103,81 @@ class Catalog(unittest.TestCase):
                 self.assertFalse(self.run_catalog(pages, scenario=scenario)[0])
 
 
+class RetireDapr(unittest.TestCase):
+    def run_retirement(self, scenario):
+        gateway_image = "alive.azurecr.io/alive/api-gateway@sha256:" + "a" * 64
+        line_image = "alive.azurecr.io/alive/hhc-line-function-bot@sha256:" + "b" * 64
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)
+            (path / "az").write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+directory = Path(os.environ["TEST_DIR"])
+mode = directory / "disabled"
+app = args[args.index("-n") + 1]
+line = app == "hhc-line-function-bot"
+scenario = os.environ["SCENARIO"]
+image = os.environ["EXPECTED_LINE_IMAGE" if line else "EXPECTED_GATEWAY_IMAGE"]
+if not line and scenario == "wrong_gateway":
+    image += "invalid"
+revision = app + "--ready"
+if args[:2] == ["containerapp", "show"]:
+    token = "https://alive-vault.vault.azure.net/secrets/line-gateway-private-token/" + os.environ["LINE_GATEWAY_PRIVATE_TOKEN_VERSION"]
+    env = [{"name": "LINE_GATEWAY_PRIVATE_TOKEN", "secretRef": "line-gateway-private-token"}]
+    if line:
+        env.extend({"name": key, "secretRef": alias} for key, alias in (
+            ("OPERATIONS_LINE_PRIVATE_TOKEN", "operations-line-private-token"),
+            ("ACCOUNT_LINE_PRIVATE_TOKEN", "account-line-private-token"),
+            ("CMS_LINE_PRIVATE_TOKEN", "cms-line-private-token"),
+        ) if scenario != "missing_binding" or key != "CMS_LINE_PRIVATE_TOKEN")
+        env.extend({"name": key, "value": "https://" + service + ".internal.fixture.region.azurecontainerapps.io"} for key, service in (
+            ("OPERATIONS_PRIVATE_BASE_URL", "operations-api"), ("ACCOUNT_API_BASE_URL", "account-api"),
+            ("CMS_PRIVATE_BASE_URL", "hhc-web-api"), ("ASSET_API_BASE_URL", "asset-api"),
+            ("AUDIT_PRIVATE_BASE_URL", "audit-log"),
+        ))
+        env.append({"name": "ASSET_PRIVATE_AUDIENCE", "value": "api://" + "a" * 36})
+    print(json.dumps({"latest": revision, "ready": revision, "image": image, "token": [token], "env": env,
+        "ingress": {"external": False, "allowInsecure": False, "targetPort": 3000, "transport": "Auto", "traffic": [{"weight": 100, "latestRevision": True}]},
+        "dapr": {"enabled": not mode.exists(), "appId": app, "appPort": 3000, "appProtocol": "http", "logLevel": "warn"}}))
+elif args[:3] == ["containerapp", "revision", "show"]:
+    print(json.dumps({"active": True, "health": "Healthy", "provisioning": "Provisioned", "running": "Running", "image": image}))
+elif args[:3] == ["containerapp", "dapr", "disable"]:
+    (directory / "mutation").write_text("disable")
+    mode.touch()
+elif args[:3] == ["containerapp", "dapr", "enable"]:
+    (directory / "mutation").write_text((directory / "mutation").read_text() + "/enable")
+    mode.unlink()
+else:
+    sys.exit(8)
+''')
+            (path / "curl").write_text('''#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+args = sys.argv[1:]
+body = Path(args[args.index("--output") + 1])
+body.write_text('{"ok":false,"error":"missing_line_signature"}')
+print("503" if os.environ["SCENARIO"] == "post_probe_failed" and (Path(os.environ["TEST_DIR"]) / "disabled").exists() else "400")
+''')
+            for binary in ("az", "curl"):
+                (path / binary).chmod(0o700)
+            env = {**os.environ, "PATH": folder + os.pathsep + os.environ["PATH"], "TEST_DIR": folder, "SCENARIO": scenario,
+                   "RESOURCE_GROUP": "fixture", "EXPECTED_GATEWAY_IMAGE": gateway_image, "EXPECTED_LINE_IMAGE": line_image,
+                   "LINE_GATEWAY_PRIVATE_TOKEN_VERSION": "c" * 32}
+            result = subprocess.run(["bash", "scripts/retire-dapr.sh"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
+            mutation = (path / "mutation").read_text() if (path / "mutation").exists() else ""
+            return result, mutation
+
+    def test_pinned_callers_and_outbound_bindings_before_mutation(self):
+        for scenario, code, mutation in (("ok", 0, "disable"), ("wrong_gateway", 1, ""), ("missing_binding", 1, ""),
+                                         ("post_probe_failed", 1, "disable/enable")):
+            with self.subTest(scenario=scenario):
+                result, observed = self.run_retirement(scenario)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertEqual(observed, mutation)
+
+
 class PublicAcceptance(unittest.TestCase):
     def test_same_run_pending_is_not_pass_and_tampered_receipts_or_503_fail(self):
         module = load('release-receipt')

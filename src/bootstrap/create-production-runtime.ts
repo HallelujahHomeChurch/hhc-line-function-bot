@@ -7,10 +7,11 @@ import { createRedisProviderCircuit } from "../helper-agent/provider-failover.js
 import { loadHistoryConfig } from "../history/config.js";
 import { PostgresGroupHistory } from "../history/postgres.js";
 import { PostgresQuoteStore } from "../quotes/postgres-store.js";
-import { readMemberAccess } from "../account/member-access.js";
+import { createMemberCMSFetch, readMemberAccess } from "../account/member-access.js";
 import { createMeetingOccurrenceReader } from "../clients/meeting-occurrences.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
+import { ManagedIdentityCredential } from "@azure/identity";
 
 import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
 import { createDeepSeekProvider } from "../clients/deepseek.js";
@@ -54,7 +55,7 @@ import { createCacheStore } from "../cache/create-cache-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
-import { createAssetApiClient } from "../clients/asset-api.js";
+import { assetAccessTokenScope, createAssetApiClient } from "../clients/asset-api.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
@@ -93,6 +94,7 @@ export async function createLocalRuntime(config: AppConfig): Promise<Application
 }
 
 async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
+  const memberCMSFetch = createMemberCMSFetch(config.cms);
   const redis = await createRedisRuntime(config.redis);
   const postgres = await createPostgresRuntime(config.database);
   const historyConfig = loadHistoryConfig(process.env.GROUP_HISTORY_CONFIG_PATH);
@@ -127,13 +129,26 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
   await searchSettings?.setup();
   const accountAdminClient = createAccountAdminClient({
     baseUrl: config.account?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
-    timeoutMs: config.account?.timeoutMs ?? 3000
+    timeoutMs: config.account?.timeoutMs ?? 3000,
+    privateToken: config.account?.privateToken
   });
+  const assetScope = config.asset?.privateAudience
+    ? assetAccessTokenScope(config.asset.privateAudience)
+    : undefined;
+  const assetCredential = assetScope ? new ManagedIdentityCredential() : undefined;
   const mediaSyncManagementService = postgres?.mediaSyncStore
     ? new MediaSyncManagementService(
         createAssetApiClient({
           baseUrl: config.asset?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
-          timeoutMs: config.asset?.timeoutMs ?? 3000
+          timeoutMs: config.asset?.timeoutMs ?? 3000,
+          getAccessToken:
+            assetScope && assetCredential
+              ? async (signal) => {
+                  const token = await assetCredential.getToken(assetScope, { abortSignal: signal });
+                  if (!token?.token) throw new Error("asset_api_token_unavailable");
+                  return token.token;
+                }
+              : undefined
         }),
         postgres.mediaSyncStore,
         accountAdminClient
@@ -282,7 +297,8 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
           client: createAuditClient({
             appId: config.audit.appId,
             token: config.audit.token,
-            daprHttpPort: config.audit.daprHttpPort
+            daprHttpPort: config.audit.daprHttpPort,
+            privateBaseUrl: config.audit.privateBaseUrl
           })
         })
       : undefined;
@@ -339,7 +355,9 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       : undefined;
   const registries = composeCapabilities(config, {
     readMeetingOccurrences: createMeetingOccurrenceReader({
-      baseUrl: "http://127.0.0.1:3500/v1.0/invoke/operations-api/method"
+      baseUrl:
+        config.operations?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/operations-api/method",
+      privateToken: config.operations?.token
     }),
     publicSearch:
       helperProfile?.enabledFunctions.includes("query_public_web") &&
@@ -503,7 +521,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     async readMemberAccess(lineUserId, profileName, requestId) {
       const subject = await accountAdminClient.resolveLineSubject({ lineUserId, profileName });
       if (!subject.bound || !subject.active) return "unavailable";
-      return readMemberAccess(fetch, subject.subjectId, requestId);
+      return readMemberAccess(memberCMSFetch, subject.subjectId, requestId);
     },
     adminActionRegistry: knowledgeAdminActionRegistry,
     adminActionRouter,

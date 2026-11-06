@@ -150,7 +150,7 @@ describe("production profile configuration deployment contract", () => {
     ] as const;
 
     expect(manifest).toMatch(/^name: PLACEHOLDER_CONTAINER_APP_NAME$/m);
-    expect(manifest).toContain("dapr:\n      enabled: true");
+    expect(manifest).toContain("dapr:\n      enabled: PLACEHOLDER_DAPR_ENABLED");
     expect(manifest).toContain("appId: hhc-line-function-bot");
     expect(manifest).toContain("appPort: 3000");
     expect(manifest).toContain("appProtocol: http");
@@ -368,7 +368,7 @@ describe("production profile configuration deployment contract", () => {
     expect(manifest).toContain("name: PROFILE_CONFIG_PATH");
     expect(manifest).toContain("value: /app/config/profiles.json");
     expect(manifest).not.toContain("name: CATALOG_SOURCES_PATH");
-    expect(manifest).toContain("dapr:\n      enabled: true");
+    expect(manifest).toContain("dapr:\n      enabled: PLACEHOLDER_DAPR_ENABLED");
     expect(manifest).toContain("appId: hhc-line-function-bot");
     expect(manifest).toContain("appPort: 3000");
     expect(manifest).toContain("appProtocol: http");
@@ -854,16 +854,22 @@ describe("production profile configuration deployment contract", () => {
     const azureLoginSteps = [...releaseWorkflow.matchAll(/uses: azure\/login@v3/gu)];
     const finalImageBuild = releaseWorkflow.lastIndexOf("az acr build");
     const refreshedLogin = azureLoginSteps.at(1)?.index ?? -1;
-    const docsLogin = azureLoginSteps.at(2)?.index ?? -1;
+    const publicAcceptanceLogin = azureLoginSteps.at(3)?.index ?? -1;
     const deploy = releaseWorkflow.indexOf("bash scripts/deploy-aca.sh");
     const upload = releaseWorkflow.indexOf("uses: actions/upload-artifact@v6");
-    expect(azureLoginSteps).toHaveLength(4);
+    expect(azureLoginSteps).toHaveLength(5);
     expect(finalImageBuild).toBeGreaterThanOrEqual(0);
     expect(refreshedLogin).toBeGreaterThan(finalImageBuild);
     expect(deploy).toBeGreaterThan(refreshedLogin);
     expect(deploy).toBeGreaterThanOrEqual(0);
     expect(upload).toBeGreaterThan(deploy);
-    expect(docsLogin).toBeGreaterThan(upload);
+    expect(publicAcceptanceLogin).toBeGreaterThan(upload);
+    const retirement = releaseWorkflow
+      .split("\n  retire_dapr:\n")[1]
+      .split("\n  public_acceptance:\n")[0];
+    expect(retirement).toContain("inputs.retire_dapr");
+    expect(retirement).toContain("bash scripts/retire-dapr.sh");
+    expect(retirement).not.toContain("az acr build");
   });
 
   it("schedules weekly periodic assurance with OIDC and always uploads its fixed report", () => {

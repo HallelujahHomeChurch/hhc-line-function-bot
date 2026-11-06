@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import { verifyPrivateGateway } from "../access/private-gateway.js";
 import { searchSettingsInput, type SearchSettingsStore } from "./contracts.js";
 
 export function registerSearchSettingsRoutes(
@@ -8,6 +9,7 @@ export function registerSearchSettingsRoutes(
     store: SearchSettingsStore;
     gatewayCallerAppId: string;
     appApiToken: string;
+    gatewayPrivateToken?: string;
     authorize(userId: string, requestId: string): Promise<boolean>;
   }
 ) {
@@ -21,13 +23,15 @@ export function registerSearchSettingsRoutes(
       reply.header("x-hhc-request-id", request.id);
       const deny = (status: number, error: string) => reply.code(status).send({ error });
       const token = request.headers["dapr-api-token"];
-      if (
-        request.headers["dapr-caller-app-id"] !== deps.gatewayCallerAppId ||
-        typeof token !== "string" ||
-        !deps.appApiToken ||
-        Buffer.byteLength(token) !== Buffer.byteLength(deps.appApiToken) ||
-        !timingSafeEqual(Buffer.from(token), Buffer.from(deps.appApiToken))
-      )
+      const privateGateway = verifyPrivateGateway(request.headers, deps.gatewayPrivateToken);
+      if (!(
+        privateGateway ??
+        (request.headers["dapr-caller-app-id"] === deps.gatewayCallerAppId &&
+          typeof token === "string" &&
+          Boolean(deps.appApiToken) &&
+          Buffer.byteLength(token) === Buffer.byteLength(deps.appApiToken) &&
+          timingSafeEqual(Buffer.from(token), Buffer.from(deps.appApiToken)))
+      ))
         return deny(403, "forbidden");
       const actor = request.headers["x-hhc-user-id"];
       if (

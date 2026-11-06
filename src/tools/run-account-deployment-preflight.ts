@@ -21,7 +21,8 @@ try {
     requirements,
     createAccountAdminClient({
       baseUrl: config.account?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/account-api/method",
-      timeoutMs: config.account?.timeoutMs ?? 3000
+      timeoutMs: config.account?.timeoutMs ?? 3000,
+      privateToken: config.account?.privateToken
     })
   );
   process.stdout.write(`ACCOUNT_PREFLIGHT_RESULT=${JSON.stringify(result)}\n`);

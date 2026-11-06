@@ -138,6 +138,7 @@ async function app(input: {
   assets?: AssetApiClient;
   store?: PostgresMediaSyncStore;
   token?: string;
+  gatewayPrivateToken?: string;
   lifecycleEnabled?: boolean;
 }) {
   const instance = fastify({ logger: false, bodyLimit: 262_144 });
@@ -151,6 +152,7 @@ async function app(input: {
     lifecycleEnabled: input.lifecycleEnabled,
     gatewayCallerAppId: "api-gateway",
     appApiToken: input.token ?? "app-token",
+    gatewayPrivateToken: input.gatewayPrivateToken,
     requestIdFactory: () => "generated-request",
     accountAdminClient: accountClient,
     service: new MediaSyncManagementService(assets, mediaStore)
@@ -241,6 +243,42 @@ const routeRequests = [
 ] as const;
 
 describe("media sync management HTTP", () => {
+  it("requires the same actor and Account authorization on the private HTTPS route", async () => {
+    const gatewayPrivateToken = "a".repeat(64);
+    const { instance, accountClient } = await app({ gatewayPrivateToken, token: "" });
+    const url = "/api/line/media-sync/collections";
+    const headers = {
+      "x-hhc-line-gateway-token": gatewayPrivateToken,
+      "x-hhc-user-id": userId,
+      "x-hhc-request-id": "request-1"
+    };
+    try {
+      expect((await instance.inject({ url, headers })).statusCode).toBe(200);
+      expect(accountClient.verifyPermission).toHaveBeenCalledExactlyOnceWith({
+        userId,
+        requestId: "request-1"
+      });
+      expect(
+        (
+          await instance.inject({
+            url,
+            headers: { ...headers, "dapr-caller-app-id": "api-gateway" }
+          })
+        ).statusCode
+      ).toBe(403);
+      expect(
+        (
+          await instance.inject({
+            url,
+            headers: { "x-hhc-line-gateway-token": gatewayPrivateToken }
+          })
+        ).statusCode
+      ).toBe(401);
+      expect(accountClient.verifyPermission).toHaveBeenCalledTimes(1);
+    } finally {
+      await instance.close();
+    }
+  });
   it.each([
     ["missing token", { ...trustedHeaders, "dapr-api-token": undefined }],
     ["wrong token", { ...trustedHeaders, "dapr-api-token": "wrong" }],

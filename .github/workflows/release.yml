@@ -13,6 +13,7 @@ on:
       - scripts/release-catalog.py
       - scripts/release-receipt.py
       - scripts/accept-release.sh
+      - scripts/retire-dapr.sh
       - Dockerfile
       - .dockerignore
       - package.json
@@ -42,6 +43,16 @@ on:
         required: false
         default: false
         type: boolean
+      retire_dapr:
+        description: Disable only the LINE sidecar on the existing verified image
+        type: boolean
+        default: false
+      expected_gateway_image:
+        description: Exact serving Gateway image digest after its HTTPS cutover
+        type: string
+      expected_line_image:
+        description: Exact serving LINE image digest with all private HTTPS bindings
+        type: string
 
 permissions:
   actions: read
@@ -55,6 +66,7 @@ concurrency:
 jobs:
   release:
     name: Build and release
+    if: ${{ !inputs.retire_dapr }}
     runs-on: ubuntu-latest
     environment: production-actions
     outputs:
@@ -63,6 +75,7 @@ jobs:
       revision: ${{ steps.release_outputs.outputs.revision }}
       deployment_attempt: ${{ steps.release_outputs.outputs.deployment_attempt }}
       receipt_id: ${{ steps.assurance_artifact.outputs.artifact-id }}
+      dapr_enabled: ${{ steps.release_outputs.outputs.dapr_enabled }}
     env:
       ACR_NAME: alive
       ACR_LOGIN_SERVER: alive.azurecr.io
@@ -80,6 +93,12 @@ jobs:
       MEDIA_SYNC_WARM_QUEUE_NAME: media-sync-warm
       ASSET_API_AUDIENCE: ${{ vars.ASSET_API_AUDIENCE }}
       MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}
+      OPERATIONS_LINE_PRIVATE_TOKEN_VERSION: ${{ vars.OPERATIONS_LINE_PRIVATE_TOKEN_VERSION }}
+      ACCOUNT_LINE_PRIVATE_SECRET_VERSION: ${{ vars.ACCOUNT_LINE_PRIVATE_SECRET_VERSION }}
+      CMS_LINE_PRIVATE_SECRET_VERSION: ${{ vars.CMS_LINE_PRIVATE_SECRET_VERSION }}
+      LINE_GATEWAY_PRIVATE_TOKEN_VERSION: ${{ vars.LINE_GATEWAY_PRIVATE_TOKEN_VERSION }}
+      LINE_ASSET_PRIVATE_HTTPS: ${{ vars.LINE_ASSET_PRIVATE_HTTPS || 'false' }}
+      AUDIT_PRIVATE_HTTPS: ${{ vars.AUDIT_PRIVATE_HTTPS || 'false' }}
       LINE_PROVIDER_CONSOLE_VERIFIED_ID: ${{ vars.LINE_PROVIDER_CONSOLE_VERIFIED_ID }}
       RELEASE_REPORT_PATH: artifacts/release-assurance/report.json
       RELEASE_PUBLIC_EXPECTATION: ${{ inputs.public_expectation || 'normal' }}
@@ -120,6 +139,7 @@ jobs:
           echo "image=$(jq -r .image artifacts/release-assurance/deployment.json)" >> "${GITHUB_OUTPUT}"
           echo "revision=$(jq -r .revision artifacts/release-assurance/deployment.json)" >> "${GITHUB_OUTPUT}"
           echo "deployment_attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+          echo "dapr_enabled=${RELEASE_BOT_DAPR_ENABLED}" >> "${GITHUB_OUTPUT}"
       - name: Upload release assurance report
         id: assurance_artifact
         if: always()
@@ -129,6 +149,30 @@ jobs:
           path: artifacts/release-assurance/*.json
           retention-days: 7
           if-no-files-found: error
+
+  retire_dapr:
+    name: Retire LINE sidecar on the existing image
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.retire_dapr && github.repository == 'HallelujahHomeChurch/hhc-line-function-bot' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: production-actions
+    timeout-minutes: 9
+    env:
+      RESOURCE_GROUP: alive
+      EXPECTED_GATEWAY_IMAGE: ${{ inputs.expected_gateway_image }}
+      EXPECTED_LINE_IMAGE: ${{ inputs.expected_line_image }}
+      LINE_GATEWAY_PRIVATE_TOKEN_VERSION: ${{ vars.LINE_GATEWAY_PRIVATE_TOKEN_VERSION }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --yes
+      - name: Verify pinned HTTPS callers and retire Dapr
+        run: bash scripts/retire-dapr.sh
 
   public_acceptance:
     name: Public acceptance after controlled reopening
@@ -155,6 +199,7 @@ jobs:
       DEPLOYED_REVISION: ${{ needs.release.outputs.revision }}
       DEPLOYED_IMAGE: ${{ needs.release.outputs.image }}
       DEPLOYMENT_ATTEMPT: ${{ needs.release.outputs.deployment_attempt }}
+      RELEASE_BOT_DAPR_ENABLED: ${{ needs.release.outputs.dapr_enabled }}
     steps:
       - uses: actions/checkout@v5
       - name: Download the same successful deployment receipt

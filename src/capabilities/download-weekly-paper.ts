@@ -2,10 +2,14 @@ import type { FunctionExecutionResult, JsonRecord, TextMessageHandler } from "..
 import { downloadWeeklyPaperArgumentsSchema } from "../function-arguments.js";
 import type { FunctionDefinition } from "./catalog.js";
 import type { AccountAdminClient } from "../account/account-admin-client.js";
-import { readMemberAccess, editionLabel, type BulletinEdition } from "../account/member-access.js";
+import {
+  readMemberAccess,
+  editionLabel,
+  MEMBER_CMS_DAPR_BASE_URL,
+  type BulletinEdition
+} from "../account/member-access.js";
 import { matchesWeeklyPaper, weeklyPaperArguments } from "./weekly-paper-request.js";
 
-const DAPR_BASE_URL = "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method";
 const PUBLIC_ORIGIN = "https://www.alive.org.tw";
 const REQUEST_TIMEOUT_MS = 3_000;
 const MAX_ISSUE_NUMBER = 2_147_483_647;
@@ -94,7 +98,7 @@ export async function downloadWeeklyPaper(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(`${DAPR_BASE_URL}${path}`, {
+    const response = await fetchImpl(`${MEMBER_CMS_DAPR_BASE_URL}${path}`, {
       method: "GET",
       headers: {
         "X-HHC-User-ID": subject.subjectId,
