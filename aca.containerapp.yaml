@@ -132,6 +132,7 @@ properties:
             value: audit-log
           - name: AUDIT_TOKEN
             secretRef: audit-token
+          # Private service transport bindings
           - name: GRAPH_TENANT_ID
             value: PLACEHOLDER_GRAPH_TENANT_ID
           - name: GRAPH_CLIENT_ID

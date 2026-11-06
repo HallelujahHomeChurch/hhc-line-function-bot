@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { memberAccessLines, readMemberAccess } from "../account/member-access.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createMemberCMSFetch,
+  MEMBER_CMS_DAPR_BASE_URL,
+  memberAccessLines,
+  readMemberAccess
+} from "../account/member-access.js";
 import {
   renderAccountIdentity,
   renderCapabilityHelp
@@ -14,6 +19,33 @@ const snapshot = {
 const reply = (data: unknown) => new Response(JSON.stringify({ data, meta: {}, error: null }));
 
 describe("trusted member access projection", () => {
+  it("preserves the trusted member identity through the exact CMS HTTPS routes", async () => {
+    const baseUrl = "https://hhc-web-api.internal.fixture.region.azurecontainerapps.io";
+    const token = "a".repeat(64);
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(reply(snapshot));
+    const transport = createMemberCMSFetch({ baseUrl, token }, fetchImpl);
+    await expect(readMemberAccess(transport, "fresh-subject", "request-1")).resolves.toEqual(
+      snapshot
+    );
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toBe(baseUrl + "/priv/line/member-access?locale=zh-Hant");
+    expect(Object.fromEntries(new Headers(init?.headers))).toMatchObject({
+      "x-hhc-user-id": "fresh-subject",
+      "x-hhc-auth-provider": "account-api",
+      "x-hhc-request-id": "request-1",
+      "x-hhc-cms-service-caller": "hhc-line-function-bot",
+      "x-hhc-cms-service-token": token
+    });
+    expect(init?.redirect).toBe("error");
+    await transport(MEMBER_CMS_DAPR_BASE_URL + "/api/member/bulletins/online?issueNumber=1");
+    expect(String(fetchImpl.mock.calls[1][0])).toBe(
+      baseUrl + "/api/member/bulletins/online?issueNumber=1"
+    );
+    await expect(transport(MEMBER_CMS_DAPR_BASE_URL + "/priv/legal/current")).rejects.toThrow(
+      "member_cms_route_invalid"
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
   it("does not present a granted Bot function as a member content grant", () => {
     const projection: EffectiveCapabilityProjection = {
       reads: [

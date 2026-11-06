@@ -166,6 +166,87 @@ if [[ -z "${meeting_api_fqdn}" ]]; then
 fi
 meeting_api_url="https://${meeting_api_fqdn}"
 
+operations_private_url=''
+operations_token_ref=''
+if [[ -n "${OPERATIONS_LINE_PRIVATE_TOKEN_VERSION:-}" ]]; then
+  [[ "${OPERATIONS_LINE_PRIVATE_TOKEN_VERSION}" =~ ^[a-f0-9]{32}$ ]]
+  operations_token_ref="https://alive-vault.vault.azure.net/secrets/operations-line-private-token/${OPERATIONS_LINE_PRIVATE_TOKEN_VERSION}"
+  operations_runtime="$(release_containerapp_read show \
+    --resource-group "${RESOURCE_GROUP}" --name "${MEETING_API_CONTAINER_APP_NAME}" \
+    --query "{ingress:properties.configuration.ingress,latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,uri:properties.configuration.secrets[?name=='operations-line-private-token'].keyVaultUrl,token:properties.template.containers[0].env[?name=='OPERATIONS_LINE_PRIVATE_TOKEN'].secretRef}" \
+    --output json)"
+  jq -e --arg uri "${operations_token_ref}" '
+    .latest == .ready and (.ready | type == "string") and
+    .ingress.external == false and .ingress.allowInsecure == false and .ingress.targetPort == 8081 and
+    .uri == [$uri] and .token == ["operations-line-private-token"]' <<<"${operations_runtime}" >/dev/null
+  [[ "${meeting_api_url}" =~ ^https://operations-api\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$ ]]
+  operations_private_url="${meeting_api_url}"
+fi
+
+resolve_private_binding() {
+  local app="$1" port="$2" secret_name="$3" variable="$4" version="$5" runtime fqdn token_ref
+  [[ "$version" =~ ^[a-f0-9]{32}$ ]] || return 1
+  runtime="$(release_containerapp_read show \
+    --resource-group "${RESOURCE_GROUP}" --name "$app" \
+    --query "{ingress:properties.configuration.ingress,latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,uri:properties.configuration.secrets[?name=='$secret_name'].keyVaultUrl,token:properties.template.containers[0].env[?name=='$variable'].secretRef}" \
+    --output json)" || return 1
+  fqdn="$(jq -er --arg secret "$secret_name" --argjson port "$port" '
+    select(.latest == .ready and (.ready | type == "string") and .ingress.external == false and
+      .ingress.allowInsecure == false and .ingress.targetPort == $port and .token == [$secret])
+    | .ingress.fqdn' <<<"$runtime")" || return 1
+  token_ref="$(jq -er '.uri | select(length == 1) | .[0]' <<<"$runtime")" || return 1
+  [[ "$token_ref" =~ ^https://[a-z0-9-]+\.vault\.azure\.net/secrets/$secret_name/$version$ ]] || return 1
+  [[ "$fqdn" =~ ^$app\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$ ]] || return 1
+  printf 'https://%s\t%s\n' "$fqdn" "$token_ref"
+}
+
+account_private_url=''
+account_token_ref=''
+if [[ -n "${ACCOUNT_LINE_PRIVATE_SECRET_VERSION:-}" ]]; then
+  account_binding="$(resolve_private_binding account-api 8081 account-line-private-token ACCOUNT_LINE_PRIVATE_TOKEN "${ACCOUNT_LINE_PRIVATE_SECRET_VERSION}")"
+  IFS=$'\t' read -r account_private_url account_token_ref <<<"$account_binding"
+fi
+
+cms_private_url=''
+cms_token_ref=''
+if [[ -n "${CMS_LINE_PRIVATE_SECRET_VERSION:-}" ]]; then
+  cms_binding="$(resolve_private_binding hhc-web-api 8082 cms-line-private-token CMS_LINE_PRIVATE_TOKEN "${CMS_LINE_PRIVATE_SECRET_VERSION}")"
+  IFS=$'\t' read -r cms_private_url cms_token_ref <<<"$cms_binding"
+fi
+
+asset_private_url=''
+case "${LINE_ASSET_PRIVATE_HTTPS:-false}" in
+  true)
+    asset_runtime="$(release_containerapp_read show \
+      --resource-group "${RESOURCE_GROUP}" --name "${ASSET_API_CONTAINER_APP_NAME}" \
+      --query '{ingress:properties.configuration.ingress,latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName}' \
+      --output json)"
+    jq -e '.latest == .ready and (.ready | type == "string") and .ingress.external == false and .ingress.allowInsecure == false' \
+      <<<"${asset_runtime}" >/dev/null
+    [[ "${asset_api_url}" =~ ^https://asset-api\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$ ]]
+    asset_private_url="${asset_api_url}"
+    ;;
+  false) ;;
+  *) echo 'Invalid LINE_ASSET_PRIVATE_HTTPS' >&2; exit 1 ;;
+esac
+
+audit_private_url=''
+case "${AUDIT_PRIVATE_HTTPS:-false}" in
+  true)
+    audit_runtime="$(release_containerapp_read show \
+      --resource-group "${RESOURCE_GROUP}" --name audit-log \
+      --query '{ingress:properties.configuration.ingress,latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName}' \
+      --output json)"
+    audit_fqdn="$(jq -er '
+      select(.latest == .ready and (.ready | type == "string") and .ingress.external == false and .ingress.allowInsecure == false)
+      | .ingress.fqdn' <<<"${audit_runtime}")"
+    [[ "${audit_fqdn}" =~ ^audit-log\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$ ]]
+    audit_private_url="https://${audit_fqdn}"
+    ;;
+  false) ;;
+  *) echo 'Invalid AUDIT_PRIVATE_HTTPS' >&2; exit 1 ;;
+esac
+
 attachment_storage_id="$(az storage account show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
@@ -207,6 +288,14 @@ if [[ -z "${bot_principal_id}" || -z "${audit_vault_id}" \
     --output tsv \
     --only-show-errors)" != "1" ]]; then
   echo "LINE bot identity is missing Key Vault Secrets User on its Audit token" >&2
+  exit 1
+fi
+if [[ -n "${operations_token_ref}" && "$(az role assignment list \
+  --scope "${audit_vault_id}/secrets/operations-line-private-token" \
+  --assignee-object-id "${bot_principal_id}" \
+  --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" \
+  --output tsv --only-show-errors)" != "1" ]]; then
+  echo 'LINE bot identity is missing Key Vault access for its Operations credential' >&2
   exit 1
 fi
 if [[ "$(az role assignment list \
@@ -456,6 +545,22 @@ az containerapp secret set \
   --secrets "audit-token=keyvaultref:https://alive-vault.vault.azure.net/secrets/audit-log-production-token-line-bot,identityref:system" \
   --only-show-errors \
   --output none
+private_secret_refs=()
+if [[ -n "${operations_token_ref}" ]]; then
+  private_secret_refs+=("operations-line-private-token=keyvaultref:${operations_token_ref},identityref:system")
+fi
+if [[ -n "${account_token_ref}" ]]; then
+  private_secret_refs+=("account-line-private-token=keyvaultref:${account_token_ref},identityref:system")
+fi
+if [[ -n "${cms_token_ref}" ]]; then
+  private_secret_refs+=("cms-line-private-token=keyvaultref:${cms_token_ref},identityref:system")
+fi
+if [[ "${#private_secret_refs[@]}" -gt 0 ]]; then
+  az containerapp secret set \
+    --resource-group "${RESOURCE_GROUP}" --name "${CONTAINER_APP_NAME}" \
+    --secrets "${private_secret_refs[@]}" \
+    --only-show-errors --output none
+fi
 
 BOT_MANIFEST_TEMPLATE="${bot_manifest_template}" \
 BOT_MANIFEST="${bot_manifest}" \
@@ -467,6 +572,12 @@ AZURE_OPENAI_EMBEDDING_ENDPOINT="${azure_openai_embedding_endpoint}" \
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}" \
 AZURE_OPENAI_EMBEDDING_API_VERSION="${AZURE_OPENAI_EMBEDDING_API_VERSION}" \
 BOT_ENV_JSON="${bot_env_json}" \
+OPERATIONS_PRIVATE_BASE_URL="${operations_private_url}" \
+AUDIT_PRIVATE_BASE_URL="${audit_private_url}" \
+ACCOUNT_PRIVATE_BASE_URL="${account_private_url}" \
+CMS_PRIVATE_BASE_URL="${cms_private_url}" \
+ASSET_PRIVATE_BASE_URL="${asset_private_url}" \
+ASSET_API_AUDIENCE="${ASSET_API_AUDIENCE}" \
 python3 - <<'PY'
 from pathlib import Path
 import json
@@ -545,6 +656,36 @@ substitutions.update(
 )
 
 text = Path(os.environ["BOT_MANIFEST_TEMPLATE"]).read_text()
+transport_env = []
+if os.environ["OPERATIONS_PRIVATE_BASE_URL"]:
+    transport_env.extend([
+        ("OPERATIONS_PRIVATE_BASE_URL", "value", os.environ["OPERATIONS_PRIVATE_BASE_URL"]),
+        ("OPERATIONS_LINE_PRIVATE_TOKEN", "secretRef", "operations-line-private-token"),
+    ])
+if os.environ["AUDIT_PRIVATE_BASE_URL"]:
+    transport_env.append(("AUDIT_PRIVATE_BASE_URL", "value", os.environ["AUDIT_PRIVATE_BASE_URL"]))
+if os.environ["ACCOUNT_PRIVATE_BASE_URL"]:
+    transport_env.extend([
+        ("ACCOUNT_API_BASE_URL", "value", os.environ["ACCOUNT_PRIVATE_BASE_URL"]),
+        ("ACCOUNT_LINE_PRIVATE_TOKEN", "secretRef", "account-line-private-token"),
+    ])
+if os.environ["CMS_PRIVATE_BASE_URL"]:
+    transport_env.extend([
+        ("CMS_PRIVATE_BASE_URL", "value", os.environ["CMS_PRIVATE_BASE_URL"]),
+        ("CMS_LINE_PRIVATE_TOKEN", "secretRef", "cms-line-private-token"),
+    ])
+if os.environ["ASSET_PRIVATE_BASE_URL"]:
+    transport_env.extend([
+        ("ASSET_API_BASE_URL", "value", os.environ["ASSET_PRIVATE_BASE_URL"]),
+        ("ASSET_PRIVATE_AUDIENCE", "value", os.environ["ASSET_API_AUDIENCE"]),
+    ])
+marker = "          # Private service transport bindings\n"
+if text.count(marker) != 1:
+    raise SystemExit("Expected one private service transport binding block")
+text = text.replace(marker, "".join(
+    f"          - name: {name}\n            {kind}: {json.dumps(value)}\n"
+    for name, kind, value in transport_env
+))
 # Replace longer names before their prefixes, including the recovery cutoff.
 for placeholder in sorted(substitutions, key=len, reverse=True):
     value = substitutions[placeholder]

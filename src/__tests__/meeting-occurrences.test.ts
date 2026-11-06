@@ -42,4 +42,24 @@ describe("meeting occurrence reader", () => {
     await expect(read(new Date())).rejects.toThrow();
     await expect(read(new Date())).rejects.toThrow();
   });
+  it("uses the exact Operations HTTPS route without fallback or redirects", async () => {
+    const baseUrl = "https://operations-api.internal.fixture.region.azurecontainerapps.io";
+    const privateToken = "a".repeat(64);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 401 }));
+    const read = createMeetingOccurrenceReader({ baseUrl, privateToken, fetcher });
+    await expect(read(new Date("2026-09-05T00:00:00Z"))).rejects.toThrow(
+      "meeting_occurrences_unavailable"
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(String(fetcher.mock.calls[0][0])).toContain(
+      baseUrl + "/priv/operations/meeting-occurrences?"
+    );
+    expect(fetcher.mock.calls[0][1]).toMatchObject({
+      redirect: "error",
+      headers: { "x-hhc-operations-token": privateToken }
+    });
+    expect(() =>
+      createMeetingOccurrenceReader({ baseUrl: "https://example.test", privateToken })
+    ).toThrow("meeting_occurrences_https_config_invalid");
+  });
 });

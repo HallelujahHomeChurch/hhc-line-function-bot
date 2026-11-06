@@ -18,8 +18,19 @@ export type ReadMeetingOccurrences = (now: Date) => Promise<MeetingOccurrence[]>
 
 export function createMeetingOccurrenceReader(options: {
   baseUrl: string;
+  privateToken?: string;
   fetcher?: typeof fetch;
 }): ReadMeetingOccurrences {
+  const privateToken = options.privateToken;
+  if (
+    privateToken !== undefined &&
+    (!/^https:\/\/operations-api\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$/u.test(
+      options.baseUrl
+    ) ||
+      !/^[a-f0-9]{64}$/u.test(privateToken))
+  ) {
+    throw new Error("meeting_occurrences_https_config_invalid");
+  }
   let cache: { from: string; refreshedAt: number; items: MeetingOccurrence[] } | undefined;
   return async (now) => {
     const from = new Date(now);
@@ -31,7 +42,15 @@ export function createMeetingOccurrenceReader(options: {
     const query = new URLSearchParams({ from: fromKey, to: to.toISOString() });
     const response = await (options.fetcher ?? fetch)(
       `${options.baseUrl.replace(/\/$/u, "")}/priv/operations/meeting-occurrences?${query}`,
-      { signal: AbortSignal.timeout(3_000) }
+      {
+        signal: AbortSignal.timeout(3_000),
+        ...(privateToken === undefined
+          ? {}
+          : {
+              redirect: "error",
+              headers: { "x-hhc-operations-token": privateToken }
+            })
+      }
     );
     if (!response.ok) throw new Error("meeting_occurrences_unavailable");
     const items = envelopeSchema.parse(await response.json()).data;

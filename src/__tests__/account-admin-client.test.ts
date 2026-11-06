@@ -32,6 +32,29 @@ const aclSubjectSearchInput = {
 };
 
 describe("account admin client", () => {
+  it("preserves the binding request and does not fall back from private HTTPS", async () => {
+    const baseUrl = "https://account-api.internal.fixture.region.azurecontainerapps.io";
+    const privateToken = "a".repeat(64);
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 403 }));
+    const client = createAccountAdminClient({ baseUrl, privateToken, timeoutMs: 1000, fetchImpl });
+    await expect(client.finalizeBinding(finalizeInput)).rejects.toThrow("account_api_http_403");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      baseUrl + "/priv/account/v1/line/bindings/finalize",
+      expect.objectContaining({
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          "content-type": "application/json",
+          "x-hhc-account-service-caller": "hhc-line-function-bot",
+          "x-hhc-account-service-token": privateToken
+        }
+      })
+    );
+    expect(() =>
+      createAccountAdminClient({ baseUrl: "https://example.test", privateToken, timeoutMs: 1000 })
+    ).toThrow("account_https_config_invalid");
+  });
   it("verifies only presenter:line:manage with the propagated request ID", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ allowed: true }));
     const client = createAccountAdminClient({

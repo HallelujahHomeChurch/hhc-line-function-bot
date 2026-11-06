@@ -367,6 +367,8 @@ export interface AppConfig {
   observability?: ObservabilityConfig;
   account?: AccountServiceConfig;
   asset?: AssetServiceConfig;
+  operations?: { baseUrl: string; token: string };
+  cms?: { baseUrl: string; token: string };
   mediaSync?: MediaSyncConfig;
   audit?: AuditConfig;
 }
@@ -374,11 +376,13 @@ export interface AppConfig {
 export interface AccountServiceConfig {
   baseUrl: string;
   timeoutMs: number;
+  privateToken?: string;
 }
 
 export interface AssetServiceConfig {
   baseUrl: string;
   timeoutMs: number;
+  privateAudience?: string;
 }
 
 export interface MediaSyncConfig {
@@ -392,6 +396,7 @@ export interface AuditConfig {
   appId: "audit-log" | "audit-log-test";
   token?: string;
   daprHttpPort: number;
+  privateBaseUrl?: string;
 }
 
 export interface ObservabilityConfig {

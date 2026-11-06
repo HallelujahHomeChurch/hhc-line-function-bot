@@ -12,6 +12,7 @@ import type { AttachmentScanQueue } from "../attachments/scan-queue.js";
 import type { AttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import type { CacheStore } from "../cache/cache-store.js";
 import { downloadWeeklyPaper } from "../capabilities/download-weekly-paper.js";
+import { createMemberCMSFetch } from "../account/member-access.js";
 import {
   createBulletinContinuationHandler,
   startBulletinBinding
@@ -105,11 +106,12 @@ export function composeCapabilities(
   config: AppConfig,
   clients: CapabilityCompositionDependencies
 ): CapabilityComposition {
+  const memberCMSFetch = createMemberCMSFetch(config.cms, clients.fetchImpl ?? fetch);
   const functions: FunctionRegistry = {
     download_weekly_paper: (args, context) =>
       downloadWeeklyPaper(
         args,
-        clients.fetchImpl ?? fetch,
+        memberCMSFetch,
         context.event.source.userId
           ? {
               lineUserId: context.event.source.userId,
@@ -220,7 +222,7 @@ export function composeCapabilities(
     handle: createBulletinContinuationHandler({
       account: clients.accountAdminClient ?? missingAccountClient(),
       sessions: clients.sessionStore,
-      fetchImpl: clients.fetchImpl ?? fetch
+      fetchImpl: memberCMSFetch
     })
   };
   const textMessages: TextMessageHandlerRegistry = {};

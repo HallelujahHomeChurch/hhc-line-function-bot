@@ -144,9 +144,20 @@ export class AccountApiError extends Error {
 export function createAccountAdminClient(options: {
   baseUrl: string;
   timeoutMs: number;
+  privateToken?: string;
   fetchImpl?: typeof fetch;
 }): AccountAdminClient {
   const baseUrl = options.baseUrl.replace(/\/+$/u, "");
+  const privateToken = options.privateToken;
+  if (
+    privateToken !== undefined &&
+    (!/^https:\/\/account-api\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$/u.test(
+      baseUrl
+    ) ||
+      !/^[a-f0-9]{64}$/u.test(privateToken))
+  ) {
+    throw new Error("account_https_config_invalid");
+  }
   const fetchImpl = options.fetchImpl ?? fetch;
 
   async function post(
@@ -158,7 +169,16 @@ export function createAccountAdminClient(options: {
     try {
       response = await fetchImpl(`${baseUrl}${path}`, {
         method: "POST",
-        headers: { "content-type": "application/json", ...headers },
+        headers: {
+          "content-type": "application/json",
+          ...headers,
+          ...(privateToken === undefined
+            ? {}
+            : {
+                "x-hhc-account-service-caller": "hhc-line-function-bot",
+                "x-hhc-account-service-token": privateToken
+              })
+        },
         body: JSON.stringify(body),
         redirect: "manual",
         signal: AbortSignal.timeout(options.timeoutMs)

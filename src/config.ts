@@ -327,6 +327,29 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   const auditDispatchEnabled = readBool(env.AUDIT_DISPATCH_ENABLED, false);
   const auditAppId = env.AUDIT_APP_ID?.trim() || "audit-log";
   const auditToken = env.AUDIT_TOKEN?.trim();
+  const auditPrivateBaseUrl = env.AUDIT_PRIVATE_BASE_URL;
+  const operationsBaseUrl = env.OPERATIONS_PRIVATE_BASE_URL;
+  const operationsToken = env.OPERATIONS_LINE_PRIVATE_TOKEN;
+  const accountToken = env.ACCOUNT_LINE_PRIVATE_TOKEN;
+  const cmsBaseUrl = env.CMS_PRIVATE_BASE_URL;
+  const cmsToken = env.CMS_LINE_PRIVATE_TOKEN;
+  const assetPrivateAudience = env.ASSET_PRIVATE_AUDIENCE;
+  const assetBaseUrl = readAssetApiBaseUrl(env);
+  if (Boolean(operationsBaseUrl) !== Boolean(operationsToken)) {
+    throw new Error("Operations HTTPS requires both the origin and caller credential");
+  }
+  if (Boolean(cmsBaseUrl) !== Boolean(cmsToken)) {
+    throw new Error("CMS HTTPS requires both the origin and caller credential");
+  }
+  if (
+    assetPrivateAudience &&
+    (!/^https:\/\/asset-api\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$/u.test(
+      assetBaseUrl
+    ) ||
+      !/^api:\/\/[a-f0-9-]{36}$/u.test(assetPrivateAudience))
+  ) {
+    throw new Error("Invalid Asset private HTTPS configuration");
+  }
   if (auditAppId !== "audit-log" && auditAppId !== "audit-log-test") {
     throw new Error("AUDIT_APP_ID is invalid");
   }
@@ -403,12 +426,18 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     },
     account: {
       baseUrl: readAccountApiBaseUrl(env),
-      timeoutMs: readInt(env.ACCOUNT_API_TIMEOUT_MS, 3000)
+      timeoutMs: readInt(env.ACCOUNT_API_TIMEOUT_MS, 3000),
+      ...(accountToken ? { privateToken: accountToken } : {})
     },
     asset: {
-      baseUrl: readAssetApiBaseUrl(env),
-      timeoutMs: readInt(env.ASSET_API_TIMEOUT_MS, 3000)
+      baseUrl: assetBaseUrl,
+      timeoutMs: readInt(env.ASSET_API_TIMEOUT_MS, 3000),
+      ...(assetPrivateAudience ? { privateAudience: assetPrivateAudience } : {})
     },
+    ...(operationsBaseUrl && operationsToken
+      ? { operations: { baseUrl: operationsBaseUrl, token: operationsToken } }
+      : {}),
+    ...(cmsBaseUrl && cmsToken ? { cms: { baseUrl: cmsBaseUrl, token: cmsToken } } : {}),
     mediaSync: {
       lifecycleEnabled: readBool(env.MEDIA_SYNC_LIFECYCLE_ENABLED, false),
       gatewayCallerAppId: readDaprAppId(
@@ -422,6 +451,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       dispatchEnabled: auditDispatchEnabled,
       appId: auditAppId,
       ...(auditToken ? { token: auditToken } : {}),
+      ...(auditPrivateBaseUrl ? { privateBaseUrl: auditPrivateBaseUrl } : {}),
       daprHttpPort: readInt(env.DAPR_HTTP_PORT, 3500)
     }
   };

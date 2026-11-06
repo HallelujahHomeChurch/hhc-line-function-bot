@@ -113,6 +113,33 @@ describe("central audit producer contract", () => {
       retryAfterMs: 7_000
     });
   });
+
+  it("sends the unchanged Audit payload through private HTTPS and retries a credential mismatch", async () => {
+    const privateBaseUrl = "https://audit-log.internal.fixture.region.azurecontainerapps.io";
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 401 }));
+    const client = createAuditClient({
+      appId: "audit-log",
+      token: "audit-token",
+      daprHttpPort: 3500,
+      privateBaseUrl,
+      fetchImpl
+    });
+    await expect(client.append("{}")).resolves.toEqual({ status: "retry", reason: "http_401" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledWith(
+      privateBaseUrl + "/priv/audit/events",
+      expect.objectContaining({
+        method: "POST",
+        body: "{}",
+        redirect: "manual",
+        headers: {
+          "content-type": "application/json",
+          "x-audit-token": "audit-token",
+          "x-hhc-audit-caller": "hhc-line-function-bot"
+        }
+      })
+    );
+  });
 });
 
 describe("central audit dispatcher", () => {
