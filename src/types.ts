@@ -389,6 +389,7 @@ export interface MediaSyncConfig {
   lifecycleEnabled?: boolean;
   gatewayCallerAppId: string;
   appApiToken: string;
+  gatewayPrivateToken?: string;
 }
 
 export interface AuditConfig {

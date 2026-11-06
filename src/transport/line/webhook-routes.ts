@@ -278,6 +278,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
       store: deps.searchSettings,
       gatewayCallerAppId: config.mediaSync.gatewayCallerAppId,
       appApiToken: config.mediaSync.appApiToken,
+      gatewayPrivateToken: config.mediaSync.gatewayPrivateToken,
       authorize: async (userId, requestId) =>
         (await deps.accountAdminClient.verifySearchSettingsPermission?.({ userId, requestId })) ===
         true

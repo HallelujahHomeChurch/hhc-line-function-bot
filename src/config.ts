@@ -328,6 +328,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   const auditAppId = env.AUDIT_APP_ID?.trim() || "audit-log";
   const auditToken = env.AUDIT_TOKEN?.trim();
   const auditPrivateBaseUrl = env.AUDIT_PRIVATE_BASE_URL;
+  const gatewayPrivateToken = env.LINE_GATEWAY_PRIVATE_TOKEN;
+  if (gatewayPrivateToken !== undefined && !/^[a-f0-9]{64}$/u.test(gatewayPrivateToken)) {
+    throw new Error("Invalid LINE Gateway HTTPS credential");
+  }
   const operationsBaseUrl = env.OPERATIONS_PRIVATE_BASE_URL;
   const operationsToken = env.OPERATIONS_LINE_PRIVATE_TOKEN;
   const accountToken = env.ACCOUNT_LINE_PRIVATE_TOKEN;
@@ -445,7 +449,8 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
         "api-gateway",
         "MEDIA_SYNC_GATEWAY_CALLER_APP_ID"
       ),
-      appApiToken: env.APP_API_TOKEN ?? ""
+      appApiToken: env.APP_API_TOKEN ?? "",
+      ...(gatewayPrivateToken ? { gatewayPrivateToken } : {})
     },
     audit: {
       dispatchEnabled: auditDispatchEnabled,

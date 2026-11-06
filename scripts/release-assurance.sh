@@ -697,6 +697,7 @@ else:
         )
     )
     dapr = state.get("dapr") or {}
+    expected_dapr = os.environ.get("RELEASE_BOT_DAPR_ENABLED", "true")
     if not traffic_ok:
         print("target_traffic_mismatch")
     elif (
@@ -706,10 +707,13 @@ else:
     ):
         print("bot_ingress_mismatch")
     elif (
-        dapr.get("enabled") is not True
-        or dapr.get("appId") != "hhc-line-function-bot"
-        or dapr.get("appPort") != 3000
-        or dapr.get("appProtocol") != "http"
+        expected_dapr not in ("true", "false")
+        or dapr.get("enabled") is not (expected_dapr == "true")
+        or (expected_dapr == "true" and (
+            dapr.get("appId") != "hhc-line-function-bot"
+            or dapr.get("appPort") != 3000
+            or dapr.get("appProtocol") != "http"
+        ))
     ):
         print("bot_dapr_mismatch")
     else:
@@ -1341,6 +1345,7 @@ traffic_ok = (
     )
 )
 dapr = state.get("dapr") or {}
+expected_dapr = os.environ.get("RELEASE_BOT_DAPR_ENABLED", "true")
 valid = (
     state.get("latestRevision") == revision
     and state.get("latestReadyRevision") == revision
@@ -1349,10 +1354,13 @@ valid = (
     and state.get("external") is False
     and state.get("targetPort") == 3000
     and str(state.get("transport") or "").lower() == "auto"
-    and dapr.get("enabled") is True
-    and dapr.get("appId") == "hhc-line-function-bot"
-    and dapr.get("appPort") == 3000
-    and dapr.get("appProtocol") == "http"
+    and expected_dapr in ("true", "false")
+    and dapr.get("enabled") is (expected_dapr == "true")
+    and (expected_dapr == "false" or (
+        dapr.get("appId") == "hhc-line-function-bot"
+        and dapr.get("appPort") == 3000
+        and dapr.get("appProtocol") == "http"
+    ))
     and os.environ["RELEASE_ROLLBACK_IMAGE_CANDIDATE"]
     == os.environ["RELEASE_EXPECTED_ROLLBACK_IMAGE"]
 )

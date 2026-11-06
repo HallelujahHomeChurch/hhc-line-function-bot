@@ -166,6 +166,21 @@ if [[ -z "${meeting_api_fqdn}" ]]; then
 fi
 meeting_api_url="https://${meeting_api_fqdn}"
 
+RELEASE_BOT_DAPR_ENABLED="$(release_containerapp_read show \
+  --resource-group "${RESOURCE_GROUP}" --name "${CONTAINER_APP_NAME}" \
+  --query properties.configuration.dapr.enabled --output tsv --only-show-errors)"
+[[ "${RELEASE_BOT_DAPR_ENABLED}" == true || "${RELEASE_BOT_DAPR_ENABLED}" == false ]]
+export RELEASE_BOT_DAPR_ENABLED
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  printf 'RELEASE_BOT_DAPR_ENABLED=%s\n' "${RELEASE_BOT_DAPR_ENABLED}" >> "${GITHUB_ENV}"
+fi
+
+gateway_token_ref=''
+if [[ -n "${LINE_GATEWAY_PRIVATE_TOKEN_VERSION:-}" ]]; then
+  [[ "${LINE_GATEWAY_PRIVATE_TOKEN_VERSION}" =~ ^[a-f0-9]{32}$ ]]
+  gateway_token_ref="https://alive-vault.vault.azure.net/secrets/line-gateway-private-token/${LINE_GATEWAY_PRIVATE_TOKEN_VERSION}"
+fi
+
 operations_private_url=''
 operations_token_ref=''
 if [[ -n "${OPERATIONS_LINE_PRIVATE_TOKEN_VERSION:-}" ]]; then
@@ -247,6 +262,13 @@ case "${AUDIT_PRIVATE_HTTPS:-false}" in
   *) echo 'Invalid AUDIT_PRIVATE_HTTPS' >&2; exit 1 ;;
 esac
 
+if [[ "${RELEASE_BOT_DAPR_ENABLED}" == false ]] &&
+   [[ -z "${gateway_token_ref}" || -z "${operations_private_url}" || -z "${account_private_url}" ||
+      -z "${cms_private_url}" || -z "${asset_private_url}" || -z "${audit_private_url}" ]]; then
+  echo 'Sidecar-free LINE requires all private service bindings' >&2
+  exit 1
+fi
+
 attachment_storage_id="$(az storage account show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
@@ -298,6 +320,14 @@ if [[ -n "${operations_token_ref}" && "$(az role assignment list \
   echo 'LINE bot identity is missing Key Vault access for its Operations credential' >&2
   exit 1
 fi
+if [[ -n "${gateway_token_ref}" && "$(az role assignment list \
+  --scope "${audit_vault_id}/secrets/line-gateway-private-token" \
+  --assignee-object-id "${bot_principal_id}" \
+  --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" \
+  --output tsv --only-show-errors)" != "1" ]]; then
+  echo 'LINE bot identity is missing Key Vault access for its Gateway credential' >&2
+  exit 1
+fi
 if [[ "$(az role assignment list \
   --scope "${attachment_queue_scope}" \
   --assignee-object-id "${attachment_job_principal_id}" \
@@ -340,6 +370,15 @@ if ! verify_asset_access_contract \
   "${attachment_job_principal_id}"; then
   echo "Asset API workload access contract is unavailable" >&2
   exit 1
+fi
+if [[ -n "${asset_private_url}" ]]; then
+  bot_client_id="$(az ad sp show --id "${bot_principal_id}" --query appId --output tsv --only-show-errors)"
+  if [[ -z "${bot_client_id}" ]] || ! verify_asset_access_contract \
+    "${RESOURCE_GROUP}" "${ASSET_API_CONTAINER_APP_NAME}" "${ASSET_API_AUDIENCE}" \
+    "${bot_client_id}" "${bot_principal_id}"; then
+    echo 'Asset API access contract is unavailable for the LINE bot identity' >&2
+    exit 1
+  fi
 fi
 
 azure_openai_embedding_endpoint="$(az cognitiveservices account show \
@@ -555,6 +594,9 @@ fi
 if [[ -n "${cms_token_ref}" ]]; then
   private_secret_refs+=("cms-line-private-token=keyvaultref:${cms_token_ref},identityref:system")
 fi
+if [[ -n "${gateway_token_ref}" ]]; then
+  private_secret_refs+=("line-gateway-private-token=keyvaultref:${gateway_token_ref},identityref:system")
+fi
 if [[ "${#private_secret_refs[@]}" -gt 0 ]]; then
   az containerapp secret set \
     --resource-group "${RESOURCE_GROUP}" --name "${CONTAINER_APP_NAME}" \
@@ -578,6 +620,7 @@ ACCOUNT_PRIVATE_BASE_URL="${account_private_url}" \
 CMS_PRIVATE_BASE_URL="${cms_private_url}" \
 ASSET_PRIVATE_BASE_URL="${asset_private_url}" \
 ASSET_API_AUDIENCE="${ASSET_API_AUDIENCE}" \
+LINE_GATEWAY_HTTPS_BOUND="$([[ -n "${gateway_token_ref}" ]] && echo true || echo false)" \
 python3 - <<'PY'
 from pathlib import Path
 import json
@@ -614,6 +657,7 @@ for name in source_env_names:
 
 recovery = json.loads(os.environ["RELEASE_RECOVERY_ENV_JSON"])
 substitutions = {
+    "PLACEHOLDER_DAPR_ENABLED": os.environ["RELEASE_BOT_DAPR_ENABLED"] == "true",
     "PLACEHOLDER_REDIS_KEY_PREFIX": recovery["REDIS_KEY_PREFIX"],
     "PLACEHOLDER_LINE_REDIS_RECOVERY": recovery["LINE_REDIS_RECOVERY"],
     "PLACEHOLDER_LINE_REDIS_RECOVERY_CUTOFF_MS": recovery["LINE_REDIS_RECOVERY_CUTOFF_MS"],
@@ -679,6 +723,8 @@ if os.environ["ASSET_PRIVATE_BASE_URL"]:
         ("ASSET_API_BASE_URL", "value", os.environ["ASSET_PRIVATE_BASE_URL"]),
         ("ASSET_PRIVATE_AUDIENCE", "value", os.environ["ASSET_API_AUDIENCE"]),
     ])
+if os.environ["LINE_GATEWAY_HTTPS_BOUND"] == "true":
+    transport_env.append(("LINE_GATEWAY_PRIVATE_TOKEN", "secretRef", "line-gateway-private-token"))
 marker = "          # Private service transport bindings\n"
 if text.count(marker) != 1:
     raise SystemExit("Expected one private service transport binding block")

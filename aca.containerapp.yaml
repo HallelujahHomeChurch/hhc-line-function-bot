@@ -6,7 +6,7 @@ properties:
   configuration:
     activeRevisionsMode: Single
     dapr:
-      enabled: true
+      enabled: PLACEHOLDER_DAPR_ENABLED
       appId: hhc-line-function-bot
       appPort: 3000
       appProtocol: http
