@@ -1,13 +1,11 @@
+import { validateInternalServiceOrigin } from "../clients/internal-origin.js";
+
 export interface MediaSyncWindow {
   startsAt: string;
   endsAt: string;
 }
 
 type Fetcher = typeof fetch;
-
-export function meetingAccessTokenScope(audience: string): string {
-  return `${audience.replace(/\/+$/u, "")}/.default`;
-}
 
 export class MeetingWindowClient {
   private windows: MediaSyncWindow[] = [];
@@ -17,13 +15,14 @@ export class MeetingWindowClient {
   constructor(
     private readonly options: {
       baseUrl: string;
-      getAccessToken: () => Promise<string>;
       fetcher?: Fetcher;
       refreshMs?: number;
       leadMs?: number;
       tailMs?: number;
     }
-  ) {}
+  ) {
+    validateInternalServiceOrigin(options.baseUrl, "operations-api");
+  }
 
   async isWarm(now = new Date()): Promise<boolean> {
     if (now.getTime() - this.refreshedAt >= (this.options.refreshMs ?? 60_000)) {
@@ -49,7 +48,10 @@ export class MeetingWindowClient {
     url.searchParams.set("from", new Date(now.getTime() - tail).toISOString());
     url.searchParams.set("to", new Date(now.getTime() + lead).toISOString());
     const response = await (this.options.fetcher ?? fetch)(url, {
-      headers: { authorization: `Bearer ${await this.options.getAccessToken()}` },
+      headers: {
+        "x-hhc-caller-app-id": "hhc-line-function-bot"
+      },
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) throw new Error(`meeting_api_${response.status}`);

@@ -36,7 +36,7 @@ describe("R3.5 modular monolith documentation", () => {
     expect(readme).toContain("manifest-driven");
     expect(readme).toContain("scripts/deploy-aca.sh");
     expect(architecture).toContain("sole owner");
-    expect(operations).toContain("Asset.Invoke");
+    expect(operations).toContain("ASSET_ALLOWED_CALLERS");
   });
 
   it("marks the old roadmap as historical and keeps final R4.0 guidance current", async () => {

@@ -287,8 +287,6 @@ describe("periodic assurance CLI", () => {
       getProperties: vi.fn(),
       peekMessages: vi.fn()
     });
-    const getToken = vi.fn().mockResolvedValue({ token: "workload-token" });
-    const createCredential = vi.fn().mockReturnValue({ getToken });
     const createAsset = vi.fn().mockReturnValue({} as AssetApiClient);
 
     const deps = createPeriodicAssuranceDependencies(
@@ -302,14 +300,12 @@ describe("periodic assurance CLI", () => {
         ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING: "queue-connection",
         ATTACHMENT_SCAN_QUEUE_NAME: "attachment-scan",
         ASSET_API_URL: "https://asset.internal",
-        ASSET_API_AUDIENCE: "api://asset-api",
         AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
       },
       {
         createGraph,
         createNotion,
         createQueue,
-        createCredential,
         createAsset
       }
     );
@@ -323,17 +319,9 @@ describe("periodic assurance CLI", () => {
     expect(createQueue).toHaveBeenCalledWith("queue-connection", "attachment-scan", {
       retryOptions: { maxTries: 1 }
     });
-    expect(createCredential).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
     expect(createAsset).toHaveBeenCalledWith({
       baseUrl: "https://asset.internal",
-      getAccessToken: expect.any(Function),
       onRejection: expect.any(Function)
-    });
-    const getAssetAccessToken = createAsset.mock.calls[0]?.[0].getAccessToken;
-    const signal = AbortSignal.timeout(1_000);
-    await expect(getAssetAccessToken(signal)).resolves.toBe("workload-token");
-    expect(getToken).toHaveBeenCalledWith("api://asset-api/.default", {
-      abortSignal: signal
     });
     expect(deps.runAssetLifecycle).toEqual(expect.any(Function));
   });
@@ -360,7 +348,6 @@ describe("periodic assurance CLI", () => {
         ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING: "queue-connection",
         ATTACHMENT_SCAN_QUEUE_NAME: "attachment-scan",
         ASSET_API_URL: "https://tenant-private.example/blob-key-private",
-        ASSET_API_AUDIENCE: "api://asset-api",
         AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
       },
       {
@@ -378,7 +365,6 @@ describe("periodic assurance CLI", () => {
           getProperties: vi.fn(),
           peekMessages: vi.fn()
         }),
-        createCredential: vi.fn().mockReturnValue({ getToken: vi.fn() }),
         createAsset
       }
     );

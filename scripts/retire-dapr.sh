@@ -9,7 +9,7 @@ token_ref="https://alive-vault.vault.azure.net/secrets/line-gateway-private-toke
 
 read_app() {
   az containerapp show -g "${RESOURCE_GROUP}" -n "$1" --only-show-errors -o json \
-    --query "{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,image:properties.template.containers[0].image,ingress:properties.configuration.ingress,dapr:properties.configuration.dapr,token:properties.configuration.secrets[?name=='line-gateway-private-token'].keyVaultUrl,env:properties.template.containers[0].env[?name=='LINE_GATEWAY_PRIVATE_TOKEN'||name=='OPERATIONS_LINE_PRIVATE_TOKEN'||name=='OPERATIONS_PRIVATE_BASE_URL'||name=='ACCOUNT_LINE_PRIVATE_TOKEN'||name=='ACCOUNT_API_BASE_URL'||name=='CMS_LINE_PRIVATE_TOKEN'||name=='CMS_PRIVATE_BASE_URL'||name=='ASSET_PRIVATE_AUDIENCE'||name=='ASSET_API_BASE_URL'||name=='AUDIT_PRIVATE_BASE_URL']}"
+    --query "{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,image:properties.template.containers[0].image,ingress:properties.configuration.ingress,dapr:properties.configuration.dapr,token:properties.configuration.secrets[?name=='line-gateway-private-token'].keyVaultUrl,env:properties.template.containers[0].env[?name=='LINE_GATEWAY_PRIVATE_TOKEN'||name=='OPERATIONS_LINE_PRIVATE_TOKEN'||name=='OPERATIONS_PRIVATE_BASE_URL'||name=='ACCOUNT_LINE_PRIVATE_TOKEN'||name=='ACCOUNT_API_BASE_URL'||name=='CMS_LINE_PRIVATE_TOKEN'||name=='CMS_PRIVATE_BASE_URL'||name=='ASSET_API_BASE_URL'||name=='AUDIT_PRIVATE_BASE_URL']}"
 }
 
 verify_serving() {
@@ -37,7 +37,6 @@ verify_line_bindings() {
     ([.env[] | select(.name == "OPERATIONS_LINE_PRIVATE_TOKEN").secretRef] == ["operations-line-private-token"]) and
     ([.env[] | select(.name == "ACCOUNT_LINE_PRIVATE_TOKEN").secretRef] == ["account-line-private-token"]) and
     ([.env[] | select(.name == "CMS_LINE_PRIVATE_TOKEN").secretRef] == ["cms-line-private-token"]) and
-    any(.env[]; .name == "ASSET_PRIVATE_AUDIENCE" and (.value | test("^api://[a-f0-9-]{36}$"))) and
     origin("OPERATIONS_PRIVATE_BASE_URL"; "operations-api") and origin("ACCOUNT_API_BASE_URL"; "account-api") and
     origin("CMS_PRIVATE_BASE_URL"; "hhc-web-api") and origin("ASSET_API_BASE_URL"; "asset-api") and
     origin("AUDIT_PRIVATE_BASE_URL"; "audit-log")

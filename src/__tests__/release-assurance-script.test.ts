@@ -229,7 +229,9 @@ describe("release assurance shell transaction", () => {
       "Required ACA environment reference is unavailable"
     );
     expect(flattened).toContain("properties.template.containers[0].env");
-    expect(flattened).not.toContain("properties.latestReadyRevisionName");
+    expect(flattened).not.toContain(
+      "--name fixture-bot --query properties.latestReadyRevisionName"
+    );
     expect(flattened).not.toMatch(
       /containerapp (?:secret set|update|create|revision copy)|containerapp env storage set|containerapp job (?:update|create)/u
     );
@@ -243,7 +245,9 @@ describe("release assurance shell transaction", () => {
 
     expect(result.status, diagnostic(result, calls)).not.toBe(0);
     expect(result.stderr, diagnostic(result, calls)).toContain("LINE Provider Console checkpoint");
-    expect(flattened).not.toContain("properties.latestReadyRevisionName");
+    expect(flattened).not.toContain(
+      "--name fixture-bot --query properties.latestReadyRevisionName"
+    );
     expect(flattened).not.toMatch(
       /containerapp (?:secret set|update|create|revision copy)|containerapp env storage set|containerapp job (?:update|create)/u
     );
@@ -967,8 +971,6 @@ export PERIODIC_ASSURANCE_JOB_NAME="fixture-periodic"
 export ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME="fixture-attachments"
 export ATTACHMENT_SCAN_QUEUE_NAME="fixture-queue"
 export MEDIA_SYNC_WARM_QUEUE_NAME="fixture-warm-queue"
-export ASSET_API_AUDIENCE="api://fixture-asset"
-export MEETING_API_AUDIENCE="api://fixture-meeting"
 export LINE_PROVIDER_CONSOLE_VERIFIED_ID="${scenario === "provider_console_mismatch" ? "provider-2" : "provider-1"}"
 export RELEASE_REPORT_PATH="${toBashPath(reportPath)}"
 export RELEASE_ID="fixture-early-failure"
@@ -1016,16 +1018,14 @@ else if (command("containerapp", "show") && name === "fixture-bot" && query === 
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "properties.configuration.dapr.enabled") output("true");
 else if (command("identity", "show") && query === "id") output("/identities/fixture-jobs");
 else if (command("identity", "show")) output({ id: "/identities/fixture-attachment", clientId: "attachment-client", principalId: "attachment-principal" });
-else if (command("containerapp", "show") && name === "asset-api") output("asset.internal.example");
-else if (command("containerapp", "show") && name === "operations-api") output("meeting.internal.example");
+else if (command("containerapp", "show") && name === "asset-api") output(query.includes("callers:") ? { latest:"asset-r1",ready:"asset-r1",image:"alive.azurecr.io/alive/asset-api@sha256:${"a".repeat(64)}",ingress:{external:false,allowInsecure:false,targetPort:8080,transport:"Auto",fqdn:"asset-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io"},callers:["hhc-line-function-bot"]} : "asset.internal.example");
+else if (command("containerapp", "show") && name === "operations-api") output("operations-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io");
 else if (command("storage", "account", "show")) output("/storage/fixture-attachments");
 else if (command("acr", "show")) output("/acr/fixture");
 else if (command("keyvault", "show")) output("/vaults/fixture");
 else if (command("resource", "show")) output(${JSON.stringify(missingJobsDatabase ? "false" : "true")});
 else if (command("role", "assignment", "list")) output("1");
-else if (command("ad", "sp", "show")) output({ id: "asset-sp", appRoles: [{ id: "asset-role", value: "Asset.Invoke", isEnabled: true, allowedMemberTypes: ["Application"] }] });
-else if (command("rest")) output({ value: [{ appRoleId: "asset-role", resourceId: "asset-sp" }] });
-else if (command("containerapp", "auth", "show")) output({ platform: { enabled: true }, globalValidation: { unauthenticatedClientAction: "Return401" }, identityProviders: { azureActiveDirectory: { validation: { defaultAuthorizationPolicy: { allowedApplications: ["attachment-client"], allowedPrincipals: { identities: ["attachment-principal"] } } } } } });
+else if (command("containerapp", "auth", "show")) output(false);
 else if (command("cognitiveservices", "account", "show")) output("https://embedding.example/");
 else if (command("cognitiveservices", "account", "deployment", "list")) output({ properties: { provisioningState: "Succeeded", model: { name: "text-embedding-3-small" } } });
 else if (command("containerapp", "show") && name === "fixture-bot" && query === "properties.template.containers[0].env") output([
@@ -1607,7 +1607,6 @@ if (command("containerapp", "job", "show")) {
       env: [
         { name: "ATTACHMENT_SCAN_QUEUE_URL", value: "https://queue.example/scan" },
         { name: "ASSET_API_URL", value: "https://asset.internal.example" },
-        { name: "ASSET_API_AUDIENCE", value: "api://asset-api" },
         { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" },
         { name: "MEDIA_SYNC_MAX_BYTES", value: "209715200" },
         { name: "MAX_ATTACHMENT_BYTES", value: "26214400" }
@@ -1659,7 +1658,6 @@ if (command("containerapp", "job", "show")) {
         },
         { name: "ATTACHMENT_SCAN_QUEUE_NAME", value: "queue-fixture" },
         { name: "ASSET_API_URL", value: "https://asset.internal.example" },
-        { name: "ASSET_API_AUDIENCE", value: "api://asset-api" },
         { name: "AZURE_CLIENT_ID", value: "11111111-1111-4111-8111-111111111111" }
       ],
       resources: { cpu: 0.25, memory: "0.5Gi", ephemeralStorage: "" },

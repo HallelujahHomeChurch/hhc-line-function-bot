@@ -321,7 +321,7 @@ The bot does not perform arbitrary web browsing or maintain an administrator web
 
 Sheet music searches authorized internal catalogs only. Public web search/page reading and new search-result imports are retired. The worker accepts LINE message content only and rejects external work even when it already contains an Asset ID. Retired SEARXNG and EXTERNAL_RESOURCE environment variables are ignored by the application; current deployment and release checks no longer configure or require the service.
 
-The active `hhc-line-bot-attachment-worker` Job has one replica per execution, `0.5` CPU / `1Gi` memory, and uses a dedicated managed identity to call Asset API through authenticated internal ingress. Asset API owns malware scans and signature refresh; LINE has no scanner image or signature mounts. Retiring an existing SearXNG Azure resource is a separate authorized step after the application rollout and work drain, following azure-infra rules when that repository is affected. See [the retirement plan](../superpowers/plans/2026-11-01-searxng-retirement.md).
+The active `hhc-line-bot-attachment-worker` Job has one replica per execution, `0.5` CPU / `1Gi` memory, and uses a dedicated managed identity for queue/storage access and the canonical LINE caller header for Asset API through internal HTTPS. Asset API owns malware scans and signature refresh; LINE has no scanner image or signature mounts. Retiring an existing SearXNG Azure resource is a separate authorized step after the application rollout and work drain, following azure-infra rules when that repository is affected. See [the retirement plan](../superpowers/plans/2026-11-01-searxng-retirement.md).
 
 Asset returns a durable scan status. `pending` and `scanning` remain retryable; `infected`, `failed`, or any malformed response fails closed. The LINE Job downloads only after creating a service grant and verifies the original hash again before Graph publication.
 
@@ -336,7 +336,7 @@ Do not add `image` or `file` to a production profile's `allowedMessageTypes` unt
 - `save_resource` is granted only to the intended helper users/groups.
 - The target catalog sources have write capabilities and real OneDrive folder IDs.
 - Redis is configured so pending attachment sessions are not lost across restarts or replicas.
-- The dedicated attachment identity has queue processor, queue reader, ACR pull, and `Asset.Invoke` access; Asset API and its scan Jobs are healthy.
+- The dedicated attachment identity retains queue processor, queue reader and ACR pull access. Asset API must be ready on its exact internal HTTPS origin, with EasyAuth disabled and `hhc-line-function-bot` in `ASSET_ALLOWED_CALLERS`; its scan Jobs remain healthy. No Asset or Operations Entra token is acquired.
 
 The webhook entrance still only creates a short-lived pending attachment session and asks for purpose. After final confirmation it queues opaque work; the finite worker validates the download, uploads it to Asset, waits for `clean`, downloads through a service grant, verifies the hash, and then publishes.
 

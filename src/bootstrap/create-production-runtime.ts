@@ -11,7 +11,6 @@ import { createMemberCMSFetch, readMemberAccess } from "../account/member-access
 import { createMeetingOccurrenceReader } from "../clients/meeting-occurrences.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
-import { ManagedIdentityCredential } from "@azure/identity";
 
 import { createAzureOpenAiEmbeddingClient } from "../clients/azure-openai-embedding.js";
 import { createDeepSeekProvider } from "../clients/deepseek.js";
@@ -55,7 +54,7 @@ import { createCacheStore } from "../cache/create-cache-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { createGraphDriveClient } from "../clients/graph.js";
-import { assetAccessTokenScope, createAssetApiClient } from "../clients/asset-api.js";
+import { createAssetApiClient } from "../clients/asset-api.js";
 import { createLineSdkIdentityClient, createLineSdkReplyClient } from "../clients/line.js";
 import { createNotionDatabaseClient } from "../clients/notion.js";
 import { createNotionKnowledgeClient } from "../clients/notion-knowledge.js";
@@ -132,23 +131,11 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     timeoutMs: config.account?.timeoutMs ?? 3000,
     privateToken: config.account?.privateToken
   });
-  const assetScope = config.asset?.privateAudience
-    ? assetAccessTokenScope(config.asset.privateAudience)
-    : undefined;
-  const assetCredential = assetScope ? new ManagedIdentityCredential() : undefined;
   const mediaSyncManagementService = postgres?.mediaSyncStore
     ? new MediaSyncManagementService(
         createAssetApiClient({
           baseUrl: config.asset?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
-          timeoutMs: config.asset?.timeoutMs ?? 3000,
-          getAccessToken:
-            assetScope && assetCredential
-              ? async (signal) => {
-                  const token = await assetCredential.getToken(assetScope, { abortSignal: signal });
-                  if (!token?.token) throw new Error("asset_api_token_unavailable");
-                  return token.token;
-                }
-              : undefined
+          timeoutMs: config.asset?.timeoutMs ?? 3000
         }),
         postgres.mediaSyncStore,
         accountAdminClient

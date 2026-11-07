@@ -321,7 +321,6 @@ describe("attachment asset worker", () => {
     await fixture.store.releaseForRetry(fixture.workId, claim!.claimId!);
     const assets = createAssetApiClient({
       baseUrl: "https://asset.internal",
-      getAccessToken: vi.fn().mockResolvedValue("token"),
       fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 404 }))
     });
 

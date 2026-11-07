@@ -382,7 +382,6 @@ export interface AccountServiceConfig {
 export interface AssetServiceConfig {
   baseUrl: string;
   timeoutMs: number;
-  privateAudience?: string;
 }
 
 export interface MediaSyncConfig {

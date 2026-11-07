@@ -137,7 +137,6 @@ if args[:2] == ["containerapp", "show"]:
             ("CMS_PRIVATE_BASE_URL", "hhc-web-api"), ("ASSET_API_BASE_URL", "asset-api"),
             ("AUDIT_PRIVATE_BASE_URL", "audit-log"),
         ))
-        env.append({"name": "ASSET_PRIVATE_AUDIENCE", "value": "api://" + "a" * 36})
     print(json.dumps({"latest": revision, "ready": revision, "image": image, "token": [token], "env": env,
         "ingress": {"external": False, "allowInsecure": False, "targetPort": 3000, "transport": "Auto", "traffic": [{"weight": 100, "latestRevision": True}]},
         "dapr": {"enabled": not mode.exists(), "appId": app, "appPort": 3000, "appProtocol": "http", "logLevel": "warn"}}))

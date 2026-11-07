@@ -51,91 +51,23 @@ fail_release_check() {
 }
 
 verify_asset_access_contract() {
-  local resource_group="$1"
-  local asset_app_name="$2"
-  local asset_audience="$3"
-  local workload_client_id="$4"
-  local workload_principal_id="$5"
-  local asset_service_json
-  local role_assignments_json
-  local auth_json
-
-  if ! asset_service_json="$(
-    az ad sp show \
-      --id "${asset_audience}" \
-      --query '{id:id,appRoles:appRoles}' \
-      --output json \
-      --only-show-errors 2>/dev/null
-  )" || [[ -z "${asset_service_json}" ]]; then
-    return 1
-  fi
-  if ! role_assignments_json="$(
-    az rest \
-      --method get \
-      --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${workload_principal_id}/appRoleAssignments" \
-      --output json \
-      --only-show-errors 2>/dev/null
-  )" || [[ -z "${role_assignments_json}" ]]; then
-    return 1
-  fi
-  if ! auth_json="$(
-    az containerapp auth show \
-      --resource-group "${resource_group}" \
-      --name "${asset_app_name}" \
-      --output json \
-      --only-show-errors 2>/dev/null
-  )" || [[ -z "${auth_json}" ]]; then
-    return 1
-  fi
-
-  ASSET_SERVICE_JSON="${asset_service_json}" \
-  ASSET_ROLE_ASSIGNMENTS_JSON="${role_assignments_json}" \
-  ASSET_AUTH_JSON="${auth_json}" \
-  ASSET_WORKLOAD_CLIENT_ID="${workload_client_id}" \
-  ASSET_WORKLOAD_PRINCIPAL_ID="${workload_principal_id}" \
-  python3 - <<'PY'
-import json
-import os
-
-try:
-    service = json.loads(os.environ["ASSET_SERVICE_JSON"])
-    assignments = json.loads(os.environ["ASSET_ROLE_ASSIGNMENTS_JSON"])
-    auth = json.loads(os.environ["ASSET_AUTH_JSON"])
-except (KeyError, TypeError, ValueError):
-    raise SystemExit(1)
-
-roles = service.get("appRoles") if isinstance(service, dict) else None
-role = next(
-    (
-        item
-        for item in (roles if isinstance(roles, list) else [])
-        if isinstance(item, dict)
-        and item.get("value") == "Asset.Invoke"
-        and item.get("isEnabled") is True
-        and "Application" in (item.get("allowedMemberTypes") or [])
-    ),
-    None,
-)
-assigned = any(
-    isinstance(item, dict)
-    and item.get("appRoleId") == (role or {}).get("id")
-    and item.get("resourceId") == service.get("id")
-    for item in (assignments.get("value") if isinstance(assignments, dict) else []) or []
-)
-aad = ((auth.get("identityProviders") or {}).get("azureActiveDirectory") or {})
-policy = ((aad.get("validation") or {}).get("defaultAuthorizationPolicy") or {})
-applications = policy.get("allowedApplications") or []
-principals = (policy.get("allowedPrincipals") or {}).get("identities") or []
-valid = (
-    role is not None
-    and assigned
-    and (auth.get("platform") or {}).get("enabled") is True
-    and (auth.get("globalValidation") or {}).get("unauthenticatedClientAction") == "Return401"
-    and os.environ["ASSET_WORKLOAD_CLIENT_ID"] in applications
-    and os.environ["ASSET_WORKLOAD_PRINCIPAL_ID"] in principals
-)
-raise SystemExit(0 if valid else 1)
-PY
+  local resource_group="$1" asset_app_name="$2"
+  [[ "$asset_app_name" == asset-api ]] || return 1
+  local service auth
+  service="$(az containerapp show --resource-group "$resource_group" --name "$asset_app_name" \
+    --query "{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,image:properties.template.containers[0].image,ingress:properties.configuration.ingress,callers:properties.template.containers[0].env[?name=='ASSET_ALLOWED_CALLERS'].value}" \
+    --output json --only-show-errors)" || return 1
+  auth="$(az containerapp auth show --resource-group "$resource_group" --name "$asset_app_name" \
+    --query platform.enabled --output json --only-show-errors)" || return 1
+  jq -e --argjson auth "$auth" '
+    $auth == false and .latest != null and .latest == .ready and
+    (.image | test("^alive[.]azurecr[.]io/alive/asset-api@sha256:[a-f0-9]{64}$")) and
+    (.ingress | .external == false and .allowInsecure == false and .targetPort == 8080 and
+      (.transport | ascii_downcase) == "auto" and
+      .fqdn == "asset-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io") and
+    (.callers | length == 1) and
+    (.callers[0] | split(",") | index("hhc-line-function-bot") != null)
+  ' <<< "$service" >/dev/null
 }
 
 capture_known_good_state() {
@@ -875,7 +807,6 @@ elif check_name == "attachment_worker_job":
         and {
             "ATTACHMENT_SCAN_QUEUE_URL",
             "ASSET_API_URL",
-            "ASSET_API_AUDIENCE",
             "AZURE_CLIENT_ID",
             "MEDIA_SYNC_MAX_BYTES",
             "MAX_ATTACHMENT_BYTES",
@@ -926,7 +857,6 @@ elif check_name == "periodic_assurance_job":
                 "NOTION_SERVICE_DATABASE_ID": {"value": None},
                 "ATTACHMENT_SCAN_QUEUE_NAME": {"value": None},
                 "ASSET_API_URL": {"value": None},
-                "ASSET_API_AUDIENCE": {"value": None},
                 "AZURE_CLIENT_ID": {"value": None},
                 "GRAPH_CLIENT_SECRET": {"secretRef": "graph-client-secret"},
                 "NOTION_TOKEN": {"secretRef": "notion-token"},

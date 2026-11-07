@@ -22,8 +22,6 @@ required_release_environment=(
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
   ATTACHMENT_SCAN_QUEUE_NAME
   MEDIA_SYNC_WARM_QUEUE_NAME
-  ASSET_API_AUDIENCE
-  MEETING_API_AUDIENCE
   LINE_PROVIDER_CONSOLE_VERIFIED_ID
 )
 for required_name in "${required_release_environment[@]}"; do
@@ -165,6 +163,7 @@ if [[ -z "${meeting_api_fqdn}" ]]; then
   exit 1
 fi
 meeting_api_url="https://${meeting_api_fqdn}"
+[[ "${meeting_api_url}" == "https://operations-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io" ]] || { echo "Unexpected Operations private origin" >&2; exit 1; }
 
 RELEASE_BOT_DAPR_ENABLED="$(release_containerapp_read show \
   --resource-group "${RESOURCE_GROUP}" --name "${CONTAINER_APP_NAME}" \
@@ -362,23 +361,9 @@ for warm_role in "Storage Queue Data Message Processor" "Storage Queue Data Read
     exit 1
   fi
 done
-if ! verify_asset_access_contract \
-  "${RESOURCE_GROUP}" \
-  "${ASSET_API_CONTAINER_APP_NAME}" \
-  "${ASSET_API_AUDIENCE}" \
-  "${attachment_job_client_id}" \
-  "${attachment_job_principal_id}"; then
-  echo "Asset API workload access contract is unavailable" >&2
+if ! verify_asset_access_contract "${RESOURCE_GROUP}" "${ASSET_API_CONTAINER_APP_NAME}"; then
+  echo "Asset API private caller contract is unavailable" >&2
   exit 1
-fi
-if [[ -n "${asset_private_url}" ]]; then
-  bot_client_id="$(az ad sp show --id "${bot_principal_id}" --query appId --output tsv --only-show-errors)"
-  if [[ -z "${bot_client_id}" ]] || ! verify_asset_access_contract \
-    "${RESOURCE_GROUP}" "${ASSET_API_CONTAINER_APP_NAME}" "${ASSET_API_AUDIENCE}" \
-    "${bot_client_id}" "${bot_principal_id}"; then
-    echo 'Asset API access contract is unavailable for the LINE bot identity' >&2
-    exit 1
-  fi
 fi
 
 azure_openai_embedding_endpoint="$(az cognitiveservices account show \
@@ -619,7 +604,6 @@ AUDIT_PRIVATE_BASE_URL="${audit_private_url}" \
 ACCOUNT_PRIVATE_BASE_URL="${account_private_url}" \
 CMS_PRIVATE_BASE_URL="${cms_private_url}" \
 ASSET_PRIVATE_BASE_URL="${asset_private_url}" \
-ASSET_API_AUDIENCE="${ASSET_API_AUDIENCE}" \
 LINE_GATEWAY_HTTPS_BOUND="$([[ -n "${gateway_token_ref}" ]] && echo true || echo false)" \
 python3 - <<'PY'
 from pathlib import Path
@@ -721,7 +705,6 @@ if os.environ["CMS_PRIVATE_BASE_URL"]:
 if os.environ["ASSET_PRIVATE_BASE_URL"]:
     transport_env.extend([
         ("ASSET_API_BASE_URL", "value", os.environ["ASSET_PRIVATE_BASE_URL"]),
-        ("ASSET_PRIVATE_AUDIENCE", "value", os.environ["ASSET_API_AUDIENCE"]),
     ])
 if os.environ["LINE_GATEWAY_HTTPS_BOUND"] == "true":
     transport_env.append(("LINE_GATEWAY_PRIVATE_TOKEN", "secretRef", "line-gateway-private-token"))
@@ -826,9 +809,7 @@ render_job_manifest() {
   ATTACHMENT_SCAN_QUEUE_NAME="${ATTACHMENT_SCAN_QUEUE_NAME}" \
   MEDIA_SYNC_WARM_QUEUE_NAME="${MEDIA_SYNC_WARM_QUEUE_NAME}" \
   ASSET_API_URL="${asset_api_url}" \
-  ASSET_API_AUDIENCE="${ASSET_API_AUDIENCE}" \
   MEETING_API_URL="${meeting_api_url}" \
-  MEETING_API_AUDIENCE="${MEETING_API_AUDIENCE}" \
   BOT_SECRETS_JSON="${bot_secrets_json}" \
   BOT_ENV_JSON="${bot_env_json}" \
   ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING="${attachment_scan_queue_connection_string}" \
@@ -908,9 +889,7 @@ substitutions = {
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME": os.environ["ATTACHMENT_SCAN_QUEUE_NAME"],
     "PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME": os.environ["MEDIA_SYNC_WARM_QUEUE_NAME"],
     "PLACEHOLDER_ASSET_API_URL": os.environ["ASSET_API_URL"],
-    "PLACEHOLDER_ASSET_API_AUDIENCE": os.environ["ASSET_API_AUDIENCE"],
     "PLACEHOLDER_MEETING_API_URL": os.environ["MEETING_API_URL"],
-    "PLACEHOLDER_MEETING_API_AUDIENCE": os.environ["MEETING_API_AUDIENCE"],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": os.environ[
         "ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING"
     ],

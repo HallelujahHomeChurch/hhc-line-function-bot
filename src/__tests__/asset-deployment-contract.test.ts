@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 describe("Asset deployment access contract", () => {
-  it("wires the periodic job to the least-privilege Asset-enabled identity", async () => {
+  it("wires the periodic job to the existing workload identity and token-free Asset transport", async () => {
     const [deploy, manifest] = await Promise.all([
       readFile(path.join(ROOT, "scripts/deploy-aca.sh"), "utf8"),
       readFile(path.join(ROOT, "aca.periodic-assurance-job.yaml"), "utf8")
@@ -29,15 +29,18 @@ describe("Asset deployment access contract", () => {
       "name: AZURE_CLIENT_ID\n            value: PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID"
     );
     expect(manifest).toContain("name: ASSET_API_URL");
-    expect(manifest).toContain("name: ASSET_API_AUDIENCE");
+    expect(manifest).not.toContain("ASSET_API_AUDIENCE");
     expect(manifest).toContain("name: AZURE_CLIENT_ID");
   });
 
   it.each([
     ["success", 0],
-    ["missing_role", 1],
-    ["missing_easy_auth_application", 1],
-    ["missing_easy_auth_principal", 1]
+    ["missing_caller", 1],
+    ["auth_enabled", 1],
+    ["external_ingress", 1],
+    ["wrong_origin", 1],
+    ["unsettled", 1],
+    ["mutable_image", 1]
   ])("fails closed for %s", async (scenario, expectedStatus) => {
     const fixture = await createFixture(scenario);
 
@@ -64,20 +67,10 @@ async function createFixture(scenario: string): Promise<{ bin: string; driver: s
     path.join(bin, "az"),
     `#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1 $2 $3" == "ad sp show" ]]; then
-  printf '%s\n' '{"id":"asset-sp","appRoles":[{"id":"asset-invoke-role","value":"Asset.Invoke","isEnabled":true,"allowedMemberTypes":["Application"]}]}'
-elif [[ "$1 $2" == "rest --method" ]]; then
-  if [[ "${scenario}" == "missing_role" ]]; then
-    printf '%s\n' '{"value":[]}'
-  else
-    printf '%s\n' '{"value":[{"appRoleId":"asset-invoke-role","resourceId":"asset-sp"}]}'
-  fi
-elif [[ "$1 $2 $3" == "containerapp auth show" ]]; then
-  application='11111111-1111-4111-8111-111111111111'
-  principal='22222222-2222-4222-8222-222222222222'
-  [[ "${scenario}" == "missing_easy_auth_application" ]] && application='other'
-  [[ "${scenario}" == "missing_easy_auth_principal" ]] && principal='other'
-  printf '{"platform":{"enabled":true},"globalValidation":{"unauthenticatedClientAction":"Return401"},"identityProviders":{"azureActiveDirectory":{"validation":{"defaultAuthorizationPolicy":{"allowedApplications":["%s"],"allowedPrincipals":{"identities":["%s"]}}}}}}\n' "$application" "$principal"
+if [[ "$1 $2 $3" == "containerapp auth show" ]]; then
+  [[ "${scenario}" == auth_enabled ]] && echo true || echo false
+elif [[ "$1 $2" == "containerapp show" ]]; then
+  jq -nc --arg scenario "${scenario}" '{latest:"asset-r1",ready:(if $scenario == "unsettled" then "old" else "asset-r1" end),image:(if $scenario == "mutable_image" then "alive.azurecr.io/alive/asset-api:latest" else "alive.azurecr.io/alive/asset-api@sha256:${"a".repeat(64)}" end),ingress:{external:($scenario == "external_ingress"),allowInsecure:false,targetPort:8080,transport:"Auto",fqdn:(if $scenario == "wrong_origin" then "evil.example" else "asset-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io" end)},callers:[(if $scenario == "missing_caller" then "account-api" else "account-api,hhc-web-api,hhc-line-function-bot" end)]}'
 else
   exit 91
 fi
@@ -90,12 +83,7 @@ fi
     `#!/usr/bin/env bash
 set -euo pipefail
 source "${path.join(ROOT, "scripts/release-assurance.sh")}"
-verify_asset_access_contract \
-  fixture-resource-group \
-  asset-api \
-  api://asset-api \
-  11111111-1111-4111-8111-111111111111 \
-  22222222-2222-4222-8222-222222222222
+verify_asset_access_contract fixture-resource-group asset-api
 `,
     { mode: 0o700 }
   );

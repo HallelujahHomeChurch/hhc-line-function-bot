@@ -390,7 +390,7 @@ Do not commit real `.env` files. In Azure Container Apps, store only real creden
 - `NOTION_TOKEN`
 - `GRAPH_CLIENT_SECRET`
 - `ATTACHMENT_SCAN_QUEUE_URL` as the queue-scoped bot producer secret
-- `ASSET_API_AUDIENCE` for the attachment Job's managed-identity token
+- Asset and Operations internal HTTPS requests use the canonical `X-HHC-Caller-App-Id: hhc-line-function-bot` header without Entra access tokens. Queue/storage and Graph credentials remain independent.
 
 `config/profiles.json` is intentionally non-sensitive and is packaged in the image. Do not set `BOT_PROFILES_JSON` or `BOT_PROFILES_BASE64_JSON`; the runtime rejects both.
 

@@ -16,7 +16,7 @@ import { loadAttachmentScanWorkerConfigFromEnv } from "../attachments/scan-worke
 import { RedisAttachmentScanWorkStore } from "../attachments/scan-work-store.js";
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
-import { assetAccessTokenScope, createAssetApiClient } from "../clients/asset-api.js";
+import { createAssetApiClient } from "../clients/asset-api.js";
 import { createGraphDriveClient } from "../clients/graph.js";
 import { createLineSdkContentClient } from "../clients/line.js";
 import { createPostgresRuntime } from "../db/postgres.js";
@@ -26,7 +26,7 @@ import {
   shouldAcknowledgeMediaSyncResult,
   type MediaSyncWorkerResult
 } from "../media-sync/worker.js";
-import { MeetingWindowClient, meetingAccessTokenScope } from "../media-sync/meeting-client.js";
+import { MeetingWindowClient } from "../media-sync/meeting-client.js";
 import { logMediaSyncTiming } from "../media-sync/timing.js";
 import { createRedisRuntime } from "../redis.js";
 
@@ -137,7 +137,6 @@ export function formatAttachmentWorkerStatus(
 export interface AttachmentWorkerEnvironment {
   queueUrl: string;
   assetApiUrl: string;
-  assetApiAudience: string;
   managedIdentityClientId: string;
 }
 
@@ -146,18 +145,12 @@ export function readAttachmentWorkerEnvironment(
 ): AttachmentWorkerEnvironment {
   const queueUrl = requiredHttpsUrl(env, "ATTACHMENT_SCAN_QUEUE_URL");
   const assetApiUrl = requiredHttpsUrl(env, "ASSET_API_URL");
-  const assetApiAudience = env.ASSET_API_AUDIENCE?.trim();
-  if (!assetApiAudience || !/^(?:api|https):\/\//u.test(assetApiAudience)) {
-    throw new Error("ASSET_API_AUDIENCE is required and must be an application URI");
-  }
   const managedIdentityClientId = env.AZURE_CLIENT_ID?.trim();
   if (!managedIdentityClientId || !UUID_PATTERN.test(managedIdentityClientId)) {
     throw new Error("AZURE_CLIENT_ID is required and must be a UUID");
   }
-  return { queueUrl, assetApiUrl, assetApiAudience, managedIdentityClientId };
+  return { queueUrl, assetApiUrl, managedIdentityClientId };
 }
-
-export { assetAccessTokenScope } from "../clients/asset-api.js";
 
 export function attachmentWorkerDeadlines(startedAt: Date): {
   scanDeadline: Date;
@@ -204,16 +197,10 @@ export async function runAttachmentWorkerLoop(
   };
   try {
     const meetingUrl = requiredHttpsUrl(env, "MEETING_API_BASE_URL");
-    const meetingAudience = requiredAudience(env, "MEETING_API_AUDIENCE");
     const warmQueueUrl = requiredHttpsUrl(env, "MEDIA_SYNC_WARM_QUEUE_URL");
     const warmQueue = new QueueClient(warmQueueUrl, runtime.credential);
     const meetings = new MeetingWindowClient({
-      baseUrl: meetingUrl,
-      getAccessToken: async () => {
-        const token = await runtime.credential.getToken(meetingAccessTokenScope(meetingAudience));
-        if (!token?.token) throw new Error("meeting_api_token_unavailable");
-        return token.token;
-      }
+      baseUrl: meetingUrl
     });
     const sleep =
       options.sleep ??
@@ -275,11 +262,6 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
     });
     const assets = createAssetApiClient({
       baseUrl: job.assetApiUrl,
-      getAccessToken: async () => {
-        const token = await credential.getToken(assetAccessTokenScope(job.assetApiAudience));
-        if (!token?.token) throw new Error("asset_api_token_unavailable");
-        return token.token;
-      },
       onRejection: (telemetry) => process.stdout.write(`${JSON.stringify(telemetry)}\n`)
     });
     const lineContent = createLineSdkContentClient();
@@ -400,14 +382,6 @@ function requiredHttpsUrl(env: NodeJS.ProcessEnv, field: string): string {
   } catch {
     throw new Error(`${field} is required and must be an HTTPS URL`);
   }
-}
-
-function requiredAudience(env: NodeJS.ProcessEnv, field: string): string {
-  const value = env[field]?.trim();
-  if (!value || !/^(?:api|https):\/\//u.test(value)) {
-    throw new Error(`${field} is required and must be an application URI`);
-  }
-  return value;
 }
 
 async function closeRuntime(

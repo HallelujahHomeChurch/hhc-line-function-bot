@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { ManagedIdentityCredential } from "@azure/identity";
 import { QueueClient } from "@azure/storage-queue";
 
-import { MeetingWindowClient, meetingAccessTokenScope } from "../media-sync/meeting-client.js";
+import { MeetingWindowClient } from "../media-sync/meeting-client.js";
 import { runWarmScheduler } from "../media-sync/warm-scheduler.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -11,10 +11,6 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 export function readWarmSchedulerEnvironment(env: NodeJS.ProcessEnv) {
   const baseUrl = requiredHttpsUrl(env, "MEETING_API_BASE_URL");
   const queueUrl = requiredHttpsUrl(env, "MEDIA_SYNC_WARM_QUEUE_URL");
-  const audience = env.MEETING_API_AUDIENCE?.trim();
-  if (!audience || !/^(?:api|https):\/\//u.test(audience)) {
-    throw new Error("MEETING_API_AUDIENCE is required and must be an application URI");
-  }
   const clientId = env.AZURE_CLIENT_ID?.trim();
   if (!clientId || !UUID_PATTERN.test(clientId)) {
     throw new Error("AZURE_CLIENT_ID is required and must be a UUID");
@@ -22,7 +18,6 @@ export function readWarmSchedulerEnvironment(env: NodeJS.ProcessEnv) {
   return {
     baseUrl,
     queueUrl,
-    audience,
     clientId,
     leadMs: durationMs(env.MEDIA_SYNC_WARM_LEAD ?? "5m", "MEDIA_SYNC_WARM_LEAD"),
     tailMs: durationMs(env.MEDIA_SYNC_WARM_TAIL ?? "10m", "MEDIA_SYNC_WARM_TAIL")
@@ -37,12 +32,7 @@ export async function runMediaSyncWarmer(env: NodeJS.ProcessEnv = process.env) {
     baseUrl: config.baseUrl,
     leadMs: config.leadMs,
     tailMs: config.tailMs,
-    refreshMs: 0,
-    getAccessToken: async () => {
-      const token = await credential.getToken(meetingAccessTokenScope(config.audience));
-      if (!token?.token) throw new Error("meeting_api_token_unavailable");
-      return token.token;
-    }
+    refreshMs: 0
   });
   return runWarmScheduler({
     isWarm: (now) => meetings.isWarm(now),

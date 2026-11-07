@@ -107,12 +107,8 @@ properties:
             value: https://PLACEHOLDER_ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME.queue.core.windows.net/PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME
           - name: ASSET_API_URL
             value: PLACEHOLDER_ASSET_API_URL
-          - name: ASSET_API_AUDIENCE
-            value: PLACEHOLDER_ASSET_API_AUDIENCE
           - name: MEETING_API_BASE_URL
             value: PLACEHOLDER_MEETING_API_URL
-          - name: MEETING_API_AUDIENCE
-            value: PLACEHOLDER_MEETING_API_AUDIENCE
           - name: AZURE_CLIENT_ID
             value: PLACEHOLDER_ATTACHMENT_JOB_CLIENT_ID
           - name: MAX_ATTACHMENT_BYTES
