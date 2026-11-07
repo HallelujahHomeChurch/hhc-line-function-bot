@@ -872,6 +872,21 @@ describe("production profile configuration deployment contract", () => {
     expect(retirement).not.toContain("az acr build");
   });
 
+  it("caches Log Analytics access after fresh login and before deployment without output", () => {
+    const workflow = readProjectFile(".github/workflows/release.yml");
+    const login = workflow.indexOf("- name: Refresh Azure OIDC session before deploy");
+    const cache = workflow.indexOf("- name: Cache Log Analytics access before deployment");
+    const deploy = workflow.indexOf("- name: Deploy image and wait for healthy revision");
+    expect(login).toBeGreaterThanOrEqual(0);
+    expect(cache).toBeGreaterThan(login);
+    expect(deploy).toBeGreaterThan(cache);
+    expect(workflow.slice(login, cache)).toContain("uses: azure/login@v3");
+    expect(workflow.slice(cache, deploy).trim()).toBe(
+      "- name: Cache Log Analytics access before deployment\n" +
+        "        run: az account get-access-token --resource https://api.loganalytics.io --output none"
+    );
+  });
+
   it("schedules weekly periodic assurance with OIDC and always uploads its fixed report", () => {
     expect(projectFileExists(".github/workflows/periodic-assurance.yml")).toBe(true);
     const workflow = readProjectFile(".github/workflows/periodic-assurance.yml");
