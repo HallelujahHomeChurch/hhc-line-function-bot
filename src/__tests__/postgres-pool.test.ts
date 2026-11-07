@@ -48,6 +48,27 @@ describe("PostgreSQL pool budget", () => {
 });
 
 describe.skipIf(!process.env.KERNEL_POSTGRES_URL)("real PostgreSQL checkout budget", () => {
+  it.each(["fixture--revision", "revision-".repeat(10), "界".repeat(40)])(
+    "reads the effective bounded revision tag: %s",
+    async (revision) => {
+      const target = new URL(process.env.KERNEL_POSTGRES_URL!);
+      expect(target.hostname).toBe("127.0.0.1");
+      target.searchParams.set("application_name", "old");
+      vi.stubEnv("CONTAINER_APP_REVISION", revision);
+      const pool = createPostgresPool({ url: target.toString(), ssl: false });
+      try {
+        const result = await pool.query("SHOW application_name");
+        const name = result.rows[0].application_name as string;
+        expect(Buffer.byteLength(name)).toBeLessThanOrEqual(63);
+        expect(name).not.toBe("old");
+        if (revision === "fixture--revision") expect(name).toBe(revision);
+        else expect(name).toMatch(/-[0-9a-f]{16}$/);
+      } finally {
+        await pool.end();
+        vi.unstubAllEnvs();
+      }
+    }
+  );
   it("rejects a saturated checkout and recovers without increasing max2", async () => {
     const url = process.env.KERNEL_POSTGRES_URL!;
     expect(new URL(url).hostname).toBe("127.0.0.1");
