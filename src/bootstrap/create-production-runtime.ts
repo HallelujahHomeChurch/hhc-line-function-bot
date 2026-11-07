@@ -1,4 +1,5 @@
 import { PostgresSearchSettingsStore } from "../search-settings/store.js";
+import { startPoolDiagnostics } from "../db/pool-diagnostics.js";
 import { createPublicWebSearch } from "../clients/public-web-search.js";
 import { createPublicSearchQuota } from "../state/public-search-quota.js";
 import { createBudgetedFetch } from "../helper-agent/budget.js";
@@ -548,6 +549,11 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     searchSettings
   });
 
+  const stopPoolDiagnostics = [
+    postgres ? startPoolDiagnostics(postgres.pool) : undefined,
+    historyPool ? startPoolDiagnostics(historyPool, "history") : undefined,
+    helperStateLockPool ? startPoolDiagnostics(helperStateLockPool, "helper_lock") : undefined
+  ];
   return {
     app,
     async close() {
@@ -567,6 +573,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
       for (const result of intakeAndMedia) {
         if (result.status === "rejected") errors.push(result.reason);
       }
+      for (const stop of stopPoolDiagnostics) stop?.();
       for (const close of [
         () => openaiProxy?.close(),
         () => historyPool?.end(),

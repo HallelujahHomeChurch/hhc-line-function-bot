@@ -44,11 +44,12 @@ describe("account admin client", () => {
       expect.objectContaining({
         method: "POST",
         redirect: "manual",
-        headers: {
+        headers: expect.objectContaining({
           "content-type": "application/json",
           "x-hhc-account-service-caller": "hhc-line-function-bot",
-          "x-hhc-account-service-token": privateToken
-        }
+          "x-hhc-account-service-token": privateToken,
+          traceparent: expect.stringMatching(/^00-[a-f0-9]{32}-[a-f0-9]{16}-00$/u)
+        })
       })
     );
     expect(() =>
@@ -73,10 +74,11 @@ describe("account admin client", () => {
       "http://127.0.0.1:3500/v1.0/invoke/account-api/method/priv/account/v1/permissions/verify",
       expect.objectContaining({
         method: "POST",
-        headers: {
+        headers: expect.objectContaining({
           "content-type": "application/json",
-          "x-hhc-request-id": "request-1"
-        },
+          "x-hhc-request-id": "request-1",
+          traceparent: expect.stringMatching(/^00-[a-f0-9]{32}-[a-f0-9]{16}-00$/u)
+        }),
         body: JSON.stringify({
           userId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
           permission: "presenter:line:manage"
@@ -104,10 +106,11 @@ describe("account admin client", () => {
       "http://127.0.0.1:3500/v1.0/invoke/account-api/method/priv/account/v1/line/search-settings/authorize",
       expect.objectContaining({
         method: "POST",
-        headers: {
+        headers: expect.objectContaining({
           "content-type": "application/json",
-          "x-hhc-request-id": "request-1"
-        },
+          "x-hhc-request-id": "request-1",
+          traceparent: expect.stringMatching(/^00-[a-f0-9]{32}-[a-f0-9]{16}-00$/u)
+        }),
         body: JSON.stringify({
           userId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
           permission: "*"
@@ -145,10 +148,11 @@ describe("account admin client", () => {
       "http://127.0.0.1:3500/v1.0/invoke/account-api/method/priv/account/v1/media-sync/acl-subjects/search",
       expect.objectContaining({
         method: "POST",
-        headers: {
+        headers: expect.objectContaining({
           "content-type": "application/json",
-          "x-hhc-request-id": "request-1"
-        },
+          "x-hhc-request-id": "request-1",
+          traceparent: expect.stringMatching(/^00-[a-f0-9]{32}-[a-f0-9]{16}-00$/u)
+        }),
         body: JSON.stringify({
           requestingUserId: "018f0c1f-18d0-7e81-9f6f-69c456db7003",
           subjectType: "user",

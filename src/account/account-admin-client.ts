@@ -1,3 +1,4 @@
+import { internalDiagnosticFetch, readDiagnosticJSON } from "../observability/http-diagnostics.js";
 import type { CapabilityName } from "../capabilities/names.js";
 import { isCapabilityName } from "../types.js";
 import type { AccountLinkPresentation } from "../types.js";
@@ -158,7 +159,7 @@ export function createAccountAdminClient(options: {
   ) {
     throw new Error("account_https_config_invalid");
   }
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = internalDiagnosticFetch(options.fetchImpl ?? fetch);
 
   async function post(
     path: string,
@@ -195,7 +196,7 @@ export function createAccountAdminClient(options: {
       );
     }
     try {
-      return await response.json();
+      return await readDiagnosticJSON(response);
     } catch {
       throw new AccountApiError("account_api_invalid_json", false);
     }

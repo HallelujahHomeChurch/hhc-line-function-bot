@@ -1,4 +1,6 @@
 import pg from "pg";
+import { createHash } from "node:crypto";
+import { assertJobDatabaseIdentity } from "./job-identity.js";
 import { runAccessMigrations } from "../access/migrations.js";
 
 import { runMediaSyncMigrations } from "../media-sync/migrations.js";
@@ -7,6 +9,7 @@ import type { DatabaseConfig } from "../types.js";
 
 export interface PostgresRuntime {
   pool: pg.Pool;
+  stopPoolDiagnostics?: () => void;
   mediaSyncStore: PostgresMediaSyncStore;
 }
 
@@ -14,8 +17,26 @@ export function createPostgresPool(
   config: DatabaseConfig,
   options: Pick<pg.PoolConfig, "Client" | "connectionTimeoutMillis"> = {}
 ): pg.Pool {
+  let connectionString = config.url;
+  const revision = process.env.CONTAINER_APP_REVISION;
+  if (revision) {
+    let name = revision;
+    if (/[^\x20-\x7e]/.test(revision)) {
+      name = `revision-${createHash("sha256").update(revision).digest("hex").slice(0, 16)}`;
+    } else if (Buffer.byteLength(revision) > 63) {
+      let prefix = "";
+      for (const character of revision) {
+        if (Buffer.byteLength(prefix + character) > 46) break;
+        prefix += character;
+      }
+      name = `${prefix}-${createHash("sha256").update(revision).digest("hex").slice(0, 16)}`;
+    }
+    const target = new URL(config.url);
+    target.searchParams.set("application_name", name);
+    connectionString = target.toString();
+  }
   return new pg.Pool({
-    connectionString: config.url,
+    connectionString,
     ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
     max: 2,
     connectionTimeoutMillis: 2_000,
@@ -25,9 +46,11 @@ export function createPostgresPool(
 
 export async function createPostgresRuntime(
   config: DatabaseConfig | undefined,
-  owned?: { pool: pg.Pool; signal?: AbortSignal; close(): Promise<void> }
+  owned?: { pool: pg.Pool; signal?: AbortSignal; close(): Promise<void> },
+  requireJobIdentity = false
 ): Promise<PostgresRuntime | undefined> {
   if (!config) {
+    if (requireJobIdentity) throw new Error("job_database_required");
     return undefined;
   }
 
@@ -35,7 +58,8 @@ export async function createPostgresRuntime(
 
   try {
     owned?.signal?.throwIfAborted();
-    await pool.query("select 1");
+    if (requireJobIdentity) await assertJobDatabaseIdentity(pool);
+    else await pool.query("select 1");
     owned?.signal?.throwIfAborted();
     await runAccessMigrations(pool);
     owned?.signal?.throwIfAborted();
@@ -44,6 +68,7 @@ export async function createPostgresRuntime(
     return { pool, mediaSyncStore: new PostgresMediaSyncStore(pool) };
   } catch (error) {
     await (owned ? owned.close() : pool.end()).catch(() => undefined);
+    owned?.signal?.throwIfAborted();
     throw error;
   }
 }

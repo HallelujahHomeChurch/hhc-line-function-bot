@@ -1,3 +1,4 @@
+import { internalDiagnosticFetch, readDiagnosticJSON } from "../observability/http-diagnostics.js";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -332,6 +333,7 @@ export function createAssetApiClient(options: {
 }): AssetApiClient {
   validateInternalServiceOrigin(options.baseUrl, "asset-api");
   const fetcher = options.fetcher ?? fetch;
+  const internalFetch = internalDiagnosticFetch(fetcher);
   const baseUrl = options.baseUrl.replace(/\/$/u, "");
   const request = async (
     operationStage: string,
@@ -344,7 +346,7 @@ export function createAssetApiClient(options: {
       const signal =
         requestOptions?.signal ??
         (options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs));
-      response = await fetcher(`${baseUrl}${path}`, {
+      response = await internalFetch(`${baseUrl}${path}`, {
         ...init,
         signal,
         redirect: "manual",
@@ -793,7 +795,7 @@ async function streamUploadFile(
 
 async function readJson(response: Response): Promise<unknown> {
   try {
-    return await response.json();
+    return await readDiagnosticJSON(response);
   } catch {
     throw new AssetApiRequestError("asset_api_invalid_response", false);
   }
