@@ -1,4 +1,5 @@
 import { createCatalogStore } from "../catalog/create-catalog-store.js";
+import { startPoolDiagnostics } from "../db/pool-diagnostics.js";
 import { buildCatalogSourceSeedsForProfiles, seedCatalogSources } from "../catalog/source-seeds.js";
 import { syncCatalogSources } from "../catalog/sync-service.js";
 import { createGraphDriveClient } from "../clients/graph.js";
@@ -31,6 +32,7 @@ export async function runCatalogSync(
   if (options.signal?.aborted) stop();
   const notionFetch = createCatalogNotionFetch(signal);
   let owned: ReturnType<typeof createCatalogSyncPostgres> | undefined;
+  let stopPoolDiagnostics: (() => void) | undefined;
   const work = async () => {
     signal.throwIfAborted();
     const config = loadCatalogSyncConfigFromEnv(env);
@@ -39,6 +41,7 @@ export async function runCatalogSync(
       ? createCatalogSyncPostgres(config.database, { signal, deadline })
       : undefined;
     const postgres = await createPostgresRuntime(config.database, owned);
+    if (postgres) stopPoolDiagnostics = startPoolDiagnostics(postgres.pool);
     signal.throwIfAborted();
     const catalog = await createCatalogStore({ db: postgres?.pool });
     signal.throwIfAborted();
@@ -155,6 +158,7 @@ export async function runCatalogSync(
     if (signal.aborted && signal.reason !== error) errors.push(signal.reason);
     errors.push(error);
   } finally {
+    stopPoolDiagnostics?.();
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", stop);
     controller.abort(new DOMException("catalog_sync_scope_closed", "AbortError"));

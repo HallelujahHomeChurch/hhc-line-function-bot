@@ -1,3 +1,4 @@
+import { internalDiagnosticFetch, readDiagnosticJSON } from "../observability/http-diagnostics.js";
 import { validateInternalServiceOrigin } from "../clients/internal-origin.js";
 
 export interface MediaSyncWindow {
@@ -47,7 +48,7 @@ export class MeetingWindowClient {
     const url = new URL("/priv/operations/sync-windows", this.options.baseUrl);
     url.searchParams.set("from", new Date(now.getTime() - tail).toISOString());
     url.searchParams.set("to", new Date(now.getTime() + lead).toISOString());
-    const response = await (this.options.fetcher ?? fetch)(url, {
+    const response = await internalDiagnosticFetch(this.options.fetcher ?? fetch)(url, {
       headers: {
         "x-hhc-caller-app-id": "hhc-line-function-bot"
       },
@@ -55,7 +56,7 @@ export class MeetingWindowClient {
       signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) throw new Error(`meeting_api_${response.status}`);
-    const body = (await response.json()) as unknown;
+    const body = (await readDiagnosticJSON(response)) as unknown;
     if (!isWindowEnvelope(body)) throw new Error("meeting_api_invalid_response");
     this.windows = body.data;
     this.refreshedAt = now.getTime();

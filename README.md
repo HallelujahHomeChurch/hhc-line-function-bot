@@ -674,3 +674,25 @@ visible to group members. Saved notes still expire after thirty days.
 The OpenAI-only search adapter uses the existing API key and scoped proxy, with no
 provider fallback. It requires Redis and PostgreSQL quote state and fails closed when
 they are unavailable. See [search bounds and cost observation](docs/runbooks/helper-public-search.md).
+
+### Transport failure evidence
+
+HTTP ingress and the fixed internal Account, Asset, Audit and Operations clients
+retain validated request/trace correlation without depending on span sampling.
+Failures and operations taking at least two seconds emit fixed-field status,
+phase and duration records; internal JSON-body failures are recorded separately.
+No raw URL, headers, exception text, profile/member identity or provider payload
+is logged. Provider SDKs and signed upload/download targets do not receive this
+internal trace context. This is best-effort log correlation, not an OTLP exporter
+or durable audit; background calls without an ingress context start independent
+unsampled correlation roots.
+
+Runtime PostgreSQL pools tag `application_name` with `CONTAINER_APP_REVISION`.
+ASCII names up to 63 bytes are exact; longer names use a 46-byte prefix and a
+16-hex SHA-256 suffix. Invalid nonprintable/non-ASCII names use `revision-` plus
+the same hash; outside Azure, configured application names remain unchanged.
+Runtime-owned pressure timers log fixed global `waitingCount`, `totalCount` and
+`idleCount` only while checkout waiters exist, every 15 seconds and on shutdown.
+These counters do not attribute a wait to one request. LINE does not currently
+record individual PostgreSQL query or checkout durations; HTTP/job outcomes and
+global pool pressure must not be presented as complete query causality.
