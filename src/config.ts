@@ -456,7 +456,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
 function readAccountApiBaseUrl(env: NodeJS.ProcessEnv): string {
   const explicit = env.ACCOUNT_API_BASE_URL?.trim();
   if (explicit) {
-    validateInternalServiceOrigin(explicit, "asset-api", env.NODE_ENV);
     const url = new URL(explicit);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error("ACCOUNT_API_BASE_URL must use HTTP or HTTPS");
@@ -473,6 +472,7 @@ function readAccountApiBaseUrl(env: NodeJS.ProcessEnv): string {
 function readAssetApiBaseUrl(env: NodeJS.ProcessEnv): string {
   const explicit = env.ASSET_API_BASE_URL?.trim();
   if (explicit) {
+    validateInternalServiceOrigin(explicit, "asset-api", env.NODE_ENV);
     const url = new URL(explicit);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error("ASSET_API_BASE_URL must use HTTP or HTTPS");
