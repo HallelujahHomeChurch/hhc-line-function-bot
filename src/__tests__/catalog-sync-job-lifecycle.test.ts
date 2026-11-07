@@ -20,8 +20,8 @@ vi.mock("pg", () => ({
       connect() {
         throw new Error("fixture_connect_unexpected");
       }
-      query(sql: string | { text: string }, values?: unknown[]) {
-        return fixtures.query(typeof sql === "string" ? sql : sql.text, values);
+      query(sql: string, values?: unknown[]) {
+        return fixtures.query(sql, values);
       }
       end() {
         return fixtures.end();
@@ -36,23 +36,7 @@ describe("catalog sync job PostgreSQL lifecycle", () => {
     vi.resetAllMocks();
     fixtures.config.profiles = [];
     fixtures.query.mockImplementation(async (sql: string) => ({
-      rows: sql.includes("pg_catalog.pg_roles")
-        ? [
-            {
-              current_role: "hhc_line_jobs",
-              session_role: "hhc_line_jobs",
-              rolconnlimit: 6,
-              rolcanlogin: true,
-              rolsuper: false,
-              rolcreaterole: false,
-              rolcreatedb: false,
-              rolreplication: false,
-              rolbypassrls: false
-            }
-          ]
-        : sql.includes("from pg_extension")
-          ? [{ extversion: "0.8.0" }]
-          : [],
+      rows: sql.includes("from pg_extension") ? [{ extversion: "0.8.0" }] : [],
       rowCount: 0
     }));
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -169,8 +153,8 @@ describe("catalog sync job PostgreSQL lifecycle", () => {
     const { runCatalogSync } = await import("../tools/sync-catalog.js");
     const result = await runCatalogSync(process.env).catch((error) => error);
     expect(result).toBeInstanceOf(AggregateError);
-    expect(result.cause.message).toBe("job_database_identity_unverified");
-    expect(result.errors).toEqual([result.cause, cleanup]);
+    expect(result.cause).toBe(primary);
+    expect(result.errors).toEqual([primary, cleanup]);
     expect(fixtures.end).toHaveBeenCalledOnce();
   });
 
