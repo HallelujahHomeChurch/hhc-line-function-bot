@@ -1,4 +1,5 @@
 import { recoveryCutoff } from "../application/recovery/redis-recovery.js";
+import { startPoolDiagnostics } from "../db/pool-diagnostics.js";
 import { pathToFileURL } from "node:url";
 
 import { ManagedIdentityCredential } from "@azure/identity";
@@ -245,6 +246,7 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
     const config = loadAttachmentScanWorkerConfigFromEnv(env);
     redis = await createRedisRuntime(config.redis, { onError: () => undefined });
     postgres = await createPostgresRuntime(config.database, undefined, true);
+    if (postgres) postgres.stopPoolDiagnostics = startPoolDiagnostics(postgres.pool);
     if (!redis || !postgres) throw new Error("asset_job_state_unavailable");
     const agentJobStore = new RedisAgentJobStore({
       client: redis.client,
@@ -388,6 +390,7 @@ async function closeRuntime(
   redis: Awaited<ReturnType<typeof createRedisRuntime>> | undefined,
   postgres: Awaited<ReturnType<typeof createPostgresRuntime>> | undefined
 ): Promise<void> {
+  postgres?.stopPoolDiagnostics?.();
   await Promise.allSettled([
     Promise.resolve().then(() =>
       (redis?.client as { quit(): Promise<unknown> } | undefined)?.quit()

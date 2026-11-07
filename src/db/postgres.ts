@@ -9,6 +9,7 @@ import type { DatabaseConfig } from "../types.js";
 
 export interface PostgresRuntime {
   pool: pg.Pool;
+  stopPoolDiagnostics?: () => void;
   mediaSyncStore: PostgresMediaSyncStore;
 }
 
@@ -20,7 +21,9 @@ export function createPostgresPool(
   const revision = process.env.CONTAINER_APP_REVISION;
   if (revision) {
     let name = revision;
-    if (Buffer.byteLength(revision) > 63) {
+    if (/[^\x20-\x7e]/.test(revision)) {
+      name = `revision-${createHash("sha256").update(revision).digest("hex").slice(0, 16)}`;
+    } else if (Buffer.byteLength(revision) > 63) {
       let prefix = "";
       for (const character of revision) {
         if (Buffer.byteLength(prefix + character) > 46) break;

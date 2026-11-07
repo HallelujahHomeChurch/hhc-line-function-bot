@@ -15,7 +15,8 @@ const mocks = vi.hoisted(() => ({
   appClose: vi.fn(),
   redisClose: vi.fn(),
   pgEnd: vi.fn(),
-  stopMedia: vi.fn()
+  stopMedia: vi.fn(),
+  stopPool: vi.fn()
 }));
 vi.mock("../redis.js", () => ({
   createRedisRuntime: async () => ({ client: {}, keyPrefix: "test", close: mocks.redisClose })
@@ -24,6 +25,7 @@ vi.mock("../db/postgres.js", () => ({
   createPostgresRuntime: async () => ({ pool: { end: mocks.pgEnd }, mediaSyncStore: {} }),
   createPostgresPool: vi.fn()
 }));
+vi.mock("../db/pool-diagnostics.js", () => ({ startPoolDiagnostics: () => mocks.stopPool }));
 vi.mock("../server.js", () => ({ createApp: () => ({ close: mocks.appClose }) }));
 vi.mock("../attachments/scan-queue.js", () => ({
   createAzureAttachmentScanQueue: () => ({ enqueue: vi.fn() })
@@ -102,11 +104,17 @@ describe("production media dispatcher close ordering", () => {
       const httpStarted = mocks.appClose.mock.calls.length;
       const redisEarly = mocks.redisClose.mock.calls.length;
       const pgEarly = mocks.pgEnd.mock.calls.length;
+      const poolStopEarly = mocks.stopPool.mock.calls.length;
       media.resolve();
       expect(await closing).toBe(fails ? error : undefined);
       expect(httpStarted).toBe(1);
       expect(redisEarly).toBe(0);
       expect(pgEarly).toBe(0);
+      expect(poolStopEarly).toBe(0);
+      expect(mocks.stopPool).toHaveBeenCalledOnce();
+      expect(mocks.stopPool.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.pgEnd.mock.invocationCallOrder[0]
+      );
       expect(mocks.stopMedia).toHaveBeenCalledOnce();
       expect(mocks.redisClose).toHaveBeenCalledOnce();
       expect(mocks.pgEnd).toHaveBeenCalledOnce();
