@@ -1,21 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { MeetingWindowClient, meetingAccessTokenScope } from "../media-sync/meeting-client.js";
+import { MeetingWindowClient } from "../media-sync/meeting-client.js";
 
 describe("MeetingWindowClient", () => {
   it("coalesces refreshes, caches for 60 seconds, and derives the 5/10 minute warm union", async () => {
-    const fetcher = vi.fn().mockImplementation(async (input: URL | RequestInfo) => {
-      expect(new URL(String(input)).pathname).toBe("/priv/operations/sync-windows");
-      return new Response(
-        JSON.stringify({
-          data: [{ startsAt: "2026-09-06T01:00:00.000Z", endsAt: "2026-09-06T02:00:00.000Z" }]
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    });
+    const fetcher = vi
+      .fn()
+      .mockImplementation(async (input: URL | RequestInfo, init?: RequestInit) => {
+        expect(init?.redirect).toBe("manual");
+        expect(new URL(String(input)).pathname).toBe("/priv/operations/sync-windows");
+        return new Response(
+          JSON.stringify({
+            data: [{ startsAt: "2026-09-06T01:00:00.000Z", endsAt: "2026-09-06T02:00:00.000Z" }]
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      });
     const client = new MeetingWindowClient({
       baseUrl: "https://meeting.internal",
-      getAccessToken: async () => "token",
       fetcher
     });
 
@@ -27,6 +29,11 @@ describe("MeetingWindowClient", () => {
     ).resolves.toEqual([true, true]);
     await client.isWarm(new Date("2026-09-06T00:55:59.999Z"));
     expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
+      headers: { "x-hhc-caller-app-id": "hhc-line-function-bot" },
+      redirect: "manual"
+    });
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")).toBeNull();
     await client.isWarm(new Date("2026-09-06T00:56:00.000Z"));
     expect(fetcher).toHaveBeenCalledTimes(2);
     await expect(client.isWarm(new Date("2026-09-06T02:10:00.000Z"))).resolves.toBe(true);
@@ -51,7 +58,6 @@ describe("MeetingWindowClient", () => {
     });
     const client = new MeetingWindowClient({
       baseUrl: "https://meeting.internal",
-      getAccessToken: async () => "token",
       fetcher
     });
     await expect(client.isWarm(new Date(end + 9 * 60_000))).resolves.toBe(true);
@@ -65,7 +71,6 @@ describe("MeetingWindowClient", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }));
     const client = new MeetingWindowClient({
       baseUrl: "https://meeting.internal",
-      getAccessToken: async () => "token",
       fetcher
     });
     await expect(client.isWarm(new Date("2026-09-06T01:00:00.000Z"))).rejects.toThrow(
@@ -75,7 +80,18 @@ describe("MeetingWindowClient", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it("uses the managed identity application scope", () => {
-    expect(meetingAccessTokenScope("api://meeting-app/")).toBe("api://meeting-app/.default");
+  it.each([302, 401, 403, 503])("rejects HTTP %i without following redirects", async (status) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(null, { status, headers: { location: "https://foreign.example" } })
+      );
+    const client = new MeetingWindowClient({ baseUrl: "https://meeting.internal", fetcher });
+    await expect(client.isWarm()).rejects.toThrow(`meeting_api_${status}`);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
+      redirect: "manual",
+      headers: { "x-hhc-caller-app-id": "hhc-line-function-bot" }
+    });
   });
 });

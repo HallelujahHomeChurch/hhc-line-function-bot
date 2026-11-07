@@ -56,7 +56,6 @@ vi.mock("../catalog/source-seeds.js", () => ({
   seedCatalogSources: vi.fn().mockResolvedValue(undefined)
 }));
 vi.mock("../clients/asset-api.js", () => ({
-  assetAccessTokenScope: (audience: string) => `${audience}/.default`,
   createAssetApiClient: mocks.createAssetApiClient
 }));
 
@@ -79,7 +78,6 @@ vi.mock("../attachments/scan-outbox.js", () => ({
   startWarmMediaSyncOutboxDispatcher: mocks.startOutbox
 }));
 vi.mock("../media-sync/meeting-client.js", () => ({
-  meetingAccessTokenScope: (audience: string) => `${audience}/.default`,
   MeetingWindowClient: class MeetingWindowClient {
     isWarm = mocks.isWarm;
   }
@@ -128,7 +126,6 @@ describe("attachment asset job lifecycle", () => {
     );
 
     const running = runAttachmentWorker({
-      ASSET_API_AUDIENCE: "api://asset-api",
       ASSET_API_URL: "https://asset-api.internal.example",
       ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/media-sync",
       AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
@@ -158,7 +155,6 @@ describe("attachment asset job lifecycle", () => {
     });
 
     await runAttachmentWorker({
-      ASSET_API_AUDIENCE: "api://asset-api",
       ASSET_API_URL: "https://tenant-private.example/blob-key-private",
       ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/media-private-id",
       AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
@@ -176,63 +172,59 @@ describe("attachment asset job lifecycle", () => {
     write.mockRestore();
   });
   const env = {
-    ASSET_API_AUDIENCE: "api://asset-api",
     ASSET_API_URL: "https://asset-api.internal.example",
     ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/media-sync",
     AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
     MEETING_API_BASE_URL: "https://meeting.internal.example",
-    MEETING_API_AUDIENCE: "api://operations-api",
     MEDIA_SYNC_WARM_QUEUE_URL: "https://assetscan.queue.core.windows.net/warm"
   };
-  it.each([
-    "MEETING_API_BASE_URL",
-    "MEETING_API_AUDIENCE",
-    "MEDIA_SYNC_WARM_QUEUE_URL",
-    "dispatcher"
-  ])("awaits pool cleanup when loop initialization fails at %s", async (stage) => {
-    const loopEnv = { ...env };
-    if (stage === "dispatcher")
-      mocks.startOutbox.mockImplementationOnce(() => {
-        throw new Error("dispatcher failed");
+  it.each(["MEETING_API_BASE_URL", "MEDIA_SYNC_WARM_QUEUE_URL", "dispatcher"])(
+    "awaits pool cleanup when loop initialization fails at %s",
+    async (stage) => {
+      const loopEnv = { ...env };
+      if (stage === "dispatcher")
+        mocks.startOutbox.mockImplementationOnce(() => {
+          throw new Error("dispatcher failed");
+        });
+      else Object.assign(loopEnv, { [stage]: "" });
+      let releaseClose!: () => void;
+      let closingStarted!: () => void;
+      const closing = new Promise<void>((resolve) => {
+        closingStarted = resolve;
       });
-    else Object.assign(loopEnv, { [stage]: "" });
-    let releaseClose!: () => void;
-    let closingStarted!: () => void;
-    const closing = new Promise<void>((resolve) => {
-      closingStarted = resolve;
-    });
-    mocks.postgresEnd.mockImplementationOnce(() => {
-      closingStarted();
-      return new Promise<void>((resolve) => {
-        releaseClose = resolve;
+      mocks.postgresEnd.mockImplementationOnce(() => {
+        closingStarted();
+        return new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        });
       });
-    });
-    let settled = false;
-    let failure: unknown;
-    const running = runAttachmentWorkerLoop(loopEnv)
-      .catch((error: unknown) => {
-        failure = error;
-      })
-      .then(() => {
-        settled = true;
-      });
-    try {
-      expect(
-        await Promise.race([closing.then(() => "closing"), running.then(() => "settled")])
-      ).toBe("closing");
-      expect(settled).toBe(false);
-      expect(mocks.redisQuit).toHaveBeenCalledTimes(1);
-      expect(mocks.postgresEnd).toHaveBeenCalledTimes(1);
-      expect(mocks.stopOutbox).not.toHaveBeenCalled();
-    } finally {
-      releaseClose?.();
-      await running;
+      let settled = false;
+      let failure: unknown;
+      const running = runAttachmentWorkerLoop(loopEnv)
+        .catch((error: unknown) => {
+          failure = error;
+        })
+        .then(() => {
+          settled = true;
+        });
+      try {
+        expect(
+          await Promise.race([closing.then(() => "closing"), running.then(() => "settled")])
+        ).toBe("closing");
+        expect(settled).toBe(false);
+        expect(mocks.redisQuit).toHaveBeenCalledTimes(1);
+        expect(mocks.postgresEnd).toHaveBeenCalledTimes(1);
+        expect(mocks.stopOutbox).not.toHaveBeenCalled();
+      } finally {
+        releaseClose?.();
+        await running;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain(
+        stage === "dispatcher" ? "dispatcher failed" : stage
+      );
     }
-    expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain(
-      stage === "dispatcher" ? "dispatcher failed" : stage
-    );
-  });
+  );
 
   const message = {
     messageText: JSON.stringify({

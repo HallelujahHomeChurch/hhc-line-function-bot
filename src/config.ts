@@ -1,3 +1,4 @@
+import { validateInternalServiceOrigin } from "./clients/internal-origin.js";
 import { recoveryCutoff } from "./application/recovery/redis-recovery.js";
 import { CAPABILITY_NAMES } from "./capabilities/names.js";
 import type { CapabilityName } from "./capabilities/names.js";
@@ -337,7 +338,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   const accountToken = env.ACCOUNT_LINE_PRIVATE_TOKEN;
   const cmsBaseUrl = env.CMS_PRIVATE_BASE_URL;
   const cmsToken = env.CMS_LINE_PRIVATE_TOKEN;
-  const assetPrivateAudience = env.ASSET_PRIVATE_AUDIENCE;
   const assetBaseUrl = readAssetApiBaseUrl(env);
   if (Boolean(operationsBaseUrl) !== Boolean(operationsToken)) {
     throw new Error("Operations HTTPS requires both the origin and caller credential");
@@ -345,15 +345,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   if (Boolean(cmsBaseUrl) !== Boolean(cmsToken)) {
     throw new Error("CMS HTTPS requires both the origin and caller credential");
   }
-  if (
-    assetPrivateAudience &&
-    (!/^https:\/\/asset-api\.internal\.[a-z0-9-]+\.[a-z0-9-]+\.azurecontainerapps\.io$/u.test(
-      assetBaseUrl
-    ) ||
-      !/^api:\/\/[a-f0-9-]{36}$/u.test(assetPrivateAudience))
-  ) {
-    throw new Error("Invalid Asset private HTTPS configuration");
-  }
+
   if (auditAppId !== "audit-log" && auditAppId !== "audit-log-test") {
     throw new Error("AUDIT_APP_ID is invalid");
   }
@@ -435,8 +427,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
     },
     asset: {
       baseUrl: assetBaseUrl,
-      timeoutMs: readInt(env.ASSET_API_TIMEOUT_MS, 3000),
-      ...(assetPrivateAudience ? { privateAudience: assetPrivateAudience } : {})
+      timeoutMs: readInt(env.ASSET_API_TIMEOUT_MS, 3000)
     },
     ...(operationsBaseUrl && operationsToken
       ? { operations: { baseUrl: operationsBaseUrl, token: operationsToken } }
@@ -465,6 +456,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
 function readAccountApiBaseUrl(env: NodeJS.ProcessEnv): string {
   const explicit = env.ACCOUNT_API_BASE_URL?.trim();
   if (explicit) {
+    validateInternalServiceOrigin(explicit, "asset-api", env.NODE_ENV);
     const url = new URL(explicit);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error("ACCOUNT_API_BASE_URL must use HTTP or HTTPS");

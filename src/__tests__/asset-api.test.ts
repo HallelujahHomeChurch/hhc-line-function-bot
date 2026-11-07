@@ -50,7 +50,6 @@ describe("asset api client", () => {
     };
     const client = createAssetApiClient({
       baseUrl: `https://${fixtures.tenant}.example/${fixtures.blobKey}`,
-      getAccessToken: async () => fixtures.token,
       fetcher: vi.fn<typeof fetch>().mockResolvedValue(
         new Response(JSON.stringify({ mediaId: fixtures.mediaId, fileName: fixtures.fileName }), {
           status
@@ -88,7 +87,6 @@ describe("asset api client", () => {
     };
     const client = createAssetApiClient({
       baseUrl: fixtures.url,
-      getAccessToken: async () => fixtures.token,
       fetcher: vi
         .fn<typeof fetch>()
         .mockRejectedValue(new Error(`${fixtures.mediaId}:${fixtures.fileName}`)),
@@ -483,7 +481,6 @@ describe("asset api client", () => {
       );
     const client = createAssetApiClient({
       baseUrl: "https://asset.internal",
-      getAccessToken: vi.fn().mockResolvedValue("token"),
       fetcher
     });
 
@@ -509,10 +506,11 @@ describe("asset api client", () => {
     expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
       method: "POST",
       headers: expect.objectContaining({
-        authorization: "Bearer token",
+        "x-hhc-caller-app-id": "hhc-line-function-bot",
         "idempotency-key": "line-attachment:work-1"
       })
     });
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")).toBeNull();
     expect(fetcher.mock.calls[1]).toEqual([
       "https://blob/upload",
       expect.objectContaining({ method: "PUT", headers: { "x-ms-blob-type": "BlockBlob" } })
@@ -532,7 +530,6 @@ describe("asset api client", () => {
   it.each([429, 500, 503])("classifies Asset HTTP %s as transient", async (status) => {
     const client = createAssetApiClient({
       baseUrl: "https://asset.internal",
-      getAccessToken: vi.fn().mockResolvedValue("token"),
       fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status }))
     });
 
@@ -547,7 +544,6 @@ describe("asset api client", () => {
   it("classifies timeouts as transient without leaking provider details", async () => {
     const client = createAssetApiClient({
       baseUrl: "https://asset.internal",
-      getAccessToken: vi.fn().mockResolvedValue("token"),
       fetcher: vi
         .fn<typeof fetch>()
         .mockRejectedValue(new DOMException("timed out", "TimeoutError"))
@@ -565,7 +561,6 @@ describe("asset api client", () => {
   it.each([400, 401, 403, 404])("classifies Asset HTTP %s as permanent", async (status) => {
     const client = createAssetApiClient({
       baseUrl: "https://asset.internal",
-      getAccessToken: vi.fn().mockResolvedValue("token"),
       fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status }))
     });
 
@@ -580,7 +575,6 @@ describe("asset api client", () => {
   it("rejects an invalid Asset response as permanent", async () => {
     const client = createAssetApiClient({
       baseUrl: "https://asset.internal",
-      getAccessToken: vi.fn().mockResolvedValue("token"),
       fetcher: vi
         .fn<typeof fetch>()
         .mockResolvedValue(
@@ -637,10 +631,8 @@ describe("asset api client", () => {
       )
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(new Response(null, { status: 404 }));
-    const getAccessToken = vi.fn().mockResolvedValue("workload-token");
     const client = createAssetApiClient({
       baseUrl: "https://asset.internal",
-      getAccessToken,
       fetcher
     });
 
@@ -676,7 +668,6 @@ describe("asset api client", () => {
     expect(grant).toEqual({ id: "grant-1" });
     expect(owned.ownerId).toBe("asset-assurance:run-1");
     expect(isAssetAccessDeniedError(denied)).toBe(true);
-    expect(getAccessToken).toHaveBeenCalledWith(signal);
     expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
       signal,
       body: JSON.stringify({

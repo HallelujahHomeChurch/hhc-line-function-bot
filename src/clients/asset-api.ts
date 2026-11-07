@@ -4,6 +4,8 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { pipeline } from "node:stream/promises";
 
+import { validateInternalServiceOrigin } from "./internal-origin.js";
+
 export type AssetScanStatus = "pending" | "scanning" | "clean" | "infected" | "failed";
 
 export interface AssetRecord {
@@ -298,10 +300,6 @@ export function isAssetAccessDeniedError(error: unknown): boolean {
   );
 }
 
-export function assetAccessTokenScope(audience: string): string {
-  return `${audience.replace(/\/$/u, "")}/.default`;
-}
-
 function reportAssetApiRejection(
   onRejection: ((telemetry: AssetApiRejectionTelemetry) => void) | undefined,
   operationStage: string,
@@ -328,11 +326,11 @@ function reportAssetApiRejection(
 
 export function createAssetApiClient(options: {
   baseUrl: string;
-  getAccessToken?: (signal?: AbortSignal) => Promise<string>;
   timeoutMs?: number;
   fetcher?: typeof fetch;
   onRejection?: (telemetry: AssetApiRejectionTelemetry) => void;
 }): AssetApiClient {
+  validateInternalServiceOrigin(options.baseUrl, "asset-api");
   const fetcher = options.fetcher ?? fetch;
   const baseUrl = options.baseUrl.replace(/\/$/u, "");
   const request = async (
@@ -346,15 +344,13 @@ export function createAssetApiClient(options: {
       const signal =
         requestOptions?.signal ??
         (options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs));
-      const token = options.getAccessToken ? await options.getAccessToken(signal) : undefined;
-      if (token !== undefined && !token.trim()) throw new Error("empty_token");
       response = await fetcher(`${baseUrl}${path}`, {
         ...init,
         signal,
         redirect: "manual",
         headers: {
-          ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
           ...toHeaders(init.headers),
+          "x-hhc-caller-app-id": "hhc-line-function-bot",
           ...(requestOptions?.requestId ? { "x-hhc-request-id": requestOptions.requestId } : {}),
           ...(requestOptions?.actorUserId ? { "x-hhc-actor-id": requestOptions.actorUserId } : {})
         }
