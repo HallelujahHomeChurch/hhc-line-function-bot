@@ -126,6 +126,8 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Cache Log Analytics access before deployment
+        run: az account get-access-token --resource https://api.loganalytics.io --output none
       - name: Deploy image and wait for healthy revision
         run: bash scripts/deploy-aca.sh
       - name: Capture production release outputs
