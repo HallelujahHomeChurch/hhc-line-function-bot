@@ -439,17 +439,27 @@ describe("config", () => {
         }
       ],
       async (path) => {
-        const config = loadConfigFromEnv({
+        const productionEnv = {
           NODE_ENV: "production",
           PROFILE_CONFIG_PATH: path,
           LINE_HELPER_CHANNEL_SECRET: "secret",
           LINE_HELPER_CHANNEL_ACCESS_TOKEN: "token",
           DATABASE_URL: "postgres://placeholder",
           REDIS_URL: "redis://placeholder",
-          OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef"
-        });
+          OBSERVABILITY_HMAC_KEY: "0123456789abcdef0123456789abcdef",
+          ACCOUNT_API_BASE_URL:
+            "https://account-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io",
+          ASSET_API_BASE_URL:
+            "https://asset-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io"
+        };
+        const config = loadConfigFromEnv(productionEnv);
 
         expect(config.profiles.map((profile) => profile.name)).toEqual(["helper"]);
+        expect(config.account?.baseUrl).toBe(productionEnv.ACCOUNT_API_BASE_URL);
+        expect(config.asset?.baseUrl).toBe(productionEnv.ASSET_API_BASE_URL);
+        expect(() =>
+          loadConfigFromEnv({ ...productionEnv, ASSET_API_BASE_URL: "https://foreign.example" })
+        ).toThrow("Invalid asset-api private HTTPS origin");
       }
     );
   });
