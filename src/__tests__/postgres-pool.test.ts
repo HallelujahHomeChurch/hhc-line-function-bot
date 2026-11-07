@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createPostgresPool } from "../db/postgres.js";
 
@@ -8,6 +8,33 @@ describe("PostgreSQL pool budget", () => {
 
   afterEach(async () => {
     await Promise.all(pools.splice(0).map((pool) => pool.end()));
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["fixture--revision", "revision-".repeat(10), "界".repeat(40)])(
+    "tags revision sessions within 63 bytes: %s",
+    (revision) => {
+      vi.stubEnv("CONTAINER_APP_REVISION", revision);
+      const pool = createPostgresPool({
+        url: "postgres://localhost/example?application_name=old&sslmode=disable",
+        ssl: false
+      });
+      pools.push(pool);
+      const target = new URL(pool.options.connectionString!);
+      const name = target.searchParams.get("application_name")!;
+      expect(Buffer.byteLength(name)).toBeLessThanOrEqual(63);
+      expect(name).not.toBe("old");
+      if (Buffer.byteLength(revision) <= 63) expect(name).toBe(revision);
+      else expect(name).toMatch(/-[0-9a-f]{16}$/);
+      expect(target.searchParams.get("sslmode")).toBe("disable");
+    }
+  );
+  it("preserves non-Azure application names", () => {
+    vi.stubEnv("CONTAINER_APP_REVISION", "");
+    const url = "postgres://localhost/example?application_name=local";
+    const pool = createPostgresPool({ url, ssl: false });
+    pools.push(pool);
+    expect(pool.options.connectionString).toBe(url);
   });
 
   it("caps each runtime pool at two connections", () => {

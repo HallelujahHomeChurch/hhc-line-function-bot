@@ -1,4 +1,5 @@
 import pg from "pg";
+import { createHash } from "node:crypto";
 import { assertJobDatabaseIdentity } from "./job-identity.js";
 import { runAccessMigrations } from "../access/migrations.js";
 
@@ -15,8 +16,24 @@ export function createPostgresPool(
   config: DatabaseConfig,
   options: Pick<pg.PoolConfig, "Client" | "connectionTimeoutMillis"> = {}
 ): pg.Pool {
+  let connectionString = config.url;
+  const revision = process.env.CONTAINER_APP_REVISION;
+  if (revision) {
+    let name = revision;
+    if (Buffer.byteLength(revision) > 63) {
+      let prefix = "";
+      for (const character of revision) {
+        if (Buffer.byteLength(prefix + character) > 46) break;
+        prefix += character;
+      }
+      name = `${prefix}-${createHash("sha256").update(revision).digest("hex").slice(0, 16)}`;
+    }
+    const target = new URL(config.url);
+    target.searchParams.set("application_name", name);
+    connectionString = target.toString();
+  }
   return new pg.Pool({
-    connectionString: config.url,
+    connectionString,
     ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
     max: 2,
     connectionTimeoutMillis: 2_000,
