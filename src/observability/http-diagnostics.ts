@@ -86,7 +86,7 @@ export function internalDiagnosticFetch(fetcher: typeof fetch): typeof fetch {
     try {
       const response = await fetcher(input, { ...init, headers: Object.fromEntries(headers) });
       outcome(context, "client_headers", response.status, started);
-      responses.set(response, { context, started });
+      responses.set(response, { context, started: performance.now() });
       return response;
     } catch (error) {
       outcome(context, "client_headers", 0, started, true);

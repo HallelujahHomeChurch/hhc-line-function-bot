@@ -56,6 +56,26 @@ describe("safe transport diagnostics", () => {
       await app.close();
     }
   });
+  it("does not charge slow headers to a fast response body", async () => {
+    const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const fetcher = internalDiagnosticFetch(
+      vi.fn(async () => {
+        now = 2_100;
+        return new Response('{"ok":true}');
+      })
+    );
+    const response = await fetcher("https://internal.example");
+    now += 10;
+    await expect(readDiagnosticJSON(response)).resolves.toEqual({ ok: true });
+    expect(logs).toHaveBeenCalledOnce();
+    expect(JSON.parse(logs.mock.calls[0][0])).toMatchObject({
+      phase: "client_headers",
+      duration_ms: 2_100,
+      outcome: "slow"
+    });
+  });
   it("rejects malformed and duplicate correlation and records body faults", async () => {
     for (const parent of ["bad", ["a", "b"], `00-${"0".repeat(32)}-${"1".repeat(16)}-01`]) {
       const value = transportCorrelation({ traceparent: parent, "x-hhc-request-id": "secret" });
