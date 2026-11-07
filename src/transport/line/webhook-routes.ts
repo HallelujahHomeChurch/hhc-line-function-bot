@@ -1,3 +1,4 @@
+import { registerHTTPDiagnostics } from "../../observability/http-diagnostics.js";
 import { registerSearchSettingsRoutes } from "../../search-settings/http-routes.js";
 import type { SearchSettingsStore } from "../../search-settings/contracts.js";
 import { groupReplyClient, takeGroupReply } from "./group-replies.js";
@@ -244,6 +245,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     logger: false,
     bodyLimit: config.maxBodyBytes
   });
+  registerHTTPDiagnostics(app);
   const collectHistory = deps.history
     ? createHistoryCollector(deps.history, () => {
         console.warn(JSON.stringify({ event: "history_gap" }));

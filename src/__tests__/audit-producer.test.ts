@@ -88,7 +88,11 @@ describe("central audit producer contract", () => {
       "http://127.0.0.1:3500/v1.0/invoke/audit-log/method/priv/audit/events",
       expect.objectContaining({
         method: "POST",
-        headers: { "content-type": "application/json", "x-audit-token": "audit-token" },
+        headers: expect.objectContaining({
+          "content-type": "application/json",
+          "x-audit-token": "audit-token",
+          traceparent: expect.stringMatching(/^00-[a-f0-9]{32}-[a-f0-9]{16}-00$/u)
+        }),
         body: payload,
         redirect: "manual"
       })
@@ -132,11 +136,12 @@ describe("central audit producer contract", () => {
         method: "POST",
         body: "{}",
         redirect: "manual",
-        headers: {
+        headers: expect.objectContaining({
           "content-type": "application/json",
           "x-audit-token": "audit-token",
-          "x-hhc-audit-caller": "hhc-line-function-bot"
-        }
+          "x-hhc-audit-caller": "hhc-line-function-bot",
+          traceparent: expect.stringMatching(/^00-[a-f0-9]{32}-[a-f0-9]{16}-00$/u)
+        })
       })
     );
   });

@@ -1,3 +1,4 @@
+import { internalDiagnosticFetch } from "../observability/http-diagnostics.js";
 export type AuditAppendResult =
   | { status: "delivered" }
   | { status: "retry"; reason: string; retryAfterMs?: number }
@@ -35,7 +36,7 @@ export function createAuditClient(options: {
     privateBaseUrl ??
     `http://127.0.0.1:${options.daprHttpPort}/v1.0/invoke/${options.appId}/method`;
   const endpoint = baseUrl + "/priv/audit/events";
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = internalDiagnosticFetch(options.fetchImpl ?? fetch);
   return {
     async append(payload) {
       if (Buffer.byteLength(payload) > 32 * 1024) {
