@@ -244,7 +244,7 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
   try {
     const config = loadAttachmentScanWorkerConfigFromEnv(env);
     redis = await createRedisRuntime(config.redis, { onError: () => undefined });
-    postgres = await createPostgresRuntime(config.database);
+    postgres = await createPostgresRuntime(config.database, undefined, true);
     if (!redis || !postgres) throw new Error("asset_job_state_unavailable");
     const agentJobStore = new RedisAgentJobStore({
       client: redis.client,

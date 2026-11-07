@@ -38,7 +38,7 @@ export async function runCatalogSync(
     owned = config.database
       ? createCatalogSyncPostgres(config.database, { signal, deadline })
       : undefined;
-    const postgres = await createPostgresRuntime(config.database, owned);
+    const postgres = await createPostgresRuntime(config.database, owned, true);
     signal.throwIfAborted();
     const catalog = await createCatalogStore({ db: postgres?.pool });
     signal.throwIfAborted();
