@@ -13,6 +13,8 @@ import { validateInternalServiceOrigin } from "./internal-origin.js";
 export type AssetScanStatus = "pending" | "scanning" | "clean" | "infected" | "failed";
 
 export interface AssetRecord {
+  processingReadiness?: { version: 1; state: "pending" | "ready" | "rejected" };
+  safetyEvidence?: { kind: "scanned" | "trusted-derived" };
   id: string;
   ownerService?: string;
   ownerType?: string;
@@ -848,6 +850,28 @@ function parseAssetRecord(value: unknown): AssetRecord | undefined {
   ) {
     return undefined;
   }
+  if (asset.processingReadiness !== undefined) {
+    const readiness = asset.processingReadiness;
+    const legacyReady =
+      asset.uploadStatus === "completed" &&
+      asset.scanStatus === "clean" &&
+      (asset.processingStatus === "ready" || asset.processingStatus === "not_required");
+    if (
+      !readiness ||
+      readiness.version !== 1 ||
+      !["pending", "ready", "rejected"].includes(readiness.state) ||
+      (readiness.state === "ready") !== legacyReady ||
+      (readiness.state === "ready" && asset.safetyEvidence?.kind !== "scanned")
+    )
+      return undefined;
+  }
+  // LINE publishes only actually scanned inputs; trusted watermark evidence is not a scan.
+  if (
+    (asset.safetyEvidence !== undefined &&
+      (!asset.safetyEvidence || asset.safetyEvidence.kind !== "scanned")) ||
+    asset.scanSignatureVersion === "trusted-bulletin-watermark-v1"
+  )
+    return undefined;
   return asset as AssetRecord;
 }
 
