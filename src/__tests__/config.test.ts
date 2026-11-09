@@ -313,6 +313,19 @@ describe("config", () => {
     ).toEqual({ baseUrl: "http://localhost:8080", timeoutMs: 1500 });
   });
 
+  it("loads explicit Asset workload authentication without changing the legacy default", () => {
+    expect(loadConfigFromEnv(baseEnv()).asset?.workloadAuth).toBeUndefined();
+    expect(
+      loadConfigFromEnv({
+        ...baseEnv(),
+        ASSET_API_BASE_URL: "https://asset.internal",
+        ASSET_WORKLOAD_AUTH_ENABLED: "true",
+        ASSET_WORKLOAD_AUTH_AUDIENCE: "api://asset-test",
+        ASSET_WORKLOAD_AUTH_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
+      }).asset?.workloadAuth
+    ).toEqual({ audience: "api://asset-test", clientId: "11111111-1111-4111-8111-111111111111" });
+  });
+
   it("uses exact media-sync Dapr defaults and reads the runtime app token", () => {
     expect(loadConfigFromEnv({ ...baseEnv(), APP_API_TOKEN: "runtime-token" })).toMatchObject({
       asset: {

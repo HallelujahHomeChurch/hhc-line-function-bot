@@ -5,6 +5,9 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { pipeline } from "node:stream/promises";
 
+import { assetWorkloadToken } from "./asset-workload.js";
+import type { AssetWorkloadAuth } from "../types.js";
+
 import { validateInternalServiceOrigin } from "./internal-origin.js";
 
 export type AssetScanStatus = "pending" | "scanning" | "clean" | "infected" | "failed";
@@ -327,11 +330,13 @@ function reportAssetApiRejection(
 
 export function createAssetApiClient(options: {
   baseUrl: string;
+  workloadAuth?: AssetWorkloadAuth;
   timeoutMs?: number;
   fetcher?: typeof fetch;
   onRejection?: (telemetry: AssetApiRejectionTelemetry) => void;
 }): AssetApiClient {
   validateInternalServiceOrigin(options.baseUrl, "asset-api");
+  const token = assetWorkloadToken(options.baseUrl, options.workloadAuth);
   const fetcher = options.fetcher ?? fetch;
   const internalFetch = internalDiagnosticFetch(fetcher);
   const baseUrl = options.baseUrl.replace(/\/$/u, "");
@@ -346,12 +351,14 @@ export function createAssetApiClient(options: {
       const signal =
         requestOptions?.signal ??
         (options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs));
+      const workloadToken = token ? await token(signal) : undefined;
       response = await internalFetch(`${baseUrl}${path}`, {
         ...init,
         signal,
         redirect: "manual",
         headers: {
           ...toHeaders(init.headers),
+          ...(workloadToken ? { "x-hhc-workload-authorization": `Bearer ${workloadToken}` } : {}),
           "x-hhc-caller-app-id": "hhc-line-function-bot",
           ...(requestOptions?.requestId ? { "x-hhc-request-id": requestOptions.requestId } : {}),
           ...(requestOptions?.actorUserId ? { "x-hhc-actor-id": requestOptions.actorUserId } : {})
@@ -612,7 +619,8 @@ export function createAssetApiClient(options: {
       try {
         response = await fetcher(target.url, {
           method: target.method || "PUT",
-          headers: target.headers,
+          headers: blobHeaders(target.headers),
+          redirect: "manual",
           body: data,
           signal: requestOptions?.signal
         });
@@ -747,6 +755,20 @@ export function createAssetApiClient(options: {
   };
 }
 
+function blobHeaders(headers: Record<string, string>): Record<string, string> {
+  const clean = new Headers(headers);
+  for (const key of [
+    "authorization",
+    "x-hhc-workload-authorization",
+    "x-hhc-caller-app-id",
+    "x-internal-caller-app-id",
+    "dapr-caller-app-id",
+    "dapr-api-token"
+  ])
+    clean.delete(key);
+  return Object.fromEntries(clean);
+}
+
 async function streamUploadFile(
   target: AssetUploadTarget,
   filePath: string,
@@ -764,7 +786,7 @@ async function streamUploadFile(
         url,
         {
           method: target.method || "PUT",
-          headers: { ...target.headers, "content-length": String(file.size) },
+          headers: { ...blobHeaders(target.headers), "content-length": String(file.size) },
           signal
         },
         (response) => {

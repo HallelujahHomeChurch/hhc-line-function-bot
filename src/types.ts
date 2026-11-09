@@ -379,7 +379,13 @@ export interface AccountServiceConfig {
   privateToken?: string;
 }
 
+export interface AssetWorkloadAuth {
+  audience: string;
+  clientId: string;
+}
+
 export interface AssetServiceConfig {
+  workloadAuth?: AssetWorkloadAuth;
   baseUrl: string;
   timeoutMs: number;
 }

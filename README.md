@@ -696,3 +696,31 @@ Runtime-owned pressure timers log fixed global `waitingCount`, `totalCount` and
 These counters do not attribute a wait to one request. LINE does not currently
 record individual PostgreSQL query or checkout durations; HTTP/job outcomes and
 global pool pressure must not be presented as complete query causality.
+
+### Candidate Asset workload authentication (L1)
+
+`ASSET_WORKLOAD_AUTH_ENABLED` defaults to `false`. The API composition root,
+attachment worker and periodic assurance adapter accept the same optional
+`ASSET_WORKLOAD_AUTH_AUDIENCE` and explicit `ASSET_WORKLOAD_AUTH_CLIENT_ID`.
+Enabling requires a fixed private HTTPS Asset origin; the existing Azure identity
+SDK obtains/caches an audience-bound token with a two-second acquisition budget.
+Only internal requests receive `X-HHC-Workload-Authorization`. Acquisition failure,
+expired/malformed tokens and redirects never fall back to caller-header trust.
+Binary upload paths strip service credentials, including echoed upload headers.
+
+The attachment queue identity remains separate. AS2 must map each app/job identity
+to its reviewed LINE caller; the verified original principal is request provenance,
+not a new durable audit field. Existing owner and service-grant subjects remain
+`hhc-line-function-bot`. No scope/profile/namespace expansion is included.
+
+This is a disabled candidate dependent on Asset AS2 and verified I1 issuer,
+audience, principal and role mapping. Roll back the consumer to legacy only while
+that caller's reviewed Asset legacy route remains accepted; never disable token
+validation as a fallback for an invalid token. No enablement or live probe was run.
+
+J2 characterization retains the existing 35-minute work lease, 32-minute queue
+visibility, 10-minute scan deadline, 14-minute publication deadline, finite worker,
+durable retry/outbox and unknown-publication protections. Lifecycle tests cover
+lease loss, readiness, queue acknowledgement and repair. Job DB budget changes
+remain in existing PR #166; this transport adds no queue, table, scanner, replica or
+provider work. Live job capacity and savings remain unverified.

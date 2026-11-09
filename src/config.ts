@@ -1,3 +1,4 @@
+import { readAssetWorkloadAuth } from "./clients/asset-workload.js";
 import { validateInternalServiceOrigin } from "./clients/internal-origin.js";
 import { recoveryCutoff } from "./application/recovery/redis-recovery.js";
 import { CAPABILITY_NAMES } from "./capabilities/names.js";
@@ -426,6 +427,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
       ...(accountToken ? { privateToken: accountToken } : {})
     },
     asset: {
+      workloadAuth: readAssetWorkloadAuth(env),
       baseUrl: assetBaseUrl,
       timeoutMs: readInt(env.ASSET_API_TIMEOUT_MS, 3000)
     },

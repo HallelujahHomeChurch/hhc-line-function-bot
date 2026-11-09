@@ -33,6 +33,19 @@ describe("attachment asset job environment", () => {
     });
   });
 
+  it("loads the worker workload identity separately from its queue identity", () => {
+    expect(
+      readAttachmentWorkerEnvironment({
+        ATTACHMENT_SCAN_QUEUE_URL: "https://queue.test/work",
+        ASSET_API_URL: "https://asset.internal",
+        AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
+        ASSET_WORKLOAD_AUTH_ENABLED: "true",
+        ASSET_WORKLOAD_AUTH_AUDIENCE: "api://asset-test",
+        ASSET_WORKLOAD_AUTH_CLIENT_ID: "22222222-2222-4222-8222-222222222222"
+      }).workloadAuth
+    ).toEqual({ audience: "api://asset-test", clientId: "22222222-2222-4222-8222-222222222222" });
+  });
+
   it.each([
     ["ATTACHMENT_SCAN_QUEUE_URL", { ATTACHMENT_SCAN_QUEUE_URL: "http://queue.invalid" }],
     ["ASSET_API_URL", { ASSET_API_URL: "http://asset.invalid" }],

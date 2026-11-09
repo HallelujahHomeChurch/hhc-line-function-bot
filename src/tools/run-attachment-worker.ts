@@ -1,5 +1,7 @@
 import { recoveryCutoff } from "../application/recovery/redis-recovery.js";
 import { startPoolDiagnostics } from "../db/pool-diagnostics.js";
+import type { AssetWorkloadAuth } from "../types.js";
+import { readAssetWorkloadAuth } from "../clients/asset-workload.js";
 import { pathToFileURL } from "node:url";
 
 import { ManagedIdentityCredential } from "@azure/identity";
@@ -136,6 +138,7 @@ export function formatAttachmentWorkerStatus(
 }
 
 export interface AttachmentWorkerEnvironment {
+  workloadAuth?: AssetWorkloadAuth;
   queueUrl: string;
   assetApiUrl: string;
   managedIdentityClientId: string;
@@ -150,7 +153,12 @@ export function readAttachmentWorkerEnvironment(
   if (!managedIdentityClientId || !UUID_PATTERN.test(managedIdentityClientId)) {
     throw new Error("AZURE_CLIENT_ID is required and must be a UUID");
   }
-  return { queueUrl, assetApiUrl, managedIdentityClientId };
+  return {
+    queueUrl,
+    assetApiUrl,
+    managedIdentityClientId,
+    workloadAuth: readAssetWorkloadAuth(env)
+  };
 }
 
 export function attachmentWorkerDeadlines(startedAt: Date): {
@@ -264,6 +272,7 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
     });
     const assets = createAssetApiClient({
       baseUrl: job.assetApiUrl,
+      workloadAuth: job.workloadAuth,
       onRejection: (telemetry) => process.stdout.write(`${JSON.stringify(telemetry)}\n`)
     });
     const lineContent = createLineSdkContentClient();

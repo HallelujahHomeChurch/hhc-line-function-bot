@@ -136,6 +136,7 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     ? new MediaSyncManagementService(
         createAssetApiClient({
           baseUrl: config.asset?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
+          workloadAuth: config.asset?.workloadAuth,
           timeoutMs: config.asset?.timeoutMs ?? 3000
         }),
         postgres.mediaSyncStore,
