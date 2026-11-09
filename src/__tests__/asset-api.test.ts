@@ -954,18 +954,16 @@ describe("verified Asset readiness reader", () => {
   ])("rejects unknown, contradictory or unscanned evidence %j", async (extra) => {
     const client = createAssetApiClient({
       baseUrl: "http://asset-api",
-      fetcher: vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(
-          Response.json({
-            id: "asset-1",
-            uploadStatus: "completed",
-            scanStatus: "clean",
-            processingStatus: "not_required",
-            scanSignatureVersion: "main-1",
-            ...extra
-          })
-        )
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          id: "asset-1",
+          uploadStatus: "completed",
+          scanStatus: "clean",
+          processingStatus: "not_required",
+          scanSignatureVersion: "main-1",
+          ...extra
+        })
+      )
     });
     await expect(client.get("asset-1")).rejects.toThrow();
   });
