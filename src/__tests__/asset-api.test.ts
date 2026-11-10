@@ -868,6 +868,8 @@ describe("asset api client", () => {
       request.on("end", () => {
         expect(request.method).toBe("PUT");
         expect(request.headers["x-upload-token"]).toBe("opaque");
+        expect(request.headers["x-hhc-workload-authorization"]).toBeUndefined();
+        expect(request.headers["authorization"]).toBeUndefined();
         expect(request.headers["content-length"]).toBe("16");
         response.writeHead(201).end();
       });
@@ -884,7 +886,11 @@ describe("asset api client", () => {
         {
           url: `http://127.0.0.1:${address.port}/upload`,
           method: "PUT",
-          headers: { "x-upload-token": "opaque" }
+          headers: {
+            "x-upload-token": "opaque",
+            "X-HHC-Workload-Authorization": "Bearer echoed",
+            Authorization: "echoed"
+          }
         },
         filePath
       );

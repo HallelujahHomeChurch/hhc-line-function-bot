@@ -300,6 +300,9 @@ describe("periodic assurance CLI", () => {
         ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING: "queue-connection",
         ATTACHMENT_SCAN_QUEUE_NAME: "attachment-scan",
         ASSET_API_URL: "https://asset.internal",
+        ASSET_WORKLOAD_AUTH_ENABLED: "true",
+        ASSET_WORKLOAD_AUTH_AUDIENCE: "api://asset-test",
+        ASSET_WORKLOAD_AUTH_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
         AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
       },
       {
@@ -321,6 +324,10 @@ describe("periodic assurance CLI", () => {
     });
     expect(createAsset).toHaveBeenCalledWith({
       baseUrl: "https://asset.internal",
+      workloadAuth: {
+        audience: "api://asset-test",
+        clientId: "11111111-1111-4111-8111-111111111111"
+      },
       onRejection: expect.any(Function)
     });
     expect(deps.runAssetLifecycle).toEqual(expect.any(Function));

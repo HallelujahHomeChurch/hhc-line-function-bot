@@ -1,3 +1,4 @@
+import { readAssetWorkloadAuth } from "../clients/asset-workload.js";
 import { pathToFileURL } from "node:url";
 
 import { QueueServiceClient } from "@azure/storage-queue";
@@ -15,7 +16,7 @@ import {
   type AssetApiRejectionTelemetry
 } from "../clients/asset-api.js";
 import { createGraphDriveClient, type CreateGraphDriveClientOptions } from "../clients/graph.js";
-import type { GraphConfig, GraphDriveClient } from "../types.js";
+import type { AssetWorkloadAuth, GraphConfig, GraphDriveClient } from "../types.js";
 
 const ASSET_OPERATION_TIMEOUT_MS = 180_000;
 const ASSET_CLEANUP_TIMEOUT_MS = 30_000;
@@ -50,6 +51,7 @@ export interface PeriodicAssuranceAdapterFactories {
   ): PeriodicQueueClient;
   createAsset(options: {
     baseUrl: string;
+    workloadAuth?: AssetWorkloadAuth;
     onRejection: (telemetry: AssetApiRejectionTelemetry) => void;
   }): AssetApiClient;
 }
@@ -127,6 +129,7 @@ export function createPeriodicAssuranceDependencies(
   );
   const assets = factories.createAsset({
     baseUrl: requiredHttpsUrl(env, "ASSET_API_URL"),
+    workloadAuth: readAssetWorkloadAuth(env),
     onRejection: (telemetry) => process.stdout.write(`${JSON.stringify(telemetry)}\n`)
   });
 
