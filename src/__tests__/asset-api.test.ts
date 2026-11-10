@@ -940,3 +940,50 @@ function liveCollectionItem() {
     updatedAt: "2026-08-16T00:01:00Z"
   };
 }
+
+describe("verified Asset readiness reader", () => {
+  it.each([
+    { processingReadiness: { version: 2, state: "ready" } },
+    { processingReadiness: { version: 1, state: "future" } },
+    { processingReadiness: null },
+    { processingReadiness: { version: 1, state: "pending" } },
+    { processingReadiness: { version: 1, state: "rejected" } },
+    { safetyEvidence: { kind: "future" } },
+    { safetyEvidence: { kind: "trusted-derived" } },
+    { scanSignatureVersion: "trusted-bulletin-watermark-v1" }
+  ])("rejects unknown, contradictory or unscanned evidence %j", async (extra) => {
+    const client = createAssetApiClient({
+      baseUrl: "http://asset-api",
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          id: "asset-1",
+          uploadStatus: "completed",
+          scanStatus: "clean",
+          processingStatus: "not_required",
+          scanSignatureVersion: "main-1",
+          ...extra
+        })
+      )
+    });
+    await expect(client.get("asset-1")).rejects.toThrow();
+  });
+});
+
+it.each([undefined, { version: 1, state: "ready" }])(
+  "accepts legacy and verified scanned readiness %j",
+  async (processingReadiness) => {
+    const asset = {
+      id: "asset-1",
+      uploadStatus: "completed",
+      scanStatus: "clean",
+      processingStatus: "not_required",
+      scanSignatureVersion: "main-1",
+      ...(processingReadiness ? { processingReadiness, safetyEvidence: { kind: "scanned" } } : {})
+    };
+    const client = createAssetApiClient({
+      baseUrl: "http://asset-api",
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json(asset))
+    });
+    await expect(client.get("asset-1")).resolves.toEqual(asset);
+  }
+);

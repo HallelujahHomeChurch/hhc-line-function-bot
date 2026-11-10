@@ -724,3 +724,7 @@ durable retry/outbox and unknown-publication protections. Lifecycle tests cover
 lease loss, readiness, queue acknowledgement and repair. Job DB budget changes
 remain in existing PR #166; this transport adds no queue, table, scanner, replica or
 provider work. Live job capacity and savings remain unverified.
+
+### Verified Asset readiness compatibility
+
+The Asset reader accepts optional version-1 `processingReadiness` and `safetyEvidence` before workload transport is enabled. Unknown/null versions, states or contradictory lifecycle metadata fail closed. LINE requires actual malware-scan evidence and the existing nonempty signature; trusted bulletin derivation is never a scan substitute. Legacy responses without these optional fields keep their existing validation. This is a reader-only follow-up to the default-off workload transport; no runtime setting is enabled. Producer candidate: Asset AS4 `498165f1231ff6082c33d2ebcfc5b5d7aabd13ab`. Live principal, renewal and lifecycle acceptance remain rollout gates.
