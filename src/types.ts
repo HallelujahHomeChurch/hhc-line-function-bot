@@ -344,6 +344,7 @@ export interface WikipediaConfig {
 }
 
 export interface AppConfig {
+  lineHarnessHandoff?: boolean;
   redisRecoveryCutoffMs?: number;
   serviceName: string;
   host: string;
