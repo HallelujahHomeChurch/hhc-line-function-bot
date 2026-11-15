@@ -355,6 +355,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfig {
   }
   return {
     serviceName: env.SERVICE_NAME || "hhc-line-function-bot",
+    lineHarnessHandoff: readBool(env.LINE_HARNESS_HANDOFF, false),
     host: env.HOST || "0.0.0.0",
     port: readInt(env.PORT, 3000),
     timeZone: readTimeZone(env.TIME_ZONE),

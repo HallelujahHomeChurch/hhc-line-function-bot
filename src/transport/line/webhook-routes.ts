@@ -412,6 +412,7 @@ async function handleWebhook(
   for (const event of payload.events) {
     if (!isOrdinaryLineEvent(event)) continue;
     if (
+      !config.lineHarnessHandoff &&
       collectHistory &&
       event.source.type === "group" &&
       (await isGroupAllowed(profile, event.source.groupId, accessStore))
@@ -452,6 +453,28 @@ async function handleWebhook(
     }
     handledLifecycleEvents.add(event);
     incrementIgnored(ignoredCounts, `media_sync_${action.type}`);
+  }
+  if (config.lineHarnessHandoff) {
+    if (profile.name !== "helper") return reply.send({ ok: true, ignored: true });
+    // shortcut: retain signed lifecycle delivery until legacy cleanup and rollback end.
+    try {
+      const response = await fetch(
+        "https://hhc-line-harness-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io/api/line/webhook",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-line-signature": signature },
+          body: Uint8Array.from(body),
+          redirect: "error",
+          signal: AbortSignal.timeout(10_000)
+        }
+      );
+      await response.body?.cancel();
+      if (response.status === 200)
+        return reply.send({ ok: true, ignored: payload.events.length === 0 });
+    } catch {
+      // LINE retries the unchanged signed batch; both receivers are idempotent.
+    }
+    return reply.code(503).send({ ok: false, error: "harness_handoff_unavailable" });
   }
   for (const event of payload.events) {
     if (!isAccountLinkEvent(event)) continue;

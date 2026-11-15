@@ -179,6 +179,137 @@ function createTestApp(
   });
 }
 
+describe("signed Harness handoff", () => {
+  const message = {
+    type: "message",
+    webhookEventId: "handoff-message",
+    replyToken: "reply",
+    source: { type: "group", groupId: "Ghandoff", userId: "Uhandoff" },
+    message: { id: "message", type: "text", text: "hello" }
+  };
+  const unsend = {
+    type: "unsend",
+    webhookEventId: "handoff-unsend",
+    source: message.source,
+    unsend: { messageId: "old-message" }
+  };
+
+  async function fixture() {
+    const route = vi.fn();
+    const createIngest = vi.fn();
+    const tombstoneSource = vi.fn().mockResolvedValue(undefined);
+    const tryStart = vi.fn();
+    const app = createTestApp(
+      { ...accessConfig(), lineHarnessHandoff: true },
+      {
+        router: { route },
+        webhookEventStore: { tryStart },
+        mediaSyncStore: { tombstoneSource, createIngest } as unknown as PostgresMediaSyncStore
+      }
+    );
+    return { app, route, createIngest, tombstoneSource, tryStart };
+  }
+
+  it("cleans old unsends and forwards the original signed batch without legacy intake", async () => {
+    const f = await fixture();
+    const forward = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      expect(f.tombstoneSource).toHaveBeenCalledWith("line:helper:old-message");
+      expect(init?.redirect).toBe("error");
+      return new Response(null, { status: 200 });
+    });
+    const body = JSON.stringify({ destination: "bot", events: [message, unsend] });
+    const headers = signedHeaders(body, "helper-secret");
+    try {
+      for (let retry = 0; retry < 2; retry++) {
+        const response = await f.app.inject({
+          method: "POST",
+          url: "/api/line/webhook/helper",
+          headers,
+          payload: body
+        });
+        expect(response.statusCode).toBe(200);
+      }
+      expect(forward).toHaveBeenCalledTimes(2);
+      const [url, init] = forward.mock.calls[0]!;
+      expect(url).toBe(
+        "https://hhc-line-harness-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io/api/line/webhook"
+      );
+      expect(init?.method).toBe("POST");
+      expect(Buffer.from(init?.body as Uint8Array).toString()).toBe(body);
+      expect(init?.headers).toEqual(headers);
+      expect(f.route).not.toHaveBeenCalled();
+      expect(f.tryStart).not.toHaveBeenCalled();
+      expect(f.createIngest).not.toHaveBeenCalled();
+    } finally {
+      forward.mockRestore();
+      await f.app.close();
+    }
+  });
+
+  it.each(["helper", "main"])(
+    "preserves the %s signed empty release probe contract",
+    async (profile) => {
+      const f = await fixture();
+      const forward = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(null, { status: 200 }));
+      const body = JSON.stringify({ events: [] });
+      try {
+        const response = await f.app.inject({
+          method: "POST",
+          url: profile === "helper" ? "/api/line/webhook/helper" : "/api/line/webhook/main-public",
+          headers: signedHeaders(body, profile + "-secret"),
+          payload: body
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ ok: true, ignored: true });
+        expect(forward).toHaveBeenCalledTimes(profile === "helper" ? 1 : 0);
+      } finally {
+        forward.mockRestore();
+        await f.app.close();
+      }
+    }
+  );
+
+  it.each(["status", "network", "cleanup", "signature", "public"])(
+    "keeps %s failures and archived public traffic bounded",
+    async (scenario) => {
+      const f = await fixture();
+      const forward = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(null, { status: 503 }));
+      if (scenario === "network") forward.mockRejectedValue(new Error("unavailable"));
+      if (scenario === "cleanup") f.tombstoneSource.mockRejectedValue(new Error("unavailable"));
+      const body = JSON.stringify({ destination: "bot", events: [message, unsend] });
+      try {
+        const response = await f.app.inject({
+          method: "POST",
+          url: scenario === "public" ? "/api/line/webhook/main-public" : "/api/line/webhook/helper",
+          headers: signedHeaders(
+            body,
+            scenario === "signature"
+              ? "wrong"
+              : scenario === "public"
+                ? "main-secret"
+                : "helper-secret"
+          ),
+          payload: body
+        });
+        expect(response.statusCode).toBe(
+          scenario === "signature" ? 401 : scenario === "public" ? 200 : 503
+        );
+        expect(forward).toHaveBeenCalledTimes(["status", "network"].includes(scenario) ? 1 : 0);
+        expect(f.route).not.toHaveBeenCalled();
+        expect(f.tryStart).not.toHaveBeenCalled();
+        expect(f.createIngest).not.toHaveBeenCalled();
+      } finally {
+        forward.mockRestore();
+        await f.app.close();
+      }
+    }
+  );
+});
+
 function accessConfig(): AppConfig {
   return {
     serviceName: "hhc-line-function-bot",
