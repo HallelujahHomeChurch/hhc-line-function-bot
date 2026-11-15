@@ -246,6 +246,31 @@ describe("signed Harness handoff", () => {
     }
   });
 
+  it.each(["helper", "main"])(
+    "preserves the %s signed empty release probe contract",
+    async (profile) => {
+      const f = await fixture();
+      const forward = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(null, { status: 200 }));
+      const body = JSON.stringify({ events: [] });
+      try {
+        const response = await f.app.inject({
+          method: "POST",
+          url: profile === "helper" ? "/api/line/webhook/helper" : "/api/line/webhook/main-public",
+          headers: signedHeaders(body, profile + "-secret"),
+          payload: body
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ ok: true, ignored: true });
+        expect(forward).toHaveBeenCalledTimes(profile === "helper" ? 1 : 0);
+      } finally {
+        forward.mockRestore();
+        await f.app.close();
+      }
+    }
+  );
+
   it.each(["status", "network", "cleanup", "signature", "public"])(
     "keeps %s failures and archived public traffic bounded",
     async (scenario) => {

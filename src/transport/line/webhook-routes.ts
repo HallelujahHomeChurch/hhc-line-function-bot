@@ -455,7 +455,7 @@ async function handleWebhook(
     incrementIgnored(ignoredCounts, `media_sync_${action.type}`);
   }
   if (config.lineHarnessHandoff) {
-    if (profile.name !== "helper") return reply.send({ ok: true });
+    if (profile.name !== "helper") return reply.send({ ok: true, ignored: true });
     // shortcut: retain signed lifecycle delivery until legacy cleanup and rollback end.
     try {
       const response = await fetch(
@@ -469,7 +469,8 @@ async function handleWebhook(
         }
       );
       await response.body?.cancel();
-      if (response.status === 200) return reply.send({ ok: true });
+      if (response.status === 200)
+        return reply.send({ ok: true, ignored: payload.events.length === 0 });
     } catch {
       // LINE retries the unchanged signed batch; both receivers are idempotent.
     }
