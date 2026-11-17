@@ -21,6 +21,10 @@ Read these first when starting work:
 7. `src/transport/line/attachment-intake.ts`, `src/state/*`, `src/cache/*`, and `src/redis.ts` for deterministic workflow state.
 8. `src/__tests__/*` before changing behavior; tests are the executable map.
 
+## Production retirement boundary
+
+With `LINE_HARNESS_HANDOFF=true`, old search/media management and normal helper/main functions are archived. Preserve signed helper relay, unsend, retained file deadlines, queue recovery and cleanup. Do not restore the retired catalog schedule, meeting cron, warm pulses or knowledge embedding backfill. The older capability documentation below describes retained source/recovery behavior, not active product features.
+
 ## Current Product Shape
 
 - One service can host multiple LINE bot profiles on canonical webhook paths, for example `/api/line/webhook/helper`.

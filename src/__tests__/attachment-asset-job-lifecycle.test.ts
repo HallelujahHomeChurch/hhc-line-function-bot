@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({
   createAssetApiClient: vi.fn(),
   createPostgresRuntime: vi.fn(),
   createRedisRuntime: vi.fn(),
-  isWarm: vi.fn(),
   startOutbox: vi.fn(),
   stopOutbox: vi.fn(),
   complete: vi.fn(),
@@ -77,11 +76,6 @@ vi.mock("../redis.js", () => ({
 vi.mock("../attachments/scan-outbox.js", () => ({
   startWarmMediaSyncOutboxDispatcher: mocks.startOutbox
 }));
-vi.mock("../media-sync/meeting-client.js", () => ({
-  MeetingWindowClient: class MeetingWindowClient {
-    isWarm = mocks.isWarm;
-  }
-}));
 import { runAttachmentWorker, runAttachmentWorkerLoop } from "../tools/run-attachment-worker.js";
 
 describe("attachment asset job lifecycle", () => {
@@ -96,7 +90,6 @@ describe("attachment asset job lifecycle", () => {
       mediaSyncStore: {},
       pool: { end: mocks.postgresEnd }
     });
-    mocks.isWarm.mockResolvedValue(false);
     mocks.startOutbox.mockReturnValue(mocks.stopOutbox);
     mocks.stopOutbox.mockResolvedValue(undefined);
     mocks.createAssetApiClient.mockReturnValue({});
@@ -174,11 +167,9 @@ describe("attachment asset job lifecycle", () => {
   const env = {
     ASSET_API_URL: "https://asset-api.internal.example",
     ATTACHMENT_SCAN_QUEUE_URL: "https://assetscan.queue.core.windows.net/media-sync",
-    AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
-    MEETING_API_BASE_URL: "https://meeting.internal.example",
-    MEDIA_SYNC_WARM_QUEUE_URL: "https://assetscan.queue.core.windows.net/warm"
+    AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111"
   };
-  it.each(["MEETING_API_BASE_URL", "MEDIA_SYNC_WARM_QUEUE_URL", "dispatcher"])(
+  it.each(["dispatcher"])(
     "awaits pool cleanup when loop initialization fails at %s",
     async (stage) => {
       const loopEnv = { ...env };
@@ -257,15 +248,14 @@ describe("attachment asset job lifecycle", () => {
     expect(mocks.postgresEnd).toHaveBeenCalledOnce();
   });
 
-  it.each(["warm", "work-valid", "work-malformed"])(
+  it.each(["work-valid", "work-malformed"])(
     "leaves late %s messages unacknowledged when receive ignores abort",
     async (phase) => {
       const controller = new AbortController();
       const receive = Promise.withResolvers<{ receivedMessageItems: (typeof message)[] }>();
-      if (phase !== "warm") mocks.receiveMessages.mockResolvedValueOnce(empty);
       mocks.receiveMessages.mockReturnValueOnce(receive.promise).mockResolvedValue(empty);
       const running = runAttachmentWorkerLoop(env, { signal: controller.signal });
-      const calls = phase === "warm" ? 1 : 2;
+      const calls = 1;
       await vi.waitFor(() => expect(mocks.receiveMessages).toHaveBeenCalledTimes(calls));
       controller.abort();
       const stoppedImmediately = mocks.stopOutbox.mock.calls.length;
@@ -282,38 +272,20 @@ describe("attachment asset job lifecycle", () => {
       );
       expect(mocks.receiveMessages).toHaveBeenCalledTimes(calls);
       expect(mocks.complete).not.toHaveBeenCalled();
-      expect(mocks.isWarm).not.toHaveBeenCalled();
       expect(mocks.runMediaSyncWorker).not.toHaveBeenCalled();
     }
   );
 
-  it("awaits a warm delete already in progress without starting work receive", async () => {
-    const controller = new AbortController();
-    const ack = Promise.withResolvers<void>();
-    mocks.complete.mockReturnValue(ack.promise);
-    const running = runAttachmentWorkerLoop(env, { signal: controller.signal });
-    await vi.waitFor(() => expect(mocks.complete).toHaveBeenCalledOnce());
-    controller.abort();
-    expect(mocks.redisQuit).not.toHaveBeenCalled();
-    ack.resolve();
-    await running;
-    expect(mocks.receiveMessages).toHaveBeenCalledOnce();
-    expect(mocks.runMediaSyncWorker).not.toHaveBeenCalled();
-  });
-
-  it.each(["warm", "work"])("treats own %s receive AbortError as normal stop", async (phase) => {
+  it("treats own work receive AbortError as normal stop", async () => {
     const controller = new AbortController();
     const receive = Promise.withResolvers<unknown>();
-    if (phase === "work") mocks.receiveMessages.mockResolvedValueOnce(empty);
     mocks.receiveMessages.mockReturnValueOnce(receive.promise);
     const running = runAttachmentWorkerLoop(env, { signal: controller.signal });
     const outcome = running.then(
       () => "stopped",
       (error) => error
     );
-    await vi.waitFor(() =>
-      expect(mocks.receiveMessages).toHaveBeenCalledTimes(phase === "warm" ? 1 : 2)
-    );
+    await vi.waitFor(() => expect(mocks.receiveMessages).toHaveBeenCalledTimes(1));
     controller.abort();
     receive.reject(new DOMException("stopped", "AbortError"));
     expect(await outcome).toBe("stopped");
@@ -337,31 +309,12 @@ describe("attachment asset job lifecycle", () => {
     expect(mocks.postgresEnd).toHaveBeenCalledOnce();
   });
 
-  it("does not start a handler when warm lookup ignores stop", async () => {
-    const controller = new AbortController();
-    const warm = Promise.withResolvers<boolean>();
-    mocks.receiveMessages
-      .mockResolvedValueOnce(empty)
-      .mockResolvedValueOnce({ receivedMessageItems: [message] });
-    mocks.isWarm.mockReturnValue(warm.promise);
-    const running = runAttachmentWorkerLoop(env, { signal: controller.signal });
-    await vi.waitFor(() => expect(mocks.isWarm).toHaveBeenCalledOnce());
-    controller.abort();
-    expect(mocks.postgresEnd).not.toHaveBeenCalled();
-    warm.reject(new Error("lookup_failed"));
-    await running;
-    expect(mocks.runMediaSyncWorker).not.toHaveBeenCalled();
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
-
   it("stops ticks immediately but joins actual work, ACK and outbox before closing", async () => {
     const controller = new AbortController();
     const work = Promise.withResolvers<{ status: "completed" }>();
     const ack = Promise.withResolvers<void>();
     const outbox = Promise.withResolvers<void>();
-    mocks.receiveMessages
-      .mockResolvedValueOnce(empty)
-      .mockResolvedValueOnce({ receivedMessageItems: [message] });
+    mocks.receiveMessages.mockResolvedValueOnce({ receivedMessageItems: [message] });
     mocks.runMediaSyncWorker.mockReturnValue(work.promise);
     mocks.complete.mockReturnValue(ack.promise);
     mocks.stopOutbox.mockReturnValue(outbox.promise);
@@ -383,7 +336,7 @@ describe("attachment asset job lifecycle", () => {
     expect(stoppedImmediately).toBe(1);
     expect(closedBeforeJoin).toBe(0);
     expect(mocks.stopOutbox).toHaveBeenCalledOnce();
-    expect(mocks.receiveMessages).toHaveBeenCalledTimes(2);
+    expect(mocks.receiveMessages).toHaveBeenCalledTimes(1);
     expect(mocks.postgresEnd).toHaveBeenCalledOnce();
   });
 
@@ -391,9 +344,7 @@ describe("attachment asset job lifecycle", () => {
     const controller = new AbortController();
     const work = Promise.withResolvers<unknown>();
     const outbox = Promise.withResolvers<void>();
-    mocks.receiveMessages
-      .mockResolvedValueOnce(empty)
-      .mockResolvedValueOnce({ receivedMessageItems: [message] });
+    mocks.receiveMessages.mockResolvedValueOnce({ receivedMessageItems: [message] });
     mocks.runMediaSyncWorker.mockReturnValue(work.promise);
     mocks.stopOutbox.mockReturnValue(outbox.promise);
     const outcome = runAttachmentWorkerLoop(env, { signal: controller.signal }).catch(
@@ -417,9 +368,7 @@ describe("attachment asset job lifecycle", () => {
     const controller = new AbortController();
     const ack = Promise.withResolvers<void>();
     const outbox = Promise.withResolvers<void>();
-    mocks.receiveMessages
-      .mockResolvedValueOnce(empty)
-      .mockResolvedValueOnce({ receivedMessageItems: [message] });
+    mocks.receiveMessages.mockResolvedValueOnce({ receivedMessageItems: [message] });
     mocks.complete.mockReturnValue(ack.promise);
     mocks.stopOutbox.mockReturnValue(outbox.promise);
     const outcome = runAttachmentWorkerLoop(env, { signal: controller.signal }).catch(

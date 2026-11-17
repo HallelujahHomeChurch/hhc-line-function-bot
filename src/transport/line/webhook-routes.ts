@@ -275,7 +275,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
   });
 
   registerHealthRoutes(app, config, diagnostics);
-  if (deps.searchSettings && config.mediaSync) {
+  if (!config.lineHarnessHandoff && deps.searchSettings && config.mediaSync) {
     registerSearchSettingsRoutes(app, {
       store: deps.searchSettings,
       gatewayCallerAppId: config.mediaSync.gatewayCallerAppId,
@@ -287,7 +287,7 @@ export function createApp(config: AppConfig, deps: AppDependencies): FastifyInst
     });
   }
 
-  if (deps.mediaSyncManagementService && config.mediaSync) {
+  if (!config.lineHarnessHandoff && deps.mediaSyncManagementService && config.mediaSync) {
     registerMediaSyncRoutes(app, {
       ...config.mediaSync,
       requestIdFactory,

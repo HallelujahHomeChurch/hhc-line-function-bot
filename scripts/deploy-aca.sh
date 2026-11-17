@@ -21,7 +21,6 @@ required_release_environment=(
   PERIODIC_ASSURANCE_JOB_NAME
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME
   ATTACHMENT_SCAN_QUEUE_NAME
-  MEDIA_SYNC_WARM_QUEUE_NAME
   LINE_PROVIDER_CONSOLE_VERIFIED_ID
 )
 for required_name in "${required_release_environment[@]}"; do
@@ -59,20 +58,17 @@ fi
 echo "Deploying ${image_ref} to ${CONTAINER_APP_NAME}"
 
 bot_manifest_template="${script_dir}/../aca.containerapp.yaml"
-catalog_job_manifest_template="${script_dir}/../aca.catalog-sync-job.yaml"
 release_probe_job_manifest_template="${script_dir}/../aca.release-probe-job.yaml"
 periodic_assurance_job_manifest_template="${script_dir}/../aca.periodic-assurance-job.yaml"
 attachment_worker_job_manifest_template="${script_dir}/../aca.attachment-worker-job.yaml"
 attachment_worker_app_manifest_template="${script_dir}/../aca.attachment-worker-app.yaml"
 bot_manifest="$(mktemp)"
-catalog_job_manifest="$(mktemp)"
 release_probe_job_manifest="$(mktemp)"
 periodic_assurance_job_manifest="$(mktemp)"
 attachment_worker_job_manifest="$(mktemp)"
 attachment_worker_app_manifest="$(mktemp)"
 RELEASE_CLEANUP_FILES=(
   "${bot_manifest}"
-  "${catalog_job_manifest}"
   "${release_probe_job_manifest}"
   "${periodic_assurance_job_manifest}"
   "${attachment_worker_job_manifest}"
@@ -80,7 +76,6 @@ RELEASE_CLEANUP_FILES=(
 )
 
 if [[ ! -f "${bot_manifest_template}" \
-  || ! -f "${catalog_job_manifest_template}" \
   || ! -f "${release_probe_job_manifest_template}" \
   || ! -f "${periodic_assurance_job_manifest_template}" \
   || ! -f "${attachment_worker_job_manifest_template}" \
@@ -275,7 +270,6 @@ attachment_storage_id="$(az storage account show \
   --output tsv \
   --only-show-errors)"
 attachment_queue_scope="${attachment_storage_id}/queueServices/default/queues/${ATTACHMENT_SCAN_QUEUE_NAME}"
-warm_queue_scope="${attachment_storage_id}/queueServices/default/queues/${MEDIA_SYNC_WARM_QUEUE_NAME}"
 acr_id="$(az acr show \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${ACR_NAME}" \
@@ -348,19 +342,6 @@ if [[ "$(az role assignment list \
   echo "Attachment Job identity is missing its queue processor, queue reader, or ACR pull role" >&2
   exit 1
 fi
-# The attachment worker still drains legacy pulses from the warm queue; only the retired
-# warmer Job needed Message Sender, so that role is no longer a release precondition.
-for warm_role in "Storage Queue Data Message Processor" "Storage Queue Data Reader"; do
-  if [[ "$(az role assignment list \
-    --scope "${warm_queue_scope}" \
-    --assignee-object-id "${attachment_job_principal_id}" \
-    --query "[?roleDefinitionName=='${warm_role}'] | length(@)" \
-    --output tsv \
-    --only-show-errors)" != "1" ]]; then
-    echo "Attachment identity is missing ${warm_role} on the media-sync warm queue" >&2
-    exit 1
-  fi
-done
 if ! verify_asset_access_contract "${RESOURCE_GROUP}" "${ASSET_API_CONTAINER_APP_NAME}"; then
   echo "Asset API private caller contract is unavailable" >&2
   exit 1
@@ -807,7 +788,6 @@ render_job_manifest() {
   ATTACHMENT_JOB_CLIENT_ID="${attachment_job_client_id}" \
   ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME="${ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME}" \
   ATTACHMENT_SCAN_QUEUE_NAME="${ATTACHMENT_SCAN_QUEUE_NAME}" \
-  MEDIA_SYNC_WARM_QUEUE_NAME="${MEDIA_SYNC_WARM_QUEUE_NAME}" \
   ASSET_API_URL="${asset_api_url}" \
   MEETING_API_URL="${meeting_api_url}" \
   BOT_SECRETS_JSON="${bot_secrets_json}" \
@@ -887,7 +867,6 @@ substitutions = {
         "ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME"
     ],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_NAME": os.environ["ATTACHMENT_SCAN_QUEUE_NAME"],
-    "PLACEHOLDER_MEDIA_SYNC_WARM_QUEUE_NAME": os.environ["MEDIA_SYNC_WARM_QUEUE_NAME"],
     "PLACEHOLDER_ASSET_API_URL": os.environ["ASSET_API_URL"],
     "PLACEHOLDER_MEETING_API_URL": os.environ["MEETING_API_URL"],
     "PLACEHOLDER_ATTACHMENT_SCAN_QUEUE_CONNECTION_STRING": os.environ[
@@ -976,11 +955,6 @@ render_job_manifest \
   "${ATTACHMENT_WORKER_APP_NAME}" \
   "${image_ref}"
 render_job_manifest \
-  "${catalog_job_manifest_template}" \
-  "${catalog_job_manifest}" \
-  "${CATALOG_SYNC_JOB_NAME}" \
-  "${image_ref}"
-render_job_manifest \
   "${release_probe_job_manifest_template}" \
   "${release_probe_job_manifest}" \
   "${RELEASE_PROBE_JOB_NAME}" \
@@ -1005,10 +979,9 @@ az containerapp create \
   --name "${ATTACHMENT_WORKER_APP_NAME}" \
   --yaml "${attachment_worker_app_manifest}" \
   --only-show-errors --output none
-# Planned retirement: KEDA cron rules on the attachment app replace the per-minute warmer.
+# Retired search and meeting warming have no new work; lifecycle queues remain.
 retire_release_job "${MEDIA_SYNC_WARMER_JOB_NAME}"
-mark_release_job_mutated "${CATALOG_SYNC_JOB_NAME}"
-deploy_job "${CATALOG_SYNC_JOB_NAME}" "${catalog_job_manifest}"
+retire_release_job "${CATALOG_SYNC_JOB_NAME}"
 mark_release_job_mutated "${RELEASE_PROBE_JOB_NAME}"
 deploy_job "${RELEASE_PROBE_JOB_NAME}" "${release_probe_job_manifest}"
 mark_release_job_mutated "${PERIODIC_ASSURANCE_JOB_NAME}"

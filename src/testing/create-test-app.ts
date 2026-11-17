@@ -175,6 +175,7 @@ export function createTestApp(config: AppConfig, overrides: TestAppDependencies 
     readMemberAccess: overrides.readMemberAccess,
     quoteStore: overrides.quoteStore,
     mediaSyncStore: overrides.mediaSyncStore,
+    searchSettings: overrides.searchSettings,
     mediaSyncManagementService: overrides.mediaSyncManagementService
   });
 }
