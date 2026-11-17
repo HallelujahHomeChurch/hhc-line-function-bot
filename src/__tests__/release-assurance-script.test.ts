@@ -573,10 +573,6 @@ describe("release assurance shell transaction", () => {
     "bot_ingress_transport_mismatch",
     "bot_dapr_mismatch",
     "release_probe_failure",
-    "catalog_definition_failure",
-    "catalog_cron_mismatch",
-    "catalog_image_mismatch",
-    "catalog_hmac_env_mismatch",
     "scan_definition_failure",
     "scan_scaler_mismatch",
     "scan_cron_mismatch",
@@ -641,7 +637,7 @@ describe("release assurance shell transaction", () => {
       });
       expect(copy).toEqual(expect.arrayContaining(["copy", "--from-revision", "bot--known-good"]));
       expect(calls).toContainEqual(
-        expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-catalog-sync", "--yaml"])
+        expect.arrayContaining(["job", "create", "--name", "hhc-line-bot-catalog-sync", "--yaml"])
       );
       expect(calls).toContainEqual(
         expect.arrayContaining([
@@ -751,7 +747,7 @@ describe("release assurance shell transaction", () => {
     expect(result.status, diagnostic(result, calls)).toBe(42);
     expect(report.rollback.status).toBe("failed");
     expect(calls).toContainEqual(
-      expect.arrayContaining(["job", "update", "--name", "hhc-line-bot-catalog-sync", "--yaml"])
+      expect.arrayContaining(["job", "create", "--name", "hhc-line-bot-catalog-sync", "--yaml"])
     );
   }, 15_000);
 
@@ -780,6 +776,33 @@ describe("release assurance shell transaction", () => {
     expect(result.status, diagnostic(result, calls)).toBe(42);
     expect(report.rollback.status).toBe("failed");
   }, 15_000);
+
+  it("does not delete a retired job with active or unknown executions", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+      source scripts/release-assurance.sh
+      RESOURCE_GROUP=fixture
+      release_job_exists() { echo true; }
+      release_job_image() { echo fixture; }
+      resolve_release_image() { echo fixture-digest; }
+      mark_release_job_mutated() { echo unsafe-mutation; }
+      az() {
+        if [[ "$*" == "containerapp job execution list "* ]]; then echo 1; return; fi
+        echo unsafe-azure-call
+        return 97
+      }
+      if retire_release_job fixture; then exit 98; fi
+    `
+      ],
+      { cwd: ROOT, encoding: "utf8" }
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("unsafe");
+    expect(result.stderr).toContain("leaving it intact");
+  });
 
   it("retires the warmer Job idempotently and logs its image before deletion", async () => {
     const fixture = await createFixture("warmer_retirement_success");
@@ -927,7 +950,6 @@ async function createDeployFixture(scenario: string) {
     await Promise.all(
       [
         "aca.containerapp.yaml",
-        "aca.catalog-sync-job.yaml",
         "aca.attachment-worker-job.yaml",
         "aca.attachment-worker-app.yaml",
         "aca.release-probe-job.yaml",
@@ -1217,7 +1239,7 @@ if [[ "\${FAKE_SCENARIO}" == "pre_mutation_failure" ]] \
 fi
 mark_release_mutated
 mark_release_job_mutated "hhc-line-bot-attachment-worker"
-mark_release_job_mutated "hhc-line-bot-catalog-sync"
+retire_release_job "hhc-line-bot-catalog-sync"
 mark_release_job_mutated "hhc-line-bot-release-probe"
 mark_release_job_mutated "hhc-line-bot-periodic-assurance"
 if [[ "\${FAKE_SCENARIO}" == warmer_retirement* ]]; then
@@ -1377,6 +1399,7 @@ if (command("containerapp", "job", "list")) {
   if (scenario === "job_list_failure") process.exit(106);
   const requestedName = /name=='([^']+)'/.exec(query ?? "")?.[1];
   const absent =
+    (scenario === "deferred_public_success" && requestedName === "hhc-line-bot-catalog-sync") ||
     (scenario === "absent_assurance_jobs" &&
       ["hhc-line-bot-release-probe", "hhc-line-bot-periodic-assurance"].includes(requestedName)) ||
     existsSync(path.join(state, "deleted-" + requestedName));
@@ -1440,25 +1463,9 @@ if (command("containerapp", "show") && name === "hhc-line-bot-attachment-app") {
       cooldown: 120,
       rules: [
         { name: "attachment-work", azureQueue: { queueLength: 1 } },
-        ...[
-          ["tue-fri-0625", "25 6 * * 2,5", "40 8 * * 2,5"],
-          ["thu-1155", "55 11 * * 4", "10 14 * * 4"],
-          ["fri-1855", "55 18 * * 5", "40 21 * * 5"],
-          ["sat-0855", "55 8 * * 6", "40 11 * * 6"],
-          [
-            "sun-0855",
-            scenario === "scan_cron_mismatch" || scenario === "warmer_retirement_rollback"
-              ? "0 9 * * 0"
-              : "55 8 * * 0",
-            "10 12 * * 0"
-          ]
-        ].map(([name, start, end]) => ({
-          name,
-          custom: {
-            type: "cron",
-            metadata: { timezone: "Asia/Taipei", start, end, desiredReplicas: "1" }
-          }
-        }))
+        ...(scenario === "scan_cron_mismatch" || scenario === "warmer_retirement_rollback"
+          ? [{ name: "retired-cron", custom: { type: "cron", metadata: { timezone: "Asia/Taipei", start: "0 9 * * 0", end: "10 12 * * 0", desiredReplicas: "1" } } }]
+          : [])
       ]
     });
   } else process.exit(109);
@@ -1777,6 +1784,7 @@ if (command("containerapp", "job", "execution", "show")) {
 }
 
 if (command("containerapp", "job", "execution", "list")) {
+  if (query.includes("length(@)")) { output(0); process.exit(0); }
   if (name !== "hhc-line-bot-catalog-sync") process.exit(98);
   output({
     name: "catalog-observed",
@@ -1804,16 +1812,15 @@ if (command("containerapp", "job", "update")) {
   process.exit(0);
 }
 
-if (command("containerapp", "job", "delete") && scenario.startsWith("warmer_retirement")) {
-  if (name !== "hhc-line-bot-media-sync-warmer" || !args.includes("--yes")) process.exit(103);
+if (command("containerapp", "job", "delete") && (scenario.startsWith("warmer_retirement") || name === "hhc-line-bot-catalog-sync")) {
+  if (!["hhc-line-bot-media-sync-warmer", "hhc-line-bot-catalog-sync"].includes(name) || !args.includes("--yes")) process.exit(103);
   writeFileSync(path.join(state, "deleted-" + name), "1");
   process.exit(0);
 }
 
 if (command("containerapp", "job", "create")) {
   if (
-    !scenario.startsWith("warmer_retirement") ||
-    name !== "hhc-line-bot-media-sync-warmer" ||
+    !(name === "hhc-line-bot-catalog-sync" || (scenario.startsWith("warmer_retirement") && name === "hhc-line-bot-media-sync-warmer")) ||
     !args.includes("--yaml") ||
     !existsSync(path.join(state, "deleted-" + name))
   ) process.exit(104);

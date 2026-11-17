@@ -200,15 +200,32 @@ describe("signed Harness handoff", () => {
     const tombstoneSource = vi.fn().mockResolvedValue(undefined);
     const tryStart = vi.fn();
     const app = createTestApp(
-      { ...accessConfig(), lineHarnessHandoff: true },
+      {
+        ...accessConfig(),
+        lineHarnessHandoff: true,
+        mediaSync: { gatewayCallerAppId: "gateway", appApiToken: "fixture" }
+      },
       {
         router: { route },
+        searchSettings: { get: vi.fn(), update: vi.fn(), history: vi.fn() },
+        mediaSyncManagementService: {} as MediaSyncManagementService,
         webhookEventStore: { tryStart },
         mediaSyncStore: { tombstoneSource, createIngest } as unknown as PostgresMediaSyncStore
       }
     );
     return { app, route, createIngest, tombstoneSource, tryStart };
   }
+
+  it("does not expose archived search or media management in handoff mode", async () => {
+    const f = await fixture();
+    try {
+      for (const url of ["/api/line/search-settings", "/api/line/media-sync/collections"]) {
+        expect((await f.app.inject({ method: "GET", url })).statusCode).toBe(404);
+      }
+    } finally {
+      await f.app.close();
+    }
+  });
 
   it("cleans old unsends and forwards the original signed batch without legacy intake", async () => {
     const f = await fixture();

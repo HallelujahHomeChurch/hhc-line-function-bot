@@ -8,7 +8,6 @@ on:
       - scripts/deploy-aca.sh
       - scripts/redis-recovery.py
       - scripts/release-assurance.sh
-      - scripts/meeting-cron-drift.py
       - scripts/maintenance-contract.sh
       - scripts/release-catalog.py
       - scripts/release-receipt.py
@@ -25,7 +24,6 @@ on:
       - src/**
       - config/**
       - aca.containerapp.yaml
-      - aca.catalog-sync-job.yaml
       - aca.attachment-worker-job.yaml
       - aca.attachment-worker-app.yaml
       - aca.release-probe-job.yaml
@@ -90,7 +88,6 @@ jobs:
       PERIODIC_ASSURANCE_JOB_NAME: hhc-line-bot-periodic-assurance
       ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME: ${{ vars.ATTACHMENT_SCAN_STORAGE_ACCOUNT_NAME }}
       ATTACHMENT_SCAN_QUEUE_NAME: ${{ vars.ATTACHMENT_SCAN_QUEUE_NAME }}
-      MEDIA_SYNC_WARM_QUEUE_NAME: media-sync-warm
       OPERATIONS_LINE_PRIVATE_TOKEN_VERSION: ${{ vars.OPERATIONS_LINE_PRIVATE_TOKEN_VERSION }}
       ACCOUNT_LINE_PRIVATE_SECRET_VERSION: ${{ vars.ACCOUNT_LINE_PRIVATE_SECRET_VERSION }}
       CMS_LINE_PRIVATE_SECRET_VERSION: ${{ vars.CMS_LINE_PRIVATE_SECRET_VERSION }}

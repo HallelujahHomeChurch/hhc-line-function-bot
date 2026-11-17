@@ -359,6 +359,15 @@ retire_release_job() {
     echo "Could not record the image of retired Job ${job_name}" >&2
     return 1
   fi
+  local active_executions
+  if ! active_executions="$(az containerapp job execution list \
+    --resource-group "${RESOURCE_GROUP}" --name "${job_name}" \
+    --query "[?properties.status!='Succeeded' && properties.status!='Failed' && properties.status!='Stopped'] | length(@)" \
+    --output tsv --only-show-errors)" || [[ "${active_executions}" != "0" ]]; then
+    set_release_failure job_retirement_failed
+    echo "Retired Job still has active or unknown executions; leaving it intact" >&2
+    return 1
+  fi
   # Keep the pre-deletion image in the release log for a manual rollback.
   echo "Retiring Job ${job_name}: image ${retired_image} (${retired_digest})"
   mark_release_job_mutated "${job_name}" || return 1
@@ -402,9 +411,11 @@ run_release_gates() {
     "${ATTACHMENT_SCAN_JOB_NAME}" Manual 1800 1 manual \
     "${RELEASE_TARGET_ATTACHMENT_IMAGE}" attachment_worker_job worker_definition_mismatch false || return
   release_check_attachment_worker_app || return
-  release_check_job_definition \
-    "${CATALOG_SYNC_JOB_NAME}" Schedule 600 1 schedule \
-    "${RELEASE_TARGET_IMAGE}" catalog_job catalog_definition_mismatch || return
+  if [[ "$(release_job_exists "${CATALOG_SYNC_JOB_NAME}")" != false ]]; then
+    fail_release_check catalog_job catalog_definition_mismatch http_mismatch
+    return 1
+  fi
+  record_release_check catalog_job passed none
   release_check_job_definition \
     "${RELEASE_PROBE_JOB_NAME}" Manual 300 0 manual \
     "${RELEASE_TARGET_IMAGE}" release_probe release_probe_definition_mismatch false || return
@@ -441,28 +452,10 @@ release_check_attachment_worker_app() {
   RELEASE_ATTACHMENT_APP_IMAGE="${RELEASE_TARGET_ATTACHMENT_APP_IMAGE}" \
   RELEASE_SCRIPTS_DIR="$(dirname "${BASH_SOURCE[0]}")" \
   python3 - <<'PY'
-import importlib.util
 import json
 import os
-from pathlib import Path
 
-scripts = Path(os.environ["RELEASE_SCRIPTS_DIR"])
-spec = importlib.util.spec_from_file_location("meeting_cron_drift", scripts / "meeting-cron-drift.py")
-drift = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(drift)
-# The checked-out manifest is the single source of the expected meeting warm windows.
-expected_cron = {
-    rule["name"]: {
-        "timezone": "Asia/Taipei",
-        "start": rule["startExpression"],
-        "end": rule["endExpression"],
-        "desiredReplicas": "1",
-    }
-    for rule in drift.cron_rules(
-        (scripts.parent / "aca.attachment-worker-app.yaml").read_text(encoding="utf-8")
-    )
-}
-
+expected_cron = {}
 state = json.loads(os.environ["RELEASE_ATTACHMENT_APP_STATE"])
 rules = [rule for rule in (state.get("rules") or []) if isinstance(rule, dict)]
 names = [rule.get("name") for rule in rules]

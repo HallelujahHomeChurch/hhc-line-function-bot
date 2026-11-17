@@ -132,17 +132,18 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     timeoutMs: config.account?.timeoutMs ?? 3000,
     privateToken: config.account?.privateToken
   });
-  const mediaSyncManagementService = postgres?.mediaSyncStore
-    ? new MediaSyncManagementService(
-        createAssetApiClient({
-          baseUrl: config.asset?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
-          workloadAuth: config.asset?.workloadAuth,
-          timeoutMs: config.asset?.timeoutMs ?? 3000
-        }),
-        postgres.mediaSyncStore,
-        accountAdminClient
-      )
-    : undefined;
+  const mediaSyncManagementService =
+    !config.lineHarnessHandoff && postgres?.mediaSyncStore
+      ? new MediaSyncManagementService(
+          createAssetApiClient({
+            baseUrl: config.asset?.baseUrl ?? "http://127.0.0.1:3500/v1.0/invoke/asset-api/method",
+            workloadAuth: config.asset?.workloadAuth,
+            timeoutMs: config.asset?.timeoutMs ?? 3000
+          }),
+          postgres.mediaSyncStore,
+          accountAdminClient
+        )
+      : undefined;
 
   const providers = {
     deepseek: createDeepSeekProvider({
@@ -219,17 +220,18 @@ async function createRuntime(config: AppConfig): Promise<ApplicationRuntime> {
     6 * 60 * 60 * 1000
   );
   knowledgePurgeTimer.unref();
-  const knowledgeEmbedding = config.knowledge
-    ? createAzureOpenAiEmbeddingClient({
-        apiKey: config.knowledge.embedding.apiKey,
-        endpoint: config.knowledge.embedding.endpoint,
-        deployment: config.knowledge.embedding.deployment,
-        apiVersion: config.knowledge.embedding.apiVersion,
-        model: config.knowledge.embedding.model,
-        dimensions: config.knowledge.embedding.dimensions,
-        timeoutMs: config.knowledge.embedding.timeoutMs
-      })
-    : undefined;
+  const knowledgeEmbedding =
+    !config.lineHarnessHandoff && config.knowledge
+      ? createAzureOpenAiEmbeddingClient({
+          apiKey: config.knowledge.embedding.apiKey,
+          endpoint: config.knowledge.embedding.endpoint,
+          deployment: config.knowledge.embedding.deployment,
+          apiVersion: config.knowledge.embedding.apiVersion,
+          model: config.knowledge.embedding.model,
+          dimensions: config.knowledge.embedding.dimensions,
+          timeoutMs: config.knowledge.embedding.timeoutMs
+        })
+      : undefined;
   if (knowledgeEmbedding) {
     void backfillAgentTextMemoryEmbeddings({
       store: memoryStore,

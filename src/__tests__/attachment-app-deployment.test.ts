@@ -16,7 +16,7 @@ describe("attachment app deployment", () => {
         const script = await readFile(path.join(ROOT, "scripts/deploy-aca.sh"), "utf8");
         const start = script.indexOf("\nmark_release_attachment_app_mutated\n");
         const end = script.indexOf(
-          "\n# Planned retirement: KEDA cron rules on the attachment app replace the per-minute warmer.",
+          "\n# Retired search and meeting warming have no new work; lifecycle queues remain.",
           start
         );
         expect(start).toBeGreaterThan(0);

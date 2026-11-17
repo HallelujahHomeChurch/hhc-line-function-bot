@@ -64,21 +64,7 @@ describe("production profile configuration deployment contract", () => {
       expect(rule).toContain("identity: PLACEHOLDER_ATTACHMENT_JOB_IDENTITY_ID");
     }
     expect(scale).not.toContain("name: media-sync-warm");
-    for (const [name, start, end] of [
-      ["tue-fri-0625", "25 6 * * 2,5", "40 8 * * 2,5"],
-      ["thu-1155", "55 11 * * 4", "10 14 * * 4"],
-      ["fri-1855", "55 18 * * 5", "40 21 * * 5"],
-      ["sat-0855", "55 8 * * 6", "40 11 * * 6"],
-      ["sun-0855", "55 8 * * 0", "10 12 * * 0"]
-    ]) {
-      const rule =
-        scale.match(new RegExp(`- name: ${name}\\n([\\s\\S]*?)(?=        - name:|$)`))?.[1] ?? "";
-      expect(rule).toMatch(/^ {10}custom:\n {12}type: cron\n {12}metadata:$/m);
-      expect(rule).toContain("timezone: Asia/Taipei");
-      expect(rule).toContain(`start: "${start}"`);
-      expect(rule).toContain(`end: "${end}"`);
-      expect(rule).toContain('desiredReplicas: "1"');
-    }
+    expect(scale).not.toContain("type: cron");
   });
 
   it("builds and deploys in the normal production job without one-time maintenance gates", () => {
@@ -221,7 +207,7 @@ describe("production profile configuration deployment contract", () => {
       'render_job_manifest \\\n  "${attachment_worker_job_manifest_template}"'
     );
     const scanDeploy = deployment.indexOf('deploy_job "${ATTACHMENT_SCAN_JOB_NAME}"');
-    const catalogDeploy = deployment.indexOf('deploy_job "${CATALOG_SYNC_JOB_NAME}"');
+    const catalogDeploy = deployment.indexOf('retire_release_job "${CATALOG_SYNC_JOB_NAME}"');
 
     for (const position of [
       botRendererStart,
@@ -317,7 +303,6 @@ describe("production profile configuration deployment contract", () => {
 
   it("keeps OpenAI credentials out of worker and assurance manifests", () => {
     for (const file of [
-      "aca.catalog-sync-job.yaml",
       "aca.attachment-worker-job.yaml",
       "aca.attachment-worker-app.yaml",
       "aca.release-probe-job.yaml",
@@ -471,7 +456,6 @@ describe("production profile configuration deployment contract", () => {
 
     const jobPaths = [
       "aca.attachment-worker-job.yaml",
-      "aca.catalog-sync-job.yaml",
       "aca.periodic-assurance-job.yaml",
       "aca.release-probe-job.yaml"
     ];
@@ -501,7 +485,6 @@ describe("production profile configuration deployment contract", () => {
       expect(readProjectFile(".env.example")).toContain(`${name}=PLACEHOLDER_${name}`);
       for (const path of [
         "aca.attachment-worker-job.yaml",
-        "aca.catalog-sync-job.yaml",
         "aca.periodic-assurance-job.yaml",
         "aca.release-probe-job.yaml",
         "scripts/release-assurance.sh"
@@ -648,63 +631,11 @@ describe("production profile configuration deployment contract", () => {
     expect(integrationCli).toContain('[vitestEntry, "run", "--config", config]');
   });
 
-  it("defines a scheduled ACA catalog sync job that reuses the app image", () => {
-    const job = readProjectFile("aca.catalog-sync-job.yaml");
-    const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
-    const readme = readProjectFile("README.md");
-
-    expect(job).toContain("type: Microsoft.App/jobs");
-    expect(job).toContain("triggerType: Schedule");
-    expect(job).toContain('cronExpression: "*/15 * * * *"');
-    expect(job).toContain("replicaTimeout: 600");
-    expect(job).toContain("image: alive.azurecr.io/alive/hhc-line-function-bot:latest");
-    expect(job).not.toContain("command:");
-    expect(job).toContain("args:");
-    expect(job).toContain("- dist/tools/sync-catalog.js");
-    expect(job).not.toContain("name: CATALOG_SOURCES_PATH");
-    expect(job).toContain("name: GRAPH_POP_SHEET_FOLDER_ITEM_ID");
-    expect(job).toContain("name: GRAPH_POP_SHEET_DRIVE_ID");
-    expect(job).toContain("name: GRAPH_HYMN_SHEET_FOLDER_ITEM_ID");
-    expect(job).toContain("name: GRAPH_XIAOHA_DOCUMENT_FOLDER_ITEM_ID");
-    expect(job).toContain("name: GRAPH_XIAOHA_IMAGE_FOLDER_ITEM_ID");
-    expect(job).toContain("name: GRAPH_XIAOHA_OTHER_FOLDER_ITEM_ID");
-    expect(job).not.toContain("name: GRAPH_WEEKLY_REPORT_AUDIO_FOLDER_ITEM_ID");
-    expect(job).not.toContain("name: GRAPH_SHEET_MUSIC_FOLDER_PATH");
-    expect(job).not.toContain("name: SHEET_MUSIC_DEFAULT_RECURSIVE");
-    expect(job).toContain("name: PROFILE_CONFIG_PATH");
-    expect(job).toContain("value: /app/config/profiles.json");
-    expect(job).toContain("name: DATABASE_URL");
-    expect(job).toContain("name: LINE_HELPER_CHANNEL_SECRET");
-    expect(job).toContain("name: LINE_HELPER_CHANNEL_ACCESS_TOKEN");
-    expect(job).not.toContain("name: LINE_HELPER_ADMIN_USER_ID");
-    expect(job).toContain("name: GRAPH_CLIENT_SECRET");
-    expect(job).toContain("name: NOTION_TOKEN");
-    expect(job).toContain("name: OBSERVABILITY_HMAC_KEY");
-    expect(job).toContain("secretRef: observability-hmac-key");
-    expect(job).toContain("name: NOTION_SERVICE_DATABASE_ID");
-    expect(job).toContain("name: AZURE_OPENAI_EMBEDDING_API_KEY");
-    expect(job).toContain("secretRef: azure-openai-embedding-key");
-    expect(job).toContain("name: AZURE_OPENAI_EMBEDDING_ENDPOINT");
-    expect(job).toContain("name: AZURE_OPENAI_EMBEDDING_DEPLOYMENT");
-    expect(job).toContain("name: AZURE_OPENAI_EMBEDDING_API_VERSION");
-    for (const name of [
-      "AZURE_OPENAI_EMBEDDING_ENDPOINT",
-      "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
-      "AZURE_OPENAI_EMBEDDING_API_VERSION"
-    ]) {
-      expect(job).toContain(`- name: ${name}\n            value: PLACEHOLDER_COPY_FROM_BOT_ENV`);
-    }
-    expect(job).not.toContain(
-      "value: https://bible-text-embedding-resource.cognitiveservices.azure.com/"
-    );
-    expect(job).toContain("name: EMBEDDING_MODEL");
-    expect(job).toContain("value: text-embedding-3-small");
-    expect(job).toContain("name: EMBEDDING_BATCH_SIZE");
-    expect(job).toContain("name: EMBEDDING_TIMEOUT_MS");
-    expect(job).not.toContain("ingress:");
-    expect(releaseWorkflow).toContain("- aca.catalog-sync-job.yaml");
-    expect(readme).toContain("aca.catalog-sync-job.yaml");
-    expect(readme).toContain("node dist/tools/sync-catalog.js");
+  it("retires catalog sync without deploying its archived function", () => {
+    const deployment = readProjectFile("scripts/deploy-aca.sh");
+    expect(projectFileExists("aca.catalog-sync-job.yaml")).toBe(false);
+    expect(deployment).toContain('retire_release_job "${CATALOG_SYNC_JOB_NAME}"');
+    expect(deployment).not.toContain('deploy_job "${CATALOG_SYNC_JOB_NAME}"');
   });
 
   it("defines a finite provider-free release probe job", () => {
@@ -969,7 +900,6 @@ describe("production profile configuration deployment contract", () => {
     expect(deployment).toContain('RELEASE_TARGET_SCAN_IMAGE="${image_ref}"');
     for (const jobName of [
       "ATTACHMENT_SCAN_JOB_NAME",
-      "CATALOG_SYNC_JOB_NAME",
       "RELEASE_PROBE_JOB_NAME",
       "PERIODIC_ASSURANCE_JOB_NAME"
     ]) {
@@ -990,7 +920,6 @@ describe("production profile configuration deployment contract", () => {
   it("uses the Terraform-owned Asset attachment worker and no local ClamAV runtime", () => {
     const worker = readProjectFile("aca.attachment-worker-job.yaml");
     const bot = readProjectFile("aca.containerapp.yaml");
-    const catalogJob = readProjectFile("aca.catalog-sync-job.yaml");
     const dockerfile = readProjectFile("Dockerfile");
     const workflow = readProjectFile(".github/workflows/release.yml");
     const deployment = readProjectFile("scripts/deploy-aca.sh");
@@ -1010,7 +939,7 @@ describe("production profile configuration deployment contract", () => {
     );
     expect(packageJson.scripts["attachment-scan:run"]).toBeUndefined();
 
-    for (const contents of [worker, bot, catalogJob, dockerfile, workflow, deployment]) {
+    for (const contents of [worker, bot, dockerfile, workflow, deployment]) {
       expect(contents).not.toMatch(/clamav|freshclam/iu);
     }
     expect(workflow).not.toContain("SCAN_IMAGE_REPOSITORY");
@@ -1025,7 +954,7 @@ describe("production profile configuration deployment contract", () => {
     expect(workerApp).toContain("cooldownPeriod: 120");
     expect(workerApp).toContain("name: attachment-work");
     expect(workerApp).not.toContain("name: media-sync-warm\n");
-    expect(workerApp).toContain("MEDIA_SYNC_WARM_QUEUE_URL");
+    expect(workerApp).not.toContain("MEDIA_SYNC_WARM_QUEUE_URL");
     expect(workerApp).toContain("- --loop");
     expect(projectFileExists("aca.media-sync-warmer-job.yaml")).toBe(false);
     expect(deployment).not.toContain("aca.media-sync-warmer-job.yaml");

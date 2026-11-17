@@ -29,7 +29,6 @@ import {
   shouldAcknowledgeMediaSyncResult,
   type MediaSyncWorkerResult
 } from "../media-sync/worker.js";
-import { MeetingWindowClient } from "../media-sync/meeting-client.js";
 import { logMediaSyncTiming } from "../media-sync/timing.js";
 import { createRedisRuntime } from "../redis.js";
 
@@ -205,12 +204,6 @@ export async function runAttachmentWorkerLoop(
     mediaOutboxJoin ??= stopMediaSyncOutbox?.();
   };
   try {
-    const meetingUrl = requiredHttpsUrl(env, "MEETING_API_BASE_URL");
-    const warmQueueUrl = requiredHttpsUrl(env, "MEDIA_SYNC_WARM_QUEUE_URL");
-    const warmQueue = new QueueClient(warmQueueUrl, runtime.credential);
-    const meetings = new MeetingWindowClient({
-      baseUrl: meetingUrl
-    });
     const sleep =
       options.sleep ??
       ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
@@ -220,18 +213,14 @@ export async function runAttachmentWorkerLoop(
     });
     options.signal?.addEventListener("abort", stopOutbox, { once: true });
     while (!options.signal?.aborted) {
-      await consumeWarmPulse(warmQueue, options.signal);
-      if (options.signal?.aborted) break;
       const lease = await receiveAttachmentScanWork(runtime.queue, options.signal);
       if (options.signal?.aborted) break;
       if (!lease) {
         await sleep(1_000);
         continue;
       }
-      const warm = await meetings.isWarm().catch(() => false);
-      if (options.signal?.aborted) break;
       // shortcut: no hard drain deadline until in-flight I/O and uncertain publication can be safely cancelled.
-      await runtime.run(lease, warm);
+      await runtime.run(lease, false);
     }
   } finally {
     options.signal?.removeEventListener("abort", stopOutbox);
@@ -324,27 +313,6 @@ async function createAttachmentWorkerRuntime(env: NodeJS.ProcessEnv) {
     await closeRuntime(redis, postgres);
     throw error;
   }
-}
-
-async function consumeWarmPulse(
-  client: AttachmentScanQueueReceiver,
-  signal?: AbortSignal
-): Promise<void> {
-  if (signal?.aborted) return;
-  let response;
-  try {
-    response = await client.receiveMessages({
-      numberOfMessages: 1,
-      visibilityTimeout: 30,
-      ...(signal ? { abortSignal: signal } : {})
-    });
-  } catch (error) {
-    if (signal?.aborted && error instanceof Error && error.name === "AbortError") return;
-    throw error;
-  }
-  if (signal?.aborted) return;
-  const message = response.receivedMessageItems[0];
-  if (message) await client.deleteMessage(message.messageId, message.popReceipt);
 }
 
 export async function runAttachmentWorkerQueueLease(

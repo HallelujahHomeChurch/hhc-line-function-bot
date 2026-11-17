@@ -251,7 +251,8 @@ Run a catalog sync locally with:
 pnpm catalog:sync
 ```
 
-Production should run the same built image as an ACA Scheduled Job with a different command. [`aca.catalog-sync-job.yaml`](aca.catalog-sync-job.yaml) is the placeholder-only job manifest:
+The catalog command is retained for archived recovery only. Production scheduled
+indexing is retired; do not restart it as part of normal Harness operation:
 
 ```text
 node dist/tools/sync-catalog.js
@@ -586,32 +587,19 @@ the capped credential and narrow secret-read access for both Job identities
 with admission paused before release; metadata preflight rejects a missing
 credential. This source change does not provision credentials or permissions.
 
-### Attachment app meeting warm windows
+### Archived helper lifecycle
 
-The persistent attachment app (`hhc-line-bot-attachment-app`) scales to zero
-outside meetings. App-level KEDA polling is five seconds; worker idle polling
-remains one second. Five KEDA cron rules in `aca.attachment-worker-app.yaml` keep
-one replica warm from 5 minutes before to 10 minutes after each regular
-meeting (Asia/Taipei), alongside the `attachment-work` queue rule:
+Production uses `LINE_HARNESS_HANDOFF=true`: signed helper events are relayed to
+Harness after legacy unsend processing. Public main and old search/media
+management routes are unavailable. OneDrive search, schedule and memory features
+are archived; the shared library and existing deadlines are unchanged.
 
-| rule           | start          | end            | meeting             |
-| -------------- | -------------- | -------------- | ------------------- |
-| `tue-fri-0625` | `25 6 * * 2,5` | `40 8 * * 2,5` | Tue/Fri 06:30–08:30 |
-| `thu-1155`     | `55 11 * * 4`  | `10 14 * * 4`  | Thu 12:00–14:00     |
-| `fri-1855`     | `55 18 * * 5`  | `40 21 * * 5`  | Fri 19:00–21:30     |
-| `sat-0855`     | `55 8 * * 6`   | `40 11 * * 6`  | Sat 09:00–11:30     |
-| `sun-0855`     | `55 8 * * 0`   | `10 12 * * 0`  | Sun 09:00–12:00     |
-
-These windows are hard-coded in IaC. Changing a meeting time requires editing
-the cron rules and releasing; the per-minute `hhc-line-bot-media-sync-warmer`
-Job is retired and the release deletes it if present (logging its last image).
-The weekly `Meeting Cron Drift` workflow (`.github/workflows/meeting-cron-drift.yml`,
-`scripts/meeting-cron-drift.py`) compares the rules with the public
-`/api/meeting-occurrences` for the next 28 days and opens or updates the issue
-"Meeting cron drift: attachment app" with a suggested rule when a scheduled
-occurrence is not covered. The `media-sync-warm` queue and
-`MEDIA_SYNC_WARM_QUEUE_URL` remain because the worker still drains legacy
-pulses; the Operations sync-window check inside the worker is unchanged.
+The attachment app scales from its work queue only. Meeting cron windows, pulse
+consumption and the warmer scheduler are removed. The old catalog-sync Job is
+retired through the existing deployment transaction; rollback restores its saved
+manifest. The main service still purges expired knowledge/memory records, and
+retained Asset/Graph lifecycle, queue recovery and webhook cleanup remain owned
+until their existing obligations are discharged. No bulk deletion is performed.
 
 Redis full/partial/stale loss requires the [bounded recovery procedure](docs/runbooks/redis-loss-recovery.md). The offline planner does not authorize replay; signed-event cutoff and a consistent new namespace retire old one-shot authority while unknown effects remain quarantined. The default recovery configuration is inactive.
 
@@ -622,9 +610,8 @@ environment, scoped OIDC trust, PR CI and the existing deployment concurrency.
 
 Release success requires the target image, healthy traffic, PG/Redis readiness,
 Account contract, Dapr/ingress, bounded worker definitions/bootstrap and signed
-empty Gateway smoke checks. `catalog_job` verifies its deployed definition;
-catalog warm-up and recent-sync verification are separate post-deployment checks
-and cannot roll back a healthy release. See the production operations runbook.
+empty Gateway smoke checks. `catalog_job` verifies the retired Job is absent.
+See the production operations runbook.
 
 ### Optional bounded group history
 
