@@ -794,25 +794,7 @@ def env_contract(entries, expected):
     )
 
 valid = common_valid
-if check_name == "catalog_job":
-    hmac_env = [
-        entry
-        for entry in (env if isinstance(env, list) else [])
-        if isinstance(entry, dict) and entry.get("name") == "OBSERVABILITY_HMAC_KEY"
-    ]
-    valid = (
-        valid
-        and trigger.get("cronExpression") == "*/15 * * * *"
-        and args == ["dist/tools/sync-catalog.js"]
-        and hmac_env
-        == [
-            {
-                "name": "OBSERVABILITY_HMAC_KEY",
-                "secretRef": "observability-hmac-key",
-            }
-        ]
-    )
-elif check_name == "attachment_worker_job":
+if check_name == "attachment_worker_job":
     env_names = {
         entry.get("name")
         for entry in (env if isinstance(env, list) else [])
@@ -1204,6 +1186,7 @@ PYTHON
   if [[ -n "${RELEASE_RECOVERY_ENV_JSON:-}" ]]; then
     local recovery_compatible
     recovery_compatible="$(KNOWN_GOOD_ENV_JSON="${known_good_env_json}" \
+      KNOWN_GOOD_CATALOG_EXISTS="${RELEASE_KNOWN_GOOD_CATALOG_EXISTS:-true}" \
       KNOWN_GOOD_CATALOG_MANIFEST="${RELEASE_KNOWN_GOOD_CATALOG_MANIFEST:-}" \
       KNOWN_GOOD_SCAN_MANIFEST="${RELEASE_KNOWN_GOOD_SCAN_MANIFEST:-}" \
       python3 "$(dirname "${BASH_SOURCE[0]}")/redis-recovery.py" compatible)" || return 1

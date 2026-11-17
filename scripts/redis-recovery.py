@@ -117,6 +117,8 @@ def main():
         result = previous == current
         if result and current[1] is not None:
             for key in ("KNOWN_GOOD_CATALOG_MANIFEST", "KNOWN_GOOD_SCAN_MANIFEST"):
+                if key == "KNOWN_GOOD_CATALOG_MANIFEST" and os.environ.get("KNOWN_GOOD_CATALOG_EXISTS") == "false":
+                    continue  # No retired catalog process can write to the restored namespace.
                 if key not in os.environ:
                     continue  # Pure identity comparison; release always supplies both keys.
                 manifest_path = os.environ[key]

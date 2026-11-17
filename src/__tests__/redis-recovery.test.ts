@@ -159,6 +159,19 @@ describe("recovery rollback saved job inputs", () => {
       JSON.stringify({ properties: { template: { containers: [{ env: entries }] } } })
     );
     expect(cli("compatible", null, env).stdout.trim()).toBe("true");
+    const retired = { ...env, KNOWN_GOOD_CATALOG_EXISTS: "false", KNOWN_GOOD_CATALOG_MANIFEST: "" };
+    expect(cli("compatible", null, retired).stdout.trim()).toBe("true");
+    expect(
+      cli("compatible", null, { ...retired, KNOWN_GOOD_CATALOG_EXISTS: "true" }).stdout.trim()
+    ).toBe("false");
+    expect(
+      cli("compatible", null, { ...retired, KNOWN_GOOD_SCAN_MANIFEST: "" }).stdout.trim()
+    ).toBe("false");
+    writeFileSync(
+      path,
+      JSON.stringify({ properties: { template: { containers: [{ env: [] }] } } })
+    );
+    expect(cli("compatible", null, retired).stdout.trim()).toBe("false");
     writeFileSync(path, "invalid");
     expect(cli("compatible", null, env).status).toBe(1);
   });
