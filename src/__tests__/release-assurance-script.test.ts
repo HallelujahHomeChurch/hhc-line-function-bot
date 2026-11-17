@@ -21,6 +21,27 @@ afterEach(async () => {
 });
 
 describe("release assurance shell transaction", () => {
+  it("keeps rollback secret snapshots private and removes them after a failed release", async () => {
+    const fixture = await createFixture("release_probe_child_failure");
+    const result = fixture.run();
+    const calls = await fixture.calls();
+    expect(result.status, diagnostic(result, calls)).toBe(42);
+    const reportText = await readFile(fixture.reportPath, "utf8");
+    expect(JSON.parse(reportText).rollback.status).toBe("restored");
+    for (const secret of ["private-rollback-fixture", "must-not-copy-resolved-key-vault-value"]) {
+      expect(result.stdout + result.stderr + reportText + JSON.stringify(calls)).not.toContain(
+        secret
+      );
+    }
+    const snapshots = calls.filter((args) => args.includes("--yaml"));
+    expect(snapshots.length).toBeGreaterThan(0);
+    for (const args of snapshots) {
+      await expect(readFile(args[args.indexOf("--yaml") + 1])).rejects.toMatchObject({
+        code: "ENOENT"
+      });
+    }
+  }, 15_000);
+
   it("blocks rollback before writes when a saved worker namespace predates the API fence", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "recovery-rollback-"));
     temporaryDirectories.push(directory);
@@ -531,7 +552,7 @@ describe("release assurance shell transaction", () => {
     15_000
   );
 
-  it.each(["empty_catalog_snapshot", "empty_scan_snapshot"])(
+  it.each(["empty_catalog_snapshot", "empty_scan_snapshot", "missing_job_secret"])(
     "fails an incomplete %s before any mutation",
     async (scenario) => {
       const fixture = await createFixture(scenario);
@@ -1324,7 +1345,7 @@ function toBashPath(filePath: string): string {
 }
 
 const FAKE_AZ = `#!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const rawArgs = process.argv.slice(2);
@@ -1507,8 +1528,17 @@ if (command("acr", "manifest", "show-metadata")) {
   process.exit(0);
 }
 
+if (command("containerapp", "job", "secret", "list")) {
+  if (!args.includes("--show-values")) process.exit(106);
+  output([
+    { name: "line-helper-channel-secret", value: scenario === "missing_job_secret" ? null : "private-rollback-fixture" },
+    { name: "database-url", value: "must-not-copy-resolved-key-vault-value" }
+  ]);
+  process.exit(0);
+}
+
 if (command("containerapp", "job", "show")) {
-  const manifestQuery = "{name:name,type:type,location:location,identity:{type:identity.type,userAssignedIdentities:identity.userAssignedIdentities},properties:{environmentId:properties.environmentId,configuration:{registries:properties.configuration.registries,triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,scheduleTriggerConfig:properties.configuration.scheduleTriggerConfig,eventTriggerConfig:properties.configuration.eventTriggerConfig,manualTriggerConfig:properties.configuration.manualTriggerConfig},template:properties.template}}";
+  const manifestQuery = "{name:name,type:type,location:location,identity:{type:identity.type,userAssignedIdentities:identity.userAssignedIdentities},properties:{environmentId:properties.environmentId,configuration:{secrets:properties.configuration.secrets[].{name:name,keyVaultUrl:keyVaultUrl,identity:identity},registries:properties.configuration.registries,triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,scheduleTriggerConfig:properties.configuration.scheduleTriggerConfig,eventTriggerConfig:properties.configuration.eventTriggerConfig,manualTriggerConfig:properties.configuration.manualTriggerConfig},template:properties.template}}";
   if (query === "properties.template.containers[0].image") {
     const snapshot = path.join(state, "snapshot-" + name);
     const restored = existsSync(path.join(state, "restored-" + name));
@@ -1552,6 +1582,10 @@ if (command("containerapp", "job", "show")) {
       properties: {
         environmentId: "/fixture/environment",
         configuration: {
+          secrets: [
+            { name: "line-helper-channel-secret", keyVaultUrl: null, identity: null },
+            { name: "database-url", keyVaultUrl: "https://fixture.vault.azure.net/secrets/database-url/version", identity: "/fixture/identity" }
+          ],
           registries: [{ server: "registry.example", identity: "/fixture/identity" }],
           triggerType: "Manual",
           replicaTimeout:
@@ -1573,7 +1607,7 @@ if (command("containerapp", "job", "show")) {
               name: "fixture-job",
               image: firstObservation || restored ? oldImages[name] : targetImages[name],
               args: ["fixture.js"],
-              env: name === "hhc-line-bot-release-probe" ? [{ name: "SEARXNG_BASE_URL", value: "https://legacy-search.internal.invalid" }] : [],
+              env: name === "hhc-line-bot-release-probe" ? [{ name: "SEARXNG_BASE_URL", value: "https://legacy-search.internal.invalid" }] : [{ name: "LINE_HELPER_CHANNEL_SECRET", secretRef: "line-helper-channel-secret" }],
               resources: { cpu: 0.25, memory: "0.5Gi" }
             }
           ],
@@ -1824,6 +1858,12 @@ if (command("containerapp", "job", "create")) {
     !args.includes("--yaml") ||
     !existsSync(path.join(state, "deleted-" + name))
   ) process.exit(104);
+  if ((statSync(value("--yaml")).mode & 0o077) !== 0) process.exit(108);
+  const manifest = JSON.parse(readFileSync(value("--yaml"), "utf8"));
+  for (const env of manifest.properties.template.containers[0].env) {
+    if (env.secretRef && !manifest.properties.configuration.secrets?.some(secret => secret.name === env.secretRef && (secret.value || (secret.keyVaultUrl && secret.identity)))) process.exit(105);
+  }
+  if (manifest.properties.configuration.secrets.some(secret => secret.value === "must-not-copy-resolved-key-vault-value")) process.exit(107);
   rmSync(path.join(state, "deleted-" + name));
   writeFileSync(path.join(state, "restored-" + name), "1");
   process.exit(0);
