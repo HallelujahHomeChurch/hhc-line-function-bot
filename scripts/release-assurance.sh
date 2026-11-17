@@ -256,12 +256,41 @@ release_job_image() {
 
 release_job_manifest_json() {
   local job_name="$1"
-  az containerapp job show \
+  local manifest_json
+  local secrets_json
+  manifest_json="$(az containerapp job show \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${job_name}" \
-    --query "{name:name,type:type,location:location,identity:{type:identity.type,userAssignedIdentities:identity.userAssignedIdentities},properties:{environmentId:properties.environmentId,configuration:{registries:properties.configuration.registries,triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,scheduleTriggerConfig:properties.configuration.scheduleTriggerConfig,eventTriggerConfig:properties.configuration.eventTriggerConfig,manualTriggerConfig:properties.configuration.manualTriggerConfig},template:properties.template}}" \
-    --output json \
-    --only-show-errors
+    --query "{name:name,type:type,location:location,identity:{type:identity.type,userAssignedIdentities:identity.userAssignedIdentities},properties:{environmentId:properties.environmentId,configuration:{secrets:properties.configuration.secrets[].{name:name,keyVaultUrl:keyVaultUrl,identity:identity},registries:properties.configuration.registries,triggerType:properties.configuration.triggerType,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,scheduleTriggerConfig:properties.configuration.scheduleTriggerConfig,eventTriggerConfig:properties.configuration.eventTriggerConfig,manualTriggerConfig:properties.configuration.manualTriggerConfig},template:properties.template}}" \
+    --output json --only-show-errors)" || return 1
+  # A deleted Job needs its secret definitions to be recreated. Keep Key Vault
+  # references; literal values stay only in the private, exit-cleaned snapshot.
+  secrets_json="$(az containerapp job secret list \
+    --resource-group "${RESOURCE_GROUP}" --name "${job_name}" \
+    --show-values --output json --only-show-errors)" || return 1
+  RELEASE_JOB_METADATA="${manifest_json}" RELEASE_JOB_SECRETS="${secrets_json}" python3 - <<'PYJSON'
+import json
+import os
+
+manifest = json.loads(os.environ["RELEASE_JOB_METADATA"])
+values = {entry["name"]: entry.get("value") for entry in json.loads(os.environ["RELEASE_JOB_SECRETS"])}
+config = manifest["properties"]["configuration"]
+secrets = []
+for entry in config.get("secrets") or []:
+    name = entry["name"]
+    if entry.get("keyVaultUrl") and entry.get("identity"):
+        secrets.append({"name": name, "keyVaultUrl": entry["keyVaultUrl"], "identity": entry["identity"]})
+    elif not entry.get("keyVaultUrl") and isinstance(values.get(name), str) and values[name]:
+        secrets.append({"name": name, "value": values[name]})
+    else:
+        raise SystemExit("Job rollback secret definition is unavailable")
+secret_names = {entry["name"] for entry in secrets}
+for container in manifest["properties"]["template"].get("containers", []):
+    if any(env.get("secretRef") and env["secretRef"] not in secret_names for env in container.get("env", [])):
+        raise SystemExit("Job rollback secret reference is missing")
+config["secrets"] = sorted(secrets, key=lambda entry: entry["name"])
+print(json.dumps(manifest))
+PYJSON
 }
 
 normalize_release_job_manifest() {
