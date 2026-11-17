@@ -30,7 +30,7 @@ def state_fence(revision):
     api = az("containerapp", "revision", "show", "-g", group, "-n", os.environ["CONTAINER_APP_NAME"], "--revision", revision, "--query", query)
     require([row.get("value") for row in api if row.get("name") == "LINE_RUNTIME_STATE_CONTRACT"] == ["2"])
     selected = recovery.select(None, json.dumps(api))
-    for kind, key in (("app", "ATTACHMENT_WORKER_APP_NAME"), ("job", "ATTACHMENT_SCAN_JOB_NAME"), ("job", "CATALOG_SYNC_JOB_NAME")):
+    for kind, key in (("app", "ATTACHMENT_WORKER_APP_NAME"), ("job", "ATTACHMENT_SCAN_JOB_NAME")):
         command = ("containerapp", "show") if kind == "app" else ("containerapp", "job", "show")
         rows = az(*command, "-g", group, "-n", os.environ[key], "--query", query)
         require(recovery.select(None, json.dumps(rows)) == selected)

@@ -9,7 +9,6 @@ on:
       - scripts/redis-recovery.py
       - scripts/release-assurance.sh
       - scripts/maintenance-contract.sh
-      - scripts/release-catalog.py
       - scripts/release-receipt.py
       - scripts/accept-release.sh
       - scripts/retire-dapr.sh

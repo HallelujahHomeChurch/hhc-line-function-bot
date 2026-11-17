@@ -26,83 +26,6 @@ def load(name):
     return value
 
 
-def row(name='current', status='Succeeded', old=False):
-    return {'name': name, 'status': status, 'startTime': (NOW - dt.timedelta(minutes=5 if old else 1)).isoformat().replace('+00:00', 'Z')}
-
-
-class Catalog(unittest.TestCase):
-    def run_catalog(self, pages, action='verify', scenario=''):
-        module = load('release-catalog')
-        calls = []
-        state = 'Suspended' if action == 'prepare' else 'Ready'
-        def az(*args):
-            nonlocal state
-            calls.append(args)
-            if args[:3] == ('containerapp', 'job', 'show'):
-                # Match the real CLI model: identity exists, runtime state is omitted.
-                return '/subscriptions/fixture/jobs/catalog' if args[-1] == 'id' else {'state': None, 'image': IMAGE, 'id': '/subscriptions/fixture/jobs/catalog', 'trigger': 'Schedule', 'cron': '*/15 * * * *'}
-            if args[:3] == ('containerapp', 'job', 'start'):
-                if scenario == 'lost_start':
-                    raise RuntimeError('ambiguous start')
-                return 'manual'
-            if args[:4] == ('containerapp', 'job', 'execution', 'show'):
-                return ['old-image' if scenario == 'old_image' else IMAGE]
-            if args[:3] == ('rest', '--method', 'post'):
-                state = 'Ready'
-                return None
-            if args[:3] == ('rest', '--method', 'get'):
-                if '/executions?' not in args[args.index('--url') + 1]:
-                    observed = None if scenario == 'missing_state' else state
-                    return {'state': observed, 'image': IMAGE, **({'id': '/subscriptions/fixture/jobs/catalog', 'trigger': 'Schedule', 'cron': '*/15 * * * *'} if 'id:id' in args[-1] else {})}
-                values = pages.pop(0) if len(pages) > 1 else pages[0]
-                return {'value': values, 'nextLink': 'https://wrong.invalid' if scenario == 'bad_page' else None}
-            raise AssertionError(args)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'catalog.json'
-            env = {'RESOURCE_GROUP': 'fixture', 'CATALOG_SYNC_JOB_NAME': 'catalog', 'RELEASE_TARGET_IMAGE': IMAGE, 'RELEASE_STARTED_AT': START, 'RELEASE_CATALOG_RECEIPT_PATH': str(path), 'RELEASE_CATALOG_POLL_ATTEMPTS': '3', 'RELEASE_POLL_INTERVAL_SECONDS': '0'}
-            with patch.dict(os.environ, env), patch.object(sys, 'argv', ['release-catalog.py', action]), patch.object(module, 'az', az):
-                try:
-                    module.main()
-                except RuntimeError:
-                    return False, calls, None
-                return True, calls, json.loads(path.read_text())
-
-    def test_resume_manual_cron_race_settles_two_without_stop_or_second_start(self):
-        ok, calls, receipt = self.run_catalog([[], [], [row('manual', 'Running'), row('cron', 'Running')], [row('manual'), row('cron')]], 'prepare')
-        self.assertTrue(ok)
-        self.assertEqual(receipt['maxConcurrentExecutions'], 2)
-        self.assertEqual(sum(call[:3] == ('containerapp', 'job', 'start') for call in calls), 1)
-        self.assertEqual(sum(call[:3] == ('rest', '--method', 'post') for call in calls), 1)
-        self.assertFalse(any('stop' in call for call in calls))
-        self.assertEqual(receipt['lineJobRolePoolBudget'], 6)
-
-    def test_readonly_verify_never_starts_or_resumes(self):
-        ok, calls, _ = self.run_catalog([[row()]])
-        self.assertTrue(ok)
-        self.assertFalse(any(call[:3] in {('rest', '--method', 'post'), ('containerapp', 'job', 'start')} for call in calls))
-
-    def test_missing_arm_runtime_state_never_starts_or_resumes(self):
-        for action in ('prepare', 'verify'):
-            ok, calls, _ = self.run_catalog([[row()]], action, 'missing_state')
-            self.assertFalse(ok)
-            self.assertFalse(any(call[:3] in {('rest', '--method', 'post'), ('containerapp', 'job', 'start')} for call in calls))
-
-    def test_over_budget_work_must_block_even_when_all_three_would_succeed(self):
-        ok, calls, _ = self.run_catalog([[row('a', 'Running'), row('b', 'Running'), row('c', 'Running')], [row('a'), row('b'), row('c')]], 'prepare')
-        self.assertFalse(ok)
-        self.assertFalse(any(call[:3] == ('rest', '--method', 'post') for call in calls))
-
-    def test_lost_start_is_not_automatically_retried(self):
-        ok, calls, _ = self.run_catalog([[]], 'prepare', 'lost_start')
-        self.assertFalse(ok)
-        self.assertEqual(sum(call[:3] == ('containerapp', 'job', 'start') for call in calls), 1)
-
-    def test_real_selection_rejects_stale_unknown_failed_concurrent_or_wrong_image(self):
-        for pages, scenario in [([[row(old=True)]], ''), ([[row(status='Running', old=True)]], ''), ([[row('good'), row('unknown', 'Unknown')]], ''), ([[row('good'), row('failed', 'Failed')]], ''), ([[row('a', 'Running'), row('b', 'Running'), row('c', 'Running')]], ''), ([[row()]], 'old_image'), ([[row()]], 'bad_page')]:
-            with self.subTest(scenario=scenario, rows=pages):
-                self.assertFalse(self.run_catalog(pages, scenario=scenario)[0])
-
-
 class RetireDapr(unittest.TestCase):
     def run_retirement(self, scenario):
         gateway_image = "alive.azurecr.io/alive/api-gateway@sha256:" + "a" * 64
@@ -178,6 +101,31 @@ print("503" if os.environ["SCENARIO"] == "post_probe_failed" and (Path(os.enviro
 
 
 class PublicAcceptance(unittest.TestCase):
+    def test_receipt_fence_checks_only_retained_workers_and_rejects_mismatch(self):
+        module = load('release-receipt')
+        env = {'RESOURCE_GROUP': 'fixture', 'CONTAINER_APP_NAME': 'bot',
+               'ATTACHMENT_WORKER_APP_NAME': 'attachment-app',
+               'ATTACHMENT_SCAN_JOB_NAME': 'attachment', 'CATALOG_SYNC_JOB_NAME': 'catalog'}
+        for mismatch in (None, 'attachment-app', 'attachment'):
+            with self.subTest(mismatch=mismatch):
+                observed = []
+                def read(*args):
+                    name = args[args.index('-n') + 1]
+                    self.assertNotEqual(name, 'catalog', 'retired catalog must not block receipts')
+                    observed.append(name)
+                    rows = [{'name': 'LINE_RUNTIME_STATE_CONTRACT', 'value': '2'}]
+                    if name == mismatch:
+                        rows.append({'name': 'REDIS_KEY_PREFIX', 'value': 'different-worker-fence'})
+                    return rows
+                with patch.dict(os.environ, env), patch.object(module, 'az', read):
+                    if mismatch:
+                        with self.assertRaises(ValueError):
+                            module.state_fence('bot--ready')
+                    else:
+                        digest, _ = module.state_fence('bot--ready')
+                        self.assertEqual(len(digest), 64)
+                        self.assertEqual(observed, ['bot', 'attachment-app', 'attachment'])
+
     def test_same_run_pending_is_not_pass_and_tampered_receipts_or_503_fail(self):
         module = load('release-receipt')
         fence = [{'name': 'LINE_RUNTIME_STATE_CONTRACT', 'value': '2'}]
